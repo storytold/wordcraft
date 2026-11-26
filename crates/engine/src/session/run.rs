@@ -79,7 +79,25 @@ impl Session {
         // locked content control) leaves it as it was.
         let document_before = self.document_id;
         let waiting_before = (self.pending.clone(), self.pending_at.clone());
+        let parent_active = std::mem::replace(&mut self.ime_dispatch_active, true);
+        let parent_outcome = std::mem::take(&mut self.ime_edit_outcome);
+        let parent_nested = self.ime_nested_outcome.take();
         let result = self.run_command(id, params);
+        let outcome = self.ime_edit_outcome;
+        self.ime_dispatch_active = parent_active;
+        self.ime_nested_outcome = parent_nested;
+        if parent_active {
+            self.ime_edit_outcome = parent_outcome;
+            // Failed children roll back their edits. Read-only/no-op children contribute no
+            // effect and must not invalidate the parent's otherwise direct classification.
+            if result.is_ok() && (outcome.content_changed || outcome.state_changed || outcome.transformed || outcome.selection_changed) {
+                self.ime_nested_outcome = Some(match parent_nested {
+                    Some(previous) => Self::merge_ime_outcomes(previous, outcome),
+                    None => outcome,
+                });
+            }
+        }
+
         if result.is_ok() {
             self.settle_carried(carried_before);
         } else if self.document_id == document_before {
@@ -407,6 +425,9 @@ impl Session {
         }
         self.clamp_selection();
         let mut ime_outcome = self.ime_edit_outcome;
+        if let Some(nested) = self.ime_nested_outcome {
+            ime_outcome = Self::merge_ime_outcomes(ime_outcome, nested);
+        }
         if ime_outcome.content_changed {
             ime_outcome.state_changed = true;
         }

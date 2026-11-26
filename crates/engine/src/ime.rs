@@ -27,7 +27,35 @@ pub(super) fn next_ime_state_revision() -> Option<u64> {
 #[cfg(test)]
 mod ime_revision_tests {
     use super::*;
+    use crate::ImeEditOutcome;
     use serde_json::json;
+    use wordcraft_doc::StoryRef;
+
+    #[test]
+    fn nested_macro_keeps_earlier_content_and_transformation_outcomes() {
+        let mut s = Session::new(Document::new());
+        s.prefs.autocorrect.enabled = true;
+        s.prefs.autocorrect.smart_quotes = true;
+        s.run(
+            "tools.macros",
+            &json!({"define": {"name": "quoted", "steps": [
+                {"command": "text.insert", "params": {"text": "\""}},
+                {"command": "text.insert", "params": {"text": "x"}},
+                {"command": "caret.left", "params": {}}
+            ]}}),
+        )
+        .unwrap();
+        s.run_ime("tools.macros", &json!({"run": "quoted"})).unwrap();
+        assert!(s.doc.plain_text(StoryRef::Body).contains('“'));
+        let outcome = s.ime_edit_outcome();
+        assert!(outcome.content_changed && outcome.state_changed && outcome.transformed, "{outcome:?}");
+        assert!(!outcome.classified, "a macro is not one directly classified IME edit");
+        assert!(s.run("no.such.command", &json!({})).is_err());
+        assert_eq!(s.ime_edit_outcome(), ImeEditOutcome::default(), "the next top-level dispatch starts fresh");
+        s.run_ime("text.insert", &json!({"text": "z"})).unwrap();
+        let outcome = s.ime_edit_outcome();
+        assert!(outcome.classified && outcome.content_changed && !outcome.transformed, "{outcome:?}");
+    }
 
     /// Checked allocations stop at `u64::MAX` and report exhaustion instead of wrapping.
     #[test]

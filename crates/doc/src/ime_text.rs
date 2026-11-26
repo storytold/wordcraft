@@ -84,6 +84,34 @@ impl<'a> VisibleParagraph<'a> {
         self.deleted.get(*next).is_some_and(|r| r.start <= off && off < r.end)
     }
 
+    /// Stored ranges must not erase text hidden from the IME or leave half a content control.
+    fn can_delete_range(&self, range: &Range<usize>) -> bool {
+        if self.deleted.iter().any(|deleted| range.start < deleted.end && deleted.start < range.end) {
+            return false;
+        }
+        let mut controls = 0usize;
+        for ((off, _), object) in self.para.text.char_indices().filter(|(_, c)| *c == OBJ).zip(&self.para.objects) {
+            if off >= range.end {
+                break;
+            }
+            if off < range.start {
+                continue;
+            }
+            match object {
+                crate::InlineObject::ControlStart { .. } => {
+                    let Some(next) = controls.checked_add(1) else { return false };
+                    controls = next;
+                }
+                crate::InlineObject::ControlEnd => {
+                    let Some(next) = controls.checked_sub(1) else { return false };
+                    controls = next;
+                }
+                _ => {}
+            }
+        }
+        controls == 0
+    }
+
     /// Call `f` for every visible piece: `(stored byte start, piece, stored byte len)`.
     fn for_each_piece(&self, mut f: impl FnMut(usize, &str, usize)) {
         self.for_each_piece_while(|start, piece, stored| {
@@ -395,13 +423,16 @@ impl Document {
         };
 
         // Start a range after a deletion run and end it before one, so tracked deletions are
-        // never part of the erased stored range.
+        // excluded at either endpoint; the interior is checked below as well.
         let before_start = view.stored_offset_after(before_start)?;
         let before_end = view.stored_offset_before(sel_start)?;
         let after_start = view.stored_offset_after(sel_end)?;
         let after_end = view.stored_offset_before(after_end)?;
         let before_range = (before_start < before_end).then_some(before_start..before_end);
         let after_range = (after_start < after_end).then_some(after_start..after_end);
+        if [before_range.as_ref(), after_range.as_ref()].into_iter().flatten().any(|range| !view.can_delete_range(range)) {
+            return None;
+        }
         Some(ImeDelete { before: before_range, after: after_range, anchor: anchor.off, focus: cursor.off })
     }
 }
@@ -592,6 +623,13 @@ mod tests {
         let caret = Pos::body(0, 7);
         let del = doc.ime_delete_surrounding(&caret, &caret, 1, 0, DeleteUnit::Bytes).expect("c");
         assert_eq!(del.before, Some(6..7), "the stored deletion run is skipped");
+        for unit in [DeleteUnit::Bytes, DeleteUnit::Chars] {
+            assert_eq!(doc.ime_delete_surrounding(&caret, &caret, 2, 0, unit).unwrap().before, Some(5..7));
+            assert!(doc.ime_delete_surrounding(&caret, &caret, 3, 0, unit).is_none(), "a range must not cross hidden DEL");
+            let start = Pos::body(0, 1);
+            assert!(doc.ime_delete_surrounding(&start, &start, 0, 3, unit).is_none(), "the trailing range must not cross DEL either");
+            assert_eq!(doc.ime_delete_surrounding(&start, &start, 0, 1, unit).unwrap().after, Some(1..2));
+        }
     }
 
     /// A selection spanning paragraphs has no single surrounding context: both the query and
@@ -688,8 +726,8 @@ mod tests {
     }
 
     /// Content-control markers are zero-length visible objects. A deletion range starts after
-    /// the marker and ends before the next one, so an ordinary IME edit never removes a marker
-    /// or leaves a half-paired control.
+    /// the marker and ends before the next one. Crossing just one marker is refused; a range
+    /// containing an entire paired control remains representable.
     #[test]
     fn control_markers_are_not_included_in_delete_ranges() {
         use crate::control::{ContentControl, ControlKind};
@@ -708,5 +746,16 @@ mod tests {
         assert_eq!(del.before, Some(6..9), "the control-start marker and `pre` stay outside");
         assert_eq!(del.after, Some(12..13), "the control-end marker stays outside; only `X` goes");
         assert_eq!((del.anchor, del.focus), (9, 9));
+        for unit in [DeleteUnit::Bytes, DeleteUnit::Chars] {
+            assert!(doc.ime_delete_surrounding(&cursor, &cursor, 4, 0, unit).is_none(), "do not erase the start marker alone");
+            let start = Pos::body(0, 3);
+            assert!(doc.ime_delete_surrounding(&start, &start, 0, 4, unit).is_none(), "do not erase the end marker alone");
+            let end = Pos::body(0, 13);
+            assert_eq!(
+                doc.ime_delete_surrounding(&end, &end, 7, 0, unit).unwrap().before,
+                Some(0..13),
+                "a whole paired control remains representable"
+            );
+        }
     }
 }
