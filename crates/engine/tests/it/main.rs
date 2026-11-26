@@ -1,4 +1,5 @@
 mod comment_ids;
+mod content_controls;
 mod date_fields;
 mod macro_packages;
 mod odt_charts;

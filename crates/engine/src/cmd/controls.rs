@@ -279,6 +279,22 @@ fn content_base(s: &Session, r: &ControlRange) -> CharProps {
     content_props(&s.doc, &props)
 }
 
+/// The formatting of what replaces a control's content: typed text, a list entry, a date or a
+/// check box's mark. In place of the placeholder, that is the control's own run properties
+/// (ECMA-376 §17.5.2.27), else the content's formatting without the placeholder style: the
+/// showing placeholder's own character style is that style, whatever a producer called it (Word
+/// localizes only the id; another program may localize the name too). In place of a value, it is
+/// that value's formatting.
+fn replacement_props(s: &Session, r: &ControlRange) -> CharProps {
+    if !r.control.showing_placeholder {
+        return content_base(s, r);
+    }
+    match &r.control.run_props {
+        Some(rp) => content_props(&s.doc, rp),
+        None => CharProps { style: None, ..content_base(s, r) },
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Rules for typing and deleting
 
@@ -327,14 +343,8 @@ pub fn prepare_edit(s: &mut Session) -> Result<Option<CharProps>, CmdError> {
     if !r.control.showing_placeholder || !r.contains(&b) {
         return Ok(None);
     }
-    // Text typed in place of the placeholder takes the control's own run properties (Word, and
-    // ECMA-376 §17.5.2.27), else the content's formatting without the placeholder style. The
-    // showing placeholder's own character style is that style, whatever a producer called it
-    // (Word localizes only the id; another program may localize the name too).
-    let props = match &r.control.run_props {
-        Some(rp) => content_props(&s.doc, rp),
-        None => CharProps { style: None, ..content_base(s, &r) },
-    };
+    // Text typed in place of the placeholder takes the control's own run properties, as in Word.
+    let props = replacement_props(s, &r);
     s.sel = Selection { anchor: r.content_start(), focus: r.end.clone() };
     if let Some(c) = s.doc.control_mut(&r.start) {
         c.showing_placeholder = false;
@@ -666,7 +676,7 @@ fn toggle_check_box(s: &mut Session, v: &Value) -> CmdResult {
     }
     let now = p::bool(v, "value").unwrap_or(!checked);
     let (ch, font) = if now { (*checked_char, checked_font) } else { (*unchecked_char, unchecked_font) };
-    let mut props = content_base(s, &r);
+    let mut props = replacement_props(s, &r);
     if !font.is_empty() {
         props.font = Some(font.clone());
     }
@@ -696,7 +706,7 @@ fn choose_item(s: &mut Session, v: &Value) -> CmdResult {
         return Err(CmdError::Params("give index, value or text".into()));
     };
     let Some(item) = item.cloned() else { return Err(CmdError::Params("no such entry".into())) };
-    let props = content_base(s, &r);
+    let props = replacement_props(s, &r);
     let end = set_content(s, &r, &item.display, &props)?;
     if let Some(c) = s.doc.control_mut(&r.start) {
         if let ControlKind::ComboBox { last_value, .. } | ControlKind::DropDown { last_value, .. } = &mut c.kind {
@@ -716,7 +726,7 @@ fn set_date(s: &mut Session, v: &Value) -> CmdResult {
     }
     let (y, m, d) = p::str(v, "date").and_then(parse_date).ok_or_else(|| CmdError::Params("date: YYYY-MM-DD".into()))?;
     let text = format_date_value(format, y, m, d);
-    let props = content_base(s, &r);
+    let props = replacement_props(s, &r);
     let end = set_content(s, &r, &text, &props)?;
     if let Some(c) = s.doc.control_mut(&r.start) {
         if let ControlKind::Date { full_date, .. } = &mut c.kind {
