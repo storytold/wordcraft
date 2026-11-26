@@ -29,7 +29,7 @@ use craft::ui::runtime::focus::{self, FocusTarget};
 // PLAN: assumed `RuleKind` re-exported from `craft::ui::style`
 use craft::ui::style::{DataColor, RuleKind};
 use craft::ui::text::TextField;
-use craft::ui::tile_grid::{Tile, TileGrid};
+use craft::ui::tile_grid::{GridZoom, Tile, TileGrid};
 use egui::{Color32, CornerRadius, Pos2, Rect, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -300,8 +300,8 @@ fn category_list(ui: &mut Ui, form: &mut SmartArtForm) {
         .show_items(ui, &keyed(&positions, |i| *i), &mut |key, _| ListRow::new(tl!(CATEGORIES.get(*key).copied().unwrap_or("All")).to_string()));
     for event in out.events {
         let picked = match event {
-            CollectionEvent::Selection(SelectionChange::Set(keys)) => keys.last().copied(),
-            CollectionEvent::Selection(SelectionChange::Toggle(key)) => Some(key),
+            CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => keys.last().copied(),
+            CollectionEvent::Selection { change: SelectionChange::Toggle(key), .. } => Some(key),
             _ => None,
         };
         if let Some(category) = picked.and_then(|k| CATEGORIES.get(k)) {
@@ -315,6 +315,8 @@ fn layout_tiles(ui: &mut Ui, theme: &[Rgb], form: &mut SmartArtForm) -> bool {
     let positions: Vec<usize> = (0..shown.len()).collect();
     let current = shown.iter().position(|l| *l == form.layout).unwrap_or(0);
     let out = TileGrid::<usize>::new(tl!("Layouts").to_string())
+        .thumb_size(ThumbSize::Large)
+        .zoom(GridZoom::Fixed(1.4))
         .select(SelectMode::Single)
         .card_columns(3)
         // Production's picker is three tile rows high and scrolls the rest; the cap also makes the grid the one owner
@@ -331,12 +333,12 @@ fn layout_tiles(ui: &mut Ui, theme: &[Rgb], form: &mut SmartArtForm) -> bool {
     let mut activated = false;
     for event in out.response.events {
         match event {
-            CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+            CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
                 if let Some(layout) = keys.last().and_then(|k| shown.get(*k)) {
                     form.layout = *layout;
                 }
             }
-            CollectionEvent::Selection(SelectionChange::Toggle(key)) => {
+            CollectionEvent::Selection { change: SelectionChange::Toggle(key), .. } => {
                 if let Some(layout) = shown.get(key) {
                     form.layout = *layout;
                 }
@@ -427,7 +429,7 @@ pub fn frame_button(app: &mut WordApp, ui: &mut Ui, pages: &[PlacedPage], layout
     ];
     let area = ui.max_rect();
     let shown = TaskBar::selection(tl!("Text Pane").to_string(), &corners)
-        .side(Side::Start)
+        .side(Side::Start, craft::behavior::overlay::Align::Center)
         .dismiss(TaskBarDismiss::Keep)
         .show(ui, area, |ui, _| IconButton::new(IconId::new("textPane")).label(tl!("Text Pane").to_string()).show(ui).clicked());
     if shown.inner == Some(true) {

@@ -1,3 +1,4 @@
+use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
 use super::*;
@@ -116,6 +117,25 @@ fn symbol_dialog_inserts_with_its_font() {
     // (normal text) inserts without a font.
     f.font.clear();
     assert_eq!(f.params().unwrap(), json!({"char": "\u{2665}"}));
+}
+
+/// #7326: Recently used symbols and Symbols map use compact tile sizing so the dialog
+/// fits comfortably within default window bounds without vertical overflow.
+#[test]
+fn symbol_dialog_uses_compact_tile_grids() {
+    let mut a = app();
+    remember_symbol(&mut a, "©", "DejaVu Sans");
+    let mut h = testing::harness(a);
+    let id = crate::dialogs::open(h.state_mut(), "symbol", &json!({})).expect("symbol dialog opens");
+    h.run_steps(3);
+    assert!(h.state().dialog_host.get_dyn(id).is_some(), "the symbol dialog is open");
+    let dialog = h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Symbol").rect();
+    assert!(dialog.height() <= 900.0, "complete dialog should fit within default desktop viewport: {}", dialog.height());
+    assert!(dialog.max.y <= 900.0, "complete dialog should not overflow viewport bottom: {}", dialog.max.y);
+    let symbols = h.get_by_role_and_label(egui::accesskit::Role::ListBox, "Symbols").rect();
+    assert!(symbols.height() < 500.0, "symbols grid should be compact: {}", symbols.height());
+    let recent = h.get_by_role_and_label(egui::accesskit::Role::ListBox, "Recently used symbols:").rect();
+    assert!(recent.height() < 80.0, "recently used symbols row should be compact: {}", recent.height());
 }
 
 /// The Field dialog builds the field code from its options.
@@ -354,4 +374,22 @@ fn date_time_dialog_keeps_open_and_displays_invalid_picture_error() {
     }
     assert!(a.dialog_host.get_dyn(id).is_some(), "the dialog stays open");
     assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "");
+}
+
+/// #4832: Document Information fields are offered and format instructions match the chosen
+/// format.
+#[test]
+fn field_dialog_lists_the_document_information_fields() {
+    let listed: Vec<&str> = FIELDS.iter().filter(|(_, cat, _)| *cat == "Document Information").map(|(n, _, _)| *n).collect();
+    for name in ["COMMENTS", "KEYWORDS", "LASTSAVEDBY", "NUMCHARS", "REVNUM", "SUBJECT"] {
+        assert!(listed.contains(&name), "{name} in {listed:?}");
+    }
+    let a = app();
+    let mut f = FieldForm::new(&a);
+    f.select("REVNUM");
+    f.number_format = "ROMAN".into();
+    f.preserve = false;
+    assert_eq!(f.instruction(), r"REVNUM \* ROMAN");
+    f.select("SUBJECT");
+    assert_eq!(f.instruction(), "SUBJECT");
 }

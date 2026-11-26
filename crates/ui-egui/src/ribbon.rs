@@ -68,7 +68,7 @@ pub use tabs::{
 use view::{outlining, view};
 
 /// What a pass with no ribbon reports.
-fn no_ribbon() -> RibbonOutput<String> {
+pub(crate) fn no_ribbon() -> RibbonOutput<String> {
     // PLAN: assumed `RibbonOutput::tab_ids` (S-L361) has a `Default` value; the field replaces `menu`.
     RibbonOutput { shown: None, picked: None, controls: None, tabs: None, tab_ids: Default::default() }
 }

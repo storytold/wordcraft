@@ -321,7 +321,13 @@ pub(crate) fn member_command(s: &mut Session, id: &str, _: &Value) -> Option<Cmd
     let replaces = (id.starts_with("text.") && id != "text.overtype")
         || matches!(
             id,
-            "edit.paste" | "edit.pasteText" | "edit.pasteMerge" | "edit.pasteSpecial" | "edit.pasteClipboardItem" | "edit.pasteAllClipboard"
+            "edit.paste"
+                | "edit.pasteText"
+                | "edit.pasteMerge"
+                | "edit.pasteNestedTable"
+                | "edit.pasteSpecial"
+                | "edit.pasteClipboardItem"
+                | "edit.pasteAllClipboard"
         );
     if !replaces && !matches!(id, "edit.cut" | "edit.copy") {
         return None;
