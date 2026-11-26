@@ -63,7 +63,9 @@ pub(super) fn snap_chars(b: &mut Builder, text: &str, grid: &Grid) {
             continue;
         }
         let size = b.styles.get(c.style as usize).map_or(base, |st| st.size);
-        let cells = if east_asian { (size / base).round() } else { (c.adv / pitch - 0.01).ceil() }.clamp(1.0, 64.0);
+        // A 割注 cluster's half-size style gives the wrong cell count: its two sub-lines span
+        // more than one pitch, so whole cells come from the cluster's combined advance.
+        let cells = (if c.warichu || !east_asian { (c.adv / pitch - 0.01).ceil() } else { (size / base).round() }).clamp(1.0, 64.0);
         let adv = cells * pitch;
         let shift = (adv - c.adv) / 2.0;
         for g in b.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten() {

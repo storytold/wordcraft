@@ -117,7 +117,13 @@ pub(super) fn upright_east_asian(items: Vec<Draw>) -> Vec<Draw> {
             out.push(d);
             continue;
         };
-        let up = |k: usize| ranges.get(k).and_then(|r| text.get(r.clone())).and_then(|t| t.chars().next()).is_some_and(upright_in_vertical);
+        let at = |k: usize| ranges.get(k).filter(|r| r.start < r.end).and_then(|r| text.get(r.clone())).and_then(|t| t.chars().next());
+        // A 割注 bracket has no glyph range of its own (it is not in the run's text): it stands
+        // with the notation it encloses, like the upright characters next to it.
+        let up = |k: usize| match at(k) {
+            Some(c) => upright_in_vertical(c),
+            None => (0..k).rev().find_map(at).or_else(|| (k + 1..glyphs.len()).find_map(at)).is_some_and(upright_in_vertical),
+        };
         if ranges.len() != glyphs.len() || !(0..glyphs.len()).any(up) {
             out.push(Draw::Glyphs { face, size, glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges, text_bg, x_scale });
             continue;
