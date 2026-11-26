@@ -13,6 +13,8 @@ use super::{
 /// Cell identity is independent of optional table-style formatting.
 pub(crate) enum BoxContext<'a> {
     Other,
+    /// A note separator reserves its content, but not its last paragraph's after-space.
+    FootnoteSeparator,
     /// Outer cell edges relative to its text origin (not including wrap distances).
     Cell {
         text: Option<&'a para::CellText>,
@@ -212,6 +214,16 @@ fn legacy_header_reach(text_bottom: f32, reach: &[(f32, f32)]) -> f32 {
     reach.iter().filter(|(top, _)| *top < text_bottom).map(|(_, bottom)| *bottom).fold(0.0, f32::max)
 }
 
+/// Automatic spacing and contextual Normal spacing are suppressed at the end of the box.
+fn paragraph_after_space(last: bool, automatic: bool, contextual_cell: bool, normal: impl FnOnce() -> bool, after: f32) -> f32 {
+    if last && (automatic || (contextual_cell && normal())) { 0.0 } else { after }
+}
+
+/// The final paragraph of a note separator does not reserve its after-space.
+fn separator_after_space(separator: bool, last: bool, after: f32) -> f32 {
+    if separator && last { after } else { 0.0 }
+}
+
 /// Lay out a block list into a free-standing box of `width` (no page breaks): table cells,
 /// headers, footers, notes, text boxes. Returns items relative to (0, 0) and the height. `frame`
 /// says where the box sits on its page, for floating objects positioned relative to the page or
@@ -222,8 +234,9 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     // inline (restored for the story around this box when it's done).
     let outer_hide = std::mem::replace(&mut ctx.hide_deleted, ctx.opts.hides_deleted(story));
     let empty_cell = para::CellText::default();
+    let separator = matches!(&context, BoxContext::FootnoteSeparator);
     let (in_cell, table, cell_edges) = match context {
-        BoxContext::Other => (false, None, None),
+        BoxContext::Other | BoxContext::FootnoteSeparator => (false, None, None),
         BoxContext::Cell { text, left, right, clamp } => (true, Some(text.unwrap_or(&empty_cell)), clamp.then_some((left, right))),
     };
     // Word 16.113.3: the override applies in modes 11/12/14, but not mode 15.
@@ -253,6 +266,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     let mut page_table_wraps = Vec::new();
     let mut y = 0.0f32;
     let mut prev_after = 0.0f32;
+    let mut trailing_after = 0.0f32;
     let mut prev_after_auto = false;
     let mut prev_listed = false;
     let mut prev_style: Option<(String, bool)> = None;
@@ -411,8 +425,9 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 // undefined one, formatted as Normal): the end-of-cell mark is a Normal paragraph.
                 let last = i + 1 == blocks.len();
                 let normal = || pl.rp.style == "Normal" || ctx.doc.styles.get(&pl.rp.style).is_none();
-                let after = if last && (pl.rp.after_auto || (in_cell && ctxl && normal())) { 0.0 } else { pl.rp.space_after };
+                let after = paragraph_after_space(last, pl.rp.after_auto, in_cell && ctxl, normal, pl.rp.space_after);
                 y += edges.top + pl.height + edges.bottom + after;
+                trailing_after = separator_after_space(separator, last, after);
                 prev_after = after;
                 prev_after_auto = pl.rp.after_auto;
                 prev_listed = listed;
@@ -445,7 +460,13 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     y = y.max(legacy_header_reach(y, &legacy_reach));
     let floats_bottom = float_tables.iter().map(|r| r.bottom()).fold(float_objects_bottom, f32::max);
     ctx.hide_deleted = outer_hide;
-    BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
+    // Trim only after-space actually applied by a final footnote-separator paragraph block.
+    // A trailing table or framed paragraph makes the preceding paragraph's gap internal.
+    // Keep line height and border room; ordinary boxes retain their after-space.
+    // Keep floats and frames covered by the original height clear of the notes.
+    // Content beyond that prior height keeps its existing unreserved extent.
+    let height = (y - trailing_after).max(floats_bottom.min(y)).max(0.0);
+    BoxLayout { items, height, floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
 }
 
 /// The width a text frame without one takes: its widest line, with the paragraph's indents.
