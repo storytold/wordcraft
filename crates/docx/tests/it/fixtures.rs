@@ -2124,9 +2124,10 @@ fn rotated_ole_objects_round_trip() {
     let body = text(&unzip(&out), "word/document.xml");
     assert_eq!(attr_values(&body, "a:xfrm", "rot"), ["5400000"]);
     assert_eq!(attr_values(&body, "a:xfrm", "flipH"), ["1"]);
-    // 72 × 36 pt turned 90°: 18 pt narrower each side, 18 pt taller each side.
-    assert_eq!(attr_values(&body, "wp:effectExtent", "l"), ["-228600"]);
-    assert_eq!(attr_values(&body, "wp:effectExtent", "t"), ["228600"]);
+    // 72 × 36 pt turned 90°: Word measures that against the frame turned with it, so a quarter
+    // turn adds no effect extent.
+    assert_eq!(attr_values(&body, "wp:effectExtent", "l"), ["0"]);
+    assert_eq!(attr_values(&body, "wp:effectExtent", "t"), ["0"]);
     let back = wordcraft_docx::read(&out).unwrap();
     let o = &paras(&back)[0].objects[0];
     assert!(matches!(o, InlineObject::Image { ole: Some(_), .. }), "{o:?}");
@@ -3316,7 +3317,7 @@ fn native_ink_markup_limit_does_not_write_a_dangling_reference() {
 fn native_ink_preserves_inner_transform_and_rotation_padding_on_unrelated_saves() {
     let mut files = unzip(&ink_docx(false, false));
     let body = text(&files, "word/document.xml")
-        .replace("<wp:docPr", r#"<wp:effectExtent l="55468" t="512668" r="55468" b="512668"/><wp:docPr"#)
+        .replace("<wp:docPr", r#"<wp:effectExtent l="512668" t="55468" r="512668" b="55468"/><wp:docPr"#)
         .replace("<q:xfrm>", r#"<q:xfrm rot="2700000">"#)
         .replace(r#"<a:off x="0" y="0"/><a:ext cx="1828800" cy="914400"/>"#, r#"<a:off x="127000" y="254000"/><a:ext cx="914400" cy="457200"/>"#);
     files.insert("word/document.xml".into(), body.into_bytes());
