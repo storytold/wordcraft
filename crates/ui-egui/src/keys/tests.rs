@@ -201,6 +201,9 @@ fn user_assignments_become_overrides() {
             ),
             (Some(("Mod+F1", "view.focus")), "Mod+F1", command("view.focus")),
             (Some(("Alt+Q", "view.focus")), "Alt+Q", if mac { command("view.focus") } else { tell_me.clone() }),
+            (None, "Mod+R", command("para.alignRight")),
+            (None, "Alt+R", None),
+            (None, "Mod+Alt+Shift+R", None),
         ];
         for (assign, ask, want) in rows {
             let mut h = alt_frame_app();
