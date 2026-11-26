@@ -76,39 +76,124 @@ pub fn text_color(c: &TextColor, background: Option<Rgb>) -> Rgb {
     }
 }
 
+/// The characters that stand upright in top-to-bottom text, as sorted, disjoint, inclusive ranges
+/// of code points: those whose Unicode vertical orientation (UAX #50, `VerticalOrientation.txt` of
+/// Unicode 18.0.0) is `U`, upright, or `Tu`, a vertical form where the font has one and otherwise
+/// upright (no vertical forms are substituted here, so they stand as they are). `R` and `Tr`
+/// characters (Latin, digits, arrows, brackets, dashes, the prolonged sound mark) turn with the line.
+/// Two groups the property marks `U` are left out and turn with the line:
+/// - the Latin-1 signs § © ® ± ¼ ½ ¾ × ÷: in mixed text they are usually set in the Latin font,
+///   where upright they look small and out of place among the turned letters around them;
+/// - private use (U+E000–F8FF and planes 15 and 16): a document's private-use characters are
+///   mostly symbol-font codes (U+F020–F0FF), whose glyphs differ from one font to the next.
+const UPRIGHT: [(u32, u32); 93] = [
+    (0x02EA, 0x02EB),   // Spacing Modifier Letters
+    (0x1100, 0x11FF),   // Hangul Jamo
+    (0x1401, 0x167F),   // Unified Canadian Aboriginal Syllabics
+    (0x18B0, 0x18FF),   // Unified Canadian Aboriginal Syllabics Extended
+    (0x2016, 0x2016),   // General Punctuation
+    (0x2020, 0x2021),   // General Punctuation
+    (0x2030, 0x2031),   // General Punctuation
+    (0x203B, 0x203C),   // General Punctuation
+    (0x2042, 0x2042),   // General Punctuation
+    (0x2047, 0x2049),   // General Punctuation
+    (0x2051, 0x2051),   // General Punctuation
+    (0x2065, 0x2065),   // General Punctuation
+    (0x20DD, 0x20E0),   // Combining Diacritical Marks for Symbols
+    (0x20E2, 0x20E4),   // Combining Diacritical Marks for Symbols
+    (0x2100, 0x2101),   // Letterlike Symbols
+    (0x2103, 0x2109),   // Letterlike Symbols
+    (0x210F, 0x210F),   // Letterlike Symbols
+    (0x2113, 0x2114),   // Letterlike Symbols
+    (0x2116, 0x2117),   // Letterlike Symbols
+    (0x211E, 0x2123),   // Letterlike Symbols
+    (0x2125, 0x2125),   // Letterlike Symbols
+    (0x2127, 0x2127),   // Letterlike Symbols
+    (0x2129, 0x2129),   // Letterlike Symbols
+    (0x212E, 0x212E),   // Letterlike Symbols
+    (0x2135, 0x213F),   // Letterlike Symbols
+    (0x2145, 0x214A),   // Letterlike Symbols
+    (0x214C, 0x214D),   // Letterlike Symbols
+    (0x214F, 0x2189),   // Letterlike Symbols to Number Forms
+    (0x218C, 0x218F),   // Number Forms
+    (0x221E, 0x221E),   // Mathematical Operators
+    (0x2234, 0x2235),   // Mathematical Operators
+    (0x2300, 0x2307),   // Miscellaneous Technical
+    (0x230C, 0x231F),   // Miscellaneous Technical
+    (0x2324, 0x2328),   // Miscellaneous Technical
+    (0x232B, 0x232B),   // Miscellaneous Technical
+    (0x237D, 0x239A),   // Miscellaneous Technical
+    (0x23BE, 0x23CD),   // Miscellaneous Technical
+    (0x23CF, 0x23CF),   // Miscellaneous Technical
+    (0x23D1, 0x23DB),   // Miscellaneous Technical
+    (0x23E2, 0x2422),   // Miscellaneous Technical to Control Pictures
+    (0x2424, 0x24FF),   // Control Pictures to Enclosed Alphanumerics
+    (0x25A0, 0x2619),   // Geometric Shapes to Miscellaneous Symbols
+    (0x2620, 0x2767),   // Miscellaneous Symbols to Dingbats
+    (0x2776, 0x2793),   // Dingbats
+    (0x2B12, 0x2B2F),   // Miscellaneous Symbols and Arrows
+    (0x2B50, 0x2B59),   // Miscellaneous Symbols and Arrows
+    (0x2B97, 0x2B97),   // Miscellaneous Symbols and Arrows
+    (0x2BB8, 0x2BD1),   // Miscellaneous Symbols and Arrows
+    (0x2BD3, 0x2BEB),   // Miscellaneous Symbols and Arrows
+    (0x2BF0, 0x2BFF),   // Miscellaneous Symbols and Arrows
+    (0x2E50, 0x2E51),   // Supplemental Punctuation
+    (0x2E80, 0x3007),   // CJK Radicals Supplement to CJK Symbols and Punctuation
+    (0x3012, 0x3013),   // CJK Symbols and Punctuation
+    (0x3020, 0x302F),   // CJK Symbols and Punctuation
+    (0x3031, 0x309F),   // CJK Symbols and Punctuation to Hiragana
+    (0x30A1, 0x30FB),   // Katakana
+    (0x30FD, 0xA4CF),   // Katakana to Yi Radicals
+    (0xA960, 0xA97F),   // Hangul Jamo Extended-A
+    (0xAC00, 0xD7FF),   // Hangul Syllables to Hangul Jamo Extended-B
+    (0xF900, 0xFAFF),   // CJK Compatibility Ideographs
+    (0xFE10, 0xFE1F),   // Vertical Forms
+    (0xFE30, 0xFE48),   // CJK Compatibility Forms
+    (0xFE50, 0xFE57),   // Small Form Variants
+    (0xFE5F, 0xFE62),   // Small Form Variants
+    (0xFE67, 0xFE6F),   // Small Form Variants
+    (0xFF01, 0xFF07),   // Halfwidth and Fullwidth Forms
+    (0xFF0A, 0xFF0C),   // Halfwidth and Fullwidth Forms
+    (0xFF0E, 0xFF19),   // Halfwidth and Fullwidth Forms
+    (0xFF1F, 0xFF3A),   // Halfwidth and Fullwidth Forms
+    (0xFF3C, 0xFF3C),   // Halfwidth and Fullwidth Forms
+    (0xFF3E, 0xFF3E),   // Halfwidth and Fullwidth Forms
+    (0xFF40, 0xFF5A),   // Halfwidth and Fullwidth Forms
+    (0xFFE0, 0xFFE2),   // Halfwidth and Fullwidth Forms
+    (0xFFE4, 0xFFE7),   // Halfwidth and Fullwidth Forms
+    (0xFFF0, 0xFFF8),   // Specials
+    (0xFFFC, 0xFFFD),   // Specials
+    (0x10980, 0x1099F), // Meroitic Hieroglyphs
+    (0x11580, 0x115FF), // Siddham
+    (0x11A00, 0x11ABF), // Zanabazar Square to Unified Canadian Aboriginal Syllabics Extended-A
+    (0x13000, 0x1467F), // Egyptian Hieroglyphs to Anatolian Hieroglyphs
+    (0x16FE0, 0x191DF), // Ideographic Symbols and Punctuation to Jurchen Radicals
+    (0x1AFF0, 0x1B2FF), // Kana Extended-B to Nushu
+    (0x1CEC0, 0x1CEDC), // Miscellaneous Symbols Supplement
+    (0x1CEE0, 0x1CEF0), // Miscellaneous Symbols Supplement
+    (0x1CEFE, 0x1CFCF), // Miscellaneous Symbols Supplement to Znamenny Musical Notation
+    (0x1D000, 0x1D1FF), // Byzantine Musical Symbols to Musical Symbols
+    (0x1D250, 0x1D281), // Musical Symbols Supplement
+    (0x1D2E0, 0x1D37F), // Mayan Numerals to Counting Rod Numerals
+    (0x1D800, 0x1DAAF), // Sutton SignWriting
+    (0x1F000, 0x1F7FF), // Mahjong Tiles to Geometric Shapes Extended
+    (0x1F900, 0x1FAFF), // Supplemental Symbols and Pictographs to Symbols and Pictographs Extended-A
+    (0x20000, 0x2FFFD), // Supplementary Ideographic Plane
+    (0x30000, 0x3FFFD), // Tertiary Ideographic Plane
+];
+
 /// Whether `c` stands upright in top-to-bottom East Asian text (`tbRl`) rather than turning with
-/// the line: ideographs, kana, Hangul, full-width letters and digits, and the ideographic comma
-/// and full stop (an approximation of Unicode's vertical orientation, UAX #50). Brackets, dashes
-/// and the prolonged sound mark turn with the line, as their vertical forms do.
+/// the line: ideographs, kana, Hangul, full-width letters and digits, the ideographic comma and
+/// full stop, and symbols such as ▲ ★ ※ ① Ⅳ ℃ (the table `UPRIGHT`).
 pub fn upright_in_vertical(c: char) -> bool {
-    matches!(c,
-        '\u{1100}'..='\u{11FF}'
-        | '\u{2E80}'..='\u{2FFF}'
-        | '\u{3001}'..='\u{3007}'
-        | '\u{3012}'..='\u{3013}'
-        | '\u{3020}'..='\u{302F}'
-        | '\u{3031}'..='\u{303F}'
-        | '\u{3040}'..='\u{30FB}'
-        | '\u{30FD}'..='\u{30FF}'
-        | '\u{3100}'..='\u{31EF}'
-        | '\u{31F0}'..='\u{4DBF}'
-        | '\u{4E00}'..='\u{9FFF}'
-        | '\u{A960}'..='\u{A97F}'
-        | '\u{AC00}'..='\u{D7FF}'
-        | '\u{F900}'..='\u{FAFF}'
-        | '\u{FE30}'..='\u{FE4F}'
-        | '\u{FF01}'..='\u{FF07}'
-        | '\u{FF0A}'..='\u{FF0C}'
-        | '\u{FF0E}'..='\u{FF3A}'
-        | '\u{FF3C}'
-        | '\u{FF3E}'..='\u{FF5A}'
-        | '\u{FFE0}'..='\u{FFE6}'
-        | '\u{20000}'..='\u{3FFFF}'
-    )
+    let c = u32::from(c);
+    let i = UPRIGHT.partition_point(|&(_, last)| last < c);
+    UPRIGHT.get(i).is_some_and(|&(first, _)| first <= c)
 }
 
-/// Top-to-bottom text drawn turned 90° clockwise, with its East Asian characters turned back
-/// upright, each about the centre of its em square (`tbRl`: ideographs stand, Latin lies).
+/// Top-to-bottom text drawn turned 90° clockwise, with its upright characters
+/// ([`upright_in_vertical`]) turned back, each about the centre of its em square (`tbRl`:
+/// ideographs and symbols such as ▲ stand, Latin lies).
 /// Glyph runs are split where uprightness changes, so the text keeps its order.
 pub(super) fn upright_east_asian(items: Vec<Draw>) -> Vec<Draw> {
     let mut out = Vec::with_capacity(items.len());
@@ -161,4 +246,20 @@ pub(super) fn upright_east_asian(items: Vec<Draw>) -> Vec<Draw> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UPRIGHT;
+
+    /// `upright_in_vertical` searches the ranges by halves: they must be sorted, with a gap between
+    /// each and the next (adjacent ones would be one range), and each within Unicode.
+    #[test]
+    fn upright_ranges_are_sorted_and_apart() {
+        assert!(UPRIGHT.iter().all(|&(first, last)| first <= last && last <= 0x10FFFF));
+        for w in UPRIGHT.windows(2) {
+            let &[(_, last), (next, _)] = w else { continue };
+            assert!(last + 1 < next, "{last:04X} then {next:04X}");
+        }
+    }
 }
