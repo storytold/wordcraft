@@ -402,7 +402,7 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
         }
         let mut updates: Vec<(usize, String)> = Vec::new();
         for (k, o) in p.objects.iter().enumerate() {
-            let InlineObject::Field { instr, locked: false, .. } = o else { continue };
+            let InlineObject::Field { instr, result, locked: false, .. } = o else { continue };
             // A table formula reads the cells around its own cell again.
             if instr.trim_start().starts_with('=') {
                 if let Some((tp, r, c)) = path.cell()
@@ -419,6 +419,8 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
             }
             let name = wordcraft_layout::fields::field_name(instr);
             match name.as_str() {
+                // A font with no symbol table here keeps a stored result its code gives no character for.
+                "SYMBOL" => updates.push((k, wordcraft_layout::fields::symbol_field_text(instr, result))),
                 "DATE" | "TIME" | "CREATEDATE" | "SAVEDATE" | "PRINTDATE" => {
                     let lang = field_lang(&s.doc, p, k);
                     let pic = date_picture(instr).unwrap_or_else(|| default_picture(&name, lang.as_deref()));

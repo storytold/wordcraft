@@ -14,7 +14,7 @@ use wordcraft_doc::{Document, Paragraph};
 use wordcraft_fonts::FaceRef;
 
 use crate::NumeralMode;
-use crate::fields::{FIELD_SHADING, FieldCtx, field_code_text, field_text_on, reference_link};
+use crate::fields::{FIELD_SHADING, FieldCtx, field_code_text, reference_link, shown_field_text};
 
 mod bidi;
 mod builder;

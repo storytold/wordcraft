@@ -9180,6 +9180,7 @@ version = "0.18.1"
 dependencies = [
  "craft-metafile",
  "craft-proof",
+ "encoding_rs",
  "image",
  "js-sys",
  "kurbo",
