@@ -89,19 +89,79 @@ fn notice_documents_sctk_adwaita_attribution() {
     assert!(notice.contains("Bartłomiej Maryńczak"), "NOTICE must retain sctk-adwaita's author copyright");
 }
 
-/// Verifies that `Cargo.lock` resolves `sctk-adwaita` without font dependencies.
+/// Parses `[[package]]` entries from `Cargo.lock` as `(name, version, dependencies)`.
+fn parse_lockfile_packages(lockfile: &str) -> Vec<(&str, &str, Vec<&str>)> {
+    lockfile
+        .split("[[package]]")
+        .skip(1)
+        .filter_map(|chunk| {
+            let mut name = None;
+            let mut version = None;
+            let mut deps = Vec::new();
+            let mut in_deps = false;
+            for raw_line in chunk.lines() {
+                let line = raw_line.trim();
+                if in_deps {
+                    if line == "]" {
+                        in_deps = false;
+                        continue;
+                    }
+                    let dep = line.trim_end_matches(',').trim().trim_matches('"');
+                    if !dep.is_empty() {
+                        deps.push(dep);
+                    }
+                    continue;
+                }
+                if let Some(rest) = line.strip_prefix("name = ") {
+                    name = Some(rest.trim_matches('"'));
+                } else if let Some(rest) = line.strip_prefix("version = ") {
+                    version = Some(rest.trim_matches('"'));
+                } else if line == "dependencies = [" {
+                    in_deps = true;
+                }
+            }
+            Some((name?, version?, deps))
+        })
+        .collect()
+}
+
+/// Verifies that WordCraft's resolved Linux `winit` -> `sctk-adwaita` dependency path in
+/// `Cargo.lock` does not pull in any title-font renderer crates.
 #[test]
 fn cargo_lock_contains_font_free_sctk_adwaita() {
+    use std::collections::{HashSet, VecDeque};
+
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).expect("workspace root");
     let lockfile = std::fs::read_to_string(workspace_root.join("Cargo.lock")).expect("read Cargo.lock");
-    assert!(lockfile.contains("name = \"sctk-adwaita\""), "Cargo.lock must include sctk-adwaita");
+    let packages = parse_lockfile_packages(&lockfile);
 
-    // Verify that Cargo.lock contains sctk-adwaita and none of the font renderer crates.
-    let _adwaita_entry =
-        lockfile.split("[[package]]").find(|chunk| chunk.contains("name = \"sctk-adwaita\"")).expect("sctk-adwaita package entry in Cargo.lock");
+    let has_dep = |pkg_name: &str, target: &str| {
+        packages.iter().any(|(name, _, deps)| *name == pkg_name && deps.iter().any(|spec| spec.split_whitespace().next() == Some(target)))
+    };
+    assert!(has_dep("winit", "sctk-adwaita"), "winit in Cargo.lock must depend on sctk-adwaita");
 
-    for forbidden in ["fontdue", "ab_glyph", "cosmic-text", "crossfont"] {
-        let needle = format!("name = \"{forbidden}\"");
-        assert!(!lockfile.contains(&needle), "Cargo.lock must not contain {forbidden} in the notitle configuration");
+    let mut queue = VecDeque::new();
+    let mut visited = HashSet::new();
+    for (idx, (name, _, _)) in packages.iter().enumerate() {
+        if *name == "sctk-adwaita" && visited.insert(idx) {
+            queue.push_back(idx);
+        }
+    }
+    assert!(!queue.is_empty(), "Cargo.lock must include sctk-adwaita");
+
+    let forbidden = ["fontdue", "ab_glyph", "cosmic-text", "crossfont"];
+    while let Some(idx) = queue.pop_front() {
+        let (name, _, deps) = &packages[idx];
+        assert!(!forbidden.contains(name), "sctk-adwaita's resolved dependency path must not include title-font renderer {name}");
+        for spec in deps {
+            let mut parts = spec.split_whitespace();
+            let dep_name = parts.next().expect("dependency name");
+            let dep_ver = parts.next();
+            for (next_idx, (cand_name, cand_ver, _)) in packages.iter().enumerate() {
+                if *cand_name == dep_name && dep_ver.is_none_or(|v| v == *cand_ver) && visited.insert(next_idx) {
+                    queue.push_back(next_idx);
+                }
+            }
+        }
     }
 }
