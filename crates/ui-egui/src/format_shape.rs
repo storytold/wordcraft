@@ -1,11 +1,10 @@
 //! The Format Shape pane (Shape Fill › More Gradients…, a shape's Format Shape…): the selected
-//! shapes' fill, as Word's Fill section: no fill, a solid colour with its transparency, or a
-//! gradient (preset, type, direction, angle, stops, rotate with shape). Every change runs
-//! `shape.fill` with the whole fill; a drag applies as it goes and undoes in one step.
+//! shapes' fill, outline, and layout settings (size, rotation, text direction, and alignment).
+//! Every change runs the corresponding shape command; a drag applies as it goes and undoes in one step.
 
 use std::sync::Arc;
 
-use craft::behavior::{EditEvents, Value};
+use craft::behavior::{EditEvents, Mixed, Value};
 use craft::color_ui::gradient::{ColorStop, GradientStops, StopRows, StopRules};
 use craft::color_ui::ui::gradient::{GradientEditor, StopRef};
 // PLAN: assumed craft::draw::ui exports these (ch.C15)
@@ -24,8 +23,10 @@ use craft::ui::pickers::Select;
 use craft::ui::popover::Popover;
 use craft::ui::runtime::env::{Label, UnitKind};
 use craft::ui::runtime::memory::{SaveKey, saved_value, set_saved_value};
+use craft::ui::sections::{HeaderStrength, Section};
 use craft::ui::text::NumberField;
 use egui::{Ui, pos2};
+use serde_json::json;
 use wordcraft_doc::Rgb;
 use wordcraft_doc::fill::{Fill, Gradient, GradientKind, PathShape};
 use wordcraft_doc::para::InlineObject;
@@ -58,13 +59,127 @@ pub(crate) fn remember_variation(app: &mut WordApp, pos: wordcraft_doc::Pos, fil
     app.shape_variation = Some(Variation(pos, fill, base));
 }
 
+/// All selected shapes and drawing canvases (or the active text box containing the caret).
+fn target_shapes(app: &WordApp) -> Vec<(wordcraft_doc::Pos, InlineObject)> {
+    wordcraft_engine::cmd::objects::target_objects(&app.session, |o| matches!(o, InlineObject::Shape { .. }) || o.is_canvas())
+}
+
+/// The first selected shape's or canvas's object: `None` with no shape or canvas active.
+pub(crate) fn current_object(app: &WordApp) -> Option<(wordcraft_doc::Pos, InlineObject)> {
+    target_shapes(app).into_iter().next()
+}
+
+fn fill_of(o: &InlineObject) -> Option<Fill> {
+    match o {
+        InlineObject::Shape { fill, .. } => fill.clone(),
+        o => o.canvas_style().and_then(|c| c.fill.clone()),
+    }
+}
+
+fn fill_kind_of(fill: &Option<Fill>) -> u8 {
+    match fill {
+        None => 0,
+        Some(Fill::Solid { .. }) => 1,
+        Some(Fill::Gradient(_)) => 2,
+    }
+}
+
 /// The first selected shape's or canvas's fill: `None` with no shape selected.
 pub(crate) fn current(app: &WordApp) -> Option<Option<Fill>> {
-    let (_, o) = wordcraft_engine::cmd::objects::selected(&app.session)?;
+    let (_, o) = current_object(app)?;
     match o {
         InlineObject::Shape { fill, .. } => Some(fill),
         o => o.canvas_style().map(|c| c.fill.clone()),
     }
+}
+
+/// The selected shape's outline properties (summarized across all selected shapes/canvases).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CurrentLine {
+    /// Whether all targets have a line (`Some(true)`), none do (`Some(false)`), or mixed (`None`).
+    pub has_line: Option<bool>,
+    /// The representative stroke colour (`None` when no target has an outline).
+    pub stroke: Option<Rgb>,
+    /// The representative stroke width in points.
+    pub width: f32,
+    /// The representative dash style.
+    pub dash: wordcraft_doc::line_dash::LineDash,
+    /// Whether selected non-canvas shapes disagree on dash style.
+    pub dash_mixed: bool,
+    /// The representative line cap style.
+    pub cap: wordcraft_doc::connector::LineCap,
+    /// Whether selected non-canvas shapes disagree on cap style.
+    pub cap_mixed: bool,
+    /// Whether all targets are drawing canvases (canvas outlines do not support dash or cap styles).
+    pub is_canvas: bool,
+}
+
+fn line_item(o: &InlineObject) -> Option<(Option<Rgb>, f32, wordcraft_doc::line_dash::LineDash, wordcraft_doc::connector::LineCap, bool)> {
+    match o {
+        InlineObject::Shape { stroke, stroke_width, extra, .. } => Some((*stroke, *stroke_width, extra.dash.clone(), extra.cap, false)),
+        o => o
+            .canvas_style()
+            .map(|c| (c.stroke, c.stroke_width, wordcraft_doc::line_dash::LineDash::Solid, wordcraft_doc::connector::LineCap::Flat, true)),
+    }
+}
+
+/// The selected shapes' or canvases' outline summary: `None` when no shape or canvas is selected.
+pub(crate) fn current_line(app: &WordApp) -> Option<CurrentLine> {
+    let shapes = target_shapes(app);
+    let items: Vec<_> = shapes.iter().filter_map(|(_, o)| line_item(o)).collect();
+    let first = items.first()?;
+    let any_line = items.iter().any(|x| x.0.is_some());
+    let all_line = items.iter().all(|x| x.0.is_some());
+    let has_line = (all_line || !any_line).then_some(all_line);
+    let rep = items.iter().find(|x| x.0.is_some()).unwrap_or(first);
+    let shape_items: Vec<_> = items.iter().filter(|x| !x.4).collect();
+    let shape_rep = shape_items.first().copied().unwrap_or(rep);
+    let dash_mixed = shape_items.windows(2).any(|w| w[0].2 != w[1].2);
+    let cap_mixed = shape_items.windows(2).any(|w| w[0].3 != w[1].3);
+    Some(CurrentLine {
+        has_line,
+        stroke: rep.0,
+        width: rep.1,
+        dash: shape_rep.2.clone(),
+        dash_mixed,
+        cap: shape_rep.3,
+        cap_mixed,
+        is_canvas: items.iter().all(|x| x.4),
+    })
+}
+
+/// The selected shape's or text box's layout properties.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CurrentLayout {
+    /// Width in points.
+    pub width: f32,
+    /// Height in points.
+    pub height: f32,
+    /// Rotation in degrees.
+    pub rotation: f32,
+    /// Whether any target is a text box.
+    pub is_text_box: bool,
+    /// The primary target text box's body properties.
+    pub text_body: Option<wordcraft_doc::TextBody>,
+    /// Whether selected text boxes disagree on vertical alignment.
+    pub anchor_mixed: bool,
+    /// Whether selected text boxes disagree on text direction.
+    pub vert_mixed: bool,
+}
+
+/// The selected shapes' or text boxes' layout: size, rotation, and text body settings.
+pub(crate) fn current_layout(app: &WordApp) -> Option<CurrentLayout> {
+    let (_, o) = current_object(app)?;
+    let (width, height, float) = o.frame()?;
+    let bodies: Vec<wordcraft_doc::TextBody> = wordcraft_engine::cmd::objects::text_box_targets(&app.session)
+        .into_iter()
+        .filter_map(|(_, id)| app.session.doc.parts.get(&id).map(|p| p.body))
+        .collect();
+    let is_text_box = !bodies.is_empty();
+    let text_body = bodies.first().copied();
+    let anchor_mixed = bodies.windows(2).any(|w| w[0].anchor != w[1].anchor);
+    let vert_mixed = bodies.windows(2).any(|w| w[0].vert != w[1].vert);
+    Some(CurrentLayout { width, height, rotation: float.spin().deg, is_text_box, text_body, anchor_mixed, vert_mixed })
 }
 
 /// Sets the selected shapes' fill.
@@ -137,17 +252,17 @@ pub(crate) fn fill_tile(fill: &Fill) -> (GradientStops, GradientTile) {
 
 /// The pane, while open.
 pub fn pane(app: &mut WordApp, ui: &mut Ui) {
-    let Some(fill) = current(app) else {
-        Notice::new(Tone::Neutral, tl!("Select a shape, text box or drawing canvas to format its fill.")).show(ui);
+    let shapes = target_shapes(app);
+    let Some((_, first)) = shapes.first() else {
+        Notice::new(Tone::Neutral, tl!("Select a shape, text box or drawing canvas to format it.")).show(ui);
         return;
     };
+    let fill = fill_of(first);
     let theme = app.session.doc.settings.theme_colors.clone();
-    let kind: u8 = match &fill {
-        None => 0,
-        Some(Fill::Solid { .. }) => 1,
-        Some(Fill::Gradient(_)) => 2,
-    };
-    let shown = RadioGroup::new(tl!("Fill"), Bind::given(kind)).show(ui, |ui, _| {
+    let first_kind = fill_kind_of(&fill);
+    let fill_mixed = shapes.iter().skip(1).any(|(_, o)| fill_kind_of(&fill_of(o)) != first_kind);
+    let shown_kind = if fill_mixed { Mixed::Mixed } else { Mixed::Same(first_kind) };
+    let shown = RadioGroup::new(tl!("Fill"), Bind::given(shown_kind)).show(ui, |ui, _| {
         Stack::new().show(ui, |ui, _| {
             Radio::new(0u8).label(tl!("No fill")).show(ui);
             Radio::new(1u8).label(tl!("Solid fill")).show(ui);
@@ -155,7 +270,7 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     if let Some(pick) = shown.output.events.committed().copied()
-        && pick != kind
+        && (fill_mixed || pick != first_kind)
     {
         let accent1 = theme.get(4).copied().unwrap_or(Rgb(68, 114, 196));
         let main = fill.as_ref().map_or(accent1, Fill::main_color);
@@ -172,6 +287,218 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
         Some(Fill::Gradient(g)) => gradient(app, ui, &g),
         None => {}
     }
+
+    if let Some(line) = current_line(app) {
+        Section::fixed(tl!("Line")).show(ui, |ui, _| line_section(app, ui, &theme, &line));
+    }
+
+    if let Some(layout) = current_layout(app) {
+        Section::fixed(tl!("Layout & Properties")).show(ui, |ui, _| layout_section(app, ui, &layout));
+    }
+}
+
+/// Draws a labelled preset Select for an optional current choice (`None` when mixed or custom)
+/// and returns the newly picked preset parameter when the selection changes.
+fn preset_select<'a>(
+    ui: &mut Ui,
+    label_text: &str,
+    id_salt: &str,
+    options: &[(&str, &'a str)],
+    orig_idx: Option<usize>,
+    mixed: bool,
+    custom_label: Option<&str>,
+) -> Option<&'a str> {
+    let entries: Vec<Entry<usize>> = options.iter().enumerate().map(|(i, (opt_label, _))| Entry::new(i, tl!(opt_label).to_owned())).collect();
+    let shown = if mixed { Mixed::Mixed } else { Mixed::Same(orig_idx.unwrap_or(usize::MAX)) };
+    let label = Label::from(label_text.to_owned());
+    let custom = custom_label.map(|c| Label::from(c.to_owned()));
+    let picked = Field::new(label.clone())
+        .id_salt(id_salt)
+        .show(ui, |ui, _| {
+            let mut select = Select::new(label.clone(), Bind::given(shown), &entries);
+            if let Some(custom) = custom.clone() {
+                select = select.placeholder(custom);
+            }
+            select.show(ui).events.committed().copied()
+        })
+        .inner
+        .flatten();
+    picked.filter(|&i| Some(i) != orig_idx).and_then(|i| options.get(i).map(|o| o.1))
+}
+
+/// Draws the Line section: No line or Solid line (color, width, dash type, cap type).
+fn line_section(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], line: &CurrentLine) {
+    let has_line = line.has_line.map_or(Mixed::Mixed, Mixed::Same);
+    let shown = RadioGroup::new(tl!("Line"), Bind::given(has_line)).show(ui, |ui, _| {
+        Stack::new().show(ui, |ui, _| {
+            Radio::new(false).label(tl!("No line")).show(ui);
+            Radio::new(true).label(tl!("Solid line")).show(ui);
+        });
+    });
+    if let Some(solid_line) = shown.output.events.committed().copied()
+        && line.has_line != Some(solid_line)
+    {
+        if !solid_line {
+            let _ = app.run("shape.outline", json!({"color": null}));
+        } else {
+            let accent1 = theme.get(4).copied().unwrap_or(Rgb(68, 114, 196));
+            let w = if line.width > 0.0 { line.width } else { 0.75 };
+            let _ = app.run("shape.outline", json!({"color": accent1.hex(), "width": w}));
+        }
+        return;
+    }
+    if let Some(color) = line.stroke {
+        let palette = Palette { theme: theme.to_vec(), recent: Vec::new() };
+        let mut hex = color.hex();
+        let label: Label = tl!("Color").into();
+        let picked = ui.push_id("line_color", |ui| color_field(ui, &label, &mut hex, &ColorFieldEmpty::NoColor, &palette)).inner;
+        if picked.more_colors {
+            colors::open_for(app, &Target::cmd("shape.outline"), Some(color), craft::color_ui::ui::ColorPickerTab::Standard);
+            return;
+        }
+        if picked.changed {
+            if hex.is_empty() {
+                let _ = app.run("shape.outline", json!({"color": null}));
+                return;
+            }
+            if let Some(n) = Rgb::parse(&hex) {
+                let _ = app.run("shape.outline", json!({"color": n.hex()}));
+            }
+        }
+        let mut width_events = EditEvents::new();
+        Field::new(tl!("Width")).id_salt("format_shape.line_width").show(ui, |ui, _| {
+            width_events = NumberField::new(tl!("Width"), Bind::given(Some(f64::from(line.width))))
+                .unit_kind(UnitKind::Points)
+                .range(0.25..=72.0)
+                .step(0.25)
+                .fixed_decimals(2)
+                .show(ui)
+                .edit
+                .events;
+        });
+        crate::undo_marks::apply_edits(app, width_events, |app, v: Option<f64>| {
+            if let Some(w) = v.filter(|w| (0.25..=72.0).contains(w)) {
+                let _ = app.run("shape.outline", json!({"width": w}));
+            }
+        });
+
+        if !line.is_canvas {
+            const DASHES: [(&str, &str); 11] = [
+                ("Solid", "solid"),
+                ("Round Dot", "dot"),
+                ("Square Dot", "sysDot"),
+                ("Dash", "dash"),
+                ("Dash Dot", "dashDot"),
+                ("Long Dash", "lgDash"),
+                ("Long Dash Dot", "lgDashDot"),
+                ("Long Dash Dot Dot", "lgDashDotDot"),
+                ("System Dash", "sysDash"),
+                ("System Dash Dot", "sysDashDot"),
+                ("System Dash Dot Dot", "sysDashDotDot"),
+            ];
+            let is_custom = !line.dash_mixed && matches!(line.dash, wordcraft_doc::line_dash::LineDash::Custom(_));
+            let orig_dash_idx = if line.dash_mixed || is_custom {
+                None
+            } else {
+                let current_dash_str = line.dash.ooxml().unwrap_or("solid");
+                DASHES.iter().position(|(_, k)| *k == current_dash_str).or(Some(0))
+            };
+            if let Some(dash) = preset_select(
+                ui,
+                tl!("Dash type"),
+                "format_shape.dash_type",
+                &DASHES,
+                orig_dash_idx,
+                line.dash_mixed,
+                is_custom.then(|| tl!("Custom")),
+            ) {
+                let _ = app.run("shape.outline", json!({"dash": dash}));
+            }
+
+            const CAPS: [(&str, &str); 3] = [("Flat", "flat"), ("Round", "rnd"), ("Square", "sq")];
+            let orig_cap_idx = if line.cap_mixed {
+                None
+            } else {
+                let current_cap_str = line.cap.ooxml();
+                CAPS.iter().position(|(_, k)| *k == current_cap_str).or(Some(0))
+            };
+            if let Some(cap) = preset_select(ui, tl!("Cap type"), "format_shape.cap_type", &CAPS, orig_cap_idx, line.cap_mixed, None) {
+                let _ = app.run("shape.outline", json!({"cap": cap}));
+            }
+        }
+    }
+}
+
+/// Draws the Size & Properties / Text Box layout section.
+fn layout_section(app: &mut WordApp, ui: &mut Ui, layout: &CurrentLayout) {
+    for (label, id_salt, key, value) in
+        [(tl!("Width"), "format_shape.layout_width", "width", layout.width), (tl!("Height"), "format_shape.layout_height", "height", layout.height)]
+    {
+        let mut events = EditEvents::new();
+        Field::new(label).id_salt(id_salt).show(ui, |ui, _| {
+            events = NumberField::new(label, Bind::given(Some(f64::from(value))))
+                .unit_kind(UnitKind::Points)
+                .range(1.0..=4000.0)
+                .commit_decimals(1)
+                .show(ui)
+                .edit
+                .events;
+        });
+        crate::undo_marks::apply_edits(app, events, move |app, v: Option<f64>| {
+            if let Some(val) = v.filter(|val| (1.0..=4000.0).contains(val)) {
+                let _ = app.run("shape.size", json!({ key: val, "lockAspect": false }));
+            }
+        });
+    }
+
+    let mut rot_events = EditEvents::new();
+    Field::new(tl!("Rotation")).id_salt("format_shape.rotation").show(ui, |ui, _| {
+        rot_events = NumberField::new(tl!("Rotation"), Bind::given(Some(f64::from(layout.rotation))))
+            .unit_kind(UnitKind::Degrees)
+            .range(0.0..=360.0)
+            .commit_decimals(1)
+            .show(ui)
+            .edit
+            .events;
+    });
+    crate::undo_marks::apply_edits(app, rot_events, |app, v: Option<f64>| {
+        if let Some(degrees) = v.filter(|d| (0.0..=360.0).contains(d)) {
+            let _ = app.run("shape.rotation", json!({"degrees": degrees}));
+        }
+    });
+
+    if layout.is_text_box || layout.text_body.is_some() {
+        let body = layout.text_body.unwrap_or_default();
+        Section::fixed(tl!("Text Box")).strength(HeaderStrength::Caption).show(ui, |ui, _| {
+            const VALIGNS: [(wordcraft_doc::props::VAlign, &str, &str); 3] = [
+                (wordcraft_doc::props::VAlign::Top, "Top", "t"),
+                (wordcraft_doc::props::VAlign::Center, "Middle", "ctr"),
+                (wordcraft_doc::props::VAlign::Bottom, "Bottom", "b"),
+            ];
+            const VALIGN_OPTS: [(&str, &str); 3] = [("Top", "t"), ("Middle", "ctr"), ("Bottom", "b")];
+            let orig_valign_idx = (!layout.anchor_mixed).then(|| VALIGNS.iter().position(|(a, _, _)| *a == body.anchor).unwrap_or(0));
+            if let Some(anchor) =
+                preset_select(ui, tl!("Vertical alignment"), "format_shape.valign", &VALIGN_OPTS, orig_valign_idx, layout.anchor_mixed, None)
+            {
+                let _ = app.run("shape.alignText", json!({"anchor": anchor}));
+            }
+
+            const DIRS: [(wordcraft_doc::props::TextVert, &str, &str); 4] = [
+                (wordcraft_doc::props::TextVert::Horz, "Horizontal", "horz"),
+                (wordcraft_doc::props::TextVert::Vert, "Rotate all text 90°", "vert"),
+                (wordcraft_doc::props::TextVert::Vert270, "Rotate all text 270°", "vert270"),
+                (wordcraft_doc::props::TextVert::Stacked, "Stacked", "wordArtVert"),
+            ];
+            const DIR_OPTS: [(&str, &str); 4] =
+                [("Horizontal", "horz"), ("Rotate all text 90°", "vert"), ("Rotate all text 270°", "vert270"), ("Stacked", "wordArtVert")];
+            let orig_dir_idx = (!layout.vert_mixed).then(|| DIRS.iter().position(|(d, _, _)| *d == body.vert).unwrap_or(0));
+            if let Some(dir) =
+                preset_select(ui, tl!("Text direction"), "format_shape.text_direction", &DIR_OPTS, orig_dir_idx, layout.vert_mixed, None)
+            {
+                let _ = app.run("shape.textDirection", json!({"dir": dir}));
+            }
+        });
+    }
 }
 
 /// Draws a solid fill's colour field and transparency slider, applying each changed fill as a
@@ -184,9 +511,8 @@ fn solid(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], color: Rgb, transparency
     let picked = color_field(ui, &label, &mut hex, &ColorFieldEmpty::NoColor, &palette);
     if picked.changed
         && let Some(n) = Rgb::parse(&hex)
-        && n != color
     {
-        apply(app, Some(&Fill::Solid { color: n, transparency }));
+        let _ = app.run("shape.fill", json!({"color": n.hex()}));
         return;
     }
     let out = SliderField::new(tl!("Transparency"), Bind::given(f64::from(transparency)), 0.0..=100.0).unit_kind(UnitKind::Percent).show(ui);
@@ -455,6 +781,201 @@ mod tests {
         assert_eq!(h.state().session.undo_depth(), depth);
     }
 
+    fn stroke(app: &WordApp) -> Option<wordcraft_doc::Rgb> {
+        match super::current_object(app) {
+            Some((_, InlineObject::Shape { stroke, .. })) => stroke,
+            o => panic!("{o:?}"),
+        }
+    }
+
+    /// Issue #5896: Format Shape pane provides Line settings: "No line" removes the frame,
+    /// and "Solid line" restores it with color and width.
+    #[test]
+    fn format_shape_pane_removes_and_restores_line() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.textBox", json!({"text": "Hello"})).unwrap();
+        a.run("view.formatShapePane", json!({"value": true})).unwrap();
+        let mut h = harness(a);
+        h.run_steps(4);
+        assert_eq!(stroke(h.state()), Some(wordcraft_doc::Rgb::BLACK), "default textbox has black frame");
+
+        // Click "No line" in the Format Shape pane:
+        h.get_by_label("No line").click();
+        h.run_steps(3);
+        assert_eq!(stroke(h.state()), None, "No line removes the frame");
+
+        // Click "Solid line" in the Format Shape pane:
+        h.get_by_label("Solid line").click();
+        h.run_steps(3);
+        assert!(stroke(h.state()).is_some(), "Solid line restores the frame");
+    }
+
+    /// Format Shape pane displays layout and text box sections, allowing layout adjustments.
+    #[test]
+    fn format_shape_pane_exposes_layout_and_text_box() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.textBox", json!({"text": "Box content"})).unwrap();
+        a.run("view.formatShapePane", json!({"value": true})).unwrap();
+        let mut h = harness(a);
+        h.run_steps(4);
+        assert!(h.query_by_role_and_label(egui::accesskit::Role::Heading, "Layout & Properties").is_some());
+        assert!(h.query_by_role_and_label(egui::accesskit::Role::Heading, "Text Box").is_some());
+        assert!(h.query_by_label("Vertical alignment").is_some());
+        assert!(h.query_by_label("Text direction").is_some());
+    }
+
+    /// Showing the pane leaves a shape with dimensions outside the NumberField range alone.
+    #[test]
+    fn format_shape_pane_leaves_out_of_range_layout_alone() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.shape", json!({"kind": "rectangle"})).unwrap();
+        a.run("picture.size", json!({"width": 2500.0, "lockAspect": false})).unwrap();
+        let (doc, depth) = (a.session.doc.clone(), a.session.undo_depth());
+        a.run("view.formatShapePane", json!({"value": true})).unwrap();
+        let mut h = harness(a);
+        h.run_steps(4);
+        assert_eq!(h.state().session.undo_depth(), depth, "opening pane does not mutate size");
+        assert!(h.state().session.doc == doc);
+    }
+
+    /// A drawing canvas outline hides dash and cap type controls.
+    #[test]
+    fn format_shape_pane_hides_dash_and_cap_for_canvas() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.canvas", json!({"width": 300, "height": 200})).unwrap();
+        a.run("view.formatShapePane", json!({"value": true})).unwrap();
+        let mut h = harness(a);
+        h.run_steps(4);
+        assert!(h.query_by_role_and_label(egui::accesskit::Role::Heading, "Line").is_some());
+        assert!(h.query_by_label("Solid line").is_some());
+        assert!(h.query_by_label("Dash type").is_none(), "canvas does not show dash type");
+        assert!(h.query_by_label("Cap type").is_none(), "canvas does not show cap type");
+    }
+
+    /// System dash presets and custom dashes are preserved and displayed correctly.
+    #[test]
+    fn format_shape_pane_preserves_custom_and_system_dashes() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.shape", json!({"kind": "rectangle"})).unwrap();
+        a.run("shape.outline", json!({"dash": "sysDash"})).unwrap();
+        a.run("view.formatShapePane", json!({"value": true})).unwrap();
+        let mut h = harness(a);
+        h.run_steps(4);
+        let line = super::current_line(h.state()).expect("shape has line");
+        assert_eq!(line.dash, wordcraft_doc::line_dash::LineDash::SystemDash);
+
+        // Custom dashes show as "Custom" and are preserved:
+        let (pos, _) = wordcraft_engine::cmd::objects::selected(&h.state().session).unwrap();
+        let p = h.state_mut().session.doc.para_mut(pos.story, &pos.path).unwrap();
+        let InlineObject::Shape { extra, .. } = p.object_at_mut(pos.off).unwrap() else { panic!("expected shape") };
+        extra.dash = wordcraft_doc::line_dash::LineDash::Custom(vec![(100_000, 100_000)]);
+        h.run_steps(4);
+
+        let line = super::current_line(h.state()).expect("shape has line");
+        assert!(matches!(line.dash, wordcraft_doc::line_dash::LineDash::Custom(_)), "custom dash is preserved");
+    }
+
+    /// Issue #5896 P2: when typing inside a text box inside a drawing canvas, Format Shape shows
+    /// the member's controls and "No line" removes the member's border without clearing the canvas's.
+    #[test]
+    fn format_shape_pane_targets_canvas_text_box_member_while_typing() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.canvas", json!({"width": 300, "height": 200, "outline": "1F4E79"})).unwrap();
+        a.run("insert.textBox", json!({"text": "Canvas text"})).unwrap();
+        a.run("view.formatShapePane", json!({"value": true})).unwrap();
+        let mut h = harness(a);
+        h.run_steps(4);
+        assert!(h.query_by_label("Dash type").is_some(), "member text box shows Dash type");
+        assert!(h.query_by_label("Cap type").is_some(), "member text box shows Cap type");
+        assert!(h.query_by_role_and_label(egui::accesskit::Role::Heading, "Text Box").is_some(), "member text box shows Text Box section");
+
+        h.get_by_label("No line").click();
+        h.run_steps(3);
+        let canvas = h.state().session.doc.body.first().and_then(|b| b.as_para()).and_then(|p| p.objects.first()).unwrap();
+        assert_eq!(canvas.canvas_style().and_then(|st| st.stroke), Some(wordcraft_doc::Rgb(0x1F, 0x4E, 0x79)));
+        let InlineObject::Group { children, .. } = canvas else { panic!("{canvas:?}") };
+        assert!(matches!(&children[0].obj, InlineObject::Shape { stroke: None, .. }));
+    }
+
+    /// Issue #5896: on a mixed selection where the primary shape has no line and another shape
+    /// has an outline (or where a text box is added after a rectangle), clicking "No line" applies
+    /// to every selected shape and the Text Box section remains accessible.
+    #[test]
+    fn format_shape_pane_applies_line_choice_to_mixed_selection() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.shape", json!({"kind": "rectangle"})).unwrap();
+        a.run("shape.outline", json!({"color": null})).unwrap();
+        a.session.sel = wordcraft_engine::Selection::caret(a.session.doc.end_of(wordcraft_doc::StoryRef::Body));
+        a.run("insert.textBox", json!({"text": "Mixed"})).unwrap();
+        a.run("select.objects", json!({"index": 0})).unwrap();
+        a.run("select.addObject", json!({"index": 1})).unwrap();
+        a.run("view.formatShapePane", json!({"value": true})).unwrap();
+
+        let line = super::current_line(&a).expect("mixed selection has line info");
+        assert_eq!(line.has_line, None, "mixed No line / Solid line state");
+        let layout = super::current_layout(&a).expect("mixed selection has layout info");
+        assert!(layout.is_text_box, "added text box exposes Text Box section");
+
+        let mut h = harness(a);
+        h.run_steps(4);
+        assert!(h.query_by_role_and_label(egui::accesskit::Role::Heading, "Text Box").is_some(), "Text Box controls shown for added text box");
+
+        // Primary shape has no line, second shape has an outline: clicking "No line" clears both.
+        h.get_by_label("No line").click();
+        h.run_steps(3);
+        let para = h.state().session.doc.body.first().and_then(|b| b.as_para()).unwrap();
+        for (i, off) in para.object_offsets().into_iter().enumerate() {
+            let InlineObject::Shape { stroke, .. } = para.object_at(off).unwrap() else { panic!("expected shape {i}") };
+            assert_eq!(*stroke, None, "shape {i} outline cleared");
+        }
+    }
+
+    /// Issue #5896: dragging a Format Shape slider/NumberField joins updates into its initial
+    /// undo checkpoint on the fly so drags past MAX_UNDO (500) never evict earlier undo steps.
+    #[test]
+    fn format_shape_pane_drag_coalesces_into_single_undo_step() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.shape", json!({"kind": "rectangle"})).unwrap();
+        a.run("shape.fill", json!({"color": "156082"})).unwrap();
+        a.run("arrange.rotation", json!({"degrees": 180.0})).unwrap();
+        let depth_before = a.session.undo_depth();
+
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(600.0, 800.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                super::pane(app, ui);
+            },
+            a,
+        );
+        h.run_steps(2);
+
+        let rot_rect = h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Rotation").rect();
+        let mut pos = rot_rect.center();
+        h.event(egui::Event::PointerMoved(pos));
+        h.step();
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+        h.step();
+
+        // 510 changed frames (> MAX_UNDO = 500): sweep within 80..=280 so no frame clamps to a no-op.
+        for i in 0..510 {
+            let dx = if (i / 100) % 2 == 0 { 1.0 } else { -1.0 };
+            pos.x += dx;
+            h.event(egui::Event::PointerMoved(pos));
+            h.step();
+        }
+        assert_eq!(h.state().session.undo_depth(), depth_before + 1, "all 510 drag frames share one checkpoint without eviction");
+
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        h.run_steps(2);
+        assert_eq!(h.state().session.undo_depth(), depth_before + 1);
+        assert_ne!(super::current_layout(h.state()).unwrap().rotation, 180.0, "drag changed rotation");
+
+        assert!(h.state_mut().session.undo());
+        assert_eq!(super::current_layout(h.state()).unwrap().rotation, 180.0, "single Undo restores pre-drag angle");
+        assert_eq!(h.state().session.undo_depth(), depth_before, "earlier undo history stayed intact");
+    }
+
     /// Calls `variation_base` and `remember_variation` directly: the menu tiles that drive them are
     /// `ribbon::gradient_menu`'s (ribbon-w18).
     ///
@@ -476,5 +997,171 @@ mod tests {
         super::remember_variation(&mut a, pos.clone(), now.clone(), base);
         assert_eq!(super::variation_base(&a, &pos, &now), base, "the variation shown keeps the colour it was made from");
         assert_eq!(super::variation_base(&a, &pos, &solid), solid.main_color(), "another fill does not");
+    }
+
+    /// Mixed canvas + dashed/round-capped shape selection reads dash and cap from the shape,
+    /// not from the canvas placeholder.
+    #[test]
+    fn current_line_reads_dash_and_cap_from_non_canvas_shape() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.canvas", json!({"width": 300, "height": 200, "outline": "1F4E79"})).unwrap();
+        a.session.sel = wordcraft_engine::Selection::caret(a.session.doc.end_of(wordcraft_doc::StoryRef::Body));
+        a.run("insert.shape", json!({"kind": "rectangle"})).unwrap();
+        a.run("shape.outline", json!({"dash": "dash", "cap": "rnd"})).unwrap();
+        a.run("select.objects", json!({"index": 0})).unwrap();
+        a.run("select.addObject", json!({"index": 1})).unwrap();
+
+        let line = super::current_line(&a).expect("mixed selection has line info");
+        assert!(!line.dash_mixed);
+        assert!(!line.cap_mixed);
+        assert_eq!(line.dash, wordcraft_doc::line_dash::LineDash::Dash);
+        assert_eq!(line.cap, wordcraft_doc::connector::LineCap::Round);
+    }
+
+    /// Mixed fill selection (first shape has no fill, second has solid fill) lets clicking
+    /// "No fill" clear the second shape's fill.
+    #[test]
+    fn format_shape_pane_no_fill_clears_mixed_selection() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.shape", json!({"kind": "rectangle"})).unwrap();
+        a.run("shape.fill", json!({"color": null})).unwrap();
+        a.session.sel = wordcraft_engine::Selection::caret(a.session.doc.end_of(wordcraft_doc::StoryRef::Body));
+        a.run("insert.shape", json!({"kind": "rectangle"})).unwrap();
+        a.run("shape.fill", json!({"color": "156082"})).unwrap();
+        a.run("select.objects", json!({"index": 0})).unwrap();
+        a.run("select.addObject", json!({"index": 1})).unwrap();
+        a.run("view.formatShapePane", json!({"value": true})).unwrap();
+
+        let mut h = harness(a);
+        h.run_steps(4);
+        h.get_by_label("No fill").click();
+        h.run_steps(3);
+        let para = h.state().session.doc.body.first().and_then(|b| b.as_para()).unwrap();
+        for (i, off) in para.object_offsets().into_iter().enumerate() {
+            let InlineObject::Shape { fill, .. } = para.object_at(off).unwrap() else { panic!("expected shape {i}") };
+            assert_eq!(*fill, None, "shape {i} fill cleared");
+        }
+    }
+
+    /// Selecting More Colors… in the Line color picker opens the Colors dialog and applies
+    /// the chosen color through `shape.outline`.
+    #[test]
+    fn format_shape_pane_line_more_colors_applies_outline() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.textBox", json!({"text": "Hello"})).unwrap();
+        a.run("view.formatShapePane", json!({"value": true})).unwrap();
+        let mut h = harness(a);
+        h.run_steps(4);
+
+        h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Color #000000").last().expect("line color field").click();
+        h.run_steps(3);
+        h.get_by_label("More Colors…").click();
+        h.run_steps(3);
+
+        let dialog = h.state_mut().dialog_host.get_mut::<craft::color_ui::ui::ColorPickerDialog>().expect("Colors dialog opened");
+        dialog.set_color(craft::color_ui::ui::PickedColor::rgb(craft::theme::Srgba::rgb(1.0, 0.0, 0.0)));
+        let ctx = h.ctx.clone();
+        assert!(h.state_mut().dialog_host.confirm::<craft::color_ui::ui::ColorPickerDialog>(&ctx));
+        crate::dialogs::host::settle(h.state_mut(), &ctx);
+        assert_eq!(stroke(h.state()), Some(wordcraft_doc::Rgb(255, 0, 0)));
+    }
+
+    fn png_data() -> String {
+        let img = image::RgbaImage::from_fn(20, 10, |x, y| {
+            if x > 2 && x < 17 && y > 2 && y < 7 { image::Rgba([200, 30, 30, 255]) } else { image::Rgba([255, 255, 255, 255]) }
+        });
+        let b = wordcraft_geom::picture::encode_format(&image::DynamicImage::ImageRgba8(img), image::ImageFormat::Png).unwrap();
+        wordcraft_engine::cmd::insert::base64_encode(&b)
+    }
+
+    fn body_objects(app: &WordApp) -> Vec<&InlineObject> {
+        let para = app.session.doc.body.first().and_then(|b| b.as_para()).unwrap();
+        para.object_offsets().into_iter().filter_map(|off| para.object_at(off)).collect()
+    }
+
+    fn edit_layout_spin(h: &mut egui_kittest::Harness<'static, WordApp>, label: &str, text: &str) {
+        let mut matches: Vec<_> = h.query_all_by_role_and_label(egui::accesskit::Role::SpinButton, label).collect();
+        let node = matches.pop().expect("layout spin button");
+        drop(matches);
+        node.click();
+        crate::test_harness::frames(h, 2);
+        let mut matches: Vec<_> = h.query_all_by_role_and_label(egui::accesskit::Role::SpinButton, label).collect();
+        matches.pop().expect("layout spin button").type_text(text);
+        crate::test_harness::frames(h, 2);
+        h.key_press(egui::Key::Enter);
+        crate::test_harness::frames(h, 3);
+    }
+
+    /// Issue #5896: with a Picture and a Shape selected (distinct dimensions and rotation),
+    /// Format Shape shows the shape's layout and Width/Height/Rotation only edit the shape.
+    #[test]
+    fn format_shape_pane_mixed_picture_and_shape_shows_and_updates_shape_only() {
+        use egui_kittest::kittest::NodeT;
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.picture", json!({"data": png_data()})).unwrap();
+        a.run("picture.size", json!({"width": 60.0, "height": 40.0, "lockAspect": false})).unwrap();
+        a.run("arrange.rotation", json!({"degrees": 15.0})).unwrap();
+        a.session.sel = wordcraft_engine::Selection::caret(a.session.doc.end_of(wordcraft_doc::StoryRef::Body));
+        a.run("insert.shape", json!({"kind": "rectangle", "width": 150.0, "height": 90.0})).unwrap();
+        a.run("select.objects", json!({"index": 0})).unwrap();
+        a.run("select.addObject", json!({"index": 1})).unwrap();
+        a.run("view.formatShapePane", json!({"value": true})).unwrap();
+
+        let shown_layout = super::current_layout(&a).expect("mixed selection has shape layout");
+        assert_eq!((shown_layout.width, shown_layout.height, shown_layout.rotation), (150.0, 90.0, 0.0));
+
+        let mut h = harness(a);
+        h.run_steps(4);
+        let width_val = h.query_all_by_role_and_label(egui::accesskit::Role::SpinButton, "Width").last().unwrap().accesskit_node().numeric_value();
+        let height_val = h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Height").accesskit_node().numeric_value();
+        let rot_val = h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Rotation").accesskit_node().numeric_value();
+        assert_eq!(width_val, Some(150.0));
+        assert_eq!(height_val, Some(90.0));
+        assert_eq!(rot_val, Some(0.0));
+
+        edit_layout_spin(&mut h, "Width", "210");
+        edit_layout_spin(&mut h, "Height", "115");
+        edit_layout_spin(&mut h, "Rotation", "35");
+
+        let objs = body_objects(h.state());
+        assert_eq!(objs.len(), 2);
+        let (pw, ph, pf) = objs[0].frame().unwrap();
+        assert_eq!((pw, ph, pf.spin().deg), (60.0, 40.0, 15.0), "picture dimensions and rotation stay untouched");
+        let (sw, sh, sf) = objs[1].frame().unwrap();
+        assert_eq!((sw, sh, sf.spin().deg), (210.0, 115.0, 35.0), "shape updated by Format Shape layout controls");
+        assert_eq!(wordcraft_engine::cmd::objects::picked_objects(&h.state().session).len(), 2, "multi-selection preserved");
+    }
+
+    /// Issue #5896: with an editable Chart and a Shape selected (distinct dimensions),
+    /// Format Shape shows the shape's layout and Width/Height only edit the shape.
+    #[test]
+    fn format_shape_pane_mixed_chart_and_shape_shows_and_updates_shape_only() {
+        use egui_kittest::kittest::NodeT;
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.chart", json!({"type": "column"})).unwrap();
+        let (chart_w0, chart_h0, _) = body_objects(&a)[0].frame().unwrap();
+        a.session.sel = wordcraft_engine::Selection::caret(a.session.doc.end_of(wordcraft_doc::StoryRef::Body));
+        a.run("insert.shape", json!({"kind": "rectangle", "width": 140.0, "height": 70.0})).unwrap();
+        assert_ne!((chart_w0, chart_h0), (140.0, 70.0), "distinct initial dimensions");
+        a.run("select.objects", json!({"index": 0})).unwrap();
+        a.run("select.addObject", json!({"index": 1})).unwrap();
+        a.run("view.formatShapePane", json!({"value": true})).unwrap();
+
+        let mut h = harness(a);
+        h.run_steps(4);
+        let width_val = h.query_all_by_role_and_label(egui::accesskit::Role::SpinButton, "Width").last().unwrap().accesskit_node().numeric_value();
+        let height_val = h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Height").accesskit_node().numeric_value();
+        assert_eq!(width_val, Some(140.0));
+        assert_eq!(height_val, Some(70.0));
+
+        edit_layout_spin(&mut h, "Width", "220");
+        edit_layout_spin(&mut h, "Height", "105");
+
+        let objs = body_objects(h.state());
+        assert_eq!(objs.len(), 2);
+        let (cw, ch, _) = objs[0].frame().unwrap();
+        assert_eq!((cw, ch), (chart_w0, chart_h0), "chart dimensions stay untouched");
+        let (sw, sh, _) = objs[1].frame().unwrap();
+        assert_eq!((sw, sh), (220.0, 105.0), "shape updated by Format Shape layout controls");
     }
 }

@@ -39,7 +39,7 @@ fn has_text_sel(s: &Session) -> Option<&'static str> {
     if s.sel.is_collapsed() { Some("nothing is selected") } else { None }
 }
 
-/// Something to cut: text, or whole table cells (an empty cell's selection has no length, #1744).
+/// Something to cut: text, an object, or whole table cells (an empty cell's selection has no length, #1744).
 fn has_sel(s: &Session) -> Option<&'static str> {
     if s.sel.is_collapsed() && s.cell_range().is_none() { Some("nothing is selected") } else { None }
 }
@@ -73,7 +73,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .key("Mod+Y / Mod+Shift+Z")
         .pure(),
         CommandSpec::new("edit.cut", "Cut", "Home › Clipboard", cut).key("Mod+X").when(has_sel),
-        CommandSpec::new("edit.copy", "Copy", "Home › Clipboard", copy).key("Mod+C / Mod+Insert").pure(),
+        CommandSpec::new("edit.copy", "Copy", "Home › Clipboard", copy).key("Mod+C / Mod+Insert").pure().when(has_sel),
         // Word's Spike (Ctrl+F3, Ctrl+Shift+F3; ⌘ on the Mac): the AutoText entry "Spike", so Quick
         // Parts and AutoText insert it without emptying it, as in Word.
         CommandSpec::new("edit.spike", "Spike", "Editing", spike).key("Mod+F3").when(has_text_sel),
@@ -89,6 +89,8 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("edit.paste", "Paste", "Home › Clipboard", paste)
             .key("Mod+V / Shift+Insert")
             .params(r#"{"text"?: string, "html"?: string, "rtf"?: string, "privateClipboard"?: bool}"#),
+        CommandSpec::new("edit.pasteNestedTable", "Paste as Nested Table", "Home › Clipboard › Paste", paste_nested)
+            .params(r#"{"text"?: string, "html"?: string, "rtf"?: string, "privateClipboard"?: bool} (a copied table with the caret in a table cell nests in that cell; Paste instead inserts its rows or overwrites the cells from the caret's)"#),
         CommandSpec::new("edit.pasteText", "Paste: Keep Text Only", "Home › Clipboard › Paste", paste_text)
             .params(r#"{"text"?: string}"#)
             .key("Mod+Shift+Alt+V"),
@@ -185,6 +187,7 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// Copy the selected text, object, or table cells to the clipboard.
 fn copy(s: &mut Session, _: &Value) -> CmdResult {
     let whole = super::table::selected_table(s);
     copy_with(s, whole.as_ref())
@@ -218,6 +221,7 @@ pub(crate) fn copy_result(s: &mut Session) -> Value {
     (s.clipboard_html, s.clipboard_rtf) = match &s.clipboard {
         Some(f) => {
             let mut d = f.to_document();
+            d.styles = s.doc.styles.clone();
             if d.media.is_empty() {
                 d.media = s.doc.media.clone();
             }
@@ -241,6 +245,7 @@ pub(crate) fn copy_result(s: &mut Session) -> Value {
     r
 }
 
+/// Cut the selection, selected object, or whole table cells to the clipboard and remove it from the document.
 fn cut(s: &mut Session, _: &Value) -> CmdResult {
     let whole = super::table::selected_table(s);
     let r = copy_with(s, whole.as_ref())?;
@@ -301,8 +306,25 @@ fn insert_spike(s: &mut Session, _: &Value) -> CmdResult {
 /// else another program's HTML or RTF (#687). The system clipboard's text has none, so it pastes
 /// as Keep Text Only does.
 fn paste(s: &mut Session, v: &Value) -> CmdResult {
-    match super::paste::paste_content(s, v)? {
+    let pasted = super::paste::paste_content(s, v)?;
+    if let super::paste::Pasted::Fragment(frag) = &pasted
+        && super::paste_cells::paste_over_selection(s, frag)?
+    {
+        return sel_result(s);
+    }
+    super::column::delete_cell_segments(s)?;
+    match pasted {
         super::paste::Pasted::Fragment(frag) => super::paste::insert(s, frag)?,
+        super::paste::Pasted::Text(text) => super::paste::insert_text(s, &text)?,
+    }
+    sel_result(s)
+}
+
+/// Paste as Nested Table: like Paste, but a copied table goes inside the cell the caret is in
+/// instead of laying its rows or cells over the table (#6739).
+fn paste_nested(s: &mut Session, v: &Value) -> CmdResult {
+    match super::paste::paste_content(s, v)? {
+        super::paste::Pasted::Fragment(frag) => super::paste::insert_as_is(s, frag)?,
         super::paste::Pasted::Text(text) => super::paste::insert_text(s, &text)?,
     }
     sel_result(s)
@@ -444,11 +466,17 @@ fn paste_clip_item(s: &mut Session, v: &Value) -> CmdResult {
 /// Every collected item, in the order they were copied (one undo step).
 fn paste_all_clips(s: &mut Session, _: &Value) -> CmdResult {
     let all: Vec<Fragment> = s.clip_history.items.iter().rev().map(|x| x.fragment.clone()).collect();
-    let mut r = sel_result(s)?;
+    let multiple = all.len() > 1;
     for f in all {
-        r = paste_clip(s, f)?;
+        if multiple {
+            // Insert each item at the end of the last one. Cell paste can overwrite a
+            // previous item or insert rows ahead of it.
+            super::paste::insert_as_is(s, f)?;
+        } else {
+            return paste_clip(s, f);
+        }
     }
-    Ok(r)
+    sel_result(s)
 }
 
 fn paste_text(s: &mut Session, v: &Value) -> CmdResult {
@@ -926,5 +954,33 @@ mod shortcut_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn copy_format_web_alias_respects_user_removal_and_reassignment() {
+        use craft_keymap::{Binding, Chord, CommandRef, Overrides, Policy};
+
+        let mut commands = super::super::registry().all().to_vec();
+        commands.iter_mut().find(|c| c.id == "edit.copyFormat").unwrap().shortcut = copy_format_shortcut(true);
+        let registry = Registry::new(commands);
+
+        let mut keymap = crate::keymap::registry_keymap(&registry, &Overrides::default());
+        let copy_cmd = CommandRef::new("edit.copyFormat");
+        let bold_cmd = CommandRef::new("format.bold");
+        let chord = Chord::parse("Mod+Alt+Shift+C").unwrap();
+        let binding = Binding::parse("Mod+Alt+Shift+C").unwrap();
+
+        assert!(keymap.bindings(&copy_cmd).iter().any(|b| b.trigger.chord == chord));
+        assert!(keymap.remove(&copy_cmd, &binding));
+        assert_eq!(keymap.holder(&chord), None);
+
+        keymap.assign(&bold_cmd, binding, Policy::Steal).unwrap();
+        assert_eq!(keymap.holder(&chord).as_ref().map(|c| c.id.as_str()), Some("format.bold"));
+        assert_eq!(keymap.holder(&Chord::parse("Mod+Shift+C").unwrap()).as_ref().map(|c| c.id.as_str()), Some("edit.copyFormat"));
+
+        let overrides = keymap.overrides().clone();
+        let restored = crate::keymap::registry_keymap(&registry, &overrides);
+        assert_eq!(restored.holder(&chord).as_ref().map(|c| c.id.as_str()), Some("format.bold"));
+        assert_eq!(restored.holder(&Chord::parse("Mod+Shift+C").unwrap()).as_ref().map(|c| c.id.as_str()), Some("edit.copyFormat"));
     }
 }
