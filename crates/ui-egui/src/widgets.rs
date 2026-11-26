@@ -5,6 +5,3 @@ mod hint;
 
 pub(crate) use font_box::{font_box, font_picker};
 pub(crate) use hint::command_hint;
-
-#[cfg(test)]
-mod combo;

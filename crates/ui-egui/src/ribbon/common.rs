@@ -137,3 +137,72 @@ pub(crate) fn weight_menu(ui: &mut Ui, _app: &mut WordApp, id: &str, current: Op
             .show(ui);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::WordApp;
+    use egui::accesskit::Role;
+    use egui::vec2;
+    use egui_kittest::kittest::{By, Queryable};
+    use serde_json::json;
+    use wordcraft_engine::Session;
+
+    /// #7317: the real ribbon `Font Size` `ComboBox` places its dropdown arrow on the trailing
+    /// (right) side inside an outer outline rounded on that outer edge.
+    #[test]
+    fn the_arrow_box_is_rounded_away_from_its_field() {
+        fn collect_stroke_rects(shape: &egui::Shape, out: &mut Vec<(egui::Rect, egui::CornerRadius)>) {
+            match shape {
+                egui::Shape::Vec(children) => {
+                    for child in children {
+                        collect_stroke_rects(child, out);
+                    }
+                }
+                egui::Shape::Rect(r) if r.stroke.width > 0.0 => out.push((r.rect, r.corner_radius)),
+                _ => {}
+            }
+        }
+
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Sample")), crate::Services::default());
+        app.ui.language = "en".into();
+        app.run("ui.tab", json!({"tab": "Home"})).unwrap();
+        let mut h = crate::test_harness::builder().with_size(vec2(2560.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        crate::test_harness::cjk_stand_in(&h.ctx);
+        crate::test_harness::frames(&mut h, 4);
+
+        // The Font Size TextInput is the narrower of the two ribbon TextInputs (Font vs Font Size).
+        let input_rect = h
+            .query_all(By::new().role(Role::TextInput))
+            .map(|n| n.rect())
+            .filter(|r| r.min.y < 150.0)
+            .min_by(|a, b| a.width().total_cmp(&b.width()))
+            .expect("ribbon Font Size input");
+
+        let mut stroke_rects = Vec::new();
+        for clipped in &h.output().shapes {
+            collect_stroke_rects(&clipped.shape, &mut stroke_rects);
+        }
+
+        let (outer, radius) = stroke_rects
+            .into_iter()
+            .filter(|(r, _)| r.min.y <= input_rect.min.y + 2.0 && r.max.y >= input_rect.max.y - 2.0 && r.contains_rect(input_rect.shrink(2.0)))
+            .max_by(|a, b| a.0.width().total_cmp(&b.0.width()))
+            .unwrap_or_else(|| panic!("no outer combo outline around {input_rect:?}"));
+
+        let arrow_rect = h
+            .query_all(By::new().role(Role::Button))
+            .map(|n| n.rect())
+            .find(|r| r.width() < 30.0 && outer.contains_rect(r.shrink(1.0)))
+            .unwrap_or_else(|| panic!("no dropdown arrow button inside {outer:?}"));
+
+        assert!(arrow_rect.center().x > input_rect.center().x, "arrow {arrow_rect:?} should sit right of field {input_rect:?}");
+        assert!(radius.ne > 0 && radius.se > 0, "outer right corners should be rounded, got {radius:?}");
+    }
+}
