@@ -35,10 +35,15 @@ fn doc(text: &str, cs: bool) -> Document {
 
 /// [`doc`] laid out: its paragraph and the characters drawn as missing glyphs.
 fn laid(text: &str, cs: bool) -> (Arc<ParaLayout>, Vec<char>) {
+    laid_doc(&doc(text, cs))
+}
+
+/// `d`, a document of one paragraph, laid out: the paragraph and the characters drawn as missing
+/// glyphs.
+fn laid_doc(d: &Document) -> (Arc<ParaLayout>, Vec<char>) {
     crate::test_fonts();
-    let d = doc(text, cs);
-    let l = lay(&d);
-    let missing = l.missing_glyphs(&d, &DisplayOptions::default(), None).chars.iter().map(|(c, _)| *c).collect();
+    let l = lay(d);
+    let missing = l.missing_glyphs(d, &DisplayOptions::default(), None).chars.iter().map(|(c, _)| *c).collect();
     let para = l
         .pages
         .iter()
@@ -71,6 +76,29 @@ fn a_mark_its_letters_font_lacks_goes_with_its_letter_to_a_face_that_has_both() 
     assert!(face.covers(letter) && face.covers(mark), "that face has both");
     assert_eq!(face_at(&para, 0).id(), serif.id(), "the text before stays in the run's font");
     assert_eq!(face_at(&para, text.len() - 1).id(), serif.id(), "the text after goes back to the run's font");
+}
+
+/// In small capitals a mark is set at the size of the lower-case letter it belongs to, so the
+/// letter and its marks still go together to a face that has them all, also when the run's font has
+/// the first mark and lacks the second.
+#[test]
+fn in_small_capitals_a_letter_and_its_marks_go_together_to_a_face_that_has_them_all() {
+    let serif = serif();
+    let (letter, has, lacks) = ('x', '\u{301}', '\u{336}');
+    assert!(serif.covers(letter) && serif.covers(has) && !serif.covers(lacks), "{SERIF} has x and U+0301 and lacks U+0336");
+    let text: String = [letter, has, lacks].iter().collect();
+    let chr = CharProps { font: Some(SERIF.into()), size: Some(12.0), small_caps: Some(true), ..Default::default() };
+    let mut d = Document::new();
+    d.body = vec![para_block(Paragraph::with_text(&text, chr))];
+    let (para, missing) = laid_doc(&d);
+    assert!(missing.is_empty(), "nothing is drawn as a missing glyph, but {missing:?} were");
+    let style_at = |at: usize| para.clusters.iter().find(|c| c.start <= at && at < c.end).expect("a cluster holds the character").style;
+    let face = face_at(&para, 0);
+    assert!(face.covers(lacks), "the letter is drawn in a face that has U+0336");
+    for (at, c) in text.char_indices().skip(1) {
+        assert_eq!(face_at(&para, at).id(), face.id(), "U+{:04X} is drawn in its letter's face", c as u32);
+        assert_eq!(style_at(at), style_at(0), "U+{:04X} is set at its letter's size", c as u32);
+    }
 }
 
 #[test]

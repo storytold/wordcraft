@@ -154,7 +154,14 @@ impl<'a> Builder<'a> {
                 _ if !complex && ea_face.is_some() && crate::kinsoku::is_east_asian(c) => ea_face,
                 _ => wordcraft_fonts::FontDb::global().fallback_styled(dc, primary.id(), bold, italic).map(|f| FaceRef::of(&f)),
             };
-            let key = SegKey { face, small: rc.small_caps && !rc.caps && c.is_lowercase(), complex, rtl };
+            // A mark is set like the character it belongs to, as for `complex`: in small capitals at
+            // that character's size, so the two stay in one shaping run and its cluster is matched
+            // whole.
+            let small = match cur {
+                Some(k) if mark => k.small,
+                _ => rc.small_caps && !rc.caps && c.is_lowercase(),
+            };
+            let key = SegKey { face, small, complex, rtl };
             match cur {
                 Some(previous) if previous.same(&key) => {}
                 Some(previous) => {
