@@ -94,7 +94,28 @@ pub(crate) fn walk_between(bl: &Blocks, prefix: &mut Vec<u32>, out: &mut Vec<Pat
         let m = q.len().min(x.len());
         q[..m].cmp(&x[..m])
     };
-    for (i, blk) in bl.iter().enumerate() {
+    // The blocks before `a` come first and the order of `side` along a level never goes back, so
+    // the walk starts at the first block that is not before `a` (a binary search), not at block 0:
+    // a caller that asks for many nearby ranges would otherwise rescan every block before them.
+    let first = {
+        let mut probe = prefix.clone();
+        let (mut lo, mut hi) = (0usize, bl.len());
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            crate::work::steps(1);
+            probe.push(mid as u32);
+            let before = side(&probe, a) == Less;
+            probe.pop();
+            if before {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        lo
+    };
+    for (i, blk) in bl.iter().enumerate().skip(first) {
+        crate::work::steps(1);
         prefix.push(i as u32);
         if side(prefix, b) == Greater {
             prefix.pop();

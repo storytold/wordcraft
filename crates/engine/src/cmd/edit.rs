@@ -121,28 +121,30 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("edit.find", "Find", "Home › Editing", find)
             .key("Mod+F")
-            .params(r#"{"text": string, "matchCase"?: bool, "wholeWord"?: bool, "matchPrefix"?: bool, "matchSuffix"?: bool, "ignorePunct"?: bool, "ignoreSpace"?: bool, "wildcards"?: bool, "special"?: bool (^p ^t ^# … codes, default true), "regex"?: bool}"#)
+            .params(r#"{"text": string, "matchCase"?: bool, "wholeWord"?: bool, "matchPrefix"?: bool, "matchSuffix"?: bool, "ignorePunct"?: bool, "ignoreSpace"?: bool, "wildcards"?: bool, "special"?: bool (^p ^t ^# … codes, default true), "regex"?: bool, "format"?: {"bold"?|"italic"?|"underline"?|"strike"?|"smallCaps"?|"allCaps"?|"hidden"?|"subscript"?|"superscript"?: bool, "font"?: string, "size"?: number, "color"?: "RRGGBB"|"auto", "highlight"?: colour name|bool, "style"?: style name} | null (the formatting a match must have; empty "text" finds the stretches with it)}"#)
             .pure(),
         CommandSpec::new("edit.advancedFind", "Advanced Find", "Home › Editing › Find", advanced_find)
             .params(r#"{"text"?: string, …options of edit.find, "in"?: "main|selection", "highlight"?: bool}"#)
             .pure(),
         CommandSpec::new("edit.findNext", "Find Next", "Home › Editing › Find", |s, v| {
+            super::find_format::read(s, v)?;
             read_opts(s, v);
             step(s, 1)
         })
         .key("Mod+G / F3 / Shift+F4 / Mod+PageDown")
-        .params(r#"{"text"?: string, "matchCase"?: bool, "wholeWord"?: bool, "regex"?: bool}"#)
+        .params(r#"{"text"?: string, "matchCase"?: bool, "wholeWord"?: bool, "regex"?: bool, "format"?: {…as edit.find} | null}"#)
         .pure(),
         CommandSpec::new("edit.findPrevious", "Find Previous", "Home › Editing › Find", |s, v| {
+            super::find_format::read(s, v)?;
             read_opts(s, v);
             step(s, -1)
         })
         // Elsewhere Ctrl+Shift+G is Word Count; Ctrl+Page Up/Down browse the find results.
         .key(super::mac_or("Mod+Shift+G / Mod+PageUp", "Mod+PageUp"))
-        .params(r#"{"text"?: string, "matchCase"?: bool, "wholeWord"?: bool, "regex"?: bool}"#)
+        .params(r#"{"text"?: string, "matchCase"?: bool, "wholeWord"?: bool, "regex"?: bool, "format"?: {…as edit.find} | null}"#)
         .pure(),
         CommandSpec::new("edit.replace", "Replace", "Home › Editing", replace).params(
-            r#"{"text": string, "with": string, …options of edit.replaceAll} — Word's Replace button: replaces the match only when it is already selected, then selects the next one. The first call on a caret replaces nothing; call again to replace the selected match, or use edit.replaceAll for every match. Returns {"replaced": 0 | 1, "remaining": n, "selected": {start, end} | null}"#,
+            r#"{"text": string, "with": string, "withFormat"?: {…keys of format, but "highlight" a colour name} | null, …options of edit.replaceAll} — Word's Replace button: replaces the match only when it is already selected, then selects the next one. The first call on a caret replaces nothing; call again to replace the selected match, or use edit.replaceAll for every match. Returns {"replaced": 0 | 1, "remaining": n, "selected": {start, end} | null}"#,
         ),
         // Ctrl+H, Home › Replace: the Find and Replace dialog on its Replace tab (#712). Opening
         // it changes nothing, so it is its own command and never marks the document edited.
@@ -159,7 +161,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"tab"?: "find|replace|goto" (default replace)}"#)
         .pure(),
         CommandSpec::new("edit.replaceAll", "Replace All", "Home › Editing › Replace", replace_all)
-            .params(r#"{"text": string, "with": string (^p ^t ^& ^c …; \\1 with wildcards; with regex also $1 ${n} ${name} $0 $$ \\1 \\n (paragraph mark) \\t), …options of edit.find}"#),
+            .params(r#"{"text": string, "with": string (^p ^t ^& ^c …; \\1 with wildcards; with regex also $1 ${n} ${name} $0 $$ \\1 \\n (paragraph mark) \\t; left out, the Replace with text of the last search stays, "" clears it), "withFormat"?: {…keys of format, but "highlight" a colour name} | null (formats the replaced text; with "" the found text stays and only its formatting changes), …options of edit.find}"#),
         CommandSpec::new("edit.goto", "Go To", "Home › Editing › Find", goto)
             .key("Mod+Alt+G / F5")
             .params(r#"{"page"?: n, "pageBy"?: int (pages forward, negative back, from the caret's page), "bookmark"?: string (selects its text), "paragraph"?: n}; none opens Find and Replace on its Go To tab"#)
@@ -489,7 +491,7 @@ pub(crate) fn search(s: &Session, story: StoryRef) -> Result<Vec<(Pos, Pos)>, Cm
     Ok(search_full(s, story, false)?.into_iter().map(|f| (f.a, f.b)).collect())
 }
 
-fn find_opts(f: &crate::session::FindState) -> find_pattern::Opts {
+pub(super) fn find_opts(f: &crate::session::FindState) -> find_pattern::Opts {
     find_pattern::Opts {
         match_case: f.match_case,
         whole_word: f.whole_word,
@@ -507,6 +509,24 @@ fn find_opts(f: &crate::session::FindState) -> find_pattern::Opts {
 /// wildcard groups). A pattern that can match a paragraph mark (`^p`) reads runs of sibling
 /// paragraphs as one text with a mark between them; otherwise each paragraph is read alone.
 pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Result<Vec<Found>, CmdError> {
+    // Find what › Format (#6147): empty text finds the stretches with the formatting; text finds
+    // the matches whose every character has it.
+    if s.find.query.is_empty() {
+        let mut found = super::find_format::runs(s, story);
+        if with_rep {
+            // Replace with text for a format-only match: the codes (`^p`, `^c`…) expand, there is no found text.
+            let pieces = find_pattern::parse_replace(&s.find.replace, &find_opts(&s.find));
+            let pieces = find_pattern::resolve_names(pieces, &|_| None);
+            for m in &mut found {
+                m.rep = Some(find_pattern::expand(&pieces, "", &|_| None, &s.clipboard_text));
+            }
+        }
+        return Ok(found);
+    }
+    search_text(s, story, with_rep)
+}
+
+fn search_text(s: &Session, story: StoryRef, with_rep: bool) -> Result<Vec<Found>, CmdError> {
     use regex_automata::{Input, meta, util::syntax};
     let f = &s.find;
     if f.query.is_empty() {
@@ -535,42 +555,60 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
         }
     }
     let mut out = Vec::new();
+    let filter = f.format.as_ref();
     let mut caps = re.create_captures();
     for chunk in chunks {
         let mut hay = String::new();
         let mut segs: Vec<Seg> = Vec::new();
-        // Where the live text breaks (tracked-deleted text, or a paragraph edge when not spanning).
-        let mut cuts: Vec<usize> = Vec::new();
+        // Keep nonmatching live text as context for anchors and word boundaries.
+        // Search only within ranges of eligible text, split at tracked deletions.
+        let mut ranges = Vec::new();
+        let mut from = 0;
         let last = chunk.end.saturating_sub(1);
         for i in chunk {
-            let Some(p) = paths.get(i).and_then(|path| s.doc.para(story, path)) else {
-                cuts.push(hay.len());
+            let Some(path) = paths.get(i) else { continue };
+            let Some(p) = s.doc.para(story, path) else {
+                ranges.push(from..hay.len());
+                from = hay.len();
                 continue;
             };
+            let table = filter.and_then(|f| super::find_format::table_chr(s, f, story, path));
+            let matches = |ch| filter.is_none_or(|f| f.run_matches(&s.doc.styles, p.props.style.as_deref(), table.as_ref(), ch));
             let mut expect = 0;
             for (r, ch) in p.run_ranges() {
                 let Some(t) = p.text.get(r.clone()).filter(|_| ch.del.is_none()) else { continue };
                 if t.is_empty() {
                     continue;
                 }
-                if r.start != expect {
-                    cuts.push(hay.len());
+                let eligible = matches(ch);
+                if r.start != expect || !eligible {
+                    ranges.push(from..hay.len());
+                    from = hay.len();
                 }
                 match segs.last_mut() {
                     Some(sg) if !sg.mark && sg.para == i && sg.raw + sg.len == r.start => sg.len += t.len(),
                     _ => segs.push(Seg { hay: hay.len(), para: i, raw: r.start, len: t.len(), mark: false }),
                 }
                 hay.push_str(t);
+                if !eligible {
+                    from = hay.len();
+                }
                 expect = r.end;
             }
             if i < last {
-                if expect != p.text.len() {
-                    cuts.push(hay.len());
+                let eligible = matches(&p.mark);
+                if expect != p.text.len() || !eligible {
+                    ranges.push(from..hay.len());
+                    from = hay.len();
                 }
                 segs.push(Seg { hay: hay.len(), para: i, raw: p.text.len(), len: 1, mark: true });
                 hay.push(if p.section.is_some() { find_pattern::SECT_MARK } else { find_pattern::PARA_MARK });
+                if !eligible {
+                    from = hay.len();
+                }
             }
         }
+        ranges.push(from..hay.len());
         let pos_of = |x: usize, end: bool| -> Option<Pos> {
             let k = segs.partition_point(|sg| if end { sg.hay + sg.len < x } else { sg.hay + sg.len <= x });
             let sg = segs.get(k)?;
@@ -583,15 +621,10 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
             }
             Some(Pos { story, path: paths.get(sg.para)?.clone(), off: sg.raw + (x - sg.hay) })
         };
-        cuts.push(hay.len());
-        let mut from = 0;
-        for cut in cuts {
-            if cut <= from {
-                continue;
-            }
-            let mut input = Input::new(&hay).range(from..cut);
-            from = cut;
+        for range in ranges.into_iter().filter(|r| !r.is_empty()) {
+            let mut input = Input::new(&hay).range(range);
             loop {
+                wordcraft_doc::work::steps(1);
                 re.search_captures(&input, &mut caps);
                 let Some(m) = caps.get_match() else { break };
                 // Step past an empty match so the search moves on.
@@ -661,8 +694,9 @@ fn read_opts(s: &mut Session, v: &Value) {
 }
 
 fn find(s: &mut Session, v: &Value) -> CmdResult {
+    super::find_format::read(s, v)?;
     read_opts(s, v);
-    if p::str(v, "text").is_none() {
+    if p::str(v, "text").is_none() && v.get("format").is_none() {
         // Word's Ctrl+F: the Navigation pane with its search box ready to type in (#712); the
         // Find and Replace dialog is Advanced Find.
         s.view.nav_pane = true;
@@ -686,10 +720,11 @@ fn find(s: &mut Session, v: &Value) -> CmdResult {
 
 /// Find in the classic dialog: every match in the body or the selection, optionally highlighted while you read.
 fn advanced_find(s: &mut Session, v: &Value) -> CmdResult {
-    if p::str(v, "text").is_none() && v.get("highlight").is_none() {
+    if p::str(v, "text").is_none() && v.get("highlight").is_none() && v.get("format").is_none() {
         s.push_ui_request(json!({"open": "find"}));
         return Ok(json!({"count": s.find.results.len()}));
     }
+    super::find_format::read(s, v)?;
     read_opts(s, v);
     let within = match p::str(v, "in").unwrap_or("main") {
         "main" => None,
@@ -700,7 +735,21 @@ fn advanced_find(s: &mut Session, v: &Value) -> CmdResult {
     let story = within.as_ref().map(|(a, _)| a.story).unwrap_or(StoryRef::Body);
     let mut found = search(s, story)?;
     if let Some((a, b)) = &within {
-        found.retain(|(x, y)| x >= a && y <= b);
+        if s.find.query.is_empty() {
+            // Format-only results describe runs. Return the part of each run selected by the user.
+            found.retain_mut(|(x, y)| {
+                if *x < *a {
+                    x.clone_from(a);
+                }
+                if *y > *b {
+                    y.clone_from(b);
+                }
+                *x < *y
+            });
+        } else {
+            // A text match must contain its complete pattern.
+            found.retain(|(x, y)| x >= a && y <= b);
+        }
     }
     if let Some(h) = p::bool(v, "highlight") {
         s.find.highlight = h;
@@ -736,15 +785,18 @@ fn step(s: &mut Session, dir: i64) -> CmdResult {
 /// Replace needs something to look for: the `text` given, or the last search's (Find then Replace
 /// with just a `with`). Neither is a call that would silently replace nothing (a misspelt `text`).
 fn need_query(s: &Session, v: &Value) -> Result<(), CmdError> {
-    if p::str(v, "text").is_none() && s.find.query.is_empty() {
+    if p::str(v, "text").is_none() && s.find.query.is_empty() && s.find.format.is_none() {
         return Err(CmdError::Params("`text` (string) is required".into()));
     }
     Ok(())
 }
 
 fn replace(s: &mut Session, v: &Value) -> CmdResult {
+    let with = super::find_format::read_with(s, v)?;
+    super::find_format::read(s, v)?;
     need_query(s, v)?;
     read_opts(s, v);
+    super::find_format::check_replace(s, with.as_ref())?;
     let story = s.sel.focus.story;
     let results = search_full(s, story, true)?;
     let (a, b) = s.sel.ordered();
@@ -752,7 +804,7 @@ fn replace(s: &mut Session, v: &Value) -> CmdResult {
     // happened (#6877): a first call that only selects a match reads as `replaced: 0`.
     let mut replaced = 0;
     if let Some(f) = results.into_iter().find(|f| f.a == a && f.b == b) {
-        super::paste_text(s, &f.rep.unwrap_or_default())?;
+        super::find_format::replace_current(s, f.rep, with.as_ref())?;
         replaced = 1;
     }
     let selected = match step(s, 1) {
@@ -768,18 +820,31 @@ fn replace(s: &mut Session, v: &Value) -> CmdResult {
 /// Every match replaced, last first so earlier positions stay valid (one undo step). A `\r` in
 /// the replacement (`^p`) splits the paragraph.
 fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
+    let with_format = super::find_format::read_with(s, v)?;
+    super::find_format::read(s, v)?;
     need_query(s, v)?;
     read_opts(s, v);
+    super::find_format::check_replace(s, with_format.as_ref())?;
     let story = s.sel.focus.story;
     let results = search_full(s, story, true)?;
     let n = results.len();
-    super::controls::check_deletions(s, story, results.iter().map(|f| (&f.a, &f.b)))?;
+    let keep = super::find_format::keeps_text(s, with_format.as_ref());
+    // Only formatting changes when the text stays, so locked content controls don't refuse.
+    if !keep {
+        super::controls::check_deletions(s, story, results.iter().map(|f| (&f.a, &f.b)))?;
+    }
+    let tracker = super::find_format::replacement_tracker(s, with_format.as_ref());
     for Found { a, b, rep } in results.into_iter().rev() {
+        // Replace with › Format and no text: the found text stays, only its formatting changes.
+        if keep {
+            super::find_format::apply_with(s, &a, &b, with_format.as_ref(), None)?;
+            continue;
+        }
         let with = rep.unwrap_or_default();
         if s.doc.settings.track_changes {
             // Same path as a single replace, so the change is a reviewable revision.
             s.sel = Selection { anchor: a, focus: b };
-            super::paste_text(s, &with)?;
+            super::find_format::replace_text(s, &with, with_format.as_ref(), tracker.as_ref())?;
             continue;
         }
         // Replacing a symbol gives the new text the symbol's formatting, not its own font.
@@ -793,6 +858,7 @@ fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
                 at = s.doc.insert_text(&at, part, &props)?;
             }
         }
+        super::find_format::apply_with(s, &a, &at, with_format.as_ref(), None)?;
     }
     s.status = format!("All done. We made {n} replacements.");
     Ok(json!({"replaced": n}))

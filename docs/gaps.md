@@ -127,6 +127,8 @@ full number from ~60% to ~75%. Everything else is depth on the way to full parit
 
 Normal Find and Replace now match a keyboard apostrophe against straight and typographic single quotes (#5388), including text entered with smart quotes. Exact search modes and numeric character codes retain their character identity. This fixes a focused editing case; ranked gaps and readiness estimates are unchanged.
 
+Find and Replace can search by formatting and style and replace with formatting or a style through the commands (#6147): a `format` filter (bold, italic, underline, strike, caps, hidden, super/subscript, font, size, colour, highlight, style) on Find, Find Next, Find Previous, Replace and Replace All, empty text finding the formatted text, and `withFormat` on Replace. Paragraph formatting and language are not searchable yet, and the Find and Replace dialog has no Format button yet. Ranked gaps and readiness estimates are unchanged.
+
 ## By kind
 
 List toggles now recognise numbering inherited from paragraph styles (related to #3459). This closes that command-level case; the broader issue and readiness estimates are unchanged. See [typing-parity.md](typing-parity.md) for the original-fixture and round-trip coverage.

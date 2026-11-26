@@ -26,6 +26,25 @@ fn paths_between_matches_every_path_filtered() {
     }
 }
 
+/// Walking the paragraphs between two neighbours costs the blocks in between, not every block
+/// before them: a search that asks for each match's paragraphs stays linear in the document.
+#[test]
+fn paths_between_neighbours_does_not_rescan_the_blocks_before_them() {
+    let steps = |n: usize| {
+        let lines: Vec<String> = (0..n).map(|i| format!("p{i}")).collect();
+        let d = Document::from_text(&lines.join("\n"));
+        crate::work::count(|| {
+            for i in 0..n - 1 {
+                let paths = d.paths_between(&Pos::body(i, 0), &Pos::body(i + 1, 0));
+                assert_eq!(paths.len(), 2);
+            }
+        })
+    };
+    let (small, big) = (steps(500), steps(4000));
+    // 8x the paragraphs and 8x the calls: linear is about 8x the steps, a rescan from the first block about 64x.
+    assert!(big < small * 16, "{small} steps for 500 paragraphs, {big} for 4000");
+}
+
 #[test]
 fn split_and_join() {
     let mut d = doc(&["Hello world"]);

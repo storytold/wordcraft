@@ -541,15 +541,7 @@ fn highlight(s: &mut Session, v: &Value) -> CmdResult {
     let color = v.get("color").map(|_| p::req_str(v, "color")).transpose()?;
     let h = match color {
         None => s.last_highlight,
-        Some(c) => Highlight::ALL
-            .iter()
-            .copied()
-            .find(|h| {
-                h.ooxml().eq_ignore_ascii_case(c)
-                    || h.name().replace(['-', ' ', '%'], "").eq_ignore_ascii_case(&c.replace(['-', ' ', '%'], ""))
-                    || format!("{h:?}").eq_ignore_ascii_case(c)
-            })
-            .ok_or_else(|| CmdError::Params(format!("unknown highlight colour `{c}`")))?,
+        Some(c) => super::find_format::highlight_named(c).ok_or_else(|| CmdError::Params(format!("unknown highlight colour `{c}`")))?,
     };
     let remove = color.is_none() && target_has_highlight(s, h);
     let value = if remove { Highlight::None } else { h };

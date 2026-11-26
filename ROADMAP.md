@@ -157,6 +157,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 - 2026-11-19: Layout: when strict column balancing moves an anchor line to the next column, it releases the floating object's wrap area from the abandoned column (#6821). Readiness estimates unchanged.
 - 2026-11-16: Layout: a row of hyphens after a gap wraps at any hyphen, as in Word (it fills the line and its rest goes on the next), where the whole row moved to the next line.
+- 2026-11-15: Find and Replace by formatting (#6147, #6385): the find and replace commands take a `format` filter (bold, italic, underline, strike, small caps, all caps, hidden, super/subscript, font, size, colour, highlight, paragraph or character style) and Replace takes `withFormat`. With empty text a search finds the stretches of text that have the formatting, partial words included; with text, every character of a match must have it; the formatting is what the text shows, so a style's bold counts. Replace All with only formats changes the formatting and is one undo step. Not yet: the dialog's Format button, paragraph formatting and language as search criteria. Readiness estimates unchanged.
 - 2026-11-15: Native, built-in and web Insert/Change Picture choosers offer both TIFF extensions (`.tif`, `.tiff`) alongside other supported pictures; native drops, picked-file inbox dispatch and pasted picture paths recognize the same suffixes (#6704). TIFF decoding remains limited to supported compression.
 - 2026-10-31: Screen readers hear what the dialogs and their drawn controls are: a dialog is a dialog, where it was only a window, so NVDA says so and reads the text in it (Word Count's figures); a dialog's tabs (Paragraph, Find and Replace, About) are tabs, the one shown selected, as in Word, where they were buttons read as pressed toggles; a colour field says its label and colour ("Font color: #104861"), where its text alone was the colour's hex digits; and each swatch of the colour grid says its colour, where it had no name. Readiness estimates unchanged.
 
@@ -931,6 +932,8 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 ## Revision history
 
+> 2026-11-15 · Progress log: Find and Replace by formatting through the commands (#6147).
+>
 > 2026-11-08 · Progress log: `convert --strict` refuses a PDF or PNG that would silently lack a character or a picture (#6005).
 >
 > 2026-11-08 · Progress log: turned inline pictures without a recorded effect extent keep their line to the frame, as in Word.

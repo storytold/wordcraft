@@ -108,6 +108,9 @@ pub struct FindState {
     pub match_suffix: bool,
     pub ignore_punct: bool,
     pub ignore_space: bool,
+    /// Find what › Format: the formatting a match must have (#6147). Kept until cleared.
+    #[serde(skip)]
+    pub format: Option<crate::cmd::find_format::FormatFilter>,
     /// Matches from the last search: (start, end).
     #[serde(skip)]
     pub results: Vec<(Pos, Pos)>,

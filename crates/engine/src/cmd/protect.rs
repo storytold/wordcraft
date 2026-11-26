@@ -373,7 +373,12 @@ pub(crate) fn check_before(s: &Session, id: &str, params: &Value) -> Result<bool
 
 /// Formatting limited to a selection of styles: no direct formatting, and no locked style.
 fn check_formatting(s: &Session, id: &str, params: &Value) -> Result<(), CmdError> {
+    let with = if matches!(id, "edit.replace" | "edit.replaceAll") { super::find_format::read_with(s, params)? } else { None };
+    if with.as_ref().is_some_and(super::find_format::FormatApply::has_direct_formatting) {
+        return Err(CmdError::Disabled(format!("{id}: formatting is limited to the document's styles")));
+    }
     let style = match id {
+        "edit.replace" | "edit.replaceAll" => with.as_ref().and_then(super::find_format::FormatApply::style_id),
         "para.style" | "format.charStyle" | "table.style" => p::str(params, "style"),
         "para.normal" => Some("Normal"),
         "para.heading1" => Some("Heading1"),
