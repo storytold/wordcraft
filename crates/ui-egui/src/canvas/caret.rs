@@ -15,7 +15,7 @@ use craft::ui::style::{ComponentStyle, DataColor, StyleColor, StyleCx};
 use egui::{Color32, Pos2, Rect, Response, Ui, pos2, vec2};
 use wordcraft_layout::DocLayout;
 
-use super::cursor::{caret_color_at, preedit_cursor_chars};
+use super::cursor::{caret_color_at, caret_color_at_doc, preedit_cursor_chars};
 use super::story::dims_body;
 use super::{WordApp, preview_sel};
 use crate::caret_glide::{Bar, Look, LookRequest, blink_fading, look};
@@ -54,6 +54,19 @@ struct TypingFace {
     baseline: f32,
 }
 
+/// Screen rect and scale of page `page`, even if scrolled out of view.
+fn placed_page_rect(app: &WordApp, doc: &DocLayout, pages: &[PlacedPage], page: usize) -> Option<(Rect, f64)> {
+    if let Some(pr) = pages.iter().find(|p| p.page == page) {
+        return Some((pr.rect, pr.scale));
+    }
+    let rect = *app.canvas.shown.laid.get(page)?;
+    let scale = match pages.first() {
+        Some(p) => p.scale,
+        None => f64::from(rect.width() / doc.pages.get(page)?.w.max(1.0)),
+    };
+    Some((rect, scale))
+}
+
 /// The one rule for where the caret is, for the candidate window and the painter alike. `None`
 /// without a caret on a placed page.
 fn place(app: &WordApp, doc: &DocLayout, pages: &[PlacedPage]) -> Option<Placement> {
@@ -82,22 +95,10 @@ fn place(app: &WordApp, doc: &DocLayout, pages: &[PlacedPage]) -> Option<Placeme
     let c = doc.caret_on(&sel.focus, app.session.page_hint)?;
     // A caret whose page is scrolled out of view still has a place: the input method keeps its context and
     // surroundings there (production placed it from every laid page), from the page's rect in the whole layout.
-    let unplaced;
-    let pr = match pages.iter().find(|p| p.page == c.page) {
-        Some(pr) => pr,
-        None => {
-            let rect = *app.canvas.shown.laid.get(c.page)?;
-            let scale = match pages.first() {
-                Some(p) => p.scale,
-                None => f64::from(rect.width() / doc.pages.get(c.page)?.w.max(1.0)),
-            };
-            unplaced = PlacedPage::new(c.page, rect, scale, (0.0, rect.height()));
-            &unplaced
-        }
-    };
-    let scale = pr.scale as f32;
-    let x = pr.rect.min.x + c.x * scale;
-    let y0 = pr.rect.min.y + c.top * scale;
+    let (pr_rect, pr_scale) = placed_page_rect(app, doc, pages, c.page)?;
+    let scale = pr_scale as f32;
+    let x = pr_rect.min.x + c.x * scale;
+    let y0 = pr_rect.min.y + c.top * scale;
     let y1 = y0 + c.height * scale;
     let bar = if c.width > 0.0 {
         // Turned text (a table cell's text direction): the caret lies across the page.
@@ -112,7 +113,7 @@ fn place(app: &WordApp, doc: &DocLayout, pages: &[PlacedPage]) -> Option<Placeme
     } else {
         doc.typing_style(&sel.focus, app.session.page_hint)
             .filter(|(run, base)| run.size.is_finite() && run.size > 0.0 && base.is_finite())
-            .map(|(run, base)| TypingFace { face: run.requested_face, size: run.size * scale, baseline: pr.rect.min.y + base * scale })
+            .map(|(run, base)| TypingFace { face: run.requested_face, size: run.size * scale, baseline: pr_rect.min.y + base * scale })
     };
     Some(Placement {
         bar,
@@ -140,16 +141,95 @@ fn step(app: &mut WordApp, request: LookRequest) -> Look {
     l
 }
 
+/// Build per-line overlay slices for the active IME composition from the reflowed preview layout.
+/// Falls back (`None`) when the scaled composition size exceeds [`FaceRun::largest_size`], where
+/// atlas glyph clamping shrinks the overlay below document scale.
+fn build_preview_compositions(
+    app: &mut WordApp,
+    ctx: &egui::Context,
+    pages: &[PlacedPage],
+    pass_right: f32,
+    zoom_key: u64,
+) -> Option<Vec<Composition>> {
+    let preview = super::pages::ensure_ime_preview(app)?;
+    let slices = preview.layout.composition_lines(&preview.start, &preview.end, app.session.page_hint);
+    let max_face_size = FaceRun::largest_size(ctx);
+    let global_cursor_byte = {
+        let text = &app.canvas.ime_preedit;
+        let cursor_chars = preedit_cursor_chars(text, app.canvas.ime_preedit_range.as_ref());
+        let cursor_byte = text.char_indices().nth(cursor_chars).map_or(text.len(), |(i, _)| i);
+        preview.start.off.saturating_add(cursor_byte).min(preview.end.off)
+    };
+    let cursor_idx = wordcraft_layout::hit::composition_cursor_slice(&slices, global_cursor_byte)?;
+    let probe = &slices[cursor_idx];
+    let dim_body = dims_body(app, &preview.layout);
+    let color = caret_color_at_doc(app, &preview.doc, &preview.layout, (probe.page, probe.x, probe.top + probe.height / 2.0), zoom_key, dim_body);
+    let text = &app.canvas.ime_preedit;
+    let mut out = Vec::with_capacity(slices.len());
+    for (idx, slice) in slices.iter().enumerate() {
+        let (pr_rect, pr_scale) = placed_page_rect(app, &preview.layout, pages, slice.page)?;
+        let rel_start = slice.bytes.start.checked_sub(preview.start.off)?;
+        let rel_end = slice.bytes.end.checked_sub(preview.start.off)?;
+        let slice_text = text.get(rel_start..rel_end)?.to_string();
+        if slice_text.is_empty() {
+            return None;
+        }
+        let cursor = (idx == cursor_idx).then(|| {
+            let local_bytes = global_cursor_byte.saturating_sub(slice.bytes.start).min(slice_text.len());
+            slice_text.get(..local_bytes).map_or_else(|| slice_text.chars().count(), |s| s.chars().count())
+        });
+        let scale = pr_scale as f32;
+        let left = pr_rect.min.x + slice.x * scale;
+        let y0 = pr_rect.min.y + slice.top * scale;
+        let height = slice.height * scale;
+        let bottom = y0 + height;
+        let typing = slice.typing.as_ref().map(|(run, base)| TypingFace {
+            face: run.requested_face,
+            size: run.size * scale,
+            baseline: pr_rect.min.y + base * scale,
+        });
+        if typing.is_some_and(|t| t.size > max_face_size) {
+            return None;
+        }
+        out.push(Composition {
+            left,
+            bottom,
+            height,
+            caret_bar_y: (y0, bottom),
+            room: (pass_right - left).max(0.0),
+            text: slice_text,
+            cursor,
+            color,
+            typing,
+        });
+    }
+    Some(out)
+}
+
 /// Paints the caret, its glide and fade, and the composition, over the pages of `body`; reports
 /// the editor to the input method with this pass's final caret.
 pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body: &PageBody<'_>, motion: MotionMode) {
     let ctx = ui.ctx().clone();
     let focused = app.canvas.focused(&ctx);
     crate::dialogs_smart_art::end_typing_run(app, focused);
+    let zoom_key = body.view.zoom.to_bits();
+    if focused
+        && app.session.math.is_none()
+        && preview_sel(app).is_none()
+        && !app.canvas.ime_preedit.is_empty()
+        && let Some(slices) = build_preview_compositions(app, &ctx, body.pages, pass.rect.right(), zoom_key)
+    {
+        // The caret is steady inside the composition, so the glide stands down while it shows.
+        app.canvas.glide.reset();
+        let fallback = slices.first().map(|c| [pos2(c.left, c.caret_bar_y.0), pos2(c.left, c.caret_bar_y.1)]);
+        let out = CaretMarks::new(tl!("Text cursor").to_string(), Vec::new(), slices).show_at(ui, pass.rect);
+        if let Some(bar) = out.composition_caret.or(fallback) {
+            crate::keys::report_editor(app, pass, &ctx, report_rect(bar));
+        }
+        return;
+    }
     let doc = app.session.layout();
     let Some(pl) = place(app, &doc, body.pages) else { return };
-
-    let zoom_key = body.view.zoom.to_bits();
     // The glide runs in content space: where the document's origin lands on screen.
     let content_origin = body.view.to_screen(Point::ZERO);
     let now = craft::ui::runtime::pointer::frame(&ctx).time;
@@ -186,20 +266,22 @@ pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body:
 
     let shown = pl.collapsed && focused;
     let mut bars: Vec<(Bar, Color32)> = Vec::new();
-    let mut composition = None;
+    let mut compositions: Vec<Composition> = Vec::new();
     if focused && !pl.in_equation && !app.canvas.ime_preedit.is_empty() {
-        // The caret is steady inside the composition, so the glide stands down while it shows.
+        // Fallback single-slice overlay (e.g. turned text or atlas-capped glyph sizes).
         app.canvas.glide.reset();
+        let color = ink(app);
         let text = app.canvas.ime_preedit.clone();
         let cursor = preedit_cursor_chars(&text, app.canvas.ime_preedit_range.as_ref());
-        composition = Some(Composition {
+        compositions.push(Composition {
             left: pl.left,
             bottom: pl.bottom,
             height: pl.height,
+            caret_bar_y: (pl.bar[0].y, pl.bar[1].y),
             room: (pass.rect.right() - pl.left).max(0.0),
             text,
-            cursor,
-            color: ink(app),
+            cursor: Some(cursor),
+            color,
             typing: pl.typing,
         });
     } else {
@@ -216,29 +298,31 @@ pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body:
         }
     }
     let mut report = report_rect(pl.bar);
-    if !bars.is_empty() || composition.is_some() {
+    if !bars.is_empty() || !compositions.is_empty() {
         // Over the whole view, as the other marks on the page: the marks measure nothing, so a flow placement would give
         // them an empty rect that clips their strokes away.
-        let out = CaretMarks::new(tl!("Text cursor").to_string(), bars, composition).show_at(ui, pass.rect);
+        let out = CaretMarks::new(tl!("Text cursor").to_string(), bars, compositions).show_at(ui, pass.rect);
         // The candidate window sits at the input method's cursor inside the composition, as production placed it.
-        if let Some(x) = out.composition_caret {
-            report = Rect::from_min_max(pos2(x, report.min.y), pos2(x + 1.0, report.max.y));
+        if let Some(bar) = out.composition_caret {
+            report = report_rect(bar);
         }
     }
     // Reported after the marks, which lay the composition out: this pass's final caret for the input method.
     crate::keys::report_editor(app, pass, &ctx, report);
 }
 
-/// An input method's composition drawn from the caret.
+/// An input method's composition slice drawn on a line.
 struct Composition {
     left: f32,
     bottom: f32,
     height: f32,
+    /// Top and bottom screen y for the candidate window caret bar.
+    caret_bar_y: (f32, f32),
     /// The width from `left` to the canvas's right edge.
     room: f32,
     text: String,
-    /// Where the caret stands in the composition, in characters from its start.
-    cursor: usize,
+    /// Where the caret stands in this slice of the composition, in characters from its start.
+    cursor: Option<usize>,
     color: Color32,
     /// The face, size and baseline it is drawn in; without them, the interface font from the caret's bottom.
     typing: Option<TypingFace>,
@@ -261,22 +345,22 @@ pub(crate) struct CaretMarks {
     #[common]
     common: Common,
     bars: Vec<(Bar, Color32)>,
-    composition: Option<Composition>,
-    /// Where the paint put the caret inside the composition (screen x), measured from the laid-out text.
-    composition_caret: Option<f32>,
+    compositions: Vec<Composition>,
+    /// Where the paint put the caret inside the composition (screen bar), measured from the laid-out text.
+    composition_caret: Option<Bar>,
 }
 
 impl CaretMarks {
-    /// The marks named `label`: caret bars in screen points with their colours, and a composition.
-    fn new(label: impl Into<Label>, bars: Vec<(Bar, Color32)>, composition: Option<Composition>) -> Self {
-        CaretMarks { common: Common::new(), bars, composition, composition_caret: None }.label(label)
+    /// The marks named `label`: caret bars in screen points with their colours, and composition slices.
+    fn new(label: impl Into<Label>, bars: Vec<(Bar, Color32)>, compositions: Vec<Composition>) -> Self {
+        CaretMarks { common: Common::new(), bars, compositions, composition_caret: None }.label(label)
     }
 }
 
 /// What the marks report: the caret's place inside the composition they drew, for the candidate window.
 pub(crate) struct CaretMarksOutput {
     response: Response,
-    composition_caret: Option<f32>,
+    composition_caret: Option<Bar>,
 }
 
 impl Outcome for CaretMarksOutput {
@@ -325,29 +409,32 @@ impl Component for CaretMarks {
         for (bar, color) in &self.bars {
             draw.stroke(&PaintShape::Path(bar.to_vec()), StrokeWidth::Medium, DataColor::new(*color));
         }
-        let Some(c) = &self.composition else { return };
-        let color = DataColor::new(c.color);
-        let (layout, top, bottom) = match &c.typing {
-            // In the text's own face and size, its first baseline on the line's, as typed text would sit. Characters the
-            // face lacks (CJK in a Latin font) come from the interface fonts; a size past the font atlas is capped.
-            Some(t) => {
-                let key = face_key(t.face);
-                let layout = draw.face_run(pos2(c.left, t.baseline), &FaceRun::new(c.text.as_str(), &key, t.size, color), || face_bytes(t.face));
-                let top = t.baseline - layout.first_baseline;
-                let bottom = top + layout.size().y;
-                (layout, top, bottom)
+        for c in &self.compositions {
+            let color = DataColor::new(c.color);
+            let (layout, top, bottom) = match &c.typing {
+                // In the text's own face and size, its first baseline on the line's, as typed text would sit. Characters the
+                // face lacks (CJK in a Latin font) come from the interface fonts; a size past the font atlas is capped.
+                Some(t) => {
+                    let key = face_key(t.face);
+                    let layout = draw.face_run(pos2(c.left, t.baseline), &FaceRun::new(c.text.as_str(), &key, t.size, color), || face_bytes(t.face));
+                    let top = t.baseline - layout.first_baseline;
+                    let bottom = top + layout.size().y;
+                    (layout, top, bottom)
+                }
+                None => {
+                    let rect = Rect::from_min_size(pos2(c.left, c.bottom - c.height), vec2(c.room, c.height));
+                    (draw.text(rect, &TextRun::new(c.text.as_str()).color(cx.style.ink)), c.bottom - c.height, c.bottom)
+                }
+            };
+            let width = layout.size().x;
+            let underline: Vec<Pos2> = vec![pos2(c.left, bottom), pos2(c.left + width, bottom)];
+            draw.stroke(&PaintShape::Path(underline), StrokeWidth::Thin, color);
+            if let Some(cursor) = c.cursor {
+                let x = (c.left + layout.char_x(cursor)).round() + 0.5;
+                draw.stroke(&PaintShape::Path(vec![pos2(x, top), pos2(x, bottom)]), StrokeWidth::Medium, color);
+                self.composition_caret = Some([pos2(x, c.caret_bar_y.0), pos2(x, c.caret_bar_y.1)]);
             }
-            None => {
-                let rect = Rect::from_min_size(pos2(c.left, c.bottom - c.height), vec2(c.room, c.height));
-                (draw.text(rect, &TextRun::new(c.text.as_str()).color(cx.style.ink)), c.bottom - c.height, c.bottom)
-            }
-        };
-        let width = layout.size().x;
-        let underline: Vec<Pos2> = vec![pos2(c.left, bottom), pos2(c.left + width, bottom)];
-        draw.stroke(&PaintShape::Path(underline), StrokeWidth::Thin, color);
-        let x = (c.left + layout.char_x(c.cursor)).round() + 0.5;
-        draw.stroke(&PaintShape::Path(vec![pos2(x, top), pos2(x, bottom)]), StrokeWidth::Medium, color);
-        self.composition_caret = Some(x);
+        }
     }
 
     fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {

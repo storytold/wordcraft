@@ -52,8 +52,31 @@ pub(super) fn caret_color_at(
     view: u64,
     dim_body: bool,
 ) -> Color32 {
+    caret_color_cached(app, None, layout, (page, x, y), view, dim_body)
+}
+
+/// [`caret_color_at`] against an explicit document snapshot (such as an IME preview copy).
+pub(super) fn caret_color_at_doc(
+    app: &mut WordApp,
+    doc: &wordcraft_doc::Document,
+    layout: &std::sync::Arc<DocLayout>,
+    at: (usize, f32, f32),
+    view: u64,
+    dim_body: bool,
+) -> Color32 {
+    caret_color_cached(app, Some(doc), layout, at, view, dim_body)
+}
+
+fn caret_color_cached(
+    app: &mut WordApp,
+    doc: Option<&wordcraft_doc::Document>,
+    layout: &std::sync::Arc<DocLayout>,
+    (page, x, y): (usize, f32, f32),
+    view: u64,
+    dim_body: bool,
+) -> Color32 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    (std::sync::Arc::as_ptr(layout) as usize, page, x.to_bits(), y.to_bits(), view).hash(&mut h);
+    (std::sync::Arc::as_ptr(layout) as usize, doc.is_some(), page, x.to_bits(), y.to_bits(), view).hash(&mut h);
     let key = h.finish();
     if let Some((k, c)) = app.canvas.caret_bg
         && k == key
@@ -61,7 +84,8 @@ pub(super) fn caret_color_at(
         return c;
     }
     let Some(p) = layout.pages.get(page) else { return Color32::BLACK };
-    let bg = wordcraft_render::background_at(&app.session.doc, p, &page_render_options(app, dim_body), x, y);
+    let target = doc.unwrap_or(&app.session.doc);
+    let bg = wordcraft_render::background_at(target, p, &page_render_options(app, dim_body), x, y);
     let c = caret_contrast(bg);
     app.canvas.caret_bg = Some((key, c));
     c

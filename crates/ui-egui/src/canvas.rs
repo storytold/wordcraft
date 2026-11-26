@@ -61,8 +61,10 @@ pub(crate) use links::follow_link;
 use links::{field_link, is_followable_link, is_generated_bookmark_link};
 pub use navigation::page_to_screen;
 use navigation::viewed_page;
+#[cfg(test)]
+use pages::shown_layout;
 pub(crate) use pages::{PageKeys, dark_page, page_doc, page_screen_scale, preview_sel, screen_render_options};
-use pages::{page_render_options, shown_layout};
+use pages::{page_render_options, shown_layout_for};
 use reading::{reading_anchor_page, reading_page_start, web_layout_width};
 use story::dims_body;
 pub use story::{editing_header_footer, in_text_box};
@@ -254,9 +256,13 @@ pub struct CanvasState {
     /// selection, and the document's own layout, which a view change replaces), so a still pointer
     /// doesn't lay the document out every frame. Set only while the page shows the preview.
     table_preview_layout: Option<(TablePreviewKey, wordcraft_doc::Document, wordcraft_engine::Selection, Arc<DocLayout>)>,
+    /// The cached display-only document copy and layout for an active IME composition, keyed by
+    /// the pre-edit string, document id, revision, selection, pending typing props and base layout.
+    ime_preview_layout: Option<(ImePreviewKey, wordcraft_engine::ImePreview)>,
 }
 
 type TablePreviewKey = ((String, serde_json::Value, u64, u64, wordcraft_engine::Selection), Arc<DocLayout>);
+type ImePreviewKey = ((String, u64, u64, wordcraft_engine::Selection, Option<wordcraft_doc::props::CharProps>, Option<Pos>), Arc<DocLayout>);
 
 impl CanvasState {
     /// Another document is shown in the window: everything about the page that was shown (drags,
@@ -451,6 +457,7 @@ impl Default for CanvasState {
             list_preview: None,
             preview_scroll: None,
             table_preview_layout: None,
+            ime_preview_layout: None,
         }
     }
 }
@@ -503,7 +510,7 @@ fn update_viewport(app: &mut WordApp, full: Rect, metrics: &ReadingMetrics, side
 /// The layout the pass shows, after the viewport sizes are settled.
 fn prepare_layout(app: &mut WordApp, full: Rect, metrics: &ReadingMetrics, side: f32, ctx: &egui::Context) -> Arc<DocLayout> {
     let reflow_anchor = update_viewport(app, full, metrics, side, ctx);
-    let layout = shown_layout(app);
+    let layout = shown_layout_for(app, app.canvas.focused(ctx));
     if let Some(anchor) = reflow_anchor
         && let Some(page) = reading_anchor_page(&layout, &anchor)
     {
@@ -532,6 +539,9 @@ fn hold_scroll_for_preview(app: &mut WordApp, offset: &mut (f64, f64)) -> bool {
 
 /// The selection's rects by page, in page points, from the layout `layout` is of (the preview's while one shows).
 fn selection_page_rects(app: &mut WordApp, layout: &DocLayout) -> Vec<(usize, wordcraft_geom::Rect)> {
+    if app.canvas.ime_preview_layout.is_some() {
+        return Vec::new();
+    }
     if let Some(sel) = preview_sel(app) {
         let (a, b) = sel.ordered();
         if a == b { Vec::new() } else { wordcraft_engine::cmd::table_mouse::selection_rects(layout, page_doc(app), &a, &b, app.session.page_hint) }
@@ -593,22 +603,108 @@ fn mark_area(page: usize, r: &wordcraft_geom::Rect, kind: MarkKind) -> MarkArea 
     MarkArea::new(page, rect, kind)
 }
 
+/// Byte-offset mapper from the committed document onto an active IME preview copy, accounting
+/// for both deleted-byte removal and retained tracked-deletion bytes inside the replaced span.
+pub(super) struct ImeRangeMap {
+    story: StoryRef,
+    path: wordcraft_doc::Path,
+    edit_start: usize,
+    edit_end: usize,
+    prefix_ok: bool,
+    suffix_delta: Option<isize>,
+}
+
+impl ImeRangeMap {
+    /// Build a mapper for `preview` relative to `doc` and committed `sel`, or `None` when the
+    /// selection crosses paragraphs or the edited paragraph is missing.
+    pub(super) fn new(doc: &wordcraft_doc::Document, sel: &wordcraft_engine::Selection, preview: &wordcraft_engine::ImePreview) -> Option<Self> {
+        let (sel_start, sel_end) = sel.ordered();
+        if sel_start.story != sel_end.story
+            || sel_start.path != sel_end.path
+            || sel_start.story != preview.start.story
+            || sel_start.path != preview.start.path
+        {
+            return None;
+        }
+        let orig = doc.para_at(&preview.start)?;
+        let prev = preview.doc.para_at(&preview.start)?;
+        let edit_start = sel_start.off.min(preview.start.off);
+        let edit_end = sel_end.off.max(preview.start.off);
+        let prefix_ok = orig.text.get(..edit_start).is_some_and(|s| prev.text.get(..edit_start) == Some(s));
+        let delta = prev.len() as isize - orig.len() as isize;
+        let suffix_delta = usize::try_from(edit_end as isize + delta)
+            .ok()
+            .filter(|&shifted_end| {
+                shifted_end >= preview.end.off && orig.text.get(edit_end..).is_some_and(|s| prev.text.get(shifted_end..) == Some(s))
+            })
+            .map(|_| delta);
+        Some(Self { story: preview.start.story, path: preview.start.path.clone(), edit_start, edit_end, prefix_ok, suffix_delta })
+    }
+
+    /// Map a committed `(a, b)` span onto the preview copy, skipping spans replaced by the active
+    /// composition or whose displacement cannot be verified.
+    pub(super) fn map(&self, a: &Pos, b: &Pos) -> Option<(Pos, Pos)> {
+        let same_para = |p: &Pos| p.story == self.story && p.path == self.path;
+        let map_suffix = |p: &Pos| {
+            let d = self.suffix_delta?;
+            Some(Pos { off: (p.off as isize + d).max(0) as usize, ..p.clone() })
+        };
+        if !same_para(a) && !same_para(b) {
+            return Some((a.clone(), b.clone()));
+        }
+        if same_para(a) && same_para(b) {
+            if b.off <= self.edit_start && a.off <= self.edit_start && self.prefix_ok {
+                return Some((a.clone(), b.clone()));
+            }
+            if a.off >= self.edit_end && b.off >= self.edit_end {
+                return Some((map_suffix(a)?, map_suffix(b)?));
+            }
+            return None;
+        }
+        if same_para(a) {
+            if a.off >= self.edit_end {
+                return Some((map_suffix(a)?, b.clone()));
+            }
+            if a.off < self.edit_start && self.prefix_ok {
+                return Some((a.clone(), b.clone()));
+            }
+            return None;
+        }
+        if b.off <= self.edit_start && self.prefix_ok {
+            return Some((a.clone(), b.clone()));
+        }
+        if b.off >= self.edit_end {
+            return Some((a.clone(), map_suffix(b)?));
+        }
+        None
+    }
+}
+
 /// The selection, Find › Reading Highlight and Read Aloud marks, in page points.
 fn mark_areas(app: &mut WordApp, layout: &DocLayout, selected: &[(usize, wordcraft_geom::Rect)]) -> Vec<MarkArea> {
     let mut areas: Vec<MarkArea> = selected.iter().map(|(page, r)| mark_area(*page, r, MarkKind::Selection)).collect();
+    let found: Option<Vec<(Pos, Pos)>> = preview_sel(app).is_none().then(|| app.session.find_highlights().iter().take(5000).cloned().collect());
+    let spoken = crate::read_aloud::highlight(app);
+    let preview = app.canvas.ime_preview_layout.as_ref().map(|(_, p)| p);
+    let range_map = preview.and_then(|p| ImeRangeMap::new(&app.session.doc, &app.session.sel, p));
+    let mark_doc = preview.map_or(&app.session.doc, |p| &p.doc);
+    let hint = app.session.page_hint;
     // Find's places are the document's, not the preview's.
-    if preview_sel(app).is_none() {
-        let hint = app.session.page_hint;
-        let found: Vec<(Pos, Pos)> = app.session.find_highlights().iter().take(5000).cloned().collect();
+    if let Some(found) = found {
         for (a, b) in &found {
-            for (page, r) in layout.selection_rects(&app.session.doc, a, b, hint) {
+            let mapped = if preview.is_some() { range_map.as_ref().and_then(|m| m.map(a, b)) } else { Some((a.clone(), b.clone())) };
+            let Some((ma, mb)) = mapped else { continue };
+            for (page, r) in layout.selection_rects(mark_doc, &ma, &mb, hint) {
                 areas.push(mark_area(page, &r, MarkKind::Found));
             }
         }
     }
-    if let Some((a, b)) = crate::read_aloud::highlight(app) {
-        for (page, r) in layout.selection_rects(&app.session.doc, &a, &b, app.session.page_hint) {
-            areas.push(mark_area(page, &r, MarkKind::Spoken));
+    if let Some((a, b)) = spoken {
+        let mapped = if preview.is_some() { range_map.as_ref().and_then(|m| m.map(&a, &b)) } else { Some((a, b)) };
+        if let Some((ma, mb)) = mapped {
+            for (page, r) in layout.selection_rects(mark_doc, &ma, &mb, hint) {
+                areas.push(mark_area(page, &r, MarkKind::Spoken));
+            }
         }
     }
     areas
@@ -738,30 +834,98 @@ fn show_reading(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: R
     }
 }
 
+/// Dismiss an active IME composition on canvas pointer press before `prepare_layout` builds a
+/// preview copy at the moved caret. Returns `true` when a secondary press dismissed live pre-edit,
+/// so the context menu still opens without moving the caret away from the composition.
+fn dismiss_ime_on_pointer_press(app: &mut WordApp, ui: &Ui, full: Rect) -> bool {
+    if app.canvas.ime_preedit.is_empty() && app.canvas.ime_preview_layout.is_none() {
+        return false;
+    }
+    let (mut primary, mut secondary) = (false, false);
+    ui.input(|i| {
+        for e in &i.events {
+            if let egui::Event::PointerButton { pos, button, pressed: true, .. } = e
+                && full.contains(*pos)
+            {
+                match button {
+                    egui::PointerButton::Primary => primary = true,
+                    egui::PointerButton::Secondary => secondary = true,
+                    _ => {}
+                }
+            }
+        }
+    });
+    if !primary && !secondary {
+        return false;
+    }
+    let secondary_on_live = !app.canvas.ime_preedit.is_empty() && secondary;
+    app.canvas.ime_preedit.clear();
+    app.canvas.ime_preedit_range = None;
+    app.canvas.ime_preview_layout = None;
+    app.canvas.ime_interrupted_preedit = true;
+    app.canvas.ime_interrupt_now = true;
+    secondary_on_live
+}
+
 /// Render the document canvas for the current frame: the pages (or Read Mode's columns) and everything over them.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let full = ui.available_rect_before_wrap();
+    let secondary_dismissed_ime = dismiss_ime_on_pointer_press(app, ui, full);
     let Some(metrics) = reading_metrics::read(ui) else { return };
     let side = app.canvas.page_side.unwrap_or(0.0);
     let layout = prepare_layout(app, full, &metrics, side, ui.ctx());
     if app.session.view.read_mode {
         show_reading(app, ui, &layout, full, &metrics);
     } else {
-        show_pages(app, ui, &layout, full);
+        show_pages(app, ui, &layout, full, secondary_dismissed_ime);
     }
 }
 
+/// Preview cursor position inside `preview.doc` for the active `ime_preedit` and cursor range.
+fn ime_preview_cursor_pos(app: &WordApp, preview: &wordcraft_engine::ImePreview) -> Pos {
+    let text = &app.canvas.ime_preedit;
+    let cursor_chars = cursor::preedit_cursor_chars(text, app.canvas.ime_preedit_range.as_ref());
+    let cursor_byte = text.char_indices().nth(cursor_chars).map_or(text.len(), |(i, _)| i);
+    let off = preview.start.off.saturating_add(cursor_byte).min(preview.end.off);
+    Pos { off, ..preview.start.clone() }
+}
+
+/// Layout and caret used for post-input viewport scrolling: the composition's preview cursor while
+/// an IME composition is active on a focused canvas, else the committed selection's caret.
+fn scroll_target_caret(app: &mut WordApp, focused: bool) -> (Arc<DocLayout>, Option<wordcraft_layout::hit::Caret>) {
+    if focused
+        && preview_sel(app).is_none()
+        && !app.canvas.ime_preedit.is_empty()
+        && let Some(preview) = pages::ensure_ime_preview(app)
+    {
+        let pos = ime_preview_cursor_pos(app, &preview);
+        if let Some(c) = preview
+            .layout
+            .composition_caret(&preview.start, &preview.end, pos.off, app.session.page_hint)
+            .or_else(|| preview.layout.caret_on(&pos, app.session.page_hint))
+        {
+            return (preview.layout, Some(c));
+        }
+    }
+    let fresh = app.session.layout();
+    let c = fresh.caret_on(&preview_sel(app).unwrap_or(app.session.sel_ends()).focus, app.session.page_hint);
+    (fresh, c)
+}
+
 /// The page view and everything shown over it.
-fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rect) {
+fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rect, secondary_dismissed_ime: bool) {
     // The document's layout the pages are drawn from: the pass's keys and press run inside the page view, after the
     // pages took it.
     let laid_before = app.session.layout();
+    let preedit_before = app.canvas.ime_preedit.clone();
+    let ime_active = app.canvas.ime_preview_layout.is_some();
+    let tool_layout = if ime_active { &laid_before } else { layout };
     let mut state = std::mem::take(&mut app.canvas.view);
     sync_view_state(app, &mut state);
     let before = (state.zoom, state.fit);
     if app.canvas.nav_to_caret {
         app.canvas.nav_to_caret = false;
-        let c = layout.caret_on(&preview_sel(app).unwrap_or(app.session.sel_ends()).focus, app.session.page_hint);
+        let c = tool_layout.caret_on(&preview_sel(app).unwrap_or(app.session.sel_ends()).focus, app.session.page_hint);
         if let Some(c) = c
             && let Some(page) = layout.pages.get(c.page)
         {
@@ -776,13 +940,13 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     let held = hold_scroll_for_preview(app, &mut state.offset);
     let started_at = state.offset.1;
 
-    let caret = layout.caret_on(&preview_sel(app).unwrap_or(app.session.sel_ends()).focus, app.session.page_hint);
+    let caret = tool_layout.caret_on(&preview_sel(app).unwrap_or(app.session.sel_ends()).focus, app.session.page_hint);
     if let Some(c) = &caret
         && !app.session.selects_whole_story()
     {
         app.session.page_hint = c.page;
     }
-    let dim_body = dims_body(app, layout);
+    let dim_body = dims_body(app, tool_layout);
     let hidden = crate::objects::dragged_off_page(app.canvas.object_gesture.as_ref());
     let selected = selection_page_rects(app, layout);
     let areas = mark_areas(app, layout, &selected);
@@ -796,8 +960,9 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     let source = source::WordPages::new(app, layout, dim_body, hidden);
     // The describer owns its snapshot, as the source does, so the page view can hold it while the body edits the app.
     let described = preview_sel(app).unwrap_or(app.session.sel_ends()).clone();
-    let describer = crate::a11y::DocumentDescriber::new(source.doc(), layout.clone(), (described.anchor.clone(), described.focus.clone()));
-    let regions = crate::table_pen::regions(app, layout);
+    let described_doc = if ime_active { Arc::new(app.session.doc.clone()) } else { source.doc() };
+    let describer = crate::a11y::DocumentDescriber::new(described_doc, tool_layout.clone(), (described.anchor.clone(), described.focus.clone()));
+    let regions = crate::table_pen::regions(app, tool_layout);
 
     let mut tool_response: Option<ToolHostResponse> = None;
     let mut strip_click: Option<Pos2> = None;
@@ -815,7 +980,7 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
         .navigation(navigation_options())
         .editor(craft::ui::primitives::EditorPurpose::Text)
         .rulers(show_rulers)
-        .snap(crate::objects::snap(app, layout))
+        .snap(crate::objects::snap(app, tool_layout))
         .tool_regions(regions)
         .access(&describer)
         .show(ui, |ui, body| {
@@ -823,30 +988,31 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
             body_view = Some(body.view);
             // Canvas controls take their presses first, then the tool host runs, then the caret shows over them.
             TextMarks::over(body.pages).areas(&areas).show_at(ui, body.rect);
-            gridlines::show(app, ui, layout, body);
-            crate::content_controls::show(app, ui, layout, body);
-            strip_click = equation_frame::show(app, ui, layout, body);
-            crate::crop::show(app, ui, layout, body);
-            crate::objects::show(app, ui, layout, body);
+            gridlines::show(app, ui, tool_layout, body);
+            crate::content_controls::show(app, ui, tool_layout, body);
+            strip_click = equation_frame::show(app, ui, tool_layout, body);
+            crate::crop::show(app, ui, tool_layout, body);
+            crate::objects::show(app, ui, tool_layout, body);
             // Shown after the selection areas: across controls the later one is on top of a press, and a border
             // beats the area it lies in (the engine's `target_at` answers none where a border is).
-            crate::table_mouse::show(app, ui, layout, body);
-            crate::table_resize::show(app, ui, layout, body);
-            crate::ink::show(app, ui, layout, body);
-            crate::dialogs_smart_art::frame_button(app, ui, body.pages, layout);
+            crate::table_mouse::show(app, ui, tool_layout, body);
+            crate::table_resize::show(app, ui, tool_layout, body);
+            crate::ink::show(app, ui, tool_layout, body);
+            crate::dialogs_smart_art::frame_button(app, ui, body.pages, tool_layout);
             if let Some(pass) = body.pass {
                 ran = true;
-                let response = run_page_tool(app, ui, layout, body, pass);
+                let response = run_page_tool(app, ui, tool_layout, body, pass);
                 // A right click the page tool left asks for the menu: what it clicked becomes the selection first, so
-                // the menu acts on it (the page tool takes the primary button only).
-                if let Some(request) = response.context.filter(|r| !matches!(r.source, ContextSource::Key)) {
-                    input::handle_secondary_selection(app, body, layout, request.at);
+                // the menu acts on it (the page tool takes the primary button only), unless this press dismissed
+                // a live IME composition (the menu still opens while the caret stays put).
+                if !secondary_dismissed_ime && let Some(request) = response.context.filter(|r| !matches!(r.source, ContextSource::Key)) {
+                    input::handle_secondary_selection(app, body, tool_layout, request.at);
                 }
                 tool_response = Some(response);
                 caret::paint_caret(app, ui, pass, body, Env::of(ui).motion.mode);
                 // This pass's keys and press have moved the caret: follow it, not the one from before the pass.
-                let fresh = app.session.layout();
-                caret_after = fresh.caret_on(&preview_sel(app).unwrap_or(app.session.sel_ends()).focus, app.session.page_hint);
+                let (scroll_layout, target_caret) = scroll_target_caret(app, app.canvas.focused(ui.ctx()));
+                caret_after = target_caret;
                 if app.canvas.scroll_to_caret
                     && !held
                     && let Some(c) = &caret_after
@@ -862,7 +1028,7 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
                             );
                         }
                         None => {
-                            let h = fresh.pages.get(c.page).map_or(1.0, |p| p.h.max(1.0));
+                            let h = scroll_layout.pages.get(c.page).map_or(1.0, |p| p.h.max(1.0));
                             fix.go_to = Some((c.page, f64::from(c.top / h)));
                             unplaced = Some((c.page, h, *c));
                         }
@@ -896,10 +1062,13 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
             }
         }
     }
-    // This pass's own input changed the document under the pages it drew: run the pass again, so the frame that
-    // delivers a key paints its text (production laid out and painted in the one pass) rather than the next frame.
-    if ran && !Arc::ptr_eq(&laid_before, &app.session.layout()) {
+    // This pass's own input changed the document or pre-edit under the pages it drew: run the pass again, so the frame
+    // that delivers a key or composition paints its reflowed pages and overlay together rather than flashing for a frame.
+    if ran && (!Arc::ptr_eq(&laid_before, &app.session.layout()) || preedit_before != app.canvas.ime_preedit) {
         ui.ctx().request_discard("the page's input changed the document");
+        if !ui.ctx().will_discard() {
+            ui.ctx().request_repaint();
+        }
     }
     // The caret's page was not placed this pass: the whole layout says where it lies on screen, so the follow moves the
     // view by the same margin rule as for a placed page, from whichever side the caret is on.

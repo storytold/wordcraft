@@ -96,17 +96,67 @@ pub(crate) fn page_screen_scale(rect: Rect, page: &Page, fallback: f32) -> f32 {
     if page.w > 0.0 { rect.width() / page.w } else { fallback }
 }
 
-/// The layout the page shows: the document's own, or with the table Insert › Table's grid is
-/// hovering over (#3931). The preview is laid out on a copy, so the document and its undo history
-/// change only when a square is clicked.
+/// Ensure `app.canvas.ime_preview_layout` holds the display-only preview layout matching the
+/// current `ime_preedit` and session state, returning it when active.
+pub(super) fn ensure_ime_preview(app: &mut WordApp) -> Option<wordcraft_engine::ImePreview> {
+    if app.canvas.ime_preedit.is_empty() {
+        app.canvas.ime_preview_layout = None;
+        return None;
+    }
+    let base = app.session.layout();
+    let key = (
+        (
+            app.canvas.ime_preedit.clone(),
+            app.session.document_id(),
+            app.session.rev(),
+            app.session.sel.clone(),
+            app.session.pending.clone(),
+            app.session.pending_at().cloned(),
+        ),
+        base,
+    );
+    if let Some((k, preview)) = &app.canvas.ime_preview_layout
+        && k.0 == key.0
+        && std::sync::Arc::ptr_eq(&k.1, &key.1)
+    {
+        return Some(preview.clone());
+    }
+    match app.session.ime_preview_layout(&app.canvas.ime_preedit) {
+        Some(preview) => {
+            app.canvas.ime_preview_layout = Some((key, preview.clone()));
+            Some(preview)
+        }
+        None => {
+            app.canvas.ime_preview_layout = None;
+            None
+        }
+    }
+}
+
+/// The layout the page shows: the document's own, with the active IME composition spliced in, or
+/// with the table Insert › Table's grid is hovering over (#3931). The preview is laid out on a
+/// copy, so the document and its undo history change only when committed or clicked.
+#[cfg(test)]
 pub(super) fn shown_layout(app: &mut WordApp) -> std::sync::Arc<DocLayout> {
+    shown_layout_for(app, true)
+}
+
+pub(super) fn shown_layout_for(app: &mut WordApp, focused: bool) -> std::sync::Arc<DocLayout> {
     let table = app.canvas.table_preview.take().map(|(rows, cols)| ("insert.table".to_string(), json!({"rows": rows, "cols": cols})));
     let command = app.canvas.command_preview.take();
     app.canvas.command_previewed = command.clone().filter(|_| table.is_none());
     let Some((id, params)) = table.or(command) else {
         app.canvas.table_preview_layout = None;
+        if focused
+            && !app.canvas.ime_preedit.is_empty()
+            && let Some(preview) = ensure_ime_preview(app)
+        {
+            return preview.layout;
+        }
+        app.canvas.ime_preview_layout = None;
         return app.session.layout();
     };
+    app.canvas.ime_preview_layout = None;
     // The caret can move, or the view change, with the grid still hovered: the table then goes
     // somewhere else, or the page is laid out to another width.
     let key = ((id.clone(), params.clone(), app.session.document_id(), app.session.rev(), app.session.sel.clone()), app.session.layout());
@@ -132,6 +182,12 @@ pub(super) fn shown_layout(app: &mut WordApp) -> std::sync::Arc<DocLayout> {
 /// shows Insert › Table's preview, whose paragraph paths are the layout's (#3931).
 pub(crate) fn page_doc(app: &WordApp) -> &wordcraft_doc::Document {
     app.canvas.table_preview_layout.as_ref().map_or(&app.session.doc, |(_, doc, _, _)| doc)
+}
+
+/// The document rendered into page rasters for this pass: the IME preview copy while composing,
+/// else [`page_doc`].
+pub(super) fn render_doc(app: &WordApp) -> &wordcraft_doc::Document {
+    app.canvas.ime_preview_layout.as_ref().map_or_else(|| page_doc(app), |(_, preview)| &preview.doc)
 }
 
 /// The previewed copy's selection while the page shows Insert › Table's preview: the caret and

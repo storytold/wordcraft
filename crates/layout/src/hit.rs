@@ -34,6 +34,70 @@ pub struct EquationBox {
     pub math: std::sync::Arc<crate::math::MathLayout>,
 }
 
+/// One laid-out line slice of an active IME composition, in page points.
+#[derive(Clone, Debug)]
+pub struct CompositionLine {
+    pub page: usize,
+    pub bytes: std::ops::Range<usize>,
+    pub x: f32,
+    pub top: f32,
+    pub height: f32,
+    pub typing: Option<(StyleRun, f32)>,
+}
+
+/// Index of the composition slice in `slices` that owns a cursor at paragraph byte offset
+/// `cursor_off`, keeping a cursor at the end of a wrapped slice on that slice.
+pub fn composition_cursor_slice(slices: &[CompositionLine], cursor_off: usize) -> Option<usize> {
+    if slices.is_empty() {
+        return None;
+    }
+    slices.iter().position(|s| cursor_off < s.bytes.end).or(Some(slices.len() - 1))
+}
+
+/// Geometry of a single line's slice of an IME composition range `start_off..end_off`.
+fn line_composition_slice(
+    page: usize,
+    para: &ParaLayout,
+    (l0, li): (usize, usize),
+    (px, py): (f32, f32),
+    (start_off, end_off): (usize, usize),
+) -> Option<CompositionLine> {
+    let first = para.lines.get(l0)?;
+    let line = para.lines.get(li)?;
+    let mut min_start = usize::MAX;
+    let mut max_end = 0usize;
+    let mut min_x = f32::INFINITY;
+    let mut style_idx: Option<u32> = None;
+    for k in line.c0..line.c1 {
+        let Some(c) = para.clusters.get(k) else { continue };
+        if c.start < start_off || c.end > end_off || c.start >= c.end {
+            continue;
+        }
+        if style_idx.is_none() {
+            style_idx = Some(c.style);
+        }
+        min_start = min_start.min(c.start);
+        max_end = max_end.max(c.end);
+        if let Some(cl_x) = line.cl_left(k) {
+            min_x = min_x.min(px + cl_x);
+        }
+    }
+    if min_start >= max_end || !min_x.is_finite() {
+        return None;
+    }
+    let top = py + (line.top - first.top);
+    let (asc, desc) = para.caret_metrics(li);
+    let base = top + (line.baseline - line.top);
+    let ctop = (base - asc).max(top);
+    let height = (base + desc - ctop).max(4.0);
+    let typing = style_idx
+        .and_then(|si| para.styles.get(si as usize))
+        .filter(|run| run.size.is_finite() && run.size > 0.0)
+        .map(|run| (run.clone(), base - run.shift))
+        .filter(|(_, b)| b.is_finite());
+    Some(CompositionLine { page, bytes: min_start..max_end, x: min_x, top: ctop, height, typing })
+}
+
 /// Result of [`DocLayout::visual_step`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum VisualStep {
@@ -725,6 +789,54 @@ impl DocLayout {
             return Some(Caret { page: pi, x: r.x, top: r.y, height: r.h, width: r.w });
         }
         None
+    }
+
+    /// The laid-out line slices covering an IME composition byte range `start..end` in order,
+    /// paired with each slice's owning paragraph layout, line index, and paragraph x origin.
+    /// Returns empty in turned text or when `start` and `end` do not name a non-empty span in one paragraph.
+    fn composition_slices_with_lines<'a>(&'a self, start: &Pos, end: &Pos, page_hint: usize) -> Vec<(CompositionLine, &'a ParaLayout, usize, f32)> {
+        if start.story != end.story || start.path != end.path || start.off >= end.off {
+            return Vec::new();
+        }
+        let mut pieces = self.pieces(start.story, &start.path, page_hint);
+        pieces.sort_by_key(|(_, it)| match it {
+            Placed::Lines { l0, .. } => *l0,
+            _ => usize::MAX,
+        });
+        let mut out = Vec::new();
+        for (pi, it) in pieces {
+            let Placed::Lines { para, l0, l1, x, y, turn, .. } = it else { continue };
+            if *turn != TextDirection::Horizontal {
+                return Vec::new();
+            }
+            for li in *l0..*l1 {
+                if let Some(slice) = line_composition_slice(pi, para, (*l0, li), (*x, *y), (start.off, end.off)) {
+                    out.push((slice, para.as_ref(), li, *x));
+                }
+            }
+        }
+        out
+    }
+
+    /// The laid-out line slices covering an IME composition byte range `start..end` in order.
+    /// Returns empty in turned text or when `start` and `end` do not name a non-empty span in one paragraph.
+    pub fn composition_lines(&self, start: &Pos, end: &Pos, page_hint: usize) -> Vec<CompositionLine> {
+        self.composition_slices_with_lines(start, end, page_hint).into_iter().map(|(slice, _, _, _)| slice).collect()
+    }
+
+    /// Caret geometry for an active IME composition cursor at `cursor_off`, preserving the owning
+    /// composition slice's line affinity at soft-wrap boundaries.
+    pub fn composition_caret(&self, start: &Pos, end: &Pos, cursor_off: usize, page_hint: usize) -> Option<Caret> {
+        let entries = self.composition_slices_with_lines(start, end, page_hint);
+        if entries.is_empty() {
+            return None;
+        }
+        let idx = entries.iter().position(|(s, _, _, _)| cursor_off < s.bytes.end).unwrap_or(entries.len() - 1);
+        let (slice, para, li, px) = entries.get(idx)?;
+        let off = cursor_off.clamp(slice.bytes.start, slice.bytes.end);
+        let cx = para.x_of(*li, off)?;
+        let cx = para.caret_limit(*li).map_or(cx, |m| cx.min(m));
+        Some(Caret { page: slice.page, x: px + cx, top: slice.top, height: slice.height, width: 0.0 })
     }
 
     /// The style run text typed at `pos` would take (the character's before it, or at the start

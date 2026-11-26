@@ -101,9 +101,15 @@ pub struct ParaLayout {
     /// Room after a cluster between Asian text and Latin text or digits ([`auto_space`]), by
     /// cluster index, sorted. It is part of the cluster's advance, but takes no room at a line's end.
     pub auto_space: Vec<(usize, f32)>,
+    /// Uncommitted IME composition byte range in this paragraph, if any.
+    pub composition: Option<(usize, usize)>,
 }
 
 impl ParaLayout {
+    /// Whether cluster `c` lies inside the uncommitted IME composition range.
+    pub(crate) fn in_composition(&self, c: &Cluster) -> bool {
+        self.composition.is_some_and(|(a, b)| c.start < b && c.end > a)
+    }
     /// The room a horizontal rule at cluster `k` is placed in, from its left edge to the end of
     /// what the line has left. A first-line indent moves that end along (Word, measured with
     /// 50 % and fixed-width rules beside floats on either side and with first-line and hanging
@@ -351,6 +357,7 @@ mod label_spacing_tests {
             table: None,
             proofing: None,
             typing_word: None,
+            composition: None,
             field_codes: false,
             grid: Grid::default(),
             exclusions: &[],

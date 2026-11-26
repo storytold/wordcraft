@@ -4341,3 +4341,33 @@ fn enter_in_a_drop_cap_paragraph_makes_a_normal_paragraph() {
         assert_eq!(second.drop_cap_font, None, "{position}");
     }
 }
+
+#[test]
+fn ime_preview_layout_reflows_following_text_without_mutating_session() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "大家好"}));
+    s.sel = crate::Selection::caret(Pos::body(0, 6));
+    let snapshot = (s.doc.clone(), s.rev(), s.dirty, s.sel.clone(), s.can_undo());
+    let base_x_hao = s.layout().caret(&Pos::body(0, 6)).unwrap().x;
+
+    let preview = s.ime_preview_layout("da").expect("preview layout for pinyin");
+    assert_eq!(preview.start, Pos::body(0, 6));
+    assert_eq!(preview.end, Pos::body(0, 8));
+    let shifted_x_hao = preview.layout.caret(&preview.end).unwrap().x;
+    assert!(shifted_x_hao > base_x_hao, "'好' moves right during composition: {base_x_hao} -> {shifted_x_hao}");
+    assert_eq!(preview.layout.composition_lines(&preview.start, &preview.end, 0).len(), 1);
+    assert_eq!((s.doc.clone(), s.rev(), s.dirty, s.sel.clone(), s.can_undo()), snapshot);
+
+    let wrapped = s.ime_preview_layout(&"pinyin ".repeat(20)).expect("long wrapped composition");
+    assert!(wrapped.layout.composition_lines(&wrapped.start, &wrapped.end, 0).len() > 1);
+    assert_eq!((s.doc.clone(), s.rev(), s.dirty, s.sel.clone(), s.can_undo()), snapshot);
+
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.sel = crate::Selection { anchor: Pos::body(0, 3), focus: Pos::body(0, 6) };
+    let tc_snapshot = (s.doc.clone(), s.rev(), s.dirty, s.sel.clone(), s.can_undo());
+    let tc_preview = s.ime_preview_layout("da").expect("preview with track changes over selection");
+    let para = tc_preview.doc.para_at(&tc_preview.start).unwrap();
+    assert!(para.runs.iter().any(|r| r.props.del.is_some()), "replaced selection keeps tracked deletion");
+    assert!(para.runs.iter().all(|r| r.props.ins.is_none()), "uncommitted composition is not marked inserted");
+    assert_eq!((s.doc.clone(), s.rev(), s.dirty, s.sel.clone(), s.can_undo()), tc_snapshot);
+}

@@ -33,6 +33,7 @@ pub(crate) use doc_state::Widened;
 pub use doc_state::{CellRange, ColumnBlock, FindState, MathEdit, Selection, UNDO_LIST_MAX, next_math_session};
 use doc_state::{TypedWord, Undo, doc_bib_style};
 use ime_state::ImeCaretState;
+pub use layout::ImePreview;
 pub use locale::set_system_locale;
 pub use locale::system_locale;
 pub use prefs::Prefs;
@@ -272,6 +273,11 @@ pub struct Session {
 impl Session {
     /// File name of the persisted custom dictionary inside the settings folder.
     pub const USER_DICT_FILE: &str = "custom-dictionary.txt";
+
+    /// The position where [`Self::pending`] was carried over from a deleted character, if any.
+    pub fn pending_at(&self) -> Option<&Pos> {
+        self.pending_at.as_ref()
+    }
 
     /// The user's keyboard shortcut changes.
     pub fn keymap(&self) -> &craft_keymap::Overrides {

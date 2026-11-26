@@ -99,7 +99,7 @@ fn auto_space_room(st: &StyleRun) -> f32 {
 /// size for Times New Roman, 0.2203 for Arial, 0.2575 for Calibri, 0.2980 for Courier New,
 /// 0.3041 for Cambria — which is half each face's average character width. With different sizes
 /// either side, the room after the Latin run takes the Latin size, not the Asian one.
-pub(super) fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool) -> Vec<(usize, f32)> {
+pub(super) fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool, composition: Option<(usize, usize)>) -> Vec<(usize, f32)> {
     let mut out = Vec::new();
     if !de && !dn {
         return out;
@@ -126,7 +126,10 @@ pub(super) fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool) -> Vec
             prev = None;
             continue;
         };
+        let in_comp = |idx: usize| composition.is_some_and(|(a, end)| b.clusters.get(idx).is_some_and(|cl| cl.start < end && cl.end > a));
         if let Some((pk, pc)) = prev
+            && !in_comp(pk)
+            && !in_comp(k)
             && let Some(side) = crate::kinsoku::auto_space(pc, first, de, dn)
         {
             let style = b.clusters.get(pk).map(|p| p.style as usize);

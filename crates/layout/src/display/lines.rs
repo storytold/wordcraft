@@ -99,7 +99,7 @@ fn collect_glyph_run(
     let run = pl.clusters.get(start..line.c1.min(pl.clusters.len())).unwrap_or_default();
     let (n_glyphs, n_bytes) = run
         .iter()
-        .take_while(|cluster| cluster.style == si)
+        .take_while(|cluster| cluster.style == si && !pl.in_composition(cluster))
         .filter(|cluster| matches!(cluster.kind, ClKind::Text | ClKind::Space))
         .fold((0usize, 0usize), |(glyphs, bytes), cluster| {
             (glyphs + cluster.g1.saturating_sub(cluster.g0) as usize, bytes + cluster.end.saturating_sub(cluster.start))
@@ -110,7 +110,7 @@ fn collect_glyph_run(
     let symbol_font = wordcraft_doc::symbol_fonts::is_symbol_font(&st.rc.font);
     while k < line.c1 {
         let Some(c) = pl.clusters.get(k) else { break };
-        if c.style != si {
+        if c.style != si || pl.in_composition(c) {
             break;
         }
         let cx = x + line.cl_left(k).unwrap_or(0.0);
@@ -193,6 +193,10 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
     let mut k = line.c0;
     while k < line.c1 {
         let Some(c) = pl.clusters.get(k) else { break };
+        if pl.in_composition(c) {
+            k += 1;
+            continue;
+        }
         let si = c.style;
         let Some(st) = pl.styles.get(si as usize) else {
             k += 1;
@@ -600,6 +604,9 @@ fn formatting_marks(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         let msize = pl.styles.first().map(|s| s.size).unwrap_or(11.0);
         for k in line.c0..line.c1 {
             let Some(c) = pl.clusters.get(k) else { continue };
+            if pl.in_composition(c) {
+                continue;
+            }
             let cx = x + line.cl_left(k).unwrap_or(0.0);
             let nx = x + line.cl_right(k).unwrap_or(cx - x);
             let size = pl.styles.get(c.style as usize).map(|s| s.size).unwrap_or(msize);

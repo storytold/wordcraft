@@ -1290,6 +1290,229 @@ fn the_composition_takes_the_documents_font_and_size() {
     assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "Hello");
 }
 
+/// #1888: Typing Chinese Pinyin between existing characters reflows the text after the caret so
+/// the composition and following glyphs never overlap, and commits cleanly back into the document.
+#[test]
+fn ime_preedit_reflows_following_text_without_overlapping() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "大家好"})).unwrap();
+    app.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 6));
+    let mut h = composing_harness(app);
+    let before_hao_x = h.state_mut().session.layout().caret(&Pos::body(0, 6)).expect("caret before composition").x;
+    // A single `app_frame()` must discard the stale pass and align both page raster and overlay immediately.
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "da".into(), active_range_chars: None }));
+    h.app_frame();
+    let drawn = drawn_composition(&h, "da").expect("the composition overlay is drawn on the first frame");
+    let rendered = h.state().canvas.page_keys.layout.clone().expect("layout rendered by WordPages in this frame");
+    let rendered_hao = rendered.caret(&Pos::body(0, 8)).expect("frame raster moved following glyph right");
+    let rendered_hao_screen =
+        super::page_to_screen(h.state_mut(), rendered_hao.page, rendered_hao.x, rendered_hao.top).expect("rendered following caret on screen");
+    let comp_right = drawn.pos.x + drawn.galley.size().x;
+    // Sub-pixel glyph quantization between `epaint` and `rustybuzz` stays within 0.5 screen pt.
+    assert!(
+        rendered_hao_screen.x + 0.5 >= comp_right,
+        "rendered following caret screen x ({}) must sit at or beyond painted composition right edge ({comp_right})",
+        rendered_hao_screen.x
+    );
+    let shown = shown_layout(h.state_mut());
+    assert!(std::sync::Arc::ptr_eq(&rendered, &shown), "frame raster used the current preview layout");
+    let after_hao = shown.caret(&Pos::body(0, 8)).expect("following glyph moved right");
+    assert!(after_hao.x > before_hao_x, "'好' must move strictly right past 'da': {before_hao_x} -> {}", after_hao.x);
+    assert!(drawn.galley.size().x > 0.0);
+    let hao_screen = super::page_to_screen(h.state_mut(), after_hao.page, after_hao.x, after_hao.top).expect("following caret on screen");
+    assert!(
+        hao_screen.x + 0.5 >= comp_right,
+        "following caret screen x ({}) must sit at or beyond painted composition right edge ({comp_right})",
+        hao_screen.x
+    );
+    assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "大家好");
+
+    // Extending the pre-edit in one frame reflows `"好"` past the wider overlay in that same frame.
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "dajia".into(), active_range_chars: None }));
+    h.app_frame();
+    let drawn_long = drawn_composition(&h, "dajia").expect("extended composition overlay is drawn");
+    let rendered_long = h.state().canvas.page_keys.layout.clone().expect("layout rendered by WordPages for extended preedit");
+    let rendered_hao_long = rendered_long.caret(&Pos::body(0, 11)).expect("frame raster moved following glyph right for longer preedit");
+    let rendered_hao_long_screen = super::page_to_screen(h.state_mut(), rendered_hao_long.page, rendered_hao_long.x, rendered_hao_long.top)
+        .expect("rendered following caret on screen");
+    let comp_long_right = drawn_long.pos.x + drawn_long.galley.size().x;
+    assert!(
+        rendered_hao_long_screen.x + 0.5 >= comp_long_right,
+        "same-frame discard keeps rendered following text ({}) past extended composition right edge ({comp_long_right})",
+        rendered_hao_long_screen.x
+    );
+    let shown_long = shown_layout(h.state_mut());
+    assert!(std::sync::Arc::ptr_eq(&rendered_long, &shown_long), "extended frame raster used the updated preview layout");
+    let hao_long = shown_long.caret(&Pos::body(0, 11)).expect("following glyph moved right for longer preedit");
+    let hao_long_screen = super::page_to_screen(h.state_mut(), hao_long.page, hao_long.x, hao_long.top).expect("following caret on screen");
+    assert!(
+        hao_long_screen.x + 0.5 >= comp_long_right,
+        "same-frame discard keeps following text ({}) past extended composition right edge ({comp_long_right})",
+        hao_long_screen.x
+    );
+
+    h.event(egui::Event::Ime(egui::ImeEvent::Commit("大".into())));
+    for _ in 0..2 {
+        h.app_frame();
+    }
+    assert!(h.state().canvas.ime_preedit.is_empty());
+    assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "大家大好");
+}
+
+/// When an active IME composition wraps onto another page, the viewport follows the preview cursor
+/// so the text being composed stays visible without mutating the committed selection.
+#[test]
+fn ime_preedit_wrapping_to_next_page_scrolls_to_preview_cursor() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let filler = "Line\n".repeat(42);
+    app.run("document.setText", json!({"text": filler})).unwrap();
+    app.run("caret.docEnd", json!({})).unwrap();
+    let mut h = composing_harness(app);
+    for _ in 0..4 {
+        h.app_frame();
+    }
+    let start_offset_y = h.state().canvas.view.offset.1;
+    let long_preedit = "zhongguorenmin ".repeat(80);
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: long_preedit, active_range_chars: None }));
+    for _ in 0..4 {
+        h.app_frame();
+    }
+    let preview = super::pages::ensure_ime_preview(h.state_mut()).expect("active IME preview");
+    let end_caret = preview.layout.caret_on(&preview.end, h.state().session.page_hint).expect("preview cursor caret");
+    assert!(end_caret.page >= 1, "long composition wraps onto a later page: {end_caret:?}");
+    assert!(h.state().canvas.view.offset.1 > start_offset_y, "viewport scrolled down to follow wrapped composition cursor");
+    assert!(
+        super::page_to_screen(h.state_mut(), end_caret.page, end_caret.x, end_caret.top).is_some(),
+        "preview cursor's page is placed in the viewport"
+    );
+}
+
+/// Clicking elsewhere on the canvas during an active IME composition dismisses the uncommitted
+/// pre-edit without dragging it to the clicked spot or leaving it in the document.
+#[test]
+fn clicking_during_ime_composition_dismisses_preedit_without_dragging_it() {
+    use egui::{Event, PointerButton};
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "甲乙"})).unwrap();
+    app.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 3));
+    app.session.dirty = false;
+    let mut h = composing_harness(app);
+    h.event(Event::Ime(egui::ImeEvent::Preedit { text: "da".into(), active_range_chars: Some(2..2) }));
+    for _ in 0..4 {
+        h.app_frame();
+    }
+    assert!(drawn_composition(&h, "da").is_some(), "pre-edit is shown before clicking");
+
+    let start_caret = h.state_mut().session.layout().caret(&Pos::body(0, 0)).expect("start caret");
+    let click_at =
+        page_to_screen(h.state_mut(), start_caret.page, start_caret.x + 1.0, start_caret.top + start_caret.height * 0.5).expect("start on screen");
+    h.event(Event::PointerMoved(click_at));
+    h.app_frame();
+    h.event(Event::PointerButton { pos: click_at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.app_frame();
+    h.event(Event::PointerButton { pos: click_at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    for _ in 0..4 {
+        h.app_frame();
+    }
+
+    assert!(h.state().canvas.ime_preedit.is_empty(), "pointer press clears the pre-edit");
+    assert!(drawn_composition(&h, "da").is_none(), "no composition is drawn after the click");
+    assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "甲乙", "uncommitted pre-edit must not enter the document");
+    assert!(!h.state().session.dirty, "dismissed composition does not mark the document dirty");
+}
+
+/// Replacing a multi-page forward selection with a short pre-edit shrinks the preview layout
+/// below the committed focus page; the preview overlay and candidate-window caret still show.
+#[test]
+fn ime_preedit_replacing_multipage_selection_draws_and_reports_caret() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "Line\n".repeat(120)})).unwrap();
+    app.run("select.all", json!({})).unwrap();
+    let committed_focus = app.session.layout().caret_on(&app.session.sel.focus, app.session.page_hint).expect("committed focus caret");
+    assert!(committed_focus.page >= 1, "forward selection spans onto page 1+: {committed_focus:?}");
+
+    let mut h = composing_harness(app);
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "da".into(), active_range_chars: Some(2..2) }));
+    for _ in 0..4 {
+        h.app_frame();
+    }
+
+    let preview = super::pages::ensure_ime_preview(h.state_mut()).expect("active IME preview");
+    assert!(
+        preview.layout.pages.len() <= committed_focus.page,
+        "preview collapsed to {} page(s), fewer than committed focus page {}",
+        preview.layout.pages.len(),
+        committed_focus.page
+    );
+    assert!(drawn_composition(&h, "da").is_some(), "short preedit replacing multi-page selection must still paint");
+    assert!(h.output().platform_output.ime.is_some(), "candidate window caret must still be reported");
+}
+
+/// With Track Changes enabled, replacing a selection retains deleted bytes in the preview copy;
+/// Find highlight mapping shifts suffix matches past both the preedit and retained deleted text.
+#[test]
+fn ime_preedit_with_track_changes_maps_find_highlight_past_deleted_selection() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "abcDEFghi"})).unwrap();
+    app.run("edit.advancedFind", json!({"text": "ghi", "highlight": true})).unwrap();
+    app.session.doc.settings.track_changes = true;
+    app.session.sel = wordcraft_engine::Selection { anchor: Pos::body(0, 3), focus: Pos::body(0, 6) };
+    app.canvas.ime_preedit = "x".into();
+
+    let preview = super::pages::ensure_ime_preview(&mut app).expect("active IME preview");
+    assert_eq!(preview.doc.plain_text(StoryRef::Body), "abcxDEFghi");
+
+    let map = super::ImeRangeMap::new(&app.session.doc, &app.session.sel, &preview).expect("range map");
+    assert_eq!(map.map(&Pos::body(0, 0), &Pos::body(0, 3)), Some((Pos::body(0, 0), Pos::body(0, 3))));
+    assert_eq!(map.map(&Pos::body(0, 3), &Pos::body(0, 6)), None);
+    let mapped_suffix = map.map(&Pos::body(0, 6), &Pos::body(0, 9)).expect("mapped suffix");
+    assert_eq!(mapped_suffix, (Pos::body(0, 7), Pos::body(0, 10)));
+    assert_eq!(&preview.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().text[7..10], "ghi");
+
+    let areas = super::mark_areas(&mut app, &preview.layout, &[]);
+    let expected: Vec<_> = preview
+        .layout
+        .selection_rects(&preview.doc, &Pos::body(0, 7), &Pos::body(0, 10), app.session.page_hint)
+        .into_iter()
+        .map(|(page, r)| super::mark_area(page, &r, craft::pages::ui::MarkKind::Found))
+        .collect();
+    assert!(!expected.is_empty());
+    assert_eq!(areas.len(), expected.len());
+    for (got, want) in areas.iter().zip(&expected) {
+        assert_eq!(got.page, want.page);
+        assert_eq!(got.rect, want.rect);
+    }
+}
+
+/// When an active IME pre-edit ends right at a soft-wrap boundary, post-input scrolling follows
+/// the composition slice that owns the cursor rather than wrapping onto the next line.
+#[test]
+fn ime_preedit_ending_at_soft_wrap_scrolls_to_painted_slice_line() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "word ".repeat(30)})).unwrap();
+    app.run("caret.docStart", json!({})).unwrap();
+
+    let mut matched = None;
+    for len in 1..120 {
+        app.canvas.ime_preedit = format!("{} ", "a".repeat(len));
+        app.canvas.ime_preedit_range = Some((len + 1)..(len + 1));
+        app.canvas.ime_preview_layout = None;
+        let preview = super::pages::ensure_ime_preview(&mut app).expect("active IME preview");
+        let slices = preview.layout.composition_lines(&preview.start, &preview.end, 0);
+        let Some(last) = slices.last() else { continue };
+        let Some(naive) = preview.layout.caret_on(&preview.end, 0) else { continue };
+        if naive.top > last.top + 0.5 || naive.page > last.page {
+            matched = Some((len, last.page, last.top, naive.page, naive.top));
+            break;
+        }
+    }
+    let (len, slice_page, slice_top, naive_page, naive_top) = matched.expect("found a soft-wrap preedit boundary");
+    let (_, scroll_caret) = super::scroll_target_caret(&mut app, true);
+    let c = scroll_caret.expect("scroll target caret");
+    assert_eq!(c.page, slice_page, "len={len}: scroll page matches painted slice (naive was {naive_page})");
+    assert!((c.top - slice_top).abs() < 0.5, "len={len}: scroll top ({}) matches painted slice ({slice_top}), not naive ({naive_top})", c.top);
+}
+
 /// The composition's size never fails egui, which draws each glyph into its font atlas and
 /// panics on one wider than the atlas. In 1,638-point text at 500% the text's size is about
 /// 11,000 points, so the composition is drawn smaller.

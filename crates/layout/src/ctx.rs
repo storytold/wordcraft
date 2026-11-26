@@ -86,6 +86,7 @@ struct ParaEnvInput<'a> {
     exclusions: &'a [para::Exclusion],
     eq_number: u32,
     typing_word: Option<(usize, usize)>,
+    composition: Option<(usize, usize)>,
     fitted: &'a [(usize, f32)],
 }
 
@@ -220,6 +221,7 @@ impl Ctx<'_> {
             table: None,
             proofing: None,
             typing_word: None,
+            composition: None,
             numeral: self.opts.numeral,
             exclusions: &[],
             eq_number: 0,
@@ -267,9 +269,10 @@ impl Ctx<'_> {
         }
         self.cache.misses += 1;
         let typing = key.typing;
+        let composition = key.composition;
         let pl = Arc::new(para::layout_para(
             p,
-            &self.para_env(ParaEnvInput { width, label, table, exclusions, eq_number, typing_word: typing, fitted: &fitted }),
+            &self.para_env(ParaEnvInput { width, label, table, exclusions, eq_number, typing_word: typing, composition, fitted: &fitted }),
         ));
         self.cache.paras.insert(key, pl.clone());
         pl
@@ -291,7 +294,7 @@ impl Ctx<'_> {
         let kept = (self.eq_count, self.uses_totals);
         let (key, eq_number) = self.para_key(p, width, None, &[], label.as_ref(), &[]);
         (self.eq_count, self.uses_totals) = kept;
-        if key.typing.is_some() {
+        if key.typing.is_some() || key.composition.is_some() {
             return None;
         }
         self.cache.used.insert(key.clone());
@@ -302,7 +305,7 @@ impl Ctx<'_> {
         self.cache.misses += 1;
         let pl = Arc::new(para::layout_para(
             p,
-            &self.para_env(ParaEnvInput { width, label, table: None, exclusions: &[], eq_number, typing_word: None, fitted: &[] }),
+            &self.para_env(ParaEnvInput { width, label, table: None, exclusions: &[], eq_number, typing_word: None, composition: None, fitted: &[] }),
         ));
         self.cache.paras.insert(key, pl.clone());
         Some(pl)
@@ -328,9 +331,10 @@ impl Ctx<'_> {
         }
         self.cache.misses += 1;
         let typing = key.typing;
+        let composition = key.composition;
         let m = measure(&para::layout_para(
             p,
-            &self.para_env(ParaEnvInput { width, label, table, exclusions: &[], eq_number, typing_word: typing, fitted: &fitted }),
+            &self.para_env(ParaEnvInput { width, label, table, exclusions: &[], eq_number, typing_word: typing, composition, fitted: &fitted }),
         ));
         self.cache.measures.insert(key, m);
         m
@@ -415,6 +419,7 @@ impl Ctx<'_> {
             hide_deleted: self.hide_deleted,
             sref: if self.fields.styleref.is_some() && styleref::has_styleref(p) { self.fields.styleref_key(p) } else { 0 },
             typing: self.opts.typing_word.filter(|t| t.rev == p.rev).map(|t| (t.start, t.end)),
+            composition: self.opts.ime_composition.filter(|c| c.rev == p.rev).map(|c| (c.start, c.end)),
         };
         (key, eq_number)
     }
@@ -435,7 +440,7 @@ impl Ctx<'_> {
     }
 
     fn para_env<'b>(&'b self, input: ParaEnvInput<'b>) -> para::ParaEnv<'b> {
-        let ParaEnvInput { width, label, table, exclusions, eq_number, typing_word, fitted } = input;
+        let ParaEnvInput { width, label, table, exclusions, eq_number, typing_word, composition, fitted } = input;
         para::ParaEnv {
             doc: self.doc,
             width,
@@ -447,6 +452,7 @@ impl Ctx<'_> {
             table,
             proofing: self.opts.proofing.then_some(self.opts.proof),
             typing_word,
+            composition,
             numeral: self.opts.numeral,
             exclusions,
             eq_number,

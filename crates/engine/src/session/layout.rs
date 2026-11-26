@@ -2,9 +2,62 @@ use super::doc_state::{Selection, TypedWord, typed_range};
 use super::locale::SYSTEM_LOCALE;
 use super::snapshot_types::LayoutEntry;
 use super::view::DRAFT_WIDTH;
-use super::{Arc, DocLayout, Document, LayoutCache, LayoutOptions, Session, StoryRef, Value, ViewMode};
+use super::{Arc, DocLayout, Document, LayoutCache, LayoutOptions, Pos, Session, StoryRef, Value, ViewMode};
+
+/// Display-only document copy and layout with an active IME composition spliced in at the caret.
+#[derive(Clone)]
+pub struct ImePreview {
+    pub doc: Document,
+    pub start: Pos,
+    pub end: Pos,
+    pub layout: Arc<DocLayout>,
+}
 
 impl Session {
+    fn layout_opts(
+        &self,
+        typing_word: Option<wordcraft_layout::TypingWord>,
+        ime_composition: Option<wordcraft_layout::ImeComposition>,
+    ) -> LayoutOptions {
+        let mode = if self.view.read_mode { ViewMode::Read } else { self.view.mode };
+        let width = match mode {
+            ViewMode::Read => self.view.read_width,
+            ViewMode::Web => self.view.web_width,
+            _ => DRAFT_WIDTH,
+        };
+        let height = if self.view.read_mode { self.view.read_height } else { 0.0 };
+        let spacing = if self.view.read_mode { self.view.read_line_spacing.map(f32::to_bits) } else { None };
+        let hide_deleted = !self.view.show_markup;
+        let deleted = (hide_deleted, self.prefs.markup.hidden_deletions(), self.revisions_in_balloons());
+        let outline = (mode == ViewMode::Outline).then(|| self.view.outline.view());
+        let shown = (self.view.marks || self.prefs.marks.hidden, self.view.field_codes);
+        let (fn_name, fn_path) = self.resolved_filenames();
+        let (filename, filepath): (Option<Arc<str>>, Option<Arc<str>>) = (Some(Arc::from(fn_name.as_str())), Some(Arc::from(fn_path.as_str())));
+        LayoutOptions {
+            view: mode,
+            web_width: width,
+            read_height: height,
+            read_line_spacing: spacing.map(f32::from_bits),
+            show_hidden: shown.0,
+            hide_deleted,
+            hide_marked: deleted.1,
+            deletions_in_balloons: deleted.2,
+            proofing: self.view.proofing,
+            numeral: self.view.numeral.resolve(SYSTEM_LOCALE.get().map(String::as_str)),
+            comment_balloons: false,
+            field_codes: shown.1,
+            outline,
+            proof: wordcraft_layout::ProofOptions { grammar: self.prefs.mark_grammar, spelling: self.prefs.spelling() },
+            typing_word,
+            ime_composition,
+            filename,
+            filepath,
+            // The editor shows a body page reference as stored until fields are updated.
+            output_page_refs: false,
+            bookmark_error: None,
+        }
+    }
+
     /// The current layout (recomputed when the document or view changed).
     pub fn layout(&mut self) -> Arc<DocLayout> {
         let typing = self.typing_word();
@@ -54,30 +107,7 @@ impl Session {
         {
             return e.5.clone();
         }
-        let (fn_name, fn_path) = self.resolved_filenames();
-        let (filename, filepath): (Option<Arc<str>>, Option<Arc<str>>) = (Some(Arc::from(fn_name.as_str())), Some(Arc::from(fn_path.as_str())));
-        let opts = LayoutOptions {
-            view: mode,
-            web_width: width,
-            read_height: height,
-            read_line_spacing: spacing.map(f32::from_bits),
-            show_hidden: shown.0,
-            hide_deleted,
-            hide_marked: deleted.1,
-            deletions_in_balloons: deleted.2,
-            proofing: self.view.proofing,
-            numeral: self.view.numeral.resolve(SYSTEM_LOCALE.get().map(String::as_str)),
-            comment_balloons: false,
-            field_codes: shown.1,
-            outline: outline.clone(),
-            proof: wordcraft_layout::ProofOptions { grammar: self.prefs.mark_grammar, spelling: self.prefs.spelling() },
-            typing_word: typing,
-            filename: filename.clone(),
-            filepath: filepath.clone(),
-            // The editor shows a body page reference as stored until fields are updated.
-            output_page_refs: false,
-            bookmark_error: None,
-        };
+        let opts = self.layout_opts(typing, None);
         let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));
         let [newest, _] = std::mem::take(&mut self.layout);
         self.layout =
@@ -156,6 +186,49 @@ impl Session {
         });
         std::mem::swap(&mut copy.cache, &mut self.cache);
         layout.map(|l| (copy.doc, copy.sel, l))
+    }
+
+    /// Display-only layout with an uncommitted IME composition `preedit` spliced into a copy of the
+    /// document at the caret, so following text reflows without mutating `doc`, `rev`, `dirty`,
+    /// `sel`, or the undo history. Returns `None` for empty strings, equation mode, disallowed
+    /// edits, or control/break/object characters.
+    pub fn ime_preview_layout(&mut self, preedit: &str) -> Option<ImePreview> {
+        if preedit.is_empty()
+            || self.math.is_some()
+            || preedit.chars().any(|c| c < ' ' || matches!(c, '\u{7f}' | '\u{2029}' | '\u{fffc}'))
+            || self.why_disabled("text.insert").is_some()
+        {
+            return None;
+        }
+        let typing = self.typing_word();
+        let at = self.sel.focus.clone();
+        let mut copy = Session::with_registry(self.doc.clone(), self.registry.clone());
+        copy.sel = self.sel.clone();
+        copy.pending = self.pending.clone();
+        copy.pending_at = self.pending_at.clone();
+        copy.column = self.column.clone();
+        copy.widened = self.widened.clone();
+        copy.view = self.view.clone();
+        copy.prefs = self.prefs.clone();
+        copy.path = self.path.clone();
+        copy.file_name = self.file_name.clone();
+        copy.author = self.author.clone();
+        copy.last_highlight = self.last_highlight;
+        copy.system_region = self.system_region.clone();
+        copy.editing_lang = self.editing_lang.clone();
+        std::mem::swap(&mut copy.cache, &mut self.cache);
+        let result = crate::cmd::insert_ime_preview(&mut copy, preedit).ok().and_then(|(start, end)| {
+            let rev = copy.doc.para_at(&start)?.rev;
+            let typing = typing.and_then(|t| {
+                let p = copy.doc.para_at(&at)?;
+                (t.end <= start.off && t.end <= p.len()).then_some(wordcraft_layout::TypingWord { rev: p.rev, ..t })
+            });
+            let opts = copy.layout_opts(typing, Some(wordcraft_layout::ImeComposition { rev, start: start.off, end: end.off }));
+            let layout = Arc::new(wordcraft_layout::layout(&copy.doc, &mut copy.cache, &opts));
+            Some((start, end, layout))
+        });
+        std::mem::swap(&mut copy.cache, &mut self.cache);
+        result.map(|(start, end, layout)| ImePreview { doc: copy.doc, start, end, layout })
     }
 
     /// A layout for output (PDF, images, print): no proofing marks, print view, and page
