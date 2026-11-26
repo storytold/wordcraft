@@ -3393,6 +3393,26 @@ fn check_spelling_off_in_a_second_window_stays_off_in_every_window() {
     assert!(!b.session.view.proofing && !b.session.prefs.check_spelling, "saved off, whichever window was drawn");
 }
 
+/// #7841: in dark mode the app draws its interface text with its own lighter curve, not egui's dark default, and
+/// light mode keeps egui's light one.
+#[test]
+#[cfg(all(unix, not(target_os = "macos")))]
+fn dark_interface_text_uses_the_app_s_lighter_curve() {
+    let ctx = crate::test_harness::context();
+    let mut a = app();
+    let curve = |a: &mut WordApp, theme: theme::Appearance| {
+        a.ui.theme = theme;
+        for _ in 0..2 {
+            crate::test_harness::pass(&ctx, a, egui::RawInput::default());
+        }
+        ctx.global_style().visuals.text_options.color_transfer_function
+    };
+    let dark = curve(&mut a, theme::Appearance::Dark);
+    let light = curve(&mut a, theme::Appearance::Light);
+    assert_ne!(dark, egui::Visuals::dark().text_options.color_transfer_function, "dark mode draws with the app's curve");
+    assert_eq!(light, egui::Visuals::light().text_options.color_transfer_function, "light mode keeps egui's");
+}
+
 /// #1861: the registered Interface Theme command drives the same setting as Options:
 /// searchable in the registry, settable, toggling without a value, and surviving a restart.
 #[test]
