@@ -259,7 +259,7 @@ fn comment_harness() -> (H, u32) {
 /// Click comment `id`'s balloon (from no selected balloon): the card is selected and its own
 /// edit has the keyboard in its field.
 fn click_balloon(h: &mut H, id: u32) {
-    h.state_mut().canvas.comments.selected = None;
+    h.state_mut().canvas.comments.selected = craft::behavior::Selection::default();
     steps(h, 2);
     let card = h.state().canvas.balloon_rects.iter().find(|(i, _)| *i == id).map(|(_, r)| *r).expect("the comment has a balloon");
     click_at(h, card.left_top() + vec2(30.0, 8.0));
