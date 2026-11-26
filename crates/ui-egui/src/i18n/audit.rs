@@ -364,7 +364,10 @@ fn egui_debug_warnings_are_not_interface_text() {
             _ => None,
         })
         .collect();
-    assert!(raw.iter().any(|t| t.starts_with("egui PERF WARNING:")), "egui draws its warning: {raw:?}");
+    // egui draws the warning only in builds with `debug_assertions`.
+    if cfg!(debug_assertions) {
+        assert!(raw.iter().any(|t| t.starts_with("egui PERF WARNING:")), "egui draws its warning: {raw:?}");
+    }
     let mut drawn = Vec::new();
     for s in &shapes {
         texts(&s.shape, &mut drawn);
