@@ -89,10 +89,17 @@ pub(super) fn insert_paragraphs(s: &mut Session, text: &str) -> CmdResult {
             if crate::cmd::controls::refuses_paragraph(s) {
                 return Err(CmdError::Disabled("text.insert: this content control takes no paragraph breaks".into()));
             }
-            enter(s, false)?;
+            // A multi-line insert over a selected legacy text form field fills it, as a
+            // plain insert does: Enter would delete the field and lose the first line's
+            // result, so the break is skipped and later lines append to the fill (#5525).
+            // With Track Changes on the fill declines, so Enter keeps its tracked path.
+            if s.doc.settings.track_changes || crate::cmd::selected_text_form_field(s).is_none() {
+                enter(s, false)?;
+            }
         }
         if !line.is_empty() {
-            type_text(s, line)?;
+            // Typing: over a selected form field the line fills it in (#5525).
+            crate::cmd::type_text_effect(s, line)?;
         }
     }
     sel_result(s)
@@ -177,6 +184,10 @@ fn enter(s: &mut Session, undo_step: bool) -> Result<(), CmdError> {
 /// left- and first-indent with tabs and backspaces" on, at the start of a line of a paragraph with
 /// text: indent. Else a tab.
 pub(super) fn tab(s: &mut Session, _: &Value) -> CmdResult {
+    // Filling in a form field: Tab finishes it and moves to the next one, typing nothing (#5525).
+    if crate::cmd::form_fill_tab(s, false) {
+        return sel_result(s);
+    }
     if let Some((tpath, r, c)) = s.sel.focus.path.cell() {
         let story = s.sel.focus.story;
         let Some(t) = s.doc.table(story, &tpath) else { return ins_char(s, '\t') };
@@ -270,6 +281,9 @@ fn indent_by_tab(s: &mut Session, f: &Pos) -> CmdResult {
 }
 
 pub(super) fn back_tab(s: &mut Session, _: &Value) -> CmdResult {
+    if crate::cmd::form_fill_tab(s, true) {
+        return sel_result(s);
+    }
     if let Some((tpath, r, c)) = s.sel.focus.path.cell() {
         let story = s.sel.focus.story;
         let (nr, nc) = if c > 0 {
