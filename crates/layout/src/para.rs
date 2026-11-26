@@ -27,6 +27,7 @@ mod paragraph;
 mod proof;
 mod tabs;
 
+pub(crate) use bidi::strong_rtl;
 pub use bidi::{bidi_levels, visual_order};
 pub(crate) use builder::left_out;
 #[cfg(test)]
