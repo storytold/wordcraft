@@ -974,11 +974,7 @@ mod tests {
         for path in crate::rust_sources(&dir) {
             let name = path.file_name().unwrap().to_string_lossy().to_string();
             // This file holds the banned strings in the list above; theme.rs and icons.rs hold the theme's own colours.
-            if path == dir.join("theme.rs")
-                || path == dir.join("theme").join("legacy.rs")
-                || path == dir.join("icons.rs")
-                || path == dir.join("icons").join("glyphs.rs")
-            {
+            if path == dir.join("theme.rs") || path == dir.join("theme").join("legacy.rs") || path == dir.join("icons.rs") {
                 continue;
             }
             let src = std::fs::read_to_string(&path).unwrap();

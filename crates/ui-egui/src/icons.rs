@@ -357,6 +357,15 @@ pub fn register() {
 
 /// The app icons whose names the framework's catalog also has. The catalog wins a clash, so the
 /// app registers its own drawings of these as `wordcraft.<name>`, and [`id`] names them so.
+/// The icon art's fixed inks, the same in every theme: the red, green, orange and pink the SVG
+/// icon set draws with (`icons/*.svg`), and the soft shadow under the Text Effects letter. The
+/// text-drawn glyphs (`glyphs.rs`) take theirs from here; every other ink comes from the theme.
+pub(crate) const ART_RED: Color32 = Color32::from_rgb(0xD1, 0x3B, 0x3B);
+pub(crate) const ART_GREEN: Color32 = Color32::from_rgb(0x2E, 0x8B, 0x57);
+pub(crate) const ART_ORANGE: Color32 = Color32::from_rgb(0xE0, 0x7B, 0x1F);
+pub(crate) const ART_PINK: Color32 = Color32::from_rgb(0xE8, 0x6F, 0xA0);
+pub(crate) const ART_SHADOW: Color32 = Color32::from_rgba_premultiplied(0, 0, 0, 40);
+
 const OWN_OVER_CATALOG: &[(&str, &str)] = &[
     ("bookmark", "wordcraft.bookmark"),
     ("check", "wordcraft.check"),

@@ -160,9 +160,9 @@ impl Pen<'_> {
 /// Draws `name`; false when it is not one of [`ICONS`].
 fn paint(pen: &Pen, name: &str) -> bool {
     let (c, a) = (pen.c, pen.a);
-    let red = pen.fixed(Color32::from_rgb(0xD1, 0x3B, 0x3B));
-    let green = pen.fixed(Color32::from_rgb(0x2E, 0x8B, 0x57));
-    let orange = pen.fixed(Color32::from_rgb(0xE0, 0x7B, 0x1F));
+    let red = pen.fixed(super::ART_RED);
+    let green = pen.fixed(super::ART_GREEN);
+    let orange = pen.fixed(super::ART_ORANGE);
     match name {
         "strike" => {
             pen.text(10.0, 10.0, 12.0, "ab", c, false);
@@ -195,7 +195,7 @@ fn paint(pen: &Pen, name: &str) -> bool {
         "case" => pen.text(10.0, 10.5, 12.0, "Aa", c, false),
         "clear" => {
             pen.text(8.0, 9.0, 13.0, "A", c, false);
-            pen.fill(&[(10.0, 15.0), (14.0, 11.0), (18.0, 15.0), (14.0, 19.0)], pen.fixed(Color32::from_rgb(0xE8, 0x6F, 0xA0)));
+            pen.fill(&[(10.0, 15.0), (14.0, 11.0), (18.0, 15.0), (14.0, 19.0)], pen.fixed(super::ART_PINK));
         }
         "phonetic" => {
             pen.text(10.0, 5.0, 7.5, "abc", a, false);
@@ -207,7 +207,7 @@ fn paint(pen: &Pen, name: &str) -> bool {
         }
         "effects" => {
             pen.text(10.0, 10.0, 15.0, "A", a, true);
-            let shadow = if pen.d { Color32::TRANSPARENT } else { Color32::from_rgba_unmultiplied(0, 0, 0, 40) };
+            let shadow = if pen.d { Color32::TRANSPARENT } else { super::ART_SHADOW };
             pen.text(10.5, 10.5, 15.0, "A", shadow, true);
         }
         "numbering" => {
