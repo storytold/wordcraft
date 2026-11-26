@@ -118,7 +118,8 @@ fn clicked(phase: &PressPhase) -> bool {
 }
 
 /// The frames and title tabs of the content controls, their check boxes and the list or date button of the control
-/// the caret is in. The check boxes and the button are parts, so a press on one never reaches the page tool.
+/// the caret is in. The check boxes and the button are parts, so a press on one never reaches the page tool, and it
+/// keeps the page's keyboard focus: a list or calendar opened from the page gives the focus back to it as it closes.
 #[derive(craft::ui::contract::Component, craft::ui::contract::Props)]
 #[component(canvas_control)]
 struct ContentControls<'a> {
@@ -188,14 +189,14 @@ impl Component for ContentControls<'_> {
         let handle = HitPriority::new(HitLevel::Handle, 0);
         for (i, r) in self.checks.iter().enumerate() {
             cx.part(CHECK.at(i as u64), HitShape::Rect(grown(*r, cx.style)))
-                .sense(Sense::CLICK)
+                .sense(Sense::CLICK | Sense::KEEP_FOCUS)
                 .priority(handle)
                 .cursor(CursorIcon::PointingHand)
                 .pointer_only("Developer > Check Box ticks the control the caret is in");
         }
         if let Some(b) = self.button.map(|last| button_rect(last, cx.style)) {
             cx.part(PartRef::from(BUTTON), HitShape::Rect(b))
-                .sense(Sense::CLICK)
+                .sense(Sense::CLICK | Sense::KEEP_FOCUS)
                 .priority(handle)
                 .cursor(CursorIcon::PointingHand)
                 .pointer_only("Developer > Choose Item and Set Date run the same commands");
@@ -392,6 +393,14 @@ mod tests {
         app.run("text.insert", json!({"text": "tail text"})).unwrap();
         app.run("caret.docStart", json!({})).unwrap();
         app.run("developer.dropDown", json!({"items": ["A", "B"]})).unwrap();
+        let h = harness(app);
+        let before = h.state().session.sel.focus.clone();
+        assert!(h.state().session.doc.control_at(&before).is_some(), "the caret starts in the control");
+        h
+    }
+
+    /// `app` in a window, with the comments pane closed.
+    fn harness(mut app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
         app.run("view.commentsPane", json!({"value": false})).unwrap();
         let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
             |ui, app: &mut WordApp| {
@@ -404,9 +413,33 @@ mod tests {
         for _ in 0..6 {
             h.step();
         }
-        let before = h.state().session.sel.focus.clone();
-        assert!(h.state().session.doc.control_at(&before).is_some(), "the caret starts in the control");
         h
+    }
+
+    /// Presses and releases the primary button over `at` as a person does: the pointer arrives a
+    /// frame before the press, and the release is a frame of its own.
+    fn click_at(h: &mut egui_kittest::Harness<'static, WordApp>, at: egui::Pos2) {
+        let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        h.event(egui::Event::PointerMoved(at));
+        crate::test_harness::frames(h, 1);
+        h.event(button(true));
+        crate::test_harness::frames(h, 1);
+        h.event(button(false));
+        crate::test_harness::frames(h, 3);
+    }
+
+    /// Gives the page the keyboard without moving the caret.
+    fn focus_page(h: &mut egui_kittest::Harness<'static, WordApp>) {
+        let ctx = h.ctx.clone();
+        h.state_mut().canvas.focus_page(&ctx);
+        crate::test_harness::frames(h, 2);
+        assert!(page_focused(h), "the page has the keyboard");
+    }
+
+    /// Whether the page has the keyboard, for the framework and in the access tree a screen reader reads.
+    fn page_focused(h: &egui_kittest::Harness<'static, WordApp>) -> bool {
+        let document = egui_kittest::kittest::By::new().role(egui::accesskit::Role::Canvas).label("Document");
+        h.state().canvas.focused(&h.ctx) && h.query_all(document).any(|n| n.is_focused())
     }
 
     /// #5389: pressing a drop-down's list button opens the list and leaves the caret in the
@@ -451,5 +484,47 @@ mod tests {
         }
         assert!(!popup_open(h.state()), "the press did not open the list");
         assert!(h.state().session.undo_depth() > depth, "the stroke ran table.draw");
+    }
+
+    /// #7862: a press on the list button leaves the keyboard with the page, so the list gives it
+    /// back to the page when it closes, by Escape or by a pick.
+    #[test]
+    fn closing_the_list_gives_the_keyboard_back_to_the_page() {
+        let mut h = dropdown_harness();
+        focus_page(&mut h);
+        let button = h.get_by_label("Choose item").rect().center();
+        click_at(&mut h, button);
+        assert!(popup_open(h.state()), "the list is open");
+        h.key_press(egui::Key::Escape);
+        crate::test_harness::frames(&mut h, 2);
+        assert!(!popup_open(h.state()), "Escape closes the list");
+        assert!(page_focused(&h), "Escape gives the keyboard back to the page");
+
+        click_at(&mut h, button);
+        assert!(popup_open(h.state()), "the list opens again");
+        let row = h.get_by_role_and_label(egui::accesskit::Role::MenuItem, "B").rect().center();
+        click_at(&mut h, row);
+        assert!(!popup_open(h.state()), "the pick closes the list");
+        assert!(page_focused(&h), "the pick gives the keyboard back to the page");
+    }
+
+    /// #7862: a click on a check box control ticks it and leaves the keyboard with the page.
+    #[test]
+    fn ticking_a_check_box_leaves_the_keyboard_with_the_page() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("developer.checkBox", json!({})).unwrap();
+        let mut h = harness(app);
+        focus_page(&mut h);
+        let tick = h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Check box").rect().center();
+        click_at(&mut h, tick);
+        let ticked = h
+            .state()
+            .session
+            .doc
+            .control_ranges(wordcraft_doc::StoryRef::Body)
+            .iter()
+            .any(|r| matches!(r.control.kind, ControlKind::CheckBox { checked: true, .. }));
+        assert!(ticked, "the click ticks the box");
+        assert!(page_focused(&h), "the page keeps the keyboard");
     }
 }
