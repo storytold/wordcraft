@@ -395,7 +395,8 @@ fn flatten_region(out: &mut Vec<Op>, region: &[(Op, usize, Kind)]) {
 }
 
 /// A token of a changed paragraph: a word (or character), or an inline object without text
-/// of its own (a text box anchor, a picture, a bookmark…), which is compared and kept whole.
+/// of its own (a text box anchor, a picture, a bookmark…) or an equation, which is compared and
+/// kept whole.
 /// Each token also carries the byte range it came from in its source paragraph, so the output
 /// segment can take the formatting of the run it came from instead of the paragraph's first run.
 enum Tok<'a> {
@@ -417,7 +418,25 @@ fn obj_key(doc: &Document, o: &InlineObject) -> Key {
     for story in o.text_box_slots() {
         *story = None;
     }
+    clear_retained_omml(&mut o);
     Key::Obj(Box::new(o), texts)
+}
+
+/// Drop the retained source XML of an equation whose structure is modelled: two files can
+/// serialise the same equation differently (its OMML runs split at other places), and the
+/// reader already merges like runs into the same structure, so the XML must not take part
+/// in the comparison. An equation with no modelled structure keeps its XML: there, the XML
+/// is all the comparison has.
+fn clear_retained_omml(o: &mut InlineObject) {
+    match o {
+        InlineObject::Equation { math, .. } if !math.nodes.is_empty() => math.omml.clear(),
+        InlineObject::Group { children, .. } => {
+            for child in children {
+                clear_retained_omml(&mut child.obj);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Whether two paragraphs hold the same objects, as compared.
@@ -426,10 +445,16 @@ fn same_objects(doc: &Document, a: &Paragraph, b: &Paragraph) -> bool {
 }
 
 /// Words with the spaces after them ("The ", "cat "), or single characters, and the objects
-/// between them. Objects with text (fields, equations…) count as their text. Each token records
-/// the byte range it came from in `p`, so its output segment can take that source run's
-/// formatting. An object's flattened text (or a broken marker's placeholder) maps to the marker's
-/// own range, which is the nearest formatting the object has.
+/// between them. Objects with text (fields, ruby…) count as their text; equations are kept whole.
+/// Each token records the byte range it came from in `p`, so its output segment can take that
+/// source run's formatting. An object's flattened text (or a broken marker's placeholder) maps
+/// to the marker's own range, which is the nearest formatting the object has; an equation kept
+/// whole takes its marker's run, which is where its own colour lives.
+///
+/// A token never crosses the start or end of a symbol-font run. That run's characters (a manual
+/// bullet opening the paragraph) keep their own token and so their `w:sym` encoding, and the
+/// words after them keep theirs as text: one token for both would give the words the symbol
+/// font, or the symbol none (#5924).
 fn tokens(p: &Paragraph, characters: bool) -> Vec<Tok<'_>> {
     fn push(v: &mut Vec<Tok<'_>>, cur: &mut String, start: usize, end: usize, c: char, characters: bool) {
         cur.push(c);
@@ -441,7 +466,12 @@ fn tokens(p: &Paragraph, characters: bool) -> Vec<Tok<'_>> {
     let mut cur = String::new();
     let mut cur_start = 0usize;
     let mut objects = p.objects.iter();
+    // Run ranges come in order, so the edges are sorted.
+    let sym_edges: Vec<usize> = p.run_ranges().filter(|(_, c)| c.sym_font.is_some()).flat_map(|(r, _)| [r.start, r.end]).collect();
     for (i, c) in p.text.char_indices() {
+        if !cur.is_empty() && sym_edges.binary_search(&i).is_ok() {
+            v.push(Tok::Text(std::mem::take(&mut cur), cur_start..i));
+        }
         let marker = i..i + OBJ.len_utf8();
         if c != OBJ {
             if cur.is_empty() {
@@ -451,7 +481,10 @@ fn tokens(p: &Paragraph, characters: bool) -> Vec<Tok<'_>> {
             continue;
         }
         match objects.next() {
-            Some(o) if o.plain_text().is_empty() => {
+            // An equation's linear text is a stand-in, not the file's text. Flattened, the result
+            // gets that text in place of the equation, glued to the word beside it ("m149" +
+            // "x+1" saved as one `w:t` "m149x+1"), and the equation leaves the file (#5924).
+            Some(o) if o.plain_text().is_empty() || matches!(o, InlineObject::Equation { .. }) => {
                 if !cur.is_empty() {
                     v.push(Tok::Text(std::mem::take(&mut cur), cur_start..i));
                 }
@@ -499,20 +532,21 @@ impl<'a> SideProps<'a> {
     }
 
     /// The props of the run holding byte `off`: that run's props, or the paragraph mark when
-    /// `off` is past the last run — the same answer `Paragraph::props_of_char` gives.
-    fn run_props(&mut self, off: usize) -> &'a CharProps {
+    /// `off` is past the last run — the same answer `Paragraph::props_of_char` gives — with the
+    /// byte where that run ends (`usize::MAX` for the mark, which has no end).
+    fn run_props(&mut self, off: usize) -> (usize, &'a CharProps) {
         while self.cursor < self.ranges.len() && self.ranges[self.cursor].0.end <= off {
             self.cursor += 1;
         }
         if let Some((range, props)) = self.ranges.get(self.cursor)
             && range.contains(&off)
         {
-            return props;
+            return (range.end, props);
         }
         let idx = self.ranges.partition_point(|(r, _)| r.start <= off);
         match idx.checked_sub(1).and_then(|i| self.ranges.get(i)) {
-            Some((range, props)) if range.contains(&off) => props,
-            _ => self.mark,
+            Some((range, props)) if range.contains(&off) => (range.end, props),
+            _ => (usize::MAX, self.mark),
         }
     }
 
@@ -525,12 +559,21 @@ impl<'a> SideProps<'a> {
     /// deletion) is superseded by the compare result rather than preserved. The hyperlink is
     /// kept, because Reject restores it on a deleted run (at token granularity: the link is taken
     /// from the token's first byte, so a token that starts unlinked can lose a mid-token link).
+    ///
+    /// A symbol font is kept only when the whole token lies in its run. It belongs to that run's
+    /// own characters (a manual bullet opening the paragraph), and [`tokens`] ends a token where
+    /// such a run ends, so this only guards a token that still runs past it: the writer would
+    /// save each of its words as a `w:sym`, and the words would leave the file's text (#5924).
     fn props_of(&mut self, t: &Tok<'_>) -> CharProps {
-        let off = match t {
-            Tok::Text(_, range) | Tok::Obj(_, range) => range.start,
+        let range = match t {
+            Tok::Text(_, range) | Tok::Obj(_, range) => range,
         };
-        let c = self.run_props(off);
-        CharProps { ins: None, del: None, fmt_change: None, ..c.clone() }
+        let (run_end, c) = self.run_props(range.start);
+        let mut props = CharProps { ins: None, del: None, fmt_change: None, ..c.clone() };
+        if range.end > run_end {
+            props.sym_font = None;
+        }
+        props
     }
 }
 
@@ -612,8 +655,12 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
     } else {
         CharProps { ins: None, del: None, fmt_change: None, ..b.mark.clone() }
     };
-    let fallback = a.runs.first().map(|r| CharProps { ins: None, del: None, fmt_change: None, ..r.props.clone() }).unwrap_or_default();
-    let fallback_b = b.runs.first().map(|r| CharProps { ins: None, del: None, fmt_change: None, ..r.props.clone() }).unwrap_or_default();
+    // The fallbacks never take a symbol font: a first run's symbol font belongs to that run's own
+    // characters, not to a token whose lookup missed (#5924).
+    let fallback =
+        a.runs.first().map(|r| CharProps { ins: None, del: None, fmt_change: None, sym_font: None, ..r.props.clone() }).unwrap_or_default();
+    let fallback_b =
+        b.runs.first().map(|r| CharProps { ins: None, del: None, fmt_change: None, sym_font: None, ..r.props.clone() }).unwrap_or_default();
     let (mut i, mut j) = (0, 0);
     for op in ops {
         match op {
