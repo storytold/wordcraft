@@ -924,6 +924,121 @@ fn many_failed_fonts_end_with_a_count() {
     assert_eq!(status_text(&a), "Added 0 fonts; 5 couldn't be read: f0.ttf, f1.ttf, f2.ttf and 2 more");
 }
 
+/// #6721: the default local file location is the fallback for document Open and for saving or
+/// exporting an unsaved document. A remembered folder can take priority. Pictures, saved
+/// documents' Save As requests, and unusable default locations keep their existing behavior.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn open_and_save_as_start_in_the_default_local_file_location() {
+    let dir = scratch("default-location");
+    let own = dir.join("Letters");
+    std::fs::create_dir_all(&own).unwrap();
+    let want = Some(own.as_path());
+    let (mut a, files) = async_app();
+    let asked = || files.requests().last().cloned().unwrap();
+    let finish = |a: &mut WordApp| {
+        answer(&files, None);
+        a.poll_file_dialog();
+    };
+
+    a.open_dialog();
+    assert_eq!(asked().default_directory, None, "no folder set: the system's choice");
+    finish(&mut a);
+
+    a.run("file.options", json!({"defaultFileLocation": own.to_string_lossy()})).unwrap();
+    a.open_dialog();
+    assert_eq!(asked().directory, None, "a remembered folder can still take priority");
+    assert_eq!(asked().default_directory.as_deref(), want);
+    finish(&mut a);
+
+    typed(&mut a);
+    a.save_as_dialog();
+    assert_eq!(asked().default_directory.as_deref(), want, "a new document saves there");
+    finish(&mut a);
+    a.export_dialog("pdf");
+    assert_eq!(asked().default_directory.as_deref(), want, "so does Export");
+    finish(&mut a);
+
+    a.print_pdf_dialog();
+    assert_eq!(asked().default_directory.as_deref(), want, "so does Save these pages as PDF");
+    finish(&mut a);
+
+    a.fallback_chooser = true;
+    a.open_dialog();
+    assert!(asked().fallback);
+    assert_eq!(asked().default_directory.as_deref(), want, "the fallback chooser starts there too");
+    finish(&mut a);
+
+    a.pick_picture();
+    assert_eq!(asked().default_directory, None, "pictures are not documents");
+    finish(&mut a);
+
+    a.session.path = Some(dir.join("saved.docx"));
+    a.save_as_dialog();
+    assert_eq!(asked().directory.as_deref(), Some(dir.as_path()), "a saved document starts in its own folder");
+    assert_eq!(asked().default_directory, None);
+    finish(&mut a);
+    a.session.path = None;
+
+    a.session.prefs.default_file_location = Some(r"\\host\share\docs".into());
+    a.open_dialog();
+    assert_eq!(asked().default_directory, None, "a network folder is never offered");
+    finish(&mut a);
+
+    a.session.prefs.default_file_location = Some(own.to_string_lossy().into_owned());
+    std::fs::remove_dir_all(&own).unwrap();
+    a.open_dialog();
+    assert_eq!(asked().default_directory, None, "a folder that is gone is skipped");
+    finish(&mut a);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The choice of the starting folder, on its own: what a request becomes with a default folder.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn the_default_folder_fills_only_what_names_no_folder() {
+    let dir = scratch("default-request");
+    let f = dir.to_str();
+    let open = PickRequest::open("document");
+    assert_eq!(with_default_folder(open.clone(), f, true), open.clone().default_directory(&dir), "Open ignores the open file");
+    let preset = open.clone().default_directory("starter");
+    assert_eq!(with_default_folder(preset.clone(), f, false), preset);
+    let explicit = open.directory("elsewhere");
+    assert_eq!(with_default_folder(explicit.clone(), f, false), explicit);
+    for unrelated in [PickRequest::open("recipients"), PickRequest::open_many("font"), PickRequest::save("template")] {
+        assert_eq!(with_default_folder(unrelated.clone(), f, false), unrelated);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The saved folder is checked again at use: only a full local path to a folder that exists.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_saved_default_folder_is_used_only_while_it_is_usable() {
+    let dir = scratch("usable-default");
+    let own = dir.to_string_lossy().into_owned();
+    assert_eq!(usable_default_location(Some(&own)), Some(dir.clone()));
+    assert_eq!(usable_default_location(Some(&format!("  {own}  "))), Some(dir.clone()), "trimmed");
+    let junk = [
+        None,
+        Some(""),
+        Some("   "),
+        Some("relative/folder"),
+        Some(r"\\host\share"),
+        Some("//host/share"),
+        Some("/no/such/folder/6721"),
+        Some("bad\u{0}path"),
+    ];
+    for saved in junk {
+        assert_eq!(usable_default_location(saved), None, "{saved:?}");
+    }
+    let file = dir.join("note.txt");
+    std::fs::write(&file, "x").unwrap();
+    assert_eq!(usable_default_location(Some(&file.to_string_lossy())), None, "a file is not a folder");
+    assert_eq!(usable_default_location(Some(&"x".repeat(10_000))), None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Drawn entries have names and selection state, and choosing one still picks its path (#576, #6790).
 #[test]
 fn entries_expose_names_selection_and_picking() {

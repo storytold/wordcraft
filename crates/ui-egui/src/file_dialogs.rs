@@ -10,6 +10,8 @@
 //! zenity, #576) the service opens the framework's fallback chooser itself; the app only asks
 //! for it by name with [`PickRequest::fallback`].
 
+#[cfg(not(target_arch = "wasm32"))]
+use craft::host::PickKind;
 use craft::host::{PickId, PickRequest, Picked};
 use serde_json::{Value, json};
 
@@ -46,6 +48,43 @@ fn with_open_filters(mut request: PickRequest, purpose: &str) -> PickRequest {
         request = request.filter(tl!(label), exts);
     }
     request
+}
+
+/// Apply the selected local folder to document Open and the save/export of an unsaved document.
+/// The file service keeps explicit and previously used folders ahead of this fallback.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn with_default_folder(req: PickRequest, saved: Option<&str>, has_path: bool) -> PickRequest {
+    let applies = match (req.kind, req.purpose.as_str()) {
+        (PickKind::Open, "document") => true,
+        (PickKind::Save, "document" | "export") => !has_path,
+        _ => false,
+    };
+    if applies
+        && req.directory.is_none()
+        && req.default_directory.is_none()
+        && let Some(folder) = usable_default_location(saved)
+    {
+        return req.default_directory(folder);
+    }
+    req
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+thread_local! {
+    /// How often this test thread asked whether the saved default folder is usable.
+    pub(crate) static DEFAULT_FOLDER_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// A setting read from disk may no longer name an existing local folder. Check the path's
+/// shape before touching the filesystem, since a network path could make Windows authenticate.
+#[cfg(not(target_arch = "wasm32"))]
+fn usable_default_location(saved: Option<&str>) -> Option<std::path::PathBuf> {
+    #[cfg(test)]
+    DEFAULT_FOLDER_CHECKS.with(|checks| checks.set(checks.get() + 1));
+    let folder = saved?.trim();
+    wordcraft_engine::cmd::user_templates::check_dir(folder).ok()?;
+    let path = std::path::Path::new(folder);
+    path.is_dir().then(|| path.to_path_buf())
 }
 
 /// A path as the status line shows it: isolated in a right-to-left interface, unchanged otherwise.
@@ -123,6 +162,8 @@ impl WordApp {
             self.status(tl!("A file dialog is already open."));
             return Asked::Busy;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        let req = with_default_folder(req, self.session.prefs.default_file_location.as_deref(), self.session.path.is_some());
         let fallback = req.fallback || self.fallback_chooser;
         let id = self.host.files().pick(req.fallback(fallback));
         self.file_dialog = Some(PendingDialog { id, after });

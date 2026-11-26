@@ -6,11 +6,13 @@
 //! outside the engine are written directly by [`OptionsModel::set`].
 
 use craft::behavior::{EditEvent, MotionMode, keyed};
+use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
-use craft::ui::contract::{Bind, Entry, Props as _, Show, ShowCollection, ShowContainer};
+use craft::ui::contract::{Bind, Entry, Politeness, Props as _, Show, ShowCollection, ShowContainer};
 use craft::ui::display::{Elide, Shade, Text};
-use craft::ui::layout_components::Row;
+use craft::ui::layout_components::{Row, Stack};
 use craft::ui::list::{List, ListRow};
+use craft::ui::notices::{Notice, NoticeLayout};
 use craft::ui::patterns::preferences::{GroupSpec, PageSpec, PrefValue, PreferencesModel, PreferencesPage, RowKind, RowSpec};
 use craft::ui::runtime::env::{LengthUnits, UnitKind, Units};
 use craft::ui::runtime::memory::Remember;
@@ -270,7 +272,11 @@ impl<'a> OptionsModel<'a> {
                 ("proofing.markGrammar", Bool(prefs.mark_grammar)),
                 ("proofing.customDictionaryFile", Text(String::new())),
             ],
-            "save" => vec![("save.removePersonalInfo", Bool(false)), ("save.removeDateTime", Bool(false))],
+            "save" => vec![
+                ("save.removePersonalInfo", Bool(false)),
+                ("save.removeDateTime", Bool(false)),
+                ("save.defaultFileLocation", Text(String::new())),
+            ],
             "language" => vec![("language.interface", Choice(crate::i18n::AUTO.to_string())), ("language.dictionariesFolder", Text(String::new()))],
             "accessibility" => vec![
                 ("accessibility.animations", Choice(ui.animations.code().to_string())),
@@ -438,10 +444,8 @@ impl PreferencesModel for OptionsModel<'_> {
             ],
         );
 
-        let save = page_of(
-            "save",
-            tl!("Save"),
-            vec![
+        let save = page_of("save", tl!("Save"), {
+            let mut groups = vec![
                 GroupSpec::new(Some(tl!("Save documents")), {
                     // The browser can't write to the user's files, so AutoSave can't be turned on there (#176).
                     let row = b("save.autosave", tl!("AutoSave documents you have saved in WordCraft"), app.autosave && !browser).enabled(!browser);
@@ -463,8 +467,18 @@ impl PreferencesModel for OptionsModel<'_> {
                         ),
                     ],
                 ),
-            ],
-        )
+            ];
+            if !cfg!(target_arch = "wasm32") {
+                groups.push(GroupSpec::new(
+                    Some(tl!("File locations")),
+                    vec![
+                        RowSpec::new("save.defaultFileLocation", tl!("Default local file location:"), RowKind::Custom)
+                            .help(tl!("Open, and Save As for a document you have not saved yet, start in this folder.")),
+                    ],
+                ));
+            }
+            groups
+        })
         .footnote(tl!("AutoSave writes your changes to the file a moment after you stop typing."));
 
         let language = page_of(
@@ -673,6 +687,7 @@ impl PreferencesModel for OptionsModel<'_> {
             }
             ("save.removePersonalInfo", Bool(v)) => self.run("file.privacyOptions", json!({"removePersonalInfo": v})),
             ("save.removeDateTime", Bool(v)) => self.run("file.privacyOptions", json!({"removeDateTime": v})),
+            ("save.defaultFileLocation", Text(t)) => self.options(json!({"defaultFileLocation": t.trim()})),
             ("language.interface", Choice(c)) => self.run("ui.language", json!({"value": c})),
             ("proofing.customDictionaryFile", Text(t)) => {
                 let t = t.trim();
@@ -710,6 +725,7 @@ impl PreferencesModel for OptionsModel<'_> {
             "general.defaultApp" => default_app_row(self.app, ui),
             "proofing.autoCorrect" => self.command_button(ui, tl!("AutoCorrect Options"), "tools.autocorrect"),
             "proofing.customDictionaryFile" => self.custom_dictionary_file(ui),
+            "save.defaultFileLocation" => self.default_file_location(ui),
             "proofing.customDictionary" => self.custom_dictionary(ui),
             "language.proofingLanguage" => {
                 Text::new(self.strings.proofing_language.clone()).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
@@ -754,7 +770,67 @@ const CUSTOM_WORDS_SHOWN: u16 = 8;
 #[derive(Clone, Default)]
 struct NewWord(String);
 
+#[derive(Clone, Default)]
+struct DefaultFileLocation {
+    saved: String,
+    draft: String,
+    /// The rejected draft and its validation message, shown while that draft is unchanged.
+    rejected: Option<(String, String)>,
+}
+
 impl OptionsModel<'_> {
+    /// The default local file location field; whether the setting changed.
+    fn default_file_location(&mut self, ui: &mut Ui) -> bool {
+        let mut applied = false;
+        Stack::new().show(ui, |ui, cx| {
+            let location = &mut *cx.keep::<DefaultFileLocation>();
+            let saved = self.app.session.prefs.default_file_location.clone().unwrap_or_default();
+            if location.saved != saved {
+                location.draft.clone_from(&saved);
+                location.saved = saved;
+                location.rejected = None;
+            }
+            Row::new().show(ui, |ui, _| {
+                let field = TextField::new(tl!("Default local file location:"), Bind::bound(&mut location.draft))
+                    .limit(None)
+                    .placeholder(tl!("Not set: the system's choice"))
+                    .submits()
+                    .show(ui);
+                if location.rejected.as_ref().is_some_and(|(draft, _)| *draft != location.draft) {
+                    location.rejected = None;
+                }
+                let changed = location.draft.trim() != location.saved;
+                let apply = Button::new(tl!("Apply")).enabled(changed).show(ui).clicked();
+                let clear = Button::new(tl!("Clear")).enabled(!location.saved.is_empty()).show(ui).clicked();
+                let value = if clear {
+                    Some("")
+                } else if changed && (apply || field.submitted) {
+                    Some(location.draft.trim())
+                } else {
+                    None
+                };
+                if let Some(value) = value {
+                    match self.app.run("file.options", json!({"defaultFileLocation": value})) {
+                        Ok(_) => {
+                            location.saved = self.app.session.prefs.default_file_location.clone().unwrap_or_default();
+                            location.draft.clone_from(&location.saved);
+                            location.rejected = None;
+                            applied = true;
+                        }
+                        Err(error) => {
+                            self.app.status(error.clone());
+                            location.rejected = Some((location.draft.clone(), error));
+                        }
+                    }
+                }
+            });
+            if let Some((_, error)) = &location.rejected {
+                Notice::new(Tone::Bad, error.clone()).layout(NoticeLayout::Inline).announce(Politeness::Assertive).show(ui);
+            }
+        });
+        applied
+    }
+
     /// The Dictionary file field. A text row reports every typed draft, and each would bind (and
     /// later write to) whatever file the half-typed path names, so the path is committed only on
     /// Enter or focus loss. The field is given the saved path and never writes it: the framework

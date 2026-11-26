@@ -269,6 +269,65 @@ fn proofing_custom_dictionary_file_setting_is_visible() {
     assert!(found);
 }
 
+/// #6721: File › Options › Save applies or clears the default folder, and refuses a path
+/// that does not name a usable folder.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn save_options_default_file_location_applies_and_clears() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+
+    let dir = std::env::temp_dir().join(format!(
+        "wordcraft-options-folder-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir(&dir).unwrap();
+    let mut a = app();
+    a.run("ui.backstage", json!({"value": true, "page": "options", "pane": "save"})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    options_frames(&mut h, 4);
+    let label = "Default local file location:";
+    h.get_by_role_and_label(Role::TextInput, label).focus();
+    options_frames(&mut h, 2);
+    h.get_by_role_and_label(Role::TextInput, label).type_text("relative/folder");
+    options_frames(&mut h, 4);
+    h.get_by_label("Apply").click();
+    options_frames(&mut h, 4);
+    assert!(h.state().session.prefs.default_file_location.is_none());
+    let rejection = "isn't a full path";
+    assert!(h.query_by_label_contains(rejection).is_some(), "Options shows why it refused the folder");
+
+    let field = h.get_by_role_and_label(Role::TextInput, label);
+    field.focus();
+    options_frames(&mut h, 2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    options_frames(&mut h, 2);
+    h.get_by_role_and_label(Role::TextInput, label).type_text(dir.to_str().unwrap());
+    options_frames(&mut h, 4);
+    assert!(h.query_by_label_contains(rejection).is_none(), "editing the path clears the error");
+    h.get_by_label("Apply").click();
+    options_frames(&mut h, 4);
+    assert_eq!(h.state().session.prefs.default_file_location.as_deref(), dir.to_str());
+
+    let mut restarted = app();
+    let saved = serde_json::to_value(h.state().prefs()).unwrap();
+    restarted.apply_prefs(serde_json::from_value(saved).unwrap());
+    assert_eq!(restarted.session.prefs.default_file_location.as_deref(), dir.to_str());
+
+    h.get_by_label("Clear").click();
+    options_frames(&mut h, 4);
+    assert!(h.state().session.prefs.default_file_location.is_none());
+    std::fs::remove_dir(&dir).unwrap();
+}
+
 /// #5840: File › Options › Proofing sets, clears and validates the custom dictionary path.
 #[test]
 fn proofing_custom_dictionary_interaction() {

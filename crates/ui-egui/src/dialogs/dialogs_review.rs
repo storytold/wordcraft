@@ -5,7 +5,7 @@
 //! Editing pane lives in `restrict_pane`.
 
 use craft::behavior::{ColumnKey, ColumnWidth, SelectionChange, keyed};
-use craft::host::PickRequest;
+use craft::host::{PickId, PickRequest};
 use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
 use craft::ui::choice::{Checkbox, Radio, RadioGroup};
@@ -85,6 +85,15 @@ pub struct CompareForm {
     pub character_level: bool,
     /// Show changes in: `original`, `revised` or `new`.
     pub show_in: String,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    default_file_location: Option<String>,
+    /// The pick Browse filed for the Another file row, until the file service answers.
+    #[serde(skip)]
+    original_ticket: Option<PickId>,
+    /// The pick Browse filed for the Revised document row, until the file service answers.
+    #[serde(skip)]
+    revised_ticket: Option<PickId>,
 }
 
 impl Default for CompareForm {
@@ -99,13 +108,32 @@ impl Default for CompareForm {
             settings: [true; 10],
             character_level: false,
             show_in: "new".into(),
+            #[cfg(not(target_arch = "wasm32"))]
+            default_file_location: None,
+            original_ticket: None,
+            revised_ticket: None,
         }
     }
 }
 
 impl CompareForm {
     pub fn new(app: &WordApp, combine: bool) -> CompareForm {
-        CompareForm { combine, author: app.session.author.clone(), ..CompareForm::default() }
+        CompareForm {
+            combine,
+            author: app.session.author.clone(),
+            #[cfg(not(target_arch = "wasm32"))]
+            default_file_location: app.session.prefs.default_file_location.clone(),
+            ..CompareForm::default()
+        }
+    }
+
+    /// The pick Browse asks for. The default folder is resolved here, when the user browses, so
+    /// drawing the dialog never touches the filesystem.
+    fn browse_request(&self) -> PickRequest {
+        let request = PickRequest::open("document");
+        #[cfg(not(target_arch = "wasm32"))]
+        let request = crate::file_dialogs::with_default_folder(request, self.default_file_location.as_deref(), false);
+        request
     }
 
     /// The `review.compare` / `review.combine` parameters; `None` until a revised document is
@@ -140,11 +168,18 @@ impl WordForm for CompareForm {
         Label::from(if self.combine { tl!("Combine Documents").to_string() } else { tl!("Compare Documents").to_string() })
     }
 
-    fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
+    fn body(&mut self, ui: &mut Ui, cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
         let can = Env::of(ui).view().host().is_some_and(|h| h.files().can_pick());
+        let answered = |ticket: &mut Option<PickId>, cx: &FormCx<'_, '_>| {
+            let answer = ticket.and_then(|id| cx.take_pick_answer(id))?;
+            *ticket = None;
+            answer.first_path().map(|path| path.to_string_lossy().into_owned())
+        };
+        let original_pick = answered(&mut self.original_ticket, cx);
+        let revised_pick = answered(&mut self.revised_ticket, cx);
+        let (mut browse_original, mut browse_revised) = (false, false);
         let reason = (!can).then(|| Label::from(tl!("Comparing with another file needs the desktop app.").to_string()));
         let another = !self.original_current;
-        let (mut original_pick, mut revised_pick): (Option<String>, Option<String>) = (None, None);
         Stack::new().show(ui, |ui, _| {
             if let Some(reason) = &reason {
                 Notice::new(Tone::Neutral, reason.clone()).layout(NoticeLayout::Inline).show(ui);
@@ -161,20 +196,18 @@ impl WordForm for CompareForm {
                 // The field greys the row while "This document" is chosen.
                 Field::new(Label::from(tl!("Another file").to_string())).enabled(another).show(ui, |ui, _| {
                     let mut row = PathRow::new(Label::from(tl!("Another file").to_string()), Bind::bound(&mut self.original))
-                        .placeholder(Label::from(tl!("Another file").to_string()))
-                        .pick(PickRequest::open("document"));
+                        .placeholder(Label::from(tl!("Another file").to_string()));
                     if let Some(r) = &reason {
                         row = row.browse_reason(r.clone());
                     }
-                    original_pick = row.show(ui).picked;
+                    browse_original = row.show(ui).browse;
                 });
                 Field::new(Label::from(tl!("Revised document").to_string())).show(ui, |ui, _| {
-                    let mut row = PathRow::new(Label::from(tl!("Revised document").to_string()), Bind::bound(&mut self.revised))
-                        .pick(PickRequest::open("document"));
+                    let mut row = PathRow::new(Label::from(tl!("Revised document").to_string()), Bind::bound(&mut self.revised));
                     if let Some(r) = &reason {
                         row = row.browse_reason(r.clone());
                     }
-                    revised_pick = row.show(ui).picked;
+                    browse_revised = row.show(ui).browse;
                 });
             });
             Field::new(Label::from(tl!("Label changes with:").to_string())).show(ui, |ui, _| {
@@ -226,6 +259,16 @@ impl WordForm for CompareForm {
                 });
             }
         });
+        if browse_original || browse_revised {
+            let request = self.browse_request();
+            if let Some(id) = Env::of(ui).view().host().map(|h| h.files().pick(request)) {
+                if browse_original {
+                    self.original_ticket = Some(id);
+                } else {
+                    self.revised_ticket = Some(id);
+                }
+            }
+        }
         // A picked file replaces what the row shows, as a set.
         if let Some(path) = original_pick {
             self.original = path;
