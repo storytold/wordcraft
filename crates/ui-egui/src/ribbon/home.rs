@@ -498,3 +498,53 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .show(ui);
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::WordApp;
+    use crate::test_harness::AppFrames as _;
+    use egui::accesskit::Role;
+    use egui::vec2;
+    use egui_kittest::kittest::{By, Queryable};
+    use serde_json::json;
+    use wordcraft_engine::Session;
+
+    /// #7317: focusing a real ribbon control (`Bold` -> `Tab`) via keyboard shows its hint only
+    /// after `tooltip::DELAY`, and hides it while a ribbon menu is open.
+    #[test]
+    fn keyboard_focus_shows_the_hint_after_a_delay_but_not_over_a_menu() {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Sample")), crate::Services::default());
+        app.ui.language = "en".into();
+        app.run("ui.tab", json!({"tab": "Home"})).unwrap();
+        let mut h = crate::test_harness::builder().with_size(vec2(2560.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        crate::test_harness::cjk_stand_in(&h.ctx);
+        crate::test_harness::frames(&mut h, 4);
+
+        let tooltip_visible = |h: &egui_kittest::Harness<'static, WordApp>| h.query_all_by_label_contains("Home › Font").count() > 0;
+
+        let bold = h.query_all(By::new().role(Role::Button).label("Bold")).next().expect("ribbon Bold button");
+        bold.focus();
+        h.app_frame();
+        h.event(egui::Event::Key { key: egui::Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+        h.app_frame();
+        assert!(!tooltip_visible(&h), "just focused: hint should not show before tooltip delay");
+
+        let delay_frames = (craft::ui::contract::tooltip::DELAY / 0.25).ceil() as usize + 3;
+        for _ in 0..delay_frames {
+            h.step();
+        }
+        assert!(tooltip_visible(&h), "focused ribbon control should show its hint after tooltip delay");
+
+        let case_btn = h.query_all(By::new().role(Role::Button).label("Change Case")).next().expect("ribbon Change Case button");
+        case_btn.click();
+        crate::test_harness::frames(&mut h, 3);
+        assert!(!tooltip_visible(&h), "hint must not remain visible over an open ribbon menu");
+    }
+}
