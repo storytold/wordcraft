@@ -837,6 +837,10 @@ fn line_styles_in(text: &str, font: &str, font_cs: &str, roman: &[&str]) -> Vec<
 }
 
 fn laid_font_text(text: &str, font: &str, font_cs: &str, roman: &[&str]) -> DocLayout {
+    lay(&font_text_doc(text, font, font_cs, roman))
+}
+
+fn font_text_doc(text: &str, font: &str, font_cs: &str, roman: &[&str]) -> Document {
     crate::test_fonts();
     let mut d = Document::default();
     *d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap() = wordcraft_doc::Paragraph::with_text(text, CharProps::default());
@@ -848,7 +852,7 @@ fn laid_font_text(text: &str, font: &str, font_cs: &str, roman: &[&str]) -> DocL
         c.size_cs = Some(12.0);
     })
     .unwrap();
-    lay(&d)
+    d
 }
 
 #[test]
@@ -948,4 +952,26 @@ fn manual_breaks_keep_the_preceding_arabic_line_metrics() {
     for c in breaks {
         assert!(pl.styles[c.style as usize].arabic_line);
     }
+}
+
+#[test]
+fn a_break_in_its_own_formatting_run_keeps_the_preceding_arabic_line_metrics() {
+    let missing = "Zz Invented Naskh 6803";
+    let text = "ببب\n\nببب";
+    let mut d = font_text_doc(text, missing, missing, &[]);
+    // Both breaks differ from the text only in their colour, so each is a run of its own.
+    let breaks = text.find('\n').unwrap()..text.rfind('\n').unwrap() + 1;
+    d.format_range(&Pos::body(0, breaks.start), &Pos::body(0, breaks.end), &|c| {
+        c.color = Some(wordcraft_doc::props::TextColor::Rgb(wordcraft_doc::props::Rgb(0xC0, 0, 0)));
+    })
+    .unwrap();
+    let l = lay(&d);
+    let (pl, _) = first_line(&l, 0);
+    let breaks: Vec<_> = pl.clusters.iter().filter(|c| c.kind == crate::para::ClKind::LineBreak).collect();
+    assert_eq!(breaks.len(), 2);
+    // The first break ends Arabic text, so its line is Times New Roman's.
+    assert!(pl.styles[breaks[0].style as usize].arabic_line);
+    assert!((pl.lines[0].text_asc + pl.lines[0].text_desc - 12.0 * TIMES_LINE_EM as f32).abs() < 0.02, "{:?}", pl.lines[0]);
+    // The second ends an empty line: the Arabic text before the first break is not its context.
+    assert!(!pl.styles[breaks[1].style as usize].arabic_line);
 }
