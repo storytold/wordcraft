@@ -24,7 +24,7 @@ const MAX_PIXELS: usize = 50_000_000;
 
 /// The commands that paste the clipboard.
 pub(crate) fn is_paste(id: &str) -> bool {
-    matches!(id, "edit.paste" | "edit.pasteText" | "edit.pasteMerge" | "edit.pasteSpecial")
+    matches!(id, "edit.paste" | "edit.pasteText" | "edit.pasteMerge" | "edit.pasteNestedTable" | "edit.pasteSpecial")
 }
 
 /// Most format names an error lists.
@@ -458,5 +458,30 @@ mod tests {
         assert_eq!(params.get("privateClipboard"), Some(&Value::Bool(true)));
         a.run("edit.paste", params).unwrap();
         assert!(!a.session.doc.media.is_empty());
+    }
+
+    #[test]
+    fn empty_copy_does_not_publish_or_overwrite_clipboard_state() {
+        let mut a = app_with_copied_picture();
+        assert!(a.clipboard_published);
+        let clip = handle(&a).unwrap();
+        let image = clip.read_image().unwrap().unwrap();
+        assert_eq!((image.width, image.height), (2, 2));
+
+        a.run("caret.docEnd", json!({})).unwrap();
+        assert!(a.session.sel.is_collapsed());
+
+        // Copy is greyed with nothing selected (#7675), so the command is refused before it reaches the clipboard.
+        assert!(a.run("edit.copy", json!({})).is_err(), "Copy with nothing selected is refused");
+
+        assert!(a.clipboard_published, "empty copy must not change published-copy state");
+        let clip = handle(&a).unwrap();
+        let image2 = clip.read_image().unwrap().unwrap();
+        assert_eq!((image2.width, image2.height), (2, 2), "empty copy must not overwrite clipboard image");
+
+        let mut a2 = app_holding(&[]);
+        assert!(!a2.clipboard_published);
+        assert!(a2.run("edit.copy", json!({})).is_err(), "Copy with nothing selected is refused");
+        assert!(!a2.clipboard_published, "empty copy must not change published-copy state when false");
     }
 }
