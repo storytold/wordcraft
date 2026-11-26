@@ -1,5 +1,7 @@
 # Layout test fonts
 
+> **Last reviewed:** 2026-11-23 · **Last updated:** 2026-11-23 · **Change:** trivial (isolated Myanmar shaping fixture, #4314)
+
 Layout unit tests use only the 13 font files already pinned under `assets/fonts/`: Source Sans 3,
 Source Serif 4, Inter and JetBrains Mono, with their bundled styles. Family listings also include
 legacy style names such as Inter Medium. They do not load installed fonts, user font preferences,
@@ -28,3 +30,14 @@ belong in `storytold/craft-fonts`, with a reproducible test input before enablin
 Run the suite with `cargo test -p wordcraft-layout`. The isolated font initialization regression
 runs with `cargo test -p wordcraft-fonts --features test-support --test fixed_test_fonts`.
 `cargo xtask ci` also runs it through the layout crate's development dependency.
+
+## Explicit Myanmar shaping regression
+
+The direct Myanmar reordering test accepts `WORDCRAFT_TEST_MYANMAR_FONT`, pointing to
+Noto Sans Myanmar Regular. It loads that face into an isolated font database and validates its
+family, coverage and layout tables; it does not add it to layout’s fixed global font set. Linux CI
+installs `fonts-noto-core` and supplies the path. No font binary is added to this repository.
+
+## Revision history
+
+- 2026-11-23: Document the explicit Myanmar shaping fixture and its separation from layout’s fixed font database (#4314).
