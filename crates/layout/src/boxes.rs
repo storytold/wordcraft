@@ -801,9 +801,12 @@ impl Joint {
         let (gap, height) = probe.lines.first().map_or((0.0, self.height), |l| ((self.baseline - (l.baseline - l.top)).max(0.0), l.height));
         let rect = Rect::new(self.left, self.top, (self.end - self.left).max(0.0), (gap + height - 0.01).max(0.01));
         let mut areas = vec![(rect, false, None, WrapText::Right, false)];
-        // Below the first row as the line breaker sees it (taller than the line with exact
-        // spacing), so that row never meets it; a later row it meets moves below it.
-        let below = self.top + gap + height.max(probe.row_est) + 0.01;
+        // Just below the first row as the line breaker tests it: the breaker tests every row at
+        // its estimate (`row_est`), not at the line's height, so the first row never meets this
+        // area and every later row, starting lower, does and moves below it. The probe's own first
+        // line can be taller than the real one (a large word that wraps off the narrower shared
+        // line), so its height can't be used here.
+        let below = self.top + gap + probe.row_est + 0.01;
         if self.bottom() > below {
             areas.push((Rect::new(self.left, below, width.max(0.01), self.bottom() - below), true, None, WrapText::BothSides, false));
         }

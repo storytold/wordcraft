@@ -125,10 +125,17 @@ fn a_joined_paragraphs_later_lines_start_below_a_taller_shared_line() {
     // shares the heading's line; its later lines start below that line and the heading's bottom
     // border, not inside it (Word), whatever the text's line spacing.
     let spacings = [None, Some(LineSpacing::Exactly(12.0)), Some(LineSpacing::AtLeast(12.0)), Some(LineSpacing::Multiple(2.0))];
-    for (cell, spacing, bordered) in [false, true].into_iter().flat_map(|c| spacings.into_iter().flat_map(move |s| [(c, s, false), (c, s, true)])) {
-        let case = format!("cell {cell}, {spacing:?}, border {bordered}");
+    // A large word that fits the first line of the text laid out alone but wraps off the
+    // narrower shared line onto the second (`big`), so the two first lines differ in height.
+    let cases = [false, true].into_iter().flat_map(|c| spacings.into_iter().flat_map(move |s| [(c, s, false, None), (c, s, true, None)]));
+    let big = [60, 70, 80].into_iter().flat_map(|at| [(false, None, false, Some(at)), (true, None, false, Some(at))]);
+    for (cell, spacing, bordered, large) in cases.chain(big) {
+        let case = format!("cell {cell}, {spacing:?}, border {bordered}, large word at {large:?}");
         let mut d = Document::from_text(&format!("Heading\n{}", "body text ".repeat(40)));
         d.format_range(&Pos::body(0, 0), &Pos::body(0, 7), &|c| c.size = Some(40.0)).unwrap();
+        if let Some(at) = large {
+            d.format_range(&Pos::body(1, at), &Pos::body(1, at + 4), &|c| c.size = Some(30.0)).unwrap();
+        }
         let heading = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
         heading.mark.hidden = Some(true);
         if bordered {
