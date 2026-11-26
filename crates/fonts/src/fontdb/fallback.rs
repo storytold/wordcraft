@@ -71,8 +71,8 @@ impl FontDb {
         if let Some(face) = self.circle_fallback(c, exclude) {
             return (Some(face), self.read_faces().len());
         }
-        if let Some(face) = self.ballot_box_fallback(c, exclude) {
-            return (Some(face), self.read_faces().len());
+        if let Some((face, n)) = self.ballot_box_fallback(c, exclude) {
+            return (Some(face), n);
         }
         let (found, n) = self.loaded_fallback(c, exclude);
         if found.is_some() {
@@ -105,15 +105,18 @@ impl FontDb {
     /// ([`crate::word::SYMBOL`], in that order) that has all three, so a check box looks the same
     /// ticked and unticked (#7863). The UI fallback has ☐, drawn with a drop shadow, and ☑ but no
     /// ☒, which put a box's two states in different fonts. `None` when no listed face has all
-    /// three: the ordinary fallback then.
-    fn ballot_box_fallback(&self, c: char, exclude: u32) -> Option<Arc<FontFace>> {
+    /// three: the ordinary fallback then. With the face, the number of loaded faces before the
+    /// search: a face loaded during it (by it, or by another thread for a family it had passed)
+    /// leaves that number behind, so the answer isn't cached for the new face list.
+    fn ballot_box_fallback(&self, c: char, exclude: u32) -> Option<(Arc<FontFace>, usize)> {
         if !BALLOT_BOXES.contains(&c) {
             return None;
         }
+        let n = self.read_faces().len();
         let all = |f: &Arc<FontFace>| f.id != exclude && BALLOT_BOXES.iter().all(|b| f.covers(*b));
         for family in crate::word::SYMBOL {
             if let Some(face) = self.find(family, "Regular").filter(all) {
-                return Some(face);
+                return Some((face, n));
             }
             // An installed family is loaded only when its files map all three.
             #[cfg(not(target_arch = "wasm32"))]
@@ -122,7 +125,7 @@ impl FontDb {
                 if enabled && !self.is_loaded(family) && BALLOT_BOXES.iter().all(|b| self.family_maps(family, *b)) {
                     self.load_cataloged(family);
                     if let Some(face) = self.find(family, "Regular").filter(all) {
-                        return Some(face);
+                        return Some((face, n));
                     }
                 }
             }
@@ -236,7 +239,7 @@ impl FontDb {
         let ballot = chars.first().filter(|_| chars.iter().all(|c| BALLOT_BOXES.contains(c))).and_then(|c| self.ballot_box_fallback(*c, exclude));
         #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let (mut base, mut checked) = match ballot {
-            Some(face) => (Some(face), self.read_faces().len()),
+            Some((face, n)) => (Some(face), n),
             None => self.loaded_covering(chars, exclude),
         };
         #[cfg(not(target_arch = "wasm32"))]

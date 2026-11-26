@@ -919,6 +919,37 @@ fn ballot_boxes_load_an_installed_symbol_face() {
 }
 
 #[test]
+fn a_check_box_keeps_one_face_when_a_symbol_face_loads_during_its_search() {
+    // A search for ☐ passed Apple Symbols, not loaded yet, and was loading the installed Segoe UI
+    // Symbol when another thread loaded Apple Symbols. Its answer was remembered for the face count
+    // after both loads, so ☐ kept Segoe UI Symbol while ☑ and ☒ took Apple Symbols, the first
+    // listed face with all three.
+    let dir = font_dir("ballot-box-race");
+    std::fs::write(dir.join("Symbols-Regular.ttf"), with_every_ballot_box("Segoe UI Symbol")).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    let primary = db.face("Inter", "Regular");
+    let reads = || db.coverage.lock().unwrap().reads;
+    let unread = reads();
+    let loading = db.loading.lock().unwrap();
+    std::thread::scope(|s| {
+        let search = s.spawn(|| db.fallback_for('☐', primary.id()));
+        // Past Apple Symbols, the search reads the installed file's character map, then waits for
+        // `loading` to load the file. (A search that finishes without reading it ends the wait too.)
+        while reads() == unread && !search.is_finished() {
+            std::thread::yield_now();
+        }
+        // Another thread loads Apple Symbols meanwhile, as a font load adds faces (`loading` is
+        // held here).
+        db.add_fonts(vec![(with_every_ballot_box("Apple Symbols"), None)]);
+        drop(loading);
+        assert!(search.join().unwrap().is_some());
+    });
+    let faces: Vec<String> = ['☐', '☑', '☒'].iter().map(|c| db.fallback_for(*c, primary.id()).expect("a face has it").family.clone()).collect();
+    assert_eq!(faces, ["Apple Symbols"; 3], "the first listed face with all three, for every state");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn catalog_postscript_names() {
     let dir = font_dir("postscript");
     for path in [dir.join("Sysfont-Regular.ttf"), dir.join("Sub/Sysfont-Bold.TTF")] {
