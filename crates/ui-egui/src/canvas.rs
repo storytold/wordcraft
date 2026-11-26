@@ -186,6 +186,12 @@ pub struct CanvasState {
     pub(crate) ime_preedit_range: Option<std::ops::Range<usize>>,
     pub context_issue: Option<serde_json::Value>,
     pub context_synonyms: Option<serde_json::Value>,
+    /// The selection touched a tracked change when the menu opened, so the menu offers Accept and
+    /// Reject Change ([`wordcraft_engine::cmd::review::change_at_selection`], asked once per opening).
+    pub context_change: bool,
+    /// The selection the context menu opened on. What the menu offers was worked out for it, so
+    /// the menu closes if the selection changes while it is open (a command can still move it).
+    pub context_sel: Option<wordcraft_engine::Selection>,
     /// The right-click context menu is open (the mini toolbar stands down while it is).
     pub context_menu_open: bool,
     /// Where the open context menu is anchored: the framework keeps an anchor only for a context opening, and this menu opens by the app's one ask.
@@ -425,6 +431,8 @@ impl Default for CanvasState {
             ime_preedit_range: None,
             context_issue: None,
             context_synonyms: None,
+            context_change: false,
+            context_sel: None,
             context_menu_open: false,
             context_menu_at: None,
             mini_anchor: None,
