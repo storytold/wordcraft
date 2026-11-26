@@ -2587,8 +2587,37 @@ fn text_selection_of_a_whole_table_copies_the_table() {
     run(&mut s, "select.range", json!({"anchor": at(vec![1, 0, 0, 0], 0), "focus": at(vec![1, 1, 1, 0], 2)}));
     assert!(s.cell_range().is_none(), "a text selection");
     assert_eq!(s.selected_text(), "A1\tB1\nA2\tB2");
-    run(&mut s, "edit.copy", json!({}));
+    let copied = run(&mut s, "edit.copy", json!({}));
     assert!(clip_is_table(&s));
+    assert!(
+        copied["html"].as_str().is_some_and(|html| html.contains("<table")),
+        "the clipboard HTML keeps the table: {copied}"
+    );
+
+    // Empty paragraphs at the start and end of the outer cells don't turn a whole-table
+    // selection into a sequence of unrelated paragraphs on the system clipboard.
+    let mut edge = table_doc();
+    {
+        let table = edge.doc.table_mut(StoryRef::Body, &wordcraft_doc::Path(vec![1])).unwrap();
+        table.rows[0].cells[0].blocks.insert(
+            0,
+            Arc::new(wordcraft_doc::Block::Para(wordcraft_doc::Paragraph::new())),
+        );
+        table.rows[1].cells[1]
+            .blocks
+            .push(Arc::new(wordcraft_doc::Block::Para(wordcraft_doc::Paragraph::new())));
+    }
+    run(&mut edge, "select.range", json!({
+        "anchor": at(vec![1, 0, 0, 1], 0),
+        "focus": at(vec![1, 1, 1, 0], 2)
+    }));
+    let copied = run(&mut edge, "edit.copy", json!({}));
+    assert!(clip_is_table(&edge), "the fragment still contains a table: {:?}", edge.clipboard);
+    assert!(
+        copied["html"].as_str().is_some_and(|html| html.contains("<table")),
+        "the clipboard HTML keeps the table: {copied}"
+    );
+
     run(&mut s, "insert.quickParts", json!({"save": "grid"}));
     run(&mut s, "caret.docStart", json!({}));
     run(&mut s, "insert.quickParts", json!({"insert": "grid"}));

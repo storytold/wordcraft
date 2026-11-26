@@ -1052,8 +1052,9 @@ impl Document {
     }
 
     /// The table whose whole text `a..b` covers when the range runs across its cells: from the
-    /// start of its first paragraph to the end of its last. Of the tables holding both ends, the
-    /// outermost one covered whole (a table nested in a cell when the range covers just it).
+    /// first non-empty paragraph to the last (ignoring empty boundary paragraphs). Of the tables
+    /// holding both ends, the outermost one covered whole (a table nested in a cell when the range
+    /// covers just it).
     /// `None` for a range inside one cell, or one that doesn't cover a whole table.
     pub fn whole_table(&self, a: &Pos, b: &Pos) -> Option<Path> {
         let (a, b) = order(a, b);
@@ -1072,9 +1073,24 @@ impl Document {
             let tp = Path(pre.to_vec());
             if self.table(a.story, &tp).is_some() {
                 let paths = paths.get_or_insert_with(|| self.para_paths(a.story));
-                let mut inside = paths.iter().filter(|p| p.0.starts_with(pre));
-                if let Some(first) = inside.next() {
-                    let last = inside.next_back().unwrap_or(first);
+                let mut first = None;
+                let mut last = None;
+                let mut first_with_text = None;
+                let mut last_with_text = None;
+                for path in paths.iter().filter(|p| p.0.starts_with(pre)) {
+                    first.get_or_insert(path);
+                    last = Some(path);
+                    if self.para(a.story, path).is_some_and(|para| !para.is_empty()) {
+                        first_with_text.get_or_insert(path);
+                        last_with_text = Some(path);
+                    }
+                }
+                // Empty paragraphs at the edges of a cell carry no selected text. Treat a
+                // selection from the first to the last non-empty paragraph as the whole table,
+                // rather than copying each cell's paragraphs without their table structure.
+                if let (Some(first), Some(last)) =
+                    (first_with_text.or(first), last_with_text.or(last))
+                {
                     let end = self.para(a.story, last).map_or(0, Paragraph::len);
                     if *first == a.path && *last == b.path && b.off >= end {
                         return Some(tp);
