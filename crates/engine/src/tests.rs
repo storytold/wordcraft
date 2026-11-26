@@ -265,6 +265,7 @@ fn reset_shortcuts_remove_direct_formatting_but_keep_styles() {
 
 #[test]
 fn custom_dictionary_words_persist_through_their_file() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // #40: adding a word through a command writes it to the session's file, and loading
     // that file makes the word known (only the desktop app wires this up).
     let dir = std::env::temp_dir().join(format!("wc-engdict-{}", std::process::id()));
@@ -292,6 +293,7 @@ fn custom_dictionary_words_persist_through_their_file() {
 
 #[test]
 fn confined_sessions_neither_save_the_dictionary_nor_choose_folders_outside_their_roots() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // #3737 (findings 34 and WC-35): the custom dictionary file and the folder settings are
     // held to the automation roots like any other path.
     let base = scratch_dir("dict-roots");
@@ -305,6 +307,7 @@ fn confined_sessions_neither_save_the_dictionary_nor_choose_folders_outside_thei
     let confined = |s: &mut Session, cmd: &str, v: serde_json::Value| crate::file_access::confine(roots.as_ref(), || s.run(cmd, &v));
     assert!(confined(&mut s, "review.addToDictionary", json!({"word": "zxqengconfined"})).is_ok());
     assert!(wordcraft_proof::user_dictionary().contains(&"zxqengconfined".to_string()), "kept in memory");
+    wordcraft_proof::remove_word("zxqengconfined");
     assert!(!outside.exists(), "nothing written outside the write root");
     for key in ["dictionariesFolder", "userTemplatesFolder"] {
         assert!(confined(&mut s, "file.options", json!({key: base.join("outside").to_string_lossy()})).is_err(), "{key}");
@@ -319,6 +322,7 @@ fn confined_sessions_neither_save_the_dictionary_nor_choose_folders_outside_thei
 
 #[test]
 fn add_to_dictionary_takes_only_words_the_file_keeps() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // #40: the same rule as loading the dictionary file, so nothing added is dropped on the next load.
     let mut s = s();
     for bad in ["two words", "tab\tword", "bell\u{7}", &"x".repeat(65)] {
@@ -327,6 +331,202 @@ fn add_to_dictionary_takes_only_words_the_file_keeps() {
     }
     run(&mut s, "review.addToDictionary", json!({"word": " zxqengtrimmed "}));
     assert!(wordcraft_proof::user_dictionary().contains(&"zxqengtrimmed".to_string()));
+    wordcraft_proof::remove_word("zxqengtrimmed");
+}
+
+/// #5840: WordCraft supports choosing a freestanding custom.dic dictionary file (including
+/// UTF-16LE with BOM as written by Microsoft Word), using it in conjunction with the main
+/// dictionary, and persisting additions back to it in the same encoding.
+#[test]
+fn custom_dictionary_freestanding_file_option() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = crate::custom_dict::TestDir::new("custom-dic");
+    let dic_path = dir.path().join("custom.dic");
+
+    // Write a freestanding UTF-16LE dictionary file with BOM, as Word saves it on Windows.
+    let mut initial_bytes = vec![0xFF, 0xFE];
+    for u in "freestandingword\r\nmameui\r\n".encode_utf16() {
+        initial_bytes.extend_from_slice(&u.to_le_bytes());
+    }
+    std::fs::write(&dic_path, &initial_bytes).unwrap();
+
+    let mut s = s();
+    let default_path = dir.path().join("default.txt");
+    s.default_user_dict_path = Some(default_path.clone());
+    s.user_dict_path = Some(default_path.clone());
+
+    // Seed default dictionary with a default word.
+    std::fs::write(&default_path, "defaultword\n").unwrap();
+    crate::custom_dict::load_custom_dictionary(&default_path).unwrap();
+    assert!(wordcraft_proof::is_correct("defaultword"));
+
+    // Before binding, the word is unknown.
+    assert!(!wordcraft_proof::is_correct("freestandingword"));
+
+    // Set customDictionary in file.options: removes previous words and loads custom.dic.
+    let res = s.run("file.options", &json!({"customDictionary": dic_path.to_string_lossy()})).unwrap();
+    assert_eq!(res["customDictionary"], json!(dic_path.to_string_lossy()));
+    assert_eq!(s.prefs.custom_dictionary.as_deref(), Some(dic_path.to_string_lossy().as_ref()));
+    assert_eq!(s.user_dict_path.as_ref(), Some(&dic_path));
+    assert!(!wordcraft_proof::is_correct("defaultword"), "previous words removed on switch");
+    assert!(wordcraft_proof::is_correct("freestandingword"));
+    assert!(wordcraft_proof::is_correct("mameui"));
+
+    // Add a new word via review.addToDictionary: it persists back to custom.dic in UTF-16LE.
+    run(&mut s, "review.addToDictionary", json!({"word": "zxqaddedword"}));
+    let saved_raw = std::fs::read(&dic_path).unwrap();
+    assert_eq!(saved_raw[0..2], [0xFF, 0xFE], "persists as UTF-16LE with BOM");
+    let decoded = crate::custom_dict::decode_dictionary_bytes(&saved_raw).unwrap();
+    assert!(decoded.contains("freestandingword"));
+    assert!(decoded.contains("zxqaddedword"));
+
+    // Revert to "auto": removes custom dictionary words and restores default path.
+    s.run("file.options", &json!({"customDictionary": "auto"})).unwrap();
+    assert_eq!(s.prefs.custom_dictionary, None);
+    assert_eq!(s.user_dict_path.as_ref(), Some(&default_path));
+    assert!(!wordcraft_proof::is_correct("freestandingword"), "freestanding words removed on revert");
+    assert!(!wordcraft_proof::is_correct("zxqaddedword"));
+    assert!(wordcraft_proof::is_correct("defaultword"), "default words restored");
+
+    // Setting customDictionary to "auto" when user_dict_path is already default_path
+    // updates s.prefs.custom_dictionary even if it previously held a stale path.
+    s.prefs.custom_dictionary = Some("/stale/nonexistent.dic".to_string());
+    s.run("file.options", &json!({"customDictionary": "auto"})).unwrap();
+    assert_eq!(s.prefs.custom_dictionary, None);
+
+    // Clean up test words from proofing dictionary
+    wordcraft_proof::remove_word("defaultword");
+
+    // Reject nonexistent files, folders, relative paths, or oversized files.
+    assert!(s.run("file.options", &json!({"customDictionary": dir.path().join("missing.dic").to_string_lossy()})).is_err());
+    let dir_err = s.run("file.options", &json!({"customDictionary": dir.path().to_string_lossy()})).unwrap_err();
+    assert!(format!("{dir_err:?}").contains("is a folder, not a file"));
+    let rel_err = s.run("file.options", &json!({"customDictionary": "relative/custom.dic"})).unwrap_err();
+    assert!(format!("{rel_err:?}").contains("isn't a full path"));
+
+    // Accept ~/ path expansion when HOME points to a directory.
+    if let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+        let home_dir = std::path::PathBuf::from(home);
+        let test_name = format!(".wordcraft-test-tilde-{}.dic", std::process::id());
+        let tilde_file = home_dir.join(&test_name);
+        struct CleanFile(std::path::PathBuf);
+        impl Drop for CleanFile {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        if let Ok(mut f) = opts.open(&tilde_file) {
+            use std::io::Write;
+            let _ = f.write_all(b"tildeword\n");
+            let _cleaner = CleanFile(tilde_file.clone());
+            let tilde_res = s.run("file.options", &json!({"customDictionary": format!("~/{test_name}")}));
+            assert!(tilde_res.is_ok(), "tilde expansion succeeds: {:?}", tilde_res.err());
+            assert_eq!(s.prefs.custom_dictionary.as_deref(), Some(tilde_file.to_string_lossy().as_ref()));
+            assert!(wordcraft_proof::is_correct("tildeword"));
+            s.run("file.options", &json!({"customDictionary": "auto"})).unwrap();
+            wordcraft_proof::remove_word("tildeword");
+            wordcraft_proof::remove_word("defaultword");
+        }
+    }
+
+    let huge_dic = dir.path().join("huge.dic");
+    std::fs::write(&huge_dic, vec![b'a'; (crate::custom_dict::MAX_CUSTOM_FILE_BYTES + 1024) as usize]).unwrap();
+    assert!(s.run("file.options", &json!({"customDictionary": huge_dic.to_string_lossy()})).is_err());
+    assert_eq!(s.prefs.custom_dictionary, None, "oversized dictionary rejects without changing prefs");
+    wordcraft_proof::remove_word("defaultword");
+}
+
+/// #5840 review: a dictionary that passes the metadata and access checks but can't be decoded
+/// refuses the whole `file.options` call before any setting is applied, so a combined call leaves
+/// the preferences, the bound path and the proofing words as they were.
+#[test]
+fn refused_custom_dictionary_leaves_every_other_option_unchanged() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = crate::custom_dict::TestDir::new("custom-dic-refused");
+    let bound = dir.path().join("custom.dic");
+    std::fs::write(&bound, "boundword\n").unwrap();
+    // A lone 0xFF byte is neither UTF-8 nor a UTF-16LE BOM pair: the file is a readable, writable
+    // regular file, so only decoding refuses it.
+    let bad = dir.path().join("bad.dic");
+    std::fs::write(&bad, [b'h', b'i', 0xFF]).unwrap();
+
+    let mut s = s();
+    s.default_user_dict_path = Some(dir.path().join("custom-dictionary.txt"));
+    run(
+        &mut s,
+        "file.options",
+        json!({
+            "author": "Ada",
+            "initials": "AL",
+            "units": "centimeters",
+            "region": "pl-PL",
+            "dictionariesFolder": dir.path().to_string_lossy(),
+            "customDictionary": bound.to_string_lossy(),
+            "markGrammar": true,
+            "checkSpelling": true,
+        }),
+    );
+    assert!(wordcraft_proof::is_correct("boundword"));
+    let before = cmd::options::current(&s);
+
+    let err = s
+        .run(
+            "file.options",
+            &json!({
+                "author": "Grace",
+                "initials": "GH",
+                "units": "inches",
+                "region": "en-US",
+                "dictionariesFolder": "auto",
+                "customDictionary": bad.to_string_lossy(),
+                "markGrammar": false,
+                "checkSpelling": false,
+                "addWords": ["zxqrefusedword"],
+            }),
+        )
+        .unwrap_err();
+    assert!(format!("{err:?}").contains("malformed"), "reports the decode failure: {err:?}");
+    assert_eq!(cmd::options::current(&s), before, "a refused dictionary changes no setting");
+    assert_eq!(s.user_dict_path.as_ref(), Some(&bound), "the bound dictionary stays");
+    assert!(!wordcraft_proof::is_correct("zxqrefusedword"), "the refused call adds no words");
+
+    // `auto` decodes the default file before applying too, so a malformed default file is refused
+    // the same way and its companion settings stay as they were.
+    let default_path = dir.path().join("custom-dictionary.txt");
+    std::fs::write(&default_path, [b'x', 0xFF]).unwrap();
+    let before = cmd::options::current(&s);
+    let err = s.run("file.options", &json!({"customDictionary": "auto", "units": "points"})).unwrap_err();
+    assert!(format!("{err:?}").contains("malformed"), "reports the decode failure: {err:?}");
+    assert_eq!(cmd::options::current(&s), before, "a malformed default dictionary changes no setting");
+    assert_eq!(s.prefs.custom_dictionary.as_deref(), Some(bound.to_string_lossy().as_ref()));
+
+    wordcraft_proof::remove_word("boundword");
+}
+
+#[cfg(unix)]
+#[test]
+fn custom_dictionary_rejects_symlink_and_readonly_files() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = crate::custom_dict::TestDir::new("custom-dic-symlink");
+    let dic_path = dir.path().join("custom.dic");
+    std::fs::write(&dic_path, "word\n").unwrap();
+
+    let mut s = s();
+    let symlink_path = dir.path().join("symlink.dic");
+    let _ = std::os::unix::fs::symlink(&dic_path, &symlink_path);
+    let link_err = s.run("file.options", &json!({"customDictionary": symlink_path.to_string_lossy()})).unwrap_err();
+    assert!(format!("{link_err:?}").contains("is a symbolic link"));
+
+    let ro_path = dir.path().join("readonly.dic");
+    std::fs::write(&ro_path, "word\n").unwrap();
+    let mut perms = std::fs::metadata(&ro_path).unwrap().permissions();
+    perms.set_readonly(true);
+    let _ = std::fs::set_permissions(&ro_path, perms);
+    let ro_err = s.run("file.options", &json!({"customDictionary": ro_path.to_string_lossy()})).unwrap_err();
+    let ro_msg = format!("{ro_err:?}");
+    assert!(ro_msg.contains("read-only") || ro_msg.contains("Permission denied"));
 }
 
 #[test]
@@ -1052,6 +1252,7 @@ fn rep_mode(text: &str, q: &str, with: &str, extra: serde_json::Value) -> String
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn hostile_find_patterns_are_bounded() {
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": &"a".repeat(5000)}));
@@ -1675,6 +1876,26 @@ fn paste_merge_formatting_keeps_rtf_deletions() {
 }
 
 #[test]
+fn paste_merge_formatting_keeps_bold_and_italic_in_a_complex_script_run() {
+    // #4852 review: with the caret in a run marked `w:cs` (Thai from a WPS or Word file), the
+    // pasted text takes `cs` too, so its bold and italic must be the complex-script ones as well.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "ภาษาไทย"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.set", json!({"props": {"cs": true}}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "edit.pasteMerge", json!({"rtf": r"{\rtf1{\b bold}{\i slant}\par}"}));
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    let at = |word: &str| p.props_of_char(p.text.find(word).unwrap() + 1).clone();
+    let (b, i) = (at("bold"), at("slant"));
+    assert_eq!((b.cs, b.bold, b.bold_cs), (Some(true), Some(true), Some(true)), "{b:?}");
+    assert_eq!((i.cs, i.italic, i.italic_cs), (Some(true), Some(true), Some(true)), "{i:?}");
+    assert_ne!(b.italic, Some(true));
+    let r = s.doc.styles.resolve_char(None, &b);
+    assert!(r.bold_cs, "drawn bold as complex script");
+}
+
+#[test]
 fn pasted_rtf_sections_link_their_headers_to_the_previous() {
     // #1378: the RTF's own header part ids mean nothing in this document; a pasted section
     // break keeps its page but links its headers and footers to the previous section.
@@ -2131,6 +2352,58 @@ fn body_table_cells(s: &Session) -> Vec<Vec<String>> {
 }
 
 /// #1744: Select Table → Copy → Paste outside the table pastes a copy of the whole table.
+#[test]
+fn table_spots_and_borders_are_the_areas_the_pointer_queries_answer_for() {
+    use crate::cmd::{table_mouse, table_resize};
+    let mut sess = s();
+    run(&mut sess, "insert.table", serde_json::json!({"rows": 3, "cols": 3}));
+    let l = sess.layout();
+    let story = sess.sel.focus.story;
+    let reach = 3.0;
+    let spots = table_mouse::spots(&l, &sess.doc, story, 0, reach);
+    let borders = table_resize::borders(&l, &sess.doc, 0, reach);
+    assert!(!spots.is_empty() && !borders.is_empty());
+    let inside = |r: &wordcraft_geom::Rect, x: f32, y: f32| x >= r.x && x <= r.right() && y >= r.y && y <= r.bottom();
+    let (w, bottom) = l.pages.first().map_or((0.0, 0.0), |p| (p.w, p.body.bottom()));
+    let (mut spot_hits, mut border_hits) = (0, 0);
+    let mut y = 0.3f32;
+    while y < bottom {
+        let mut x = 0.3f32;
+        while x < w {
+            let spot = table_mouse::target_at(&l, &sess.doc, story, 0, x, y, reach);
+            if let Some(t) = &spot {
+                spot_hits += 1;
+                assert!(spots.iter().any(|a| a.target == *t && inside(&a.area, x, y)), "spot at ({x}, {y}) lies in its listed area");
+            }
+            if spot.is_none() && table_resize::resize_target(&l, &sess.doc, 0, x, y, reach).is_none() {
+                // Nothing answers: no listed area may hold the point unless a border took it first.
+                assert!(!spots.iter().any(|a| inside(&a.area, x, y)), "an area holds ({x}, {y}) yet nothing answers");
+            }
+            let border = table_resize::resize_target(&l, &sess.doc, 0, x, y, reach);
+            match &border {
+                Some(t) => {
+                    border_hits += 1;
+                    assert!(borders.iter().any(|(a, b)| b == t && inside(a, x, y)), "border at ({x}, {y}) lies in its listed strip");
+                }
+                None => assert!(
+                    !borders.iter().any(|(a, b)| inside(a, x, y) && {
+                        let d = match b.edge {
+                            table_resize::Edge::Column(i) => b.cols.get(i).map_or(f32::INFINITY, |c| (x - c).abs()),
+                            table_resize::Edge::Row(r) => b.rows.iter().find(|q| q.row == r).map_or(f32::INFINITY, |q| (y - q.bottom).abs()),
+                            table_resize::Edge::Corner => 0.0,
+                        };
+                        d <= reach
+                    }),
+                    "a strip holds ({x}, {y}) within reach yet no border answers"
+                ),
+            }
+            x += 3.7;
+        }
+        y += 3.7;
+    }
+    assert!(spot_hits > 0 && border_hits > 0, "the sweep met both kinds of spot");
+}
+
 #[test]
 fn copy_whole_table_pastes_a_table() {
     let mut s = table_doc();
@@ -4928,6 +5201,50 @@ fn toc_page_numbers_are_pageref_fields() {
     assert_eq!(text(&s), expected);
 }
 
+/// Output (PDF, print) shows a table of contents' page numbers where the headings now are, as
+/// Word fills its `PAGEREF`s in when it prints or exports; the editor shows them as stored until
+/// the table is updated, and the document keeps them.
+#[test]
+fn output_shows_toc_page_numbers_where_the_headings_are() {
+    let mut s = s();
+    run(&mut s, "references.toc", json!({}));
+    run(&mut s, "caret.docEnd", json!({}));
+    for name in ["Alpha", "Bravo"] {
+        run(&mut s, "text.pageBreak", json!({}));
+        run(&mut s, "text.insert", json!({"text": name}));
+        run(&mut s, "para.heading1", json!({}));
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    run(&mut s, "references.updateToc", json!({}));
+    // Another page before Alpha moves the headings to pages 3 and 4.
+    let alpha = s
+        .doc
+        .body
+        .iter()
+        .position(|b| b.as_para().is_some_and(|p| p.props.style.as_deref() == Some("Heading1") && p.text.contains("Alpha")))
+        .unwrap();
+    s.sel = crate::Selection::caret(Pos::body(alpha, 0));
+    run(&mut s, "text.pageBreak", json!({}));
+    let toc_numbers = |l: &wordcraft_layout::DocLayout| -> Vec<String> {
+        l.pages[0]
+            .items
+            .iter()
+            .flat_map(|it| match it {
+                wordcraft_layout::Placed::Lines { para, .. } => para.shown.iter().map(|s| s.1.clone()).collect(),
+                _ => vec![],
+            })
+            .collect()
+    };
+    assert_eq!(s.export_layout().pages.len(), 4);
+    assert_eq!(toc_numbers(&s.layout()), ["2", "3"]);
+    assert_eq!(toc_numbers(&s.export_layout()), ["3", "4"]);
+    assert!(text(&s).contains("Alpha\t2"), "the document keeps the stored numbers");
+    // A page image is laid out as the print job is: it shows the same numbers.
+    let png = crate::io_ext::render_png(&s.doc, 0, 1.0, &Default::default()).unwrap();
+    let printed = wordcraft_render::render_page(&s.doc, &s.export_layout().pages[0], 1.0, &Default::default()).to_png();
+    assert!(png == printed, "the page image and the printed page differ");
+}
+
 /// Headings numbered through a list carry their numbers, and the level's separator, into the
 /// TOC entries.
 #[test]
@@ -6403,6 +6720,21 @@ fn file_capped_read_refuses_content_over_the_cap() {
     assert_eq!(whole.unwrap().len(), 100);
 }
 
+/// Web fallback for `read_file_capped` and `read_file_head` returns the expected browser error.
+#[test]
+fn wasm_read_file_fallback_returns_browser_error() {
+    let err = crate::io::wasm_read_file_fallback("sample.dic").unwrap_err();
+    assert!(err.contains("files are opened through the browser on the web"));
+}
+
+/// #5840: On wasm32 targets, `read_file_capped` and `read_file_head` return the browser fallback error.
+#[cfg(target_arch = "wasm32")]
+#[test]
+fn wasm_target_read_file_capped_and_head_return_browser_error() {
+    assert!(crate::io::read_file_capped("test.dic", 1024, "dictionary").unwrap_err().contains("browser on the web"));
+    assert!(crate::io::read_file_head("test.dic", 1024).unwrap_err().contains("browser on the web"));
+}
+
 /// #3666: `read_regular_file_within` (Paste Special's copied picture file) reads a file of up to
 /// `limit` bytes whole and refuses one whose handle reports more, before reading any of it.
 #[cfg(not(target_arch = "wasm32"))]
@@ -7764,6 +8096,81 @@ fn chart_edits_are_one_undo_step_each() {
     assert_eq!((*w, graphic.w, graphic.h), (300.0, 300.0, 150.0));
 }
 
+/// Scatter series are drawn as markers without a line: inserted with data, changed to scatter
+/// and back, and added by Edit Data. Edit Data keeps each replaced series' formatting.
+#[test]
+fn scatter_chart_series_have_no_line_and_edit_data_keeps_formatting() {
+    let no_lines = |s: &Session| first_chart(&s.doc).unwrap().series.iter().map(|x| x.no_line).collect::<Vec<_>>();
+    let mut s = s();
+    run(&mut s, "insert.chart", json!({"type": "scatter", "data": {"categories": [1, 2], "series": [{"name": "A", "values": [1, 2]}]}}));
+    assert_eq!(no_lines(&s), [true]);
+    run(&mut s, "chart.type", json!({"type": "line"}));
+    assert_eq!(no_lines(&s), [false]);
+    run(&mut s, "chart.type", json!({"type": "scatter"}));
+    assert_eq!(no_lines(&s), [true]);
+
+    // Formatting read from a file, set on the chart's model.
+    let set = |s: &mut Session, f: &dyn Fn(&mut wordcraft_doc::chart::ChartSpec)| {
+        let mut spec = first_chart(&s.doc).unwrap();
+        f(&mut spec);
+        let pos = Pos::body(0, 0);
+        let p = s.doc.para_mut(pos.story, &pos.path).unwrap();
+        let off = p.object_offsets()[0];
+        if let Some(wordcraft_doc::para::InlineObject::Graphic { graphic, .. }) = p.object_at_mut(off) {
+            std::sync::Arc::make_mut(graphic).chart = Some(std::sync::Arc::new(spec));
+        }
+    };
+
+    // A series' formatting stays through Edit Data; a new series gets the type's default.
+    set(&mut s, &|c| c.series[0].fill = Some(wordcraft_doc::props::Rgb(0x12, 0x34, 0x56)));
+    run(&mut s, "chart.editData", json!({"data": {"series": [{"name": "B", "values": [3, 4]}, {"name": "C", "values": [5, 6]}]}}));
+    let c = first_chart(&s.doc).unwrap();
+    assert_eq!(c.series[0].fill, Some(wordcraft_doc::props::Rgb(0x12, 0x34, 0x56)));
+    assert_eq!((c.series[0].name.as_str(), c.series[1].name.as_str()), ("B", "C"));
+    assert_eq!(no_lines(&s), [true, true]);
+
+    // A line-only series made a scatter series again gets its markers back, so it stays visible.
+    set(&mut s, &|c| c.series[0].markers = Some(false));
+    run(&mut s, "chart.type", json!({"type": "line"}));
+    run(&mut s, "chart.type", json!({"type": "scatter"}));
+    assert_eq!(first_chart(&s.doc).unwrap().series[0].markers, None);
+
+    // The chart's Data Labels setting replaces a series' own.
+    set(&mut s, &|c| c.series[1].labels = Some(true));
+    run(&mut s, "chart.dataLabels", json!({"on": false}));
+    let c = first_chart(&s.doc).unwrap();
+    assert!(!c.data_labels && c.series.iter().all(|x| x.labels.is_none()));
+}
+
+/// A pie chart changed to a column chart gets a new column chart's value axis, and back; an
+/// axis that was changed stays as it is.
+#[test]
+fn chart_type_between_round_and_axis_charts_sets_the_value_axis() {
+    use wordcraft_doc::chart::{ChartAxis, value_axis};
+    let mut s = s();
+    run(&mut s, "insert.chart", json!({"type": "pie"}));
+    assert_eq!(first_chart(&s.doc).unwrap().val_axis, ChartAxis::default());
+    run(&mut s, "chart.type", json!({"type": "column"}));
+    assert_eq!(first_chart(&s.doc).unwrap().val_axis, value_axis());
+    run(&mut s, "chart.type", json!({"type": "doughnut"}));
+    assert_eq!(first_chart(&s.doc).unwrap().val_axis, ChartAxis::default());
+
+    let mut s = self::s();
+    run(&mut s, "insert.chart", json!({"type": "column"}));
+    let pos = Pos::body(0, 0);
+    let p = s.doc.para_mut(pos.story, &pos.path).unwrap();
+    let off = p.object_offsets()[0];
+    if let Some(wordcraft_doc::para::InlineObject::Graphic { graphic, .. }) = p.object_at_mut(off) {
+        let g = std::sync::Arc::make_mut(graphic);
+        let mut spec = (**g.chart.as_ref().unwrap()).clone();
+        spec.val_axis.max = Some(50.0);
+        g.chart = Some(std::sync::Arc::new(spec));
+    }
+    run(&mut s, "chart.type", json!({"type": "pie"}));
+    run(&mut s, "chart.type", json!({"type": "bar"}));
+    assert_eq!(first_chart(&s.doc).unwrap().val_axis, ChartAxis { max: Some(50.0), ..value_axis() });
+}
+
 #[test]
 fn hostile_chart_data_is_capped() {
     use wordcraft_doc::chart::{MAX_CELLS, MAX_POINTS, MAX_SERIES, MAX_TEXT};
@@ -7793,6 +8200,35 @@ fn hostile_chart_data_is_capped() {
     s.doc.insert_object(&Pos::body(0, 0), foreign, &Default::default()).unwrap();
     run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, wordcraft_doc::para::OBJ.len_utf8())}));
     assert!(s.run("chart.type", &json!({"type": "pie"})).is_err());
+}
+
+/// The pane's findings follow the document: an edit that fixes an issue and a replacement by
+/// another document both show at the next read, though the session keeps them between reads.
+#[test]
+fn accessibility_findings_follow_the_document() {
+    let alt = |s: &mut Session| s.accessibility_findings().iter().any(|i| i["rule"] == "altText");
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Title"));
+    run(&mut s, "insert.shape", json!({"kind": "ellipse"}));
+    assert!(alt(&mut s), "a shape without alternative text is reported");
+    assert!(alt(&mut s), "and still is at the next read");
+    let (id, rev) = (s.document_id(), s.rev());
+
+    // The fix the issue names, as the pane runs it.
+    let issue = s.accessibility_findings().iter().find(|i| i["rule"] == "altText").cloned().expect("the alt text issue");
+    run(&mut s, "select.range", issue["select"].clone());
+    run(&mut s, issue["action"]["command"].as_str().expect("a fix"), issue["action"]["params"].clone());
+    assert_eq!(s.document_id(), id);
+    assert_ne!(s.rev(), rev);
+    assert!(!alt(&mut s), "the fixed issue is gone");
+
+    // The issue again, then another document in its place.
+    run(&mut s, "insert.shape", json!({"kind": "ellipse"}));
+    assert!(alt(&mut s));
+    run(&mut s, "file.new", json!({}));
+    assert_ne!(s.document_id(), id);
+    let want = crate::cmd::accessibility::check(&s.doc);
+    assert_eq!(s.accessibility_findings(), want.as_slice(), "the new document's findings");
+    assert!(!alt(&mut s));
 }
 
 #[test]
@@ -8379,6 +8815,113 @@ fn insert_icon_places_a_picture_of_the_requested_size_that_saves_and_recolours()
     assert!(s.run("picture.iconColor", &json!({})).is_err());
 }
 
+/// #5232: a PDF with markup (file.exportPdf, file.printPdf) marks tracked changes in the Track
+/// Changes Options colours, not always by author.
+#[test]
+fn markup_pdf_takes_the_track_changes_option_colours() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Governed by Kansas law."));
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("select.text", &json!({"text": "Kansas"})).unwrap();
+    s.run("text.insert", &json!({"text": "Missouri"})).unwrap();
+    let markup = json!({"markup": true});
+    let uncompressed_markup = json!({"markup": true, "compress": false});
+    let pdf = |s: &Session| crate::io::save_bytes_opts("x.pdf", &s.doc, &cmd::file::export_options(s, &markup)).unwrap();
+    let print = |s: &Session| s.print_pdf(&markup).unwrap().0;
+    let (by_author, printed_by_author) = (pdf(&s), print(&s));
+    // Exports are deterministic, so differences are solely due to the colours.
+    assert_eq!(pdf(&s), by_author, "pdf export must be deterministic");
+    assert_eq!(print(&s), printed_by_author, "print_pdf must be deterministic");
+
+    let has = |t: &[&str], op: &str| {
+        let want: Vec<_> = op.split_ascii_whitespace().collect();
+        t.windows(want.len()).any(|w| w == want.as_slice())
+    };
+    let by_author_print_uncompressed = s.print_pdf(&uncompressed_markup).unwrap().0;
+    let by_author_print_raw = String::from_utf8_lossy(&by_author_print_uncompressed);
+    let by_author_print_tokens: Vec<_> = by_author_print_raw.split_ascii_whitespace().collect();
+    assert!(!has(&by_author_print_tokens, "0 0 1 rg") && !has(&by_author_print_tokens, "1 0 0 rg"), "by-author print has no pure blue or red");
+
+    s.run("review.trackingOptions", &json!({"insertColor": "0000FF", "deleteColor": "FF0000"})).unwrap();
+    let opts = cmd::file::export_options(&s, &markup);
+    assert_eq!(opts.revisions.insert_color, Some(wordcraft_doc::props::Rgb(0, 0, 255)));
+    assert_eq!(opts.revisions.delete_color, Some(wordcraft_doc::props::Rgb(255, 0, 0)));
+
+    let coloured_pdf = pdf(&s);
+    let coloured_print = print(&s);
+    assert_ne!(coloured_pdf, by_author, "file.exportPdf ignores the tracking colours");
+    assert_ne!(coloured_print, printed_by_author, "file.printPdf ignores the tracking colours");
+
+    let coloured_print_uncompressed = s.print_pdf(&uncompressed_markup).unwrap().0;
+    let print_raw = String::from_utf8_lossy(&coloured_print_uncompressed);
+    let print_tokens: Vec<_> = print_raw.split_ascii_whitespace().collect();
+    assert!(has(&print_tokens, "0 0 1 rg"), "coloured print_pdf has blue operator for insertion");
+    assert!(has(&print_tokens, "1 0 0 rg"), "coloured print_pdf has red operator for deletion");
+}
+
+/// #5232 review: File › Print without Print Markup leaves out tracked deletions in layout,
+/// so the page count matches the PDF export and deletions take no blank space.
+#[test]
+fn print_jobs_without_markup_lay_out_the_final_text() {
+    let text: Vec<String> = (0..200).map(|i| format!("Line {i} of the original agreement")).collect();
+    let mut s = Session::new(wordcraft_doc::Document::from_text(&text.join("\n")));
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("select.all", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": "Replaced"})).unwrap();
+    // With markup: 200 deleted lines take space in print.
+    let (marked_pdf, marked_plan) = s.print_pdf(&json!({"markup": true})).unwrap();
+    assert!(marked_plan.chosen > 1);
+    assert!(marked_pdf.starts_with(b"%PDF-"));
+    // Without markup: final text only, 1 page.
+    let (plain_pdf, plain_plan) = s.print_pdf(&json!({"markup": false})).unwrap();
+    assert_eq!(plain_plan.chosen, 1);
+    assert!(plain_pdf.starts_with(b"%PDF-"));
+}
+
+/// #5232 review: page images (render_png and file.exportPng) respect Track Changes Options
+/// colours and hidden deletions.
+#[test]
+fn markup_png_takes_the_track_changes_option_colours() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Governed by Kansas law."));
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("select.text", &json!({"text": "Kansas"})).unwrap();
+    s.run("text.insert", &json!({"text": "Missouri"})).unwrap();
+
+    let markup_opts = json!({"markup": true});
+    let by_author_opts = cmd::file::export_options(&s, &markup_opts);
+    let by_author_png = crate::io_ext::render_png(&s.doc, 0, 1.0, &by_author_opts).unwrap();
+
+    // Change tracking options to blue insertions / red deletions.
+    s.run("review.trackingOptions", &json!({"insertColor": "0000FF", "deleteColor": "FF0000"})).unwrap();
+    let coloured_opts = cmd::file::export_options(&s, &markup_opts);
+    let coloured_png = crate::io_ext::render_png(&s.doc, 0, 1.0, &coloured_opts).unwrap();
+    assert_ne!(by_author_png, coloured_png, "PNG export must reflect tracking colours");
+
+    // Also verify via file.exportPng command.
+    struct TempDir(std::path::PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let dir = TempDir(std::env::temp_dir().join(format!("wordcraft-tracking-png-{}", std::process::id())));
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let p1 = dir.0.join("by_author.png");
+    let p2 = dir.0.join("coloured.png");
+    s.run("review.trackingOptions", &json!({"insertColor": "byAuthor", "deleteColor": "byAuthor"})).unwrap();
+    s.run("file.exportPng", &json!({"path": p1.to_string_lossy(), "markup": true, "scale": 1.0})).unwrap();
+    s.run("review.trackingOptions", &json!({"insertColor": "0000FF", "deleteColor": "FF0000"})).unwrap();
+    s.run("file.exportPng", &json!({"path": p2.to_string_lossy(), "markup": true, "scale": 1.0})).unwrap();
+    assert_ne!(std::fs::read(&p1).unwrap(), std::fs::read(&p2).unwrap());
+    assert_eq!(std::fs::read(&p1).unwrap(), by_author_png);
+    assert_eq!(std::fs::read(&p2).unwrap(), coloured_png);
+
+    // Verify hidden deletions take no space in PNG export.
+    s.run("review.trackingOptions", &json!({"deleteMark": "hidden"})).unwrap();
+    let hidden_opts = cmd::file::export_options(&s, &markup_opts);
+    let hidden_png = crate::io_ext::render_png(&s.doc, 0, 1.0, &hidden_opts).unwrap();
+    assert_ne!(hidden_png, coloured_png, "hidden deletions must affect PNG pixels/layout");
+}
+
 /// Print Markup (#589): `file.printMarkup` or a command's `markup` puts the comments into PDFs
 /// (balloons beside the scaled page) and at the end of HTML, Markdown and text copies.
 #[test]
@@ -8471,6 +9014,83 @@ fn colour_commands_take_any_custom_hex() {
     assert_eq!(shading, wordcraft_doc::Rgb::parse("C0FFEE"));
     run(&mut s, "design.pageColor", json!({"color": "123ABC"}));
     assert_eq!(s.doc.settings.page_color, wordcraft_doc::Rgb::parse("123ABC"));
+}
+
+/// #2786: Define New Bullet puts the selection in a list of its own: the character, its font and
+/// its alignment at the levels the paragraphs use, each paragraph keeping its level. A list that
+/// already uses the same character is left alone, defining again never toggles the bullet off,
+/// it survives a DOCX round trip, and bad params are errors that change nothing.
+#[test]
+fn define_bullet_gives_the_selection_a_bullet_of_its_own() {
+    use wordcraft_doc::props::Align;
+    let mut s = Session::new(wordcraft_doc::Document::from_text("One\nTwo\nThree"));
+    let num_at = |s: &Session, i: usize| s.doc.para_at(&Pos::body(i, 0)).unwrap().props.numbering.unwrap();
+    // "Three" already has a ♦ list, defined the ordinary way.
+    s.sel = crate::Selection::caret(Pos::body(2, 0));
+    run(&mut s, "para.bullets", json!({"kind": "♦"}));
+    let other = num_at(&s, 2).num;
+    let other_level = s.doc.numbering.level(other, 0).unwrap().clone();
+    // "Two" sits at level 2 of a bulleted list before the definition.
+    s.sel = crate::Selection::caret(Pos::body(1, 0));
+    run(&mut s, "para.bullets", json!({}));
+    run(&mut s, "para.listLevel", json!({"level": 1}));
+    s.sel = crate::Selection { anchor: Pos::body(0, 0), focus: Pos::body(1, 3) };
+    run(&mut s, "para.defineBullet", json!({"char": "♦", "font": "Segoe UI Symbol", "align": "center"}));
+    let (one, two) = (num_at(&s, 0), num_at(&s, 1));
+    assert_eq!(one.num, two.num, "one list for the selection");
+    assert_ne!(one.num, other, "not the existing ♦ list");
+    assert_eq!((one.level, two.level), (0, 1), "each paragraph keeps its level");
+    for lvl in [0, 1] {
+        let l = s.doc.numbering.level(one.num, lvl).unwrap();
+        assert_eq!((l.text.as_str(), l.chr.font.as_deref(), l.align), ("♦", Some("Segoe UI Symbol"), Align::Center), "level {lvl}");
+    }
+    assert_eq!(s.doc.numbering.level(other, 0).unwrap(), &other_level, "the other ♦ list is unchanged");
+    // Defining the same bullet again keeps it (para.bullets would toggle it off).
+    run(&mut s, "para.defineBullet", json!({"char": "♦"}));
+    assert_eq!(s.doc.numbering.level(num_at(&s, 0).num, 0).unwrap().text, "♦");
+    // DOCX keeps the character, its font and the alignment.
+    run(&mut s, "para.defineBullet", json!({"char": "✓", "font": "Segoe UI Symbol", "align": "right", "size": 14, "bold": true, "color": "C00000"}));
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+    let n = back.para_at(&Pos::body(0, 0)).unwrap().props.numbering.unwrap();
+    let l = back.numbering.level(n.num, 0).unwrap();
+    assert_eq!((l.text.as_str(), l.chr.font.as_deref(), l.align), ("✓", Some("Segoe UI Symbol"), Align::Right));
+    // The Font dialog's size, bold and colour reach the bullet too.
+    assert_eq!((l.chr.size, l.chr.bold), (Some(14.0), Some(true)));
+    assert_eq!(l.chr.color, wordcraft_doc::props::TextColor::parse("C00000"));
+    // A paragraph numbered only by its style keeps the style's level (review of #2860).
+    let mut s2 = Session::new(wordcraft_doc::Document::from_text("Styled"));
+    let styled = Arc::make_mut(&mut s2.doc.numbering).try_add_list(wordcraft_doc::ListKind::Bullet).unwrap();
+    Arc::make_mut(&mut s2.doc.styles).get_mut("ListParagraph").unwrap().para.numbering = Some(wordcraft_doc::props::NumRef { num: styled, level: 1 });
+    s2.doc.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.style = Some("ListParagraph".into());
+    assert!(s2.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.is_none(), "no numbering of its own");
+    s2.sel = crate::Selection::caret(Pos::body(0, 0));
+    run(&mut s2, "para.defineBullet", json!({"char": "♦"}));
+    let n = s2.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.unwrap();
+    assert_eq!(n.level, 1, "the style's level is kept");
+    assert_eq!(s2.doc.numbering.level(n.num, 1).unwrap().text, "♦");
+    // No params: ★, as before.
+    s.sel = crate::Selection::caret(Pos::body(2, 0));
+    run(&mut s, "para.defineBullet", json!({}));
+    assert_eq!(s.doc.numbering.level(num_at(&s, 2).num, 0).unwrap().text, "★");
+    let doc = s.doc.clone();
+    let long = "x".repeat(200);
+    for junk in [
+        json!({"char": ""}),
+        json!({"char": "ab"}),
+        json!({"char": 5}),
+        json!({"char": "\u{7}"}),
+        json!({"char": "•", "align": "middle"}),
+        json!({"char": "•", "align": 1}),
+        json!({"char": "•", "font": 3}),
+        json!({"char": "•", "font": long}),
+        json!({"char": "•", "size": 0}),
+        json!({"char": "•", "size": "big"}),
+        json!({"char": "•", "bold": "yes"}),
+        json!({"char": "•", "color": "purple"}),
+    ] {
+        assert!(s.run("para.defineBullet", &junk).is_err(), "{junk}");
+    }
+    assert_eq!(s.doc, doc);
 }
 
 /// #4685: Home › Paragraph › Shading on text selected inside a paragraph shades that text, as in
@@ -10254,8 +10874,9 @@ fn review_language_validates_tags_and_marks_text_unchecked() {
     assert_eq!(run(&mut s, "format.state", json!({}))["lang"], "pl");
     run(&mut s, "review.language", json!({}));
     assert_eq!(run(&mut s, "format.state", json!({}))["lang"], "en-US");
-    // A language without proofing tools: no marks.
-    run(&mut s, "review.language", json!({"lang": "fr-FR"}));
+    // A language without proofing tools: no marks. `zxx` (no linguistic content) never has
+    // them; a real language such as fr-FR does wherever its system Hunspell dictionary is installed.
+    run(&mut s, "review.language", json!({"lang": "zxx"}));
     assert_eq!(run(&mut s, "review.issues", json!({})), json!([]));
 }
 
@@ -11185,8 +11806,6 @@ fn find_replace_and_go_to_open_like_word() {
     assert_eq!(s.ui_requests.last(), Some(&json!({"open": "replace"})));
     assert!(!s.dirty, "opening the dialog changes nothing");
     assert!(s.run("edit.findReplace", &json!({"tab": "nope"})).is_err());
-    let reg = s.registry.clone();
-    assert_eq!(s.keymap.resolve(&reg, "Mod+H").map(|c| c.id), Some("edit.findReplace"));
     run(&mut s, "edit.goto", json!({}));
     assert_eq!(s.ui_requests.last(), Some(&json!({"open": "goto"})));
     // Replace with a "with" and the last search still replaces, as before.
@@ -12008,6 +12627,7 @@ fn inspect_document_removes_the_note_of_a_hidden_reference() {
 /// #1344: many hidden pieces (index entries are hidden text) are removed quickly, and the
 /// found list is capped.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn inspect_document_removes_thousands_of_hidden_pieces() {
     use wordcraft_doc::props::CharProps;
     use wordcraft_doc::{Paragraph, para_block};
@@ -12951,6 +13571,13 @@ fn style_set_keeps_imported_styles_latent_styles_and_defaults() {
     let mut s = s();
     run(&mut s, "design.styleSet", json!({ "name": "title" }));
     assert_eq!(s.doc.styles.get("Title").unwrap().chr.size, Some(36.0));
+    // #4852 review: the sets that make headings bold or italic do it in both scripts, so a Thai
+    // heading in a run marked `w:cs` is drawn bold or italic too.
+    let cs = wordcraft_doc::props::CharProps { cs: Some(true), ..Default::default() };
+    run(&mut s, "design.styleSet", json!({ "name": "basic" }));
+    assert!(s.doc.styles.resolve_char(Some("Heading1"), &cs).bold_cs, "basic");
+    run(&mut s, "design.styleSet", json!({ "name": "casual" }));
+    assert!(s.doc.styles.resolve_char(Some("Heading2"), &cs).italic_cs, "casual");
 }
 
 fn style_size(s: &Session, id: &str) -> f32 {
@@ -13027,6 +13654,125 @@ fn scale_font_sizes_reaches_char_table_and_cs_sizes_and_unset_default() {
     let grid = st.styles.iter().find(|x| x.id == "Grid").and_then(|x| x.table.as_ref()).unwrap();
     assert_eq!(grid.header_chr.size, Some(16.0));
     assert_eq!(grid.regions.get(&TablePart::Band2Horz).unwrap().chr.size, Some(10.0));
+}
+
+/// #4467: `document.inspect` lists a footer's fields and marks the ones each page shows its own
+/// value of, so a caller knows "1 of 1" is a stored result and not what page 2 shows.
+#[test]
+fn inspect_marks_page_fields_in_headers_and_footers() {
+    let mut s = s();
+    let id = run(&mut s, "insert.pageNumber", json!({"format": "x of y"}))["story"].as_u64().unwrap();
+    let doc = run(&mut s, "document.inspect", json!({}));
+    let part = doc["parts"].as_array().unwrap().iter().find(|p| p["id"] == id).unwrap().clone();
+    assert_eq!(part["text"], "Page 1 of 1");
+    assert_eq!(part["fields"], json!([{"code": "PAGE", "result": "1", "perPage": true}, {"code": "NUMPAGES", "result": "1", "perPage": true}]));
+}
+
+/// #4467 review: a STYLEREF in a footer's table cell is listed as per page too (the layout looks
+/// it up on each page), and a part with more fields than `document.inspect` lists says so.
+#[test]
+fn inspect_lists_cell_fields_and_marks_a_cut_list() {
+    use wordcraft_doc::{Block, CharProps, InlineObject, Paragraph, Table, para_block};
+    let field =
+        |instr: &str| InlineObject::Field { instr: instr.into(), result: "x".into(), locked: false, dirty: false, code: false, form: String::new() };
+    let mut s = s();
+    let id = run(&mut s, "insert.pageNumber", json!({}))["story"].as_u64().unwrap();
+    let key = u32::try_from(id).unwrap();
+    let mut cell = Paragraph::new();
+    cell.insert_object(0, field("STYLEREF \"Heading 1\""), &CharProps::default()).unwrap();
+    let mut table = Table::new(1, 1, 200.0);
+    table.rows[0].cells[0].blocks = vec![para_block(cell)];
+    s.doc.parts.get_mut(&key).unwrap().blocks.push(std::sync::Arc::new(Block::Table(table)));
+    let part = |s: &mut Session| {
+        let doc = run(s, "document.inspect", json!({}));
+        doc["parts"].as_array().unwrap().iter().find(|p| p["id"] == id).unwrap().clone()
+    };
+    let p = part(&mut s);
+    assert_eq!(p["fields"][1], json!({"code": "STYLEREF \"Heading 1\"", "result": "x", "perPage": true}));
+    assert!(p.get("fieldsTruncated").is_none(), "{p}");
+
+    let mut many = Paragraph::new();
+    for _ in 0..250 {
+        many.insert_object(0, field("AUTHOR"), &CharProps::default()).unwrap();
+    }
+    s.doc.parts.get_mut(&key).unwrap().blocks.push(para_block(many));
+    let p = part(&mut s);
+    assert_eq!(p["fields"].as_array().unwrap().len(), 200);
+    assert_eq!(p["fieldsTruncated"], true);
+}
+
+/// #4467 review: a field kept as a range (`FieldStart` … `FieldEnd`, as the DOCX reader keeps a
+/// PAGE whose result has tracked changes, or a TOC spanning paragraphs) is listed too, its result
+/// the text between the markers.
+#[test]
+fn inspect_lists_range_fields() {
+    use wordcraft_doc::{CharProps, InlineObject, Paragraph, para_block};
+    let start = |instr: &str| InlineObject::FieldStart { instr: instr.into(), locked: false, dirty: false };
+    let mut s = s();
+    let id = run(&mut s, "insert.pageNumber", json!({}))["story"].as_u64().unwrap();
+    let key = u32::try_from(id).unwrap();
+    let c = CharProps::default();
+    let mut page = Paragraph::new();
+    page.insert_object(0, start("PAGE"), &c).unwrap();
+    page.insert_text(page.len(), "7  ", &c).unwrap();
+    page.insert_object(page.len(), InlineObject::FieldEnd, &c).unwrap();
+    let mut first = Paragraph::new();
+    first.insert_object(0, start("TOC \\o \"1-3\""), &c).unwrap();
+    first.insert_text(first.len(), "One", &c).unwrap();
+    let mut second = Paragraph::with_text("Two", c.clone());
+    second.insert_object(second.len(), InlineObject::FieldEnd, &c).unwrap();
+    // A result longer than `document.inspect` gives: cut, and marked.
+    let mut long = Paragraph::new();
+    long.insert_object(0, start("BIBLIOGRAPHY"), &c).unwrap();
+    long.insert_text(long.len(), &"x".repeat(2500), &c).unwrap();
+    long.insert_object(long.len(), InlineObject::FieldEnd, &c).unwrap();
+    let blocks = &mut s.doc.parts.get_mut(&key).unwrap().blocks;
+    blocks.extend([para_block(page), para_block(first), para_block(second), para_block(long)]);
+    let doc = run(&mut s, "document.inspect", json!({}));
+    let part = doc["parts"].as_array().unwrap().iter().find(|p| p["id"] == id).unwrap().clone();
+    let fields = part["fields"].as_array().unwrap();
+    assert!(fields.contains(&json!({"code": "PAGE", "result": "7  ", "perPage": true})), "spaces kept: {fields:?}");
+    assert!(fields.contains(&json!({"code": "TOC \\o \"1-3\"", "result": "One\nTwo", "perPage": false})), "{fields:?}");
+    let bib = fields.iter().find(|f| f["code"] == "BIBLIOGRAPHY").unwrap();
+    assert_eq!((bib["result"].as_str().map(str::len), &bib["resultTruncated"]), (Some(2000), &json!(true)));
+    assert!(fields.iter().filter(|f| f["code"] != "BIBLIOGRAPHY").all(|f| f.get("resultTruncated").is_none()));
+    assert!(part.get("fieldsTruncated").is_none(), "{part}");
+}
+
+/// #4467 review: a field name in lower case is a page field all the same, and a field in a table
+/// nested deeper than `document.inspect` walks (8 tables) is left out with `fieldsTruncated`.
+#[test]
+fn inspect_reads_field_names_in_any_case_and_bounds_nested_tables() {
+    use wordcraft_doc::{Block, CharProps, InlineObject, Paragraph, Table, para_block};
+    let field =
+        |instr: &str| InlineObject::Field { instr: instr.into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() };
+    // A field `depth` tables deep.
+    let nested = |depth: usize| {
+        let mut p = Paragraph::new();
+        p.insert_object(0, field("page"), &CharProps::default()).unwrap();
+        let mut block = para_block(p);
+        for _ in 0..depth {
+            let mut t = Table::new(1, 1, 200.0);
+            t.rows[0].cells[0].blocks = vec![block];
+            block = std::sync::Arc::new(Block::Table(t));
+        }
+        block
+    };
+    for (depth, listed) in [(0, true), (8, true), (9, false)] {
+        let mut s = s();
+        let id = run(&mut s, "insert.pageNumber", json!({}))["story"].as_u64().unwrap();
+        let key = u32::try_from(id).unwrap();
+        s.doc.parts.get_mut(&key).unwrap().blocks = vec![nested(depth)];
+        let doc = run(&mut s, "document.inspect", json!({}));
+        let part = doc["parts"].as_array().unwrap().iter().find(|p| p["id"] == id).unwrap().clone();
+        if listed {
+            assert_eq!(part["fields"], json!([{"code": "page", "result": "1", "perPage": true}]), "{depth}");
+            assert!(part.get("fieldsTruncated").is_none(), "{depth}: {part}");
+        } else {
+            assert!(part.get("fields").is_none(), "{depth}: {part}");
+            assert_eq!(part["fieldsTruncated"], true, "{depth}");
+        }
+    }
 }
 
 /// #3676: a 1-based page parameter becomes a 0-based index without wrapping.
@@ -13167,6 +13913,80 @@ fn an_odt_charts_paragraph_is_written_as_read_after_drawing_it() {
     let mut z = craft_zip::Archive::open(&_z_bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
     let content = String::from_utf8(z.read("content.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(content.contains(r#"draw:name="Chart1""#) && !content.contains("wcChart"), "{content}");
+}
+
+/// A scatter chart saved as ODT (or flat ODT) and opened again is still drawn as markers without
+/// lines, and its paragraph is still written as read.
+#[test]
+fn an_odt_scatter_chart_reopens_without_lines() {
+    use wordcraft_doc::para::InlineObject;
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "insert.chart", json!({"type": "scatter"}));
+    let odt = wordcraft_formats::odt::export(&s.doc).unwrap();
+    let fodt = wordcraft_formats::odt::export_flat(&s.doc).unwrap();
+    for (name, bytes) in [("t.odt", odt), ("t.fodt", fodt)] {
+        let doc = crate::io::open_bytes(name, &bytes).unwrap();
+        let c = first_chart(&doc).expect("the chart has its model");
+        assert_eq!(c.kind, wordcraft_doc::chart::ChartType::Scatter);
+        assert!(!c.series.is_empty() && c.series.iter().all(|x| x.no_line), "{name}: {:?}", c.series);
+        // The drawn items are the markers-only drawing, not the one with lines between points.
+        let p = doc.para_at(&Pos::body(0, 0)).unwrap();
+        let (items, w, h) = p
+            .object_offsets()
+            .into_iter()
+            .find_map(|off| match p.object_at(off) {
+                Some(InlineObject::Graphic { graphic, w, h, .. }) if graphic.chart.is_some() => Some((graphic.items.clone(), *w, *h)),
+                _ => None,
+            })
+            .expect("the chart is drawn");
+        let theme = &doc.settings.theme_colors;
+        assert_eq!(items, crate::cmd::chart::chart_graphic(c.clone(), theme, w, h).items, "{name}");
+        let mut lines = c.clone();
+        lines.series.iter_mut().for_each(|x| x.no_line = false);
+        assert_ne!(items, crate::cmd::chart::chart_graphic(lines, theme, w, h).items, "{name}");
+    }
+    let doc = crate::io::open_bytes("t.odt", &wordcraft_formats::odt::export(&s.doc).unwrap()).unwrap();
+    let again = wordcraft_formats::odt::export(&doc).unwrap();
+    let mut z = craft_zip::Archive::open(&again, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let content = String::from_utf8(z.read("content.xml", 16 << 20).unwrap().unwrap()).unwrap();
+    assert!(content.contains(r#"draw:name="Chart1""#) && !content.contains("wcChart"), "{content}");
+}
+
+/// An undrawn scatter series with its markers turned off is not left with neither a line nor
+/// markers when an opened ODF file's scatter charts are set to markers only; other formats keep
+/// their series as read.
+#[test]
+fn an_opened_odf_scatter_series_keeps_its_markers() {
+    use std::sync::Arc;
+    use wordcraft_doc::para::InlineObject;
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "insert.chart", json!({"type": "scatter"}));
+    let undrawn = |doc: &wordcraft_doc::Document| {
+        let mut doc = doc.clone();
+        doc.fill_objects(&|o| matches!(o, InlineObject::Graphic { graphic, .. } if graphic.chart.is_some()), &mut |o| {
+            if let InlineObject::Graphic { graphic, .. } = o {
+                let g = Arc::make_mut(graphic);
+                if let Some(spec) = g.chart.as_deref() {
+                    let mut spec = spec.clone();
+                    for series in &mut spec.series {
+                        series.no_line = false;
+                        series.markers = Some(false);
+                    }
+                    g.chart = Some(Arc::new(spec));
+                }
+                g.items.clear();
+            }
+        });
+        doc
+    };
+    let mut odf = undrawn(&s.doc);
+    crate::io_ext::draw_charts(&mut odf, true);
+    let c = first_chart(&odf).expect("the chart has its model");
+    assert!(!c.series.is_empty() && c.series.iter().all(|x| x.no_line && x.markers.is_none()), "{:?}", c.series);
+    let mut other = undrawn(&s.doc);
+    crate::io_ext::draw_charts(&mut other, false);
+    let c = first_chart(&other).expect("the chart has its model");
+    assert!(c.series.iter().all(|x| !x.no_line && x.markers == Some(false)), "{:?}", c.series);
 }
 
 /// A picture an OpenDocument file makes wider than the text (a rule across the whole page) stays

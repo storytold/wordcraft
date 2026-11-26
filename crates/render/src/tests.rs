@@ -671,6 +671,96 @@ fn picture_brightness_contrast_transparency() {
     assert!(!top.iter().any(|p| p[0] == 100));
 }
 
+/// A letterhead's page frame (a `frame` shape in the header) is drawn as a border with a hole,
+/// not a filled box over the whole page.
+#[test]
+fn header_frame_shape_has_a_hole() {
+    use wordcraft_doc::fill::Fill;
+    use wordcraft_doc::para::{Float, InlineObject, Wrap};
+    let mut d = Document::from_text("body");
+    let mut hp = wordcraft_doc::Paragraph::new();
+    let frame = InlineObject::Shape {
+        kind: ShapeKind::Frame,
+        w: 200.0,
+        h: 100.0,
+        fill: Some(Fill::solid(Rgb::BLACK)),
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { wrap: Wrap::BehindText, ..Default::default() },
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        // A border a tenth of the shorter side: 10 pt.
+        extra: wordcraft_doc::connector::ShapeExtra { corner: Some(10_000), ..Default::default() },
+    };
+    hp.insert_object(0, frame, &Default::default()).unwrap();
+    let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
+    d.last_section.headers.default = Some(id);
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let page = &l.pages[0];
+    let rect = page
+        .header
+        .iter()
+        .find_map(|it| if let wordcraft_layout::Placed::Shape { rect, .. } = it { Some(*rect) } else { None })
+        .expect("the frame is placed");
+    // Undimmed, as while the header is edited, so the border's own colour is read.
+    let mut opts = RenderOptions::default();
+    opts.display.dim_header = false;
+    let img = render_page(&d, page, 1.0, &opts);
+    let px = |x: f32, y: f32| img.pixel(x as u32, y as u32)[0];
+    let mid_y = rect.y + rect.h / 2.0;
+    assert_eq!(px(rect.x + 5.0, mid_y), 0, "the border is drawn");
+    assert_eq!(px(rect.x + rect.w - 5.0, mid_y), 0, "both sides of it");
+    assert_eq!(px(rect.x + rect.w / 2.0, mid_y), 255, "the middle is a hole");
+    assert_eq!(px(rect.x + rect.w / 2.0, rect.y + 15.0), 255, "the hole starts past the border");
+}
+
+/// A header's pictures are drawn in their place among its text, not before it: a shape in front
+/// of a shaded header paragraph stays in front of the shading, whether the header is dimmed or
+/// not. Dimmed, the black square fades to a grey, with none of the red shading under it.
+#[test]
+fn header_shape_in_front_of_shaded_paragraph_stays_in_front() {
+    use wordcraft_doc::fill::Fill;
+    use wordcraft_doc::para::{Float, InlineObject, Wrap};
+    let mut d = Document::from_text("body");
+    let mut hp = wordcraft_doc::Paragraph::with_text("Letterhead", Default::default());
+    hp.props.shading = Some(Rgb(0xFF, 0x00, 0x00));
+    let square = InlineObject::Shape {
+        kind: ShapeKind::Rectangle,
+        w: 40.0,
+        h: 40.0,
+        fill: Some(Fill::solid(Rgb::BLACK)),
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { wrap: Wrap::InFrontOfText, ..Default::default() },
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    hp.insert_object(0, square, &Default::default()).unwrap();
+    let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
+    d.last_section.headers.default = Some(id);
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let page = &l.pages[0];
+    let rect = page
+        .header
+        .iter()
+        .find_map(|it| if let wordcraft_layout::Placed::Shape { rect, .. } = it { Some(*rect) } else { None })
+        .expect("the square is placed");
+    for dim_header in [false, true] {
+        let mut opts = RenderOptions::default();
+        opts.display.dim_header = dim_header;
+        let img = render_page(&d, page, 1.0, &opts);
+        // Just inside the square's top edge, where the paragraph's shading lies too.
+        let p = img.pixel((rect.x + rect.w / 2.0) as u32, (rect.y + 3.0) as u32);
+        assert!(p[0] == p[1] && p[1] == p[2], "the square covers the shading (dimmed header: {dim_header}): {p:?}");
+        if !dim_header {
+            assert_eq!(&p[..3], &[0, 0, 0], "undimmed, the square is black");
+        }
+    }
+}
+
 /// #2892: a rule is stroked with flat ends, as the PDF export and Word draw them. Round caps
 /// used to stick half the width out past every end — a blob over the neighbouring border at
 /// each corner of a table with thick borders, while the exported PDF had square corners.
@@ -2009,7 +2099,7 @@ fn undecodable_pictures_keep_their_grey_box_pixels() {
 fn geometry_bytes_counts_pattern_tiles_and_clips_once() {
     use craft_metafile::{ClipPath, Tile};
     let segs = |n: usize| vec![Seg::Line(0.0, 0.0); n];
-    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, skipped_records: 0 };
+    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, ..Default::default() };
     let base = crate::media::geometry_bytes(&pic(vec![]));
     let tile = Arc::new(Tile { width: 1000, height: 1000, rgba: vec![0; 4_000_000], cell: [1.0, 1.0], origin: [0.0, 0.0] });
     let pattern = |tile: &Arc<Tile>| Item::Pattern { segs: segs(1000), even_odd: false, tile: tile.clone(), region: None, clips: vec![] };
@@ -2042,7 +2132,7 @@ fn geometry_bytes_counts_pattern_tiles_and_clips_once() {
 #[test]
 fn geometry_bytes_charges_the_capacity_of_segment_and_dash_vectors() {
     use craft_metafile::LineStyle;
-    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, skipped_records: 0 };
+    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, ..Default::default() };
     let path = |segs: Vec<Seg>, dash: Vec<f32>| Item::Path {
         segs,
         fill: None,
@@ -2066,7 +2156,7 @@ fn geometry_bytes_charges_the_capacity_of_segment_and_dash_vectors() {
 #[test]
 fn geometry_bytes_counts_dash_arrays_and_text_records() {
     use craft_metafile::{Font, HAlign, LineStyle, Text, VAlign};
-    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, skipped_records: 0 };
+    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, ..Default::default() };
     let path = |dash: usize| Item::Path {
         segs: vec![Seg::Line(0.0, 0.0); 2],
         fill: None,
@@ -2099,4 +2189,83 @@ fn geometry_bytes_counts_dash_arrays_and_text_records() {
     assert_eq!(named - bare, "Some Long Face Name".len());
     let empty = crate::media::geometry_bytes(&pic(vec![]));
     assert!(bare - empty >= std::mem::size_of::<Text>(), "the boxed Text struct is charged: {} bytes", bare - empty);
+}
+
+/// The placeholder for a picture `bytes` shown 200 × 150 pt, one row per pixel row: `Some(true)`
+/// for dark (text) pixels, `Some(false)` for the grey fill, `None` for anything else.
+fn placeholder_pixels(bytes: Vec<u8>) -> Vec<Vec<Option<bool>>> {
+    let mut d = Document::new();
+    let media = d.add_media(bytes, "png");
+    let mut p = wordcraft_doc::Paragraph::new();
+    let obj = wordcraft_doc::para::InlineObject::Image {
+        media,
+        w: 200.0,
+        h: 150.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
+    p.insert_object(0, obj, &Default::default()).unwrap();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let opts = RenderOptions::default();
+    let rect = page_display(&d, &l.pages[0], &opts.display)
+        .iter()
+        .find_map(|i| match i {
+            Draw::Image { rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .expect("a picture on the page");
+    let img = render_page(&d, &l.pages[0], 1.0, &opts);
+    ((rect.y.ceil() as u32)..((rect.y + rect.h).floor() as u32))
+        .map(|y| {
+            ((rect.x.ceil() as u32)..((rect.x + rect.w).floor() as u32))
+                .map(|x| {
+                    let px = img.pixel(x, y);
+                    if px[..3] == [0xD0; 3] {
+                        Some(false)
+                    } else if px[..3].iter().all(|c| *c < 0x90) {
+                        Some(true)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// #5637: a picture too large to decode is not just a grey box: the box says why, in three
+/// upright lines centred in it.
+#[test]
+fn a_picture_too_large_to_decode_says_so_in_its_box() {
+    let huge = ihdr_only_png(8333, 8333);
+    assert!(decode_pixmap(&huge).is_none(), "the decode budget refuses it");
+    let grid = placeholder_pixels(huge);
+    let (h, w) = (grid.len() as f64, grid[0].len() as f64);
+    assert!(grid.iter().flatten().any(|p| *p == Some(false)), "the grey placeholder is drawn");
+    let inked: Vec<bool> = grid.iter().map(|row| row.contains(&Some(true))).collect();
+    let rows: Vec<usize> = (0..inked.len()).filter(|y| inked[*y]).collect();
+    assert!(!rows.is_empty(), "the placeholder carries a message, not a plain grey box");
+    // Three lines of text: three bands of inked rows with blank rows between them.
+    let bands = (0..inked.len()).filter(|y| inked[*y] && (*y == 0 || !inked[*y - 1])).count();
+    assert_eq!(bands, 3, "three lines of text, inked rows {rows:?}");
+    // Centred both ways; glyphs flipped about their baselines would sit several pixels low.
+    let (top, bottom) = (rows[0] as f64, *rows.last().unwrap() as f64);
+    assert!(((top + bottom) / 2.0 - h / 2.0).abs() < 3.0, "centred vertically: rows {top}..{bottom} of {h}");
+    let cols: Vec<usize> = (0..grid[0].len()).filter(|x| grid.iter().any(|row| row[*x] == Some(true))).collect();
+    let (left, right) = (cols[0] as f64, *cols.last().unwrap() as f64);
+    assert!(((left + right) / 2.0 - w / 2.0).abs() < 3.0, "centred horizontally: columns {left}..{right} of {w}");
+    // The first line starts with the stem of an upright "P": its leftmost inked column runs at
+    // least 5 px down from the line's top.
+    let first = rows[0]..rows.iter().zip(&rows[1..]).find(|(a, b)| **b != **a + 1).map_or(rows.len(), |(a, _)| *a + 1);
+    let lead = (0..grid[0].len()).find(|x| grid[first.clone()].iter().any(|row| row[*x] == Some(true))).unwrap();
+    let stem = grid[first.clone()].iter().filter(|row| row[lead] == Some(true) || row.get(lead + 1) == Some(&Some(true))).count();
+    assert!(stem >= 5, "the first line starts with an upright P stem ({stem} px)");
+    // A damaged picture still gets its plain grey placeholder.
+    let grid = placeholder_pixels(b"\x89PNG\r\n\x1a\njunk".to_vec());
+    assert!(grid.iter().flatten().any(|p| *p == Some(false)), "a damaged picture keeps its grey placeholder");
+    assert!(!grid.iter().flatten().any(|p| *p == Some(true)), "with no size message");
 }
