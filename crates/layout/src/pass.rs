@@ -441,9 +441,10 @@ fn section_endnotes(ctx: &mut Ctx, pb: &mut PageBuilder, endnotes: &mut VecDeque
 /// the turned pages of vertical sections.
 fn finish_pages(pb: PageBuilder, doc: &Document, sections: &[(usize, &SectionProps)], web: bool) -> Vec<Page> {
     let mut pb = pb;
-    pb.close_column_lines();
-    pb.apply_valign();
-    pb.flush_notes();
+    // Each page is aligned once, before its notes go on it: `finish_page` leaves the page
+    // top-aligned after, so a page of continued notes isn't moved down again past the bottom
+    // margin when the next one starts.
+    pb.finish_page();
     let last_block = doc.body.len().saturating_sub(1);
     for _ in 0..MAX_NOTE_PAGES {
         if pb.carry.is_empty() {
@@ -451,7 +452,7 @@ fn finish_pages(pb: PageBuilder, doc: &Document, sections: &[(usize, &SectionPro
         }
         let top = pb.top;
         pb.new_page(last_block, top);
-        pb.flush_notes();
+        pb.finish_page();
     }
     pb.carry.clear();
     let mut pages = pb.pages;
