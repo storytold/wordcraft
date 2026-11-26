@@ -319,21 +319,27 @@ fn native_print_passes_orientation_options_to_spooler() {
     app.run("text.insert", json!({"text": "Test orientation"})).unwrap();
     choose_queue(&mut app, json!({}));
 
+    // The document's own paper (#6837) comes first.
+    let letter = ("media".to_owned(), "na_letter_8.5x11in".to_owned());
+
     // 1. Default (auto for portrait document) sends orientation-requested=3
     app.run("ui.printSubmit", json!({})).unwrap();
-    assert_eq!(fake.last_options(), vec![("orientation-requested".to_owned(), "3".to_owned())]);
+    assert_eq!(fake.last_options(), vec![letter.clone(), ("orientation-requested".to_owned(), "3".to_owned())]);
     app.printing.poll(&egui::Context::default());
     app.poll_printing(&egui::Context::default());
 
     // 2. Explicit landscape sends orientation-requested=4 and landscape=true
     app.run("ui.printSubmit", json!({"orientation": "landscape"})).unwrap();
-    assert_eq!(fake.last_options(), vec![("orientation-requested".to_owned(), "4".to_owned()), ("landscape".to_owned(), "true".to_owned())]);
+    assert_eq!(
+        fake.last_options(),
+        vec![letter.clone(), ("orientation-requested".to_owned(), "4".to_owned()), ("landscape".to_owned(), "true".to_owned())]
+    );
     app.printing.poll(&egui::Context::default());
     app.poll_printing(&egui::Context::default());
 
     // 3. Explicit portrait sends orientation-requested=3
     app.run("ui.printSubmit", json!({"orientation": "portrait"})).unwrap();
-    assert_eq!(fake.last_options(), vec![("orientation-requested".to_owned(), "3".to_owned())]);
+    assert_eq!(fake.last_options(), vec![letter, ("orientation-requested".to_owned(), "3".to_owned())]);
 }
 
 /// Scale to paper size (#2108): the job's PDF goes on the chosen paper, the spooler is asked
@@ -373,6 +379,33 @@ fn native_print_scales_to_the_chosen_paper() {
     assert!(app.run("ui.printSubmit", json!({"paper": "Quarto"})).is_err());
     assert_eq!(fake.jobs(), before);
     assert_eq!((app.session.doc.last_section.page_w, app.session.doc.last_section.page_h), page, "the document is unchanged");
+}
+
+/// With No Scaling, the spooler is asked for the document's own paper (#6837): an A5 document
+/// must not fall back to the printer's default A4. A user-chosen paper still wins.
+#[test]
+fn native_print_requests_the_documents_own_paper() {
+    let fake = Fake::accepting();
+    let mut app = app_over(&fake);
+    app.run("text.insert", json!({"text": "A5 form"})).unwrap();
+    app.run("layout.size", json!({"name": "A5"})).unwrap();
+    choose_queue(&mut app, json!({}));
+    let media = |options: Vec<(String, String)>| options.into_iter().filter(|(k, _)| k == "media").map(|(_, v)| v).collect::<Vec<_>>();
+
+    let page = page_of(&mut app);
+    assert_eq!(page["paper"], "none");
+    app.run("ui.printSubmit", json!({"paper": page["paper"]})).unwrap();
+    assert_eq!(media(fake.last_options()), ["iso_a5_148x210mm"]);
+    app.printing.poll(&egui::Context::default());
+    app.poll_printing(&egui::Context::default());
+
+    app.run("ui.printSubmit", json!({"orientation": "landscape"})).unwrap();
+    assert_eq!(media(fake.last_options()), ["iso_a5_148x210mm"]);
+    app.printing.poll(&egui::Context::default());
+    app.poll_printing(&egui::Context::default());
+
+    app.run("ui.printSubmit", json!({"paper": "A4"})).unwrap();
+    assert_eq!(media(fake.last_options()), ["iso_a4_210x297mm"]);
 }
 
 /// Native copies stay in the spooler; booklet pairing and padding happen once in its PDF.
