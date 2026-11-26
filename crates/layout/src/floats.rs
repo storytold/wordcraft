@@ -82,7 +82,7 @@ pub(crate) fn float_rect(frame: Option<PageFrame>, col: (f32, f32), y0: f32, w: 
     };
     let page_y = |f: &PageFrame| {
         let s = f.sect;
-        let top = f.margin_top.unwrap_or(s.margin_top);
+        let top = f.margin_top.unwrap_or(s.margin_top.abs());
         match float.v_rel {
             Anchor::Page => Some((0.0, s.page_h)),
             Anchor::Margin => {
@@ -90,8 +90,8 @@ pub(crate) fn float_rect(frame: Option<PageFrame>, col: (f32, f32), y0: f32, w: 
                 reference.margin_top = top;
                 Some((top, reference.text_height()))
             }
-            Anchor::TopMargin | Anchor::InsideMargin => Some((0.0, s.margin_top)),
-            Anchor::BottomMargin | Anchor::OutsideMargin => Some((s.page_h - s.margin_bottom, s.margin_bottom)),
+            Anchor::TopMargin | Anchor::InsideMargin => Some((0.0, s.margin_top.abs())),
+            Anchor::BottomMargin | Anchor::OutsideMargin => Some((s.page_h - s.margin_bottom.abs(), s.margin_bottom.abs())),
             _ => None,
         }
     };

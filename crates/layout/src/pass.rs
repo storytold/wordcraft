@@ -285,7 +285,7 @@ fn section_tops(ctx: &mut Ctx, hf: &HfLinks, (si, sect): (usize, &SectionProps),
     let (heads, feet) = (hf.heads.set(si), hf.feet.set(si));
     let hb = |i: Option<u32>| hf.defining_width(false, si, i);
     let fb = |i: Option<u32>| hf.defining_width(true, si, i);
-    let body = if fixed { sect.margin_top } else { with_pct_base(ctx, hb(heads.default), |c| body_top_for(c, sect, heads.default)) };
+    let body = if fixed { sect.margin_top.abs() } else { with_pct_base(ctx, hb(heads.default), |c| body_top_for(c, sect, heads.default)) };
     let first = if fixed || !sect.title_page { body } else { with_pct_base(ctx, hb(heads.first), |c| body_top_for(c, sect, heads.first)) };
     let foot = if fixed { f32::MAX } else { with_pct_base(ctx, fb(feet.default), |c| foot_top_for(c, sect, feet.default)) };
     let first_foot = if fixed || !sect.title_page { foot } else { with_pct_base(ctx, fb(feet.first), |c| foot_top_for(c, sect, feet.first)) };
@@ -611,7 +611,7 @@ pub(crate) fn layout_pass(
         section_endnotes(&mut ctx, &mut pb, &mut endnotes, (sect, si, block));
     }
     if pb.pages.is_empty() {
-        pb.new_page(0, sect_ref.margin_top);
+        pb.new_page(0, sect_ref.margin_top.abs());
     }
     // The rest of the endnotes after the last paragraph.
     let rest: Vec<u32> = endnotes.into_iter().map(|(id, _)| id).collect();

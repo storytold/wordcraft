@@ -123,6 +123,42 @@ fn dragging_the_bottom_margin_on_the_ruler_keeps_the_view_and_follows_the_pointe
     assert_eq!(h.state().session.undo_depth(), depth + 1, "one undo step for the drag");
 }
 
+/// #7107: an exact (negative) top or bottom margin counts at its size on the vertical ruler, so a
+/// drag of the opposite edge keeps an inch of text beside it and `layout.margins` accepts it, and
+/// the exact margin, not dragged, stays exact.
+#[test]
+fn ruler_margin_drags_clamp_against_an_exact_opposite_margin() {
+    use crate::canvas::rulers::{margin_params, page_edges};
+    use craft::pages::ui::{MarginEdge, MarginRules, dragged_margin};
+
+    let s = wordcraft_doc::section::SectionProps {
+        page_w: 612.0,
+        page_h: 792.0,
+        margin_left: 72.0,
+        margin_right: 72.0,
+        margin_top: -72.0,
+        margin_bottom: -72.0,
+        gutter: 0.0,
+        ..Default::default()
+    };
+    let rules = MarginRules::new((612.0, 792.0), page_edges(&s));
+    assert_eq!(dragged_margin(MarginEdge::Bottom, 72.0, &rules).points, 792.0 - 72.0 - 72.0);
+    assert_eq!(dragged_margin(MarginEdge::Top, 720.0, &rules).points, 792.0 - 72.0 - 72.0);
+
+    // Through the command: the clamped value fits beside the exact top margin, which stays exact.
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.session.doc.last_section.margin_top = -72.0;
+    let sect = wordcraft_engine::cmd::page::sect(&app.session);
+    let shown = page_edges(&sect);
+    let moved = shown.with(dragged_margin(MarginEdge::Bottom, 72.0, &MarginRules::new((f64::from(sect.page_w), f64::from(sect.page_h)), shown)));
+    let p = margin_params(&shown, &moved).expect("the bottom margin moved");
+    assert!(p.get("top").is_none(), "the exact top margin is not sent: {p}");
+    app.run("layout.margins", p).unwrap();
+    let after = wordcraft_engine::cmd::page::sect(&app.session);
+    assert_eq!(after.margin_top, -72.0);
+    assert!(after.page_h - after.margin_top.abs() - after.margin_bottom >= 72.0 - 0.01);
+}
+
 /// #1878: in Multiple Pages both rulers belong to the caret's page: the margin splitters of the
 /// horizontal ruler lie over that page's width and the vertical ruler's over its height, and
 /// they follow the caret to another page of the row and to the next row.

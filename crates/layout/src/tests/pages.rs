@@ -1103,3 +1103,42 @@ fn a_page_reference_into_nested_text_boxes_stops_where_layout_does() {
     let output = layout(&d, &mut LayoutCache::new(), &LayoutOptions { output_page_refs: true, ..Default::default() });
     assert_eq!(shown_in(&output, 0, StoryRef::Body), ["2", "2", "9"]);
 }
+
+/// Word's exact margins: a negative top (bottom) margin starts (ends) the body at its size from
+/// the page edge even when the header (footer) is taller, and the two overlap (ECMA-376
+/// §17.6.11, `w:pgMar` below zero; DOC `dyaTop` / `dyaBottom`). Measured in Word on a synthetic
+/// A4 page with six 14pt header and footer lines and ±60pt margins: the body starts at 60pt and
+/// ends 60pt above the bottom edge with the negative margins, and fits on two pages instead of
+/// three. The positive margins stay "at least": the header and footer push the body.
+#[test]
+fn negative_margins_are_exact_and_let_the_header_and_footer_overlap_the_body() {
+    crate::test_fonts();
+    let make = |top: f32, bottom: f32| {
+        let mut d = Document::from_text(&"Body line\n".repeat(100));
+        d.last_section.page_w = 595.3;
+        d.last_section.page_h = 841.9;
+        d.last_section.margin_top = top;
+        d.last_section.margin_bottom = bottom;
+        d.last_section.header = 36.0;
+        d.last_section.footer = 36.0;
+        let head = d.add_part(PartKind::Header, paras("Header line", 6));
+        let foot = d.add_part(PartKind::Footer, paras("Footer line", 6));
+        d.last_section.headers.default = Some(head);
+        d.last_section.footers.default = Some(foot);
+        let l = lay(&d);
+        let body = extent(&l.pages[0].items, StoryRef::Body).unwrap();
+        let header = extent(&l.pages[0].header, StoryRef::Part(head)).unwrap();
+        let footer = extent(&l.pages[0].footer, StoryRef::Part(foot)).unwrap();
+        (l.pages.len(), body, header, footer)
+    };
+    let (pages, body, header, footer) = make(-60.0, -60.0);
+    assert!(header.1 > 60.0 && footer.0 < 841.9 - 60.0, "the bands reach past the margins: {header:?} {footer:?}");
+    assert!((body.0 - 60.0).abs() < 0.5, "the body starts at the exact top margin, over the header: {body:?}");
+    assert!(
+        body.1 <= 841.9 - 60.0 + 0.01 && body.1 > footer.0,
+        "the body runs down to the exact bottom margin, over the footer: {body:?} {footer:?}"
+    );
+    let (at_least_pages, at_least_body, at_least_header, at_least_footer) = make(60.0, 60.0);
+    assert!(at_least_body.0 >= at_least_header.1 - 0.01 && at_least_body.1 <= at_least_footer.0 + 0.01, "{at_least_body:?}");
+    assert!(pages < at_least_pages, "exact margins: {pages} pages, at least: {at_least_pages}");
+}
