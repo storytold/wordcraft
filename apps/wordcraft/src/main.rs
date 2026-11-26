@@ -273,6 +273,21 @@ fn build_sha() -> &'static str {
     option_env!("WORDCRAFT_BUILD_SHA").map(|s| s.get(..8).unwrap_or(s)).unwrap_or("dev")
 }
 
+/// Split the command line at its first `--`: the options before it, the documents after it. The
+/// Launcher's nightly hand-off arrives as `--` followed by the file names (`launch_profile::parse`
+/// puts that separator first), so it is dropped here rather than opened as a document.
+fn split_at_delimiter(args: Vec<String>) -> (Vec<String>, Vec<String>) {
+    match args.iter().position(|a| a == "--") {
+        Some(i) => {
+            let mut options = args;
+            let files = options.split_off(i + 1);
+            options.pop();
+            (options, files)
+        }
+        None => (args, Vec::new()),
+    }
+}
+
 /// The arguments as text, and apart the files whose names aren't valid Unicode, such as a Latin-1
 /// one (#1440). A `--control` port, a token or a token file that isn't is an error.
 fn text_args(arguments: Vec<std::ffi::OsString>) -> (Vec<String>, Vec<std::path::PathBuf>) {
@@ -342,14 +357,24 @@ fn initialize_nightly_process_identity() -> Result<(), process_identity::Identit
     )
 }
 
-/// Tell the person why a Launcher launch was refused, with a native message box on a desktop
-/// session (a Launcher start has no terminal to read standard error from).
+/// Whether a refusal may also open a native message box. Standard error always carries the reason;
+/// this only adds a box where one renders without the app's event loop. Never on macOS: rfd's alert
+/// there needs the AppKit run loop this start has not reached, so a refused nightly launch hung in
+/// an invisible modal instead of exiting (GridCraft Mac smoke, 2026-11-26).
+fn refusal_dialog(flavor: build_flavor::BuildFlavor, desktop_session: bool, macos: bool) -> bool {
+    build_flavor::needs_native_error(flavor, desktop_session) && !macos
+}
+
+/// Tell the person why a Launcher launch was refused: on standard error always, and with a native
+/// message box on a desktop session whose modal renders without the app's run loop (Windows,
+/// X11/Wayland) — a Launcher start has no terminal to read standard error from, and on macOS a modal
+/// before the event loop never appears.
 fn report_launch_profile_error(error: &str) {
     complain(format_args!("launch profile: {error}"));
     let desktop_session = cfg!(windows)
         || cfg!(target_os = "macos")
         || (cfg!(target_os = "linux") && ["DISPLAY", "WAYLAND_DISPLAY"].into_iter().any(|key| std::env::var_os(key).is_some_and(|v| !v.is_empty())));
-    if build_flavor::needs_native_error(build_flavor::COMPILED, desktop_session) {
+    if refusal_dialog(build_flavor::COMPILED, desktop_session, cfg!(target_os = "macos")) {
         if let Err(identity) = initialize_nightly_process_identity() {
             complain(format_args!("launch profile: {identity}"));
             return;
@@ -445,11 +470,13 @@ fn main() -> eframe::Result {
         log::error!("couldn't start again without another program's AppImage variables, so the self-update is off in this window: {e}");
     }
     let mut flags = ControlOptions::default();
-    let mut files = Vec::new();
     let mut sample = false;
     let (args, other_files) = text_args(arguments);
     // Only macOS (Finder / LaunchServices) adds these; elsewhere `-NS…` could be a real file name.
     let args = if cfg!(target_os = "macos") { without_launch_args(args) } else { args };
+    // The Launcher's own hand-off: `--` ends the options, so nothing after it is read as one and
+    // the separator itself never becomes a document.
+    let (args, mut files) = split_at_delimiter(args);
     let mut bad_control: Option<Option<String>> = None;
     let mut missing_value: Option<&'static str> = None;
     let mut args = args.into_iter().peekable();
@@ -1075,5 +1102,45 @@ mod smoke {
         } else {
             assert!(closed, "Don't Save lets the close through");
         }
+    }
+}
+
+#[cfg(test)]
+mod command_line_tests {
+    use super::split_at_delimiter;
+
+    /// The argv the Launcher starts a nightly with, as `prepare_launch` hands it on.
+    fn launcher_argv(tail: &[&str]) -> Vec<String> {
+        let mut argv: Vec<std::ffi::OsString> = ["--launch-profile", "nightly-v1", "--profile-root", "/nightly-data/profiles/wordcraft", "--"]
+            .iter()
+            .map(std::ffi::OsString::from)
+            .collect();
+        argv.extend(tail.iter().map(std::ffi::OsString::from));
+        super::launch_profile::parse(argv).unwrap().args.iter().map(|a| a.to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn the_launchers_separator_is_never_a_document() {
+        let (options, files) = split_at_delimiter(launcher_argv(&[]));
+        assert!(options.is_empty(), "{options:?}");
+        assert!(files.is_empty(), "the separator must not reach the documents: {files:?}");
+    }
+
+    #[test]
+    fn documents_after_the_separator_are_kept_in_order() {
+        let (options, files) = split_at_delimiter(launcher_argv(&["a.file"]));
+        assert!(options.is_empty(), "{options:?}");
+        assert_eq!(files, ["a.file"]);
+        let (_, files) = split_at_delimiter(launcher_argv(&["a.file", "--version", "--sample"]));
+        assert_eq!(files, ["a.file", "--version", "--sample"], "after -- every word is a document");
+    }
+
+    #[test]
+    fn a_refusal_never_blocks_on_a_modal_before_the_event_loop_on_macos() {
+        use crate::build_flavor::BuildFlavor;
+        assert!(super::refusal_dialog(BuildFlavor::NightlyV1, true, false), "a desktop refusal still shows the box where one renders");
+        assert!(!super::refusal_dialog(BuildFlavor::NightlyV1, true, true), "macOS has no run loop yet: the modal would hang");
+        assert!(!super::refusal_dialog(BuildFlavor::NightlyV1, false, false), "a headless session has no box");
+        assert!(!super::refusal_dialog(BuildFlavor::Stable, true, false), "only a nightly refusal explains itself in a box");
     }
 }
