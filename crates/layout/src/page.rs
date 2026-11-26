@@ -117,7 +117,7 @@ pub(crate) fn page_border_rules(s: &SectionProps) -> Vec<Placed> {
     if let Some(b) = &s.page_borders {
         let sp = |e: &Option<Border>| e.map(|x| x.space).unwrap_or(24.0);
         let (x0, x1, y0, y1) = (sp(&b.left), s.page_w - sp(&b.right), sp(&b.top), s.page_h - sp(&b.bottom));
-        box_rules(&mut v, (x0, y0, x1, y1), [b.top, b.bottom, b.left, b.right], [false; 2]);
+        box_rules(&mut v, (x0, y0, x1, y1), [b.top, b.bottom, b.left, b.right], [false; 2], crate::RuleSurface::default());
     }
     v
 }
@@ -206,7 +206,14 @@ impl PageBuilder<'_> {
                 None => {
                     let len = if cont { self.sect.text_width() } else { NOTE_SEP_W };
                     let sy = top + NOTE_SEP / 2.0;
-                    pg.items.push(Placed::Rule { x0: x, y0: sy, x1: x + len, y1: sy, border: Border::single(0.5) });
+                    pg.items.push(Placed::Rule {
+                        x0: x,
+                        y0: sy,
+                        x1: x + len,
+                        y1: sy,
+                        border: Border::single(0.5),
+                        surface: crate::RuleSurface::default(),
+                    });
                 }
             }
             for (n, ny) in placed {
@@ -400,7 +407,14 @@ impl PageBuilder<'_> {
         if bottom <= top + 0.5 {
             return;
         }
-        pg.items.extend(c.xs.iter().map(|&x| Placed::Rule { x0: x, y0: top, x1: x, y1: bottom, border: Border::single(0.5) }));
+        pg.items.extend(c.xs.iter().map(|&x| Placed::Rule {
+            x0: x,
+            y0: top,
+            x1: x,
+            y1: bottom,
+            border: Border::single(0.5),
+            surface: crate::RuleSurface::default(),
+        }));
     }
     /// Where the columns end on this page: the page bottom above its footnotes, or higher up
     /// when the columns are balanced.
@@ -547,7 +561,7 @@ pub(crate) fn foot_top_for(ctx: &mut Ctx, sect: &SectionProps, footer: Option<u3
     laid.items
         .iter()
         .filter_map(|item| match item {
-            Placed::Rule { x0, x1, y0, y1, border }
+            Placed::Rule { x0, x1, y0, y1, border, .. }
                 if border.is_visible()
                     && (y0 - y1).abs() < 0.01
                     && flow_cells.iter().any(|r| (r.y - y0).abs() < 0.01 && *x0 <= r.x + 0.01 && *x1 >= r.right() - 0.01) =>

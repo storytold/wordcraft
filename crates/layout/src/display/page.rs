@@ -1,11 +1,11 @@
-use super::glyphs::{Authors, upright_east_asian};
+use super::glyphs::{Authors, text_color, upright_east_asian};
 use super::lines::{LineRender, lines};
 use super::objects::{ShapeLook, effects_in, graphic_draws, object_draws, shape_draws, spun};
 use super::options::{DisplayOptions, Hidden, MarkupOptions};
 use super::paint::Stroke;
 use super::{
-    BezPath, Border, BorderStyle, ChangeBar, Document, Draw, HashMap, InlineObject, LineEnd, Page, Placed, Rect, Rgb, Spin, StoryRef, TextDirection,
-    Underline,
+    BezPath, Border, BorderStyle, ChangeBar, Document, Draw, HashMap, InlineObject, LineEnd, Page, Path, Placed, Rect, Rgb, Spin, StoryRef,
+    TextColor, TextDirection, Underline,
 };
 
 /// Colour of moved text (both ends of a tracked move).
@@ -47,17 +47,16 @@ pub struct ItemDisplay<'a> {
     doc: &'a Document,
     page: &'a Page,
     authors: Authors<'a>,
-    clips: Clips,
+    surfaces: PageSurfaces,
     /// The page's text boxes (see [`text_frames`]): a turned one's lines are drawn turned.
     turned: Vec<(u32, Rect, Spin)>,
 }
 
 impl<'a> ItemDisplay<'a> {
     pub fn new(doc: &'a Document, page: &'a Page) -> Self {
-        let cells: Vec<Placed> =
-            page.header.iter().chain(&page.footer).chain(&page.items).filter(|c| matches!(c, Placed::Cell { clip: true, .. })).cloned().collect();
+        let surfaces = PageSurfaces::from_page(doc, page);
         let turned = [&page.items, &page.header, &page.footer].into_iter().flat_map(|items| text_frames(items)).collect();
-        ItemDisplay { doc, page, authors: Authors::new(doc), clips: clipped_cells(&cells), turned }
+        ItemDisplay { doc, page, authors: Authors::new(doc), surfaces, turned }
     }
 
     /// The draw items of `it` alone, as [`page_display`] gives them for a page holding just it
@@ -66,7 +65,7 @@ impl<'a> ItemDisplay<'a> {
         let mut out = Vec::new();
         let items = std::slice::from_ref(it);
         let (_, ba) = dimming(opts);
-        stories_display(self.doc, &[items], Some(&self.clips), opts, &self.authors, ba, &mut out);
+        stories_display(self.doc, &[items], Some(&self.surfaces), opts, &self.authors, ba, &mut out);
         // A line of a turned text box turns with it (as `stories_display` turns them on a page).
         if let Some((_, rect, spin)) = turned_frame(&self.turned, it).and_then(|k| self.turned.get(k)) {
             let mut turned = Vec::new();
@@ -108,7 +107,7 @@ fn body_change_bars(doc: &Document, page: &Page, items: &[Placed], opts: &Displa
 fn stories_display(
     doc: &Document,
     stories: &[&[Placed]],
-    shared: Option<&Clips>,
+    shared: Option<&PageSurfaces>,
     opts: &DisplayOptions,
     authors: &Authors,
     a: f32,
@@ -120,13 +119,14 @@ fn stories_display(
         let frames = text_frames(items);
         let mut spun_frames: Vec<usize> = Vec::new();
         let own;
-        let clips = match shared {
-            Some(c) => c,
+        let surfaces = match shared {
+            Some(s) => s,
             None => {
-                own = clipped_cells(items);
+                own = PageSurfaces::from_items(doc, items);
                 &own
             }
         };
+        let clips = &surfaces.clips;
         let mut done: Vec<u32> = Vec::new();
         for it in items.iter() {
             // The object being dragged is drawn by its preview instead: leave it out here.
@@ -140,7 +140,7 @@ fn stories_display(
                 && turned_frame(&frames, it).is_none()
             {
                 let mut inner = Vec::new();
-                item(doc, it, opts, authors, a, &mut inner);
+                item(doc, it, surfaces, opts, authors, a, &mut inner);
                 out.push(Draw::Clip { rect, items: inner });
                 continue;
             }
@@ -154,7 +154,7 @@ fn stories_display(
                     if let Some((_, rect, warp)) = warps.iter().find(|(w, ..)| w == id) {
                         let lines: Vec<&Placed> =
                             items.iter().filter(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if s == id)).collect();
-                        warped_text(WarpedText { doc, lines: &lines, rect: *rect, warp, opts, authors, alpha: a }, out);
+                        warped_text(WarpedText { doc, lines: &lines, rect: *rect, warp, surfaces, opts, authors, alpha: a }, out);
                     }
                 }
                 _ => match turned_frame(&frames, it) {
@@ -173,16 +173,16 @@ fn stories_display(
                                     && let Some(rect) = cell_clip(clips, *story, &path.0)
                                 {
                                     let mut clipped = Vec::new();
-                                    item(doc, line, opts, authors, a, &mut clipped);
+                                    item(doc, line, surfaces, opts, authors, a, &mut clipped);
                                     inner.push(Draw::Clip { rect, items: clipped });
                                 } else {
-                                    item(doc, line, opts, authors, a, &mut inner);
+                                    item(doc, line, surfaces, opts, authors, a, &mut inner);
                                 }
                             }
                             super::objects::spun(*spin, *rect, inner, out);
                         }
                     }
-                    None => item(doc, it, opts, authors, a, out),
+                    None => item(doc, it, surfaces, opts, authors, a, out),
                 },
             }
         }
@@ -225,13 +225,17 @@ pub fn object_display(doc: &Document, page: &Page, o: &InlineObject, rect: Rect,
     object_draws(o, rect, Spin::default(), 1.0, opts, &mut out);
     let Some(id) = text_box else { return out };
     let authors = Authors::new(doc);
+    let mut surfaces = PageSurfaces::from_page(doc, page);
+    if let InlineObject::Shape { fill, .. } = o {
+        surfaces.box_frames.insert(id, vec![(rect, fill.clone())]);
+    }
     for items in [&page.items, &page.header, &page.footer] {
         let lines: Vec<&Placed> = items.iter().filter(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if *s == id)).collect();
         match warped_boxes(doc, items).into_iter().find(|(w, ..)| *w == id) {
             Some((_, rect, warp)) if !lines.is_empty() => {
-                warped_text(WarpedText { doc, lines: &lines, rect, warp: &warp, opts, authors: &authors, alpha: 1.0 }, &mut out)
+                warped_text(WarpedText { doc, lines: &lines, rect, warp: &warp, surfaces: &surfaces, opts, authors: &authors, alpha: 1.0 }, &mut out)
             }
-            _ => lines.into_iter().for_each(|it| item(doc, it, opts, &authors, 1.0, &mut out)),
+            _ => lines.into_iter().for_each(|it| item(doc, it, &surfaces, opts, &authors, 1.0, &mut out)),
         }
     }
     out
@@ -242,9 +246,9 @@ pub fn object_display(doc: &Document, page: &Page, o: &InlineObject, rect: Rect,
 /// order they come in (the first of two that hold a line clips it).
 type Clips = HashMap<StoryRef, HashMap<Vec<u32>, (usize, Rect)>>;
 
-fn clipped_cells(items: &[Placed]) -> Clips {
+fn clipped_cells<'a>(items: impl IntoIterator<Item = &'a Placed>) -> Clips {
     let mut clips = Clips::new();
-    let cells = items.iter().filter_map(|it| match it {
+    let cells = items.into_iter().filter_map(|it| match it {
         Placed::Cell { rect, table, row, cell, story, clip: true, .. } => {
             let mut prefix = table.0.clone();
             prefix.extend([u32::try_from(*row).ok()?, u32::try_from(*cell).ok()?]);
@@ -257,6 +261,153 @@ fn clipped_cells(items: &[Placed]) -> Clips {
         clips.entry(story).or_default().entry(prefix).or_insert((i, rect));
     }
     clips
+}
+
+/// Resolved shading of each visible shaded cell, indexed by story and `[table..., row, cell]`.
+type CellFills = HashMap<StoryRef, HashMap<Vec<u32>, Rgb>>;
+
+/// Shape fills of text-box frames on the page, keyed by the shown story id, in deterministic item
+/// order. Keeping each frame's own fill (`None` when transparent) lets linked boxes with different
+/// fills resolve independently without calling `Document::text_box_chain`.
+type BoxFrames = HashMap<u32, Vec<(Rect, Option<wordcraft_doc::fill::Fill>)>>;
+
+/// Page-level clip and surface-fill indexes built once per page/story slice for O(1) lookups.
+struct PageSurfaces {
+    clips: Clips,
+    cell_fills: CellFills,
+    box_frames: BoxFrames,
+}
+
+impl PageSurfaces {
+    fn from_items(doc: &Document, items: &[Placed]) -> Self {
+        Self { clips: clipped_cells(items), cell_fills: cell_fills(items), box_frames: box_frames(doc, &[items]) }
+    }
+
+    fn from_page(doc: &Document, page: &Page) -> Self {
+        let all = || page.header.iter().chain(&page.footer).chain(&page.items);
+        Self { clips: clipped_cells(all()), cell_fills: cell_fills(all()), box_frames: box_frames(doc, &[&page.header, &page.footer, &page.items]) }
+    }
+
+    /// Effective fill colour of the text-box frame owning `(x, y)` in `story`, composited over
+    /// `page_bg` (`None` if not in a text box or if that frame is transparent).
+    fn box_fill(&self, story: StoryRef, (x, y): (f32, f32), page_bg: Option<Rgb>) -> Option<Rgb> {
+        let StoryRef::Part(id) = story else { return None };
+        let frames = self.box_frames.get(&id)?;
+        let away = |r: &Rect| {
+            let dx = (r.x - x).max(x - r.right()).max(0.0);
+            let dy = (r.y - y).max(y - r.bottom()).max(0.0);
+            dx * dx + dy * dy
+        };
+        let (_, fill) = frames.iter().min_by(|(a, _), (b, _)| away(a).total_cmp(&away(b)))?;
+        fill.as_ref().and_then(|f| fill_over(f, page_bg.unwrap_or(Rgb::WHITE)))
+    }
+
+    /// Effective enclosing surface of `story` at `pos` before falling back to `page_bg`: white for
+    /// comment stories (laid out on white balloon cards), or the owning text-box frame fill
+    /// composited over `page_bg`.
+    fn story_fill(&self, doc: &Document, story: StoryRef, pos: (f32, f32), page_bg: Option<Rgb>) -> Option<Rgb> {
+        if let StoryRef::Part(id) = story
+            && doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::Comment)
+        {
+            return Some(Rgb::WHITE);
+        }
+        self.box_fill(story, pos, page_bg)
+    }
+}
+
+fn cell_fills<'a>(items: impl IntoIterator<Item = &'a Placed>) -> CellFills {
+    let mut fills = CellFills::new();
+    for it in items {
+        if let Placed::Cell { covered: false, fill: Some(color), table, row, cell, story, .. } = it {
+            let (Ok(r), Ok(c)) = (u32::try_from(*row), u32::try_from(*cell)) else { continue };
+            let mut prefix = table.0.clone();
+            prefix.extend([r, c]);
+            fills.entry(*story).or_default().entry(prefix).or_insert(*color);
+        }
+    }
+    fills
+}
+
+/// The innermost shaded table cell enclosing `path` in `story`, if any.
+fn cell_fill(fills: &CellFills, story: StoryRef, path: &[u32]) -> Option<Rgb> {
+    let cells = fills.get(&story)?;
+    (1..=path.len()).rev().find_map(|n| cells.get(path.get(..n)?).copied())
+}
+
+fn box_frames(doc: &Document, slices: &[&[Placed]]) -> BoxFrames {
+    let mut needed: HashMap<(StoryRef, &Path), HashMap<usize, Option<&InlineObject>>> = HashMap::new();
+    for items in slices {
+        for it in *items {
+            if let Placed::Object { story, path, off, text_box, group_boxes, .. } = it
+                && (text_box.is_some() || !group_boxes.is_empty())
+            {
+                needed.entry((*story, path)).or_default().insert(*off, None);
+            }
+        }
+    }
+    if needed.is_empty() {
+        return BoxFrames::new();
+    }
+    for ((story, path), offsets) in &mut needed {
+        let Some(p) = doc.para(*story, path) else { continue };
+        offsets.retain(|off, _| p.text.get(*off..).is_some_and(|tail| tail.starts_with(wordcraft_doc::para::OBJ)));
+        let Some(last) = offsets.keys().max().copied() else { continue };
+        let markers = p.text.char_indices().take_while(|(off, _)| *off <= last).filter(|(_, c)| *c == wordcraft_doc::para::OBJ);
+        for ((off, _), obj) in markers.zip(&p.objects) {
+            if let Some(slot) = offsets.get_mut(&off) {
+                *slot = Some(obj);
+            }
+        }
+    }
+    let mut frames = BoxFrames::new();
+    for items in slices {
+        for it in *items {
+            let Placed::Object { rect, story, path, off, text_box, group_boxes, .. } = it else { continue };
+            let obj = needed.get(&(*story, path)).and_then(|m| m.get(off)).copied().flatten();
+            if let Some(shown) = text_box {
+                let fill = match obj {
+                    Some(InlineObject::Shape { fill, .. }) => fill.clone(),
+                    _ => None,
+                };
+                frames.entry(*shown).or_default().push((*rect, fill));
+            }
+            if !group_boxes.is_empty()
+                && let Some(obj @ InlineObject::Group { .. }) = obj
+            {
+                let fills = obj
+                    .group_rects(rect.x, rect.y, rect.w, rect.h)
+                    .into_iter()
+                    .filter(|(_, c)| !c.frame().is_some_and(|(_, _, f)| f.hidden))
+                    .filter_map(|(_, c)| {
+                        let InlineObject::Shape { fill, story: Some(id), .. } = c else { return None };
+                        doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox).then(|| fill.clone())
+                    });
+                for ((rel, shown), fill) in group_boxes.iter().zip(fills) {
+                    let frame = Rect::new(rect.x + rel.x, rect.y + rel.y, rel.w, rel.h);
+                    frames.entry(*shown).or_default().push((frame, fill));
+                }
+            }
+        }
+    }
+    frames
+}
+
+/// Effective background colour of a shape `fill` composited over `under` (None if fully transparent).
+fn fill_over(fill: &wordcraft_doc::fill::Fill, under: Rgb) -> Option<Rgb> {
+    use wordcraft_doc::fill::Fill;
+    let (color, transparency) = match fill.sanitized()? {
+        Fill::Solid { color, transparency } => (color, transparency),
+        Fill::Gradient(g) => {
+            let s = g.stops.get(g.stops.len() / 2)?;
+            (s.color, s.transparency)
+        }
+    };
+    let alpha = (1.0 - transparency / 100.0).clamp(0.0, 1.0);
+    if alpha <= 0.01 {
+        return None;
+    }
+    let blend = |fg: u8, bg: u8| (bg as f32 + (fg as f32 - bg as f32) * alpha).round().clamp(0.0, 255.0) as u8;
+    Some(Rgb(blend(color.0, under.0), blend(color.1, under.1), blend(color.2, under.2)))
 }
 
 /// The area to clip a line at `path` of `story` to: its cell's, when that cell is clipped. Only
@@ -311,21 +462,22 @@ fn warped_boxes(doc: &Document, items: &[Placed]) -> Vec<(u32, Rect, wordcraft_d
 /// The text of a warped text box at `rect`: its lines' letters as outlines bent by `warp`, the
 /// box's text stretched over the frame inside its margins (as WordArt is). Underlines, marks and
 /// other decorations are left out; a warp that is drawn flat leaves the text as it is.
-struct WarpedText<'doc, 'opts, 'lines, 'placed, 'authors, 'author_doc> {
+struct WarpedText<'doc, 'opts, 'lines, 'placed, 'authors, 'author_doc, 'surf> {
     doc: &'doc Document,
     lines: &'lines [&'placed Placed],
     rect: Rect,
     warp: &'lines wordcraft_doc::wordart::TextWarp,
+    surfaces: &'surf PageSurfaces,
     opts: &'opts DisplayOptions,
     authors: &'authors Authors<'author_doc>,
     alpha: f32,
 }
 
-fn warped_text(input: WarpedText<'_, '_, '_, '_, '_, '_>, out: &mut Vec<Draw>) {
-    let WarpedText { doc, lines, rect, warp, opts, authors, alpha } = input;
+fn warped_text(input: WarpedText<'_, '_, '_, '_, '_, '_, '_>, out: &mut Vec<Draw>) {
+    let WarpedText { doc, lines, rect, warp, surfaces, opts, authors, alpha } = input;
     let mut raw = Vec::new();
     for it in lines {
-        item(doc, it, opts, authors, alpha, &mut raw);
+        item(doc, it, surfaces, opts, authors, alpha, &mut raw);
     }
     // The letters: runs with effects as they are, plain runs from their glyphs.
     let mut arts: Vec<(BezPath, Box<wordcraft_doc::wordart::TextEffects>, Rgb, f32)> = Vec::new();
@@ -428,32 +580,49 @@ pub(crate) fn rule_width(b: &Border) -> f32 {
 }
 
 /// A border line from `(x0, y0)` to `(x1, y1)` (paragraph rules and character borders).
-fn rule(x0: f32, y0: f32, x1: f32, y1: f32, b: &Border, alpha: f32) -> Draw {
-    Draw::Line { x0, y0, x1, y1, width: rule_width(b), color: b.color.unwrap_or(Rgb::BLACK), stroke: border_stroke(b.style), alpha, text_bg: None }
+fn rule(x0: f32, y0: f32, x1: f32, y1: f32, b: &Border, auto_color: Rgb, alpha: f32) -> Draw {
+    Draw::Line { x0, y0, x1, y1, width: rule_width(b), color: b.color.unwrap_or(auto_color), stroke: border_stroke(b.style), alpha, text_bg: None }
 }
 
 /// Closed box around one line segment of a character-border group, widened by `space`.
 // Note: border drawn outside text advance, reserve width in line breaking if overlap shows.
-pub(super) fn char_box(b: &Border, x0: f32, x1: f32, top: f32, bottom: f32, alpha: f32, out: &mut Vec<Draw>) {
+pub(super) fn char_box(b: &Border, (x0, x1): (f32, f32), (top, bottom): (f32, f32), auto_color: Rgb, alpha: f32, out: &mut Vec<Draw>) {
     let (l, r) = (x0 - b.space, x1 + b.space);
     // The top and bottom lines run on over half the side lines, closing the corners.
     let half = rule_width(b) / 2.0;
-    out.push(rule(l - half, top, r + half, top, b, alpha));
-    out.push(rule(l - half, bottom, r + half, bottom, b, alpha));
-    out.push(rule(l, top, l, bottom, b, alpha));
-    out.push(rule(r, top, r, bottom, b, alpha));
+    out.push(rule(l - half, top, r + half, top, b, auto_color, alpha));
+    out.push(rule(l - half, bottom, r + half, bottom, b, auto_color, alpha));
+    out.push(rule(l, top, l, bottom, b, auto_color, alpha));
+    out.push(rule(r, top, r, bottom, b, auto_color, alpha));
 }
 
-fn item(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors, alpha: f32, out: &mut Vec<Draw>) {
-    item_in(doc, it, opts, authors, alpha, Spin::default(), out)
+struct DisplayCtx<'a, 'author_doc> {
+    doc: &'a Document,
+    surfaces: &'a PageSurfaces,
+    opts: &'a DisplayOptions,
+    authors: &'a Authors<'author_doc>,
+    alpha: f32,
+}
+
+fn item(doc: &Document, it: &Placed, surfaces: &PageSurfaces, opts: &DisplayOptions, authors: &Authors, alpha: f32, out: &mut Vec<Draw>) {
+    item_in(&DisplayCtx { doc, surfaces, opts, authors, alpha }, it, Spin::default(), out)
 }
 
 /// [`item`] drawn inside the turn `outer` (a turned Drawing Canvas's members): a shape's
 /// effects follow all the turns it is drawn inside.
-fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors, alpha: f32, outer: Spin, out: &mut Vec<Draw>) {
+fn item_in(ctx: &DisplayCtx<'_, '_>, it: &Placed, outer: Spin, out: &mut Vec<Draw>) {
+    let DisplayCtx { doc, surfaces, opts, authors, alpha } = *ctx;
     match it {
         Placed::Fill { rect, color } => out.push(Draw::Fill { rect: *rect, color: *color, alpha, text_bg: false }),
-        Placed::Rule { x0, y0, x1, y1, border } => out.push(rule(*x0, *y0, *x1, *y1, border, alpha)),
+        Placed::Rule { x0, y0, x1, y1, border, surface } => {
+            let page_bg = opts.page_background(doc);
+            let bg = surface
+                .fill
+                .or_else(|| surface.story.and_then(|s| surfaces.story_fill(doc, s, ((*x0 + *x1) * 0.5, (*y0 + *y1) * 0.5), page_bg)))
+                .or(page_bg);
+            let auto_color = text_color(&TextColor::Auto, bg);
+            out.push(rule(*x0, *y0, *x1, *y1, border, auto_color, alpha));
+        }
         Placed::Image { rect, media, crop, spin, fx, .. } => {
             let alpha = alpha * fx.opacity();
             spun(
@@ -486,12 +655,15 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
         Placed::Clip { rect, spin, items } => {
             let mut inner = Vec::new();
             for it in items {
-                item_in(doc, it, opts, authors, alpha, spin.within(outer), &mut inner);
+                item_in(ctx, it, spin.within(outer), &mut inner);
             }
             spun(*spin, *rect, vec![Draw::Clip { rect: *rect, items: inner }], out)
         }
         Placed::Cell { .. } | Placed::Object { .. } => {}
         Placed::Lines { story, path, para, l0, l1, x, y, turn } if turn.is_turned() => {
+            let page_bg = opts.page_background(doc);
+            let cell_bg = cell_fill(&surfaces.cell_fills, *story, &path.0);
+            let outer_bg = surfaces.story_fill(doc, *story, (*x, *y), page_bg).or(page_bg);
             let mut items = Vec::new();
             lines(
                 LineRender {
@@ -505,6 +677,8 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
                     authors,
                     alpha,
                     down: *turn == TextDirection::Down,
+                    cell_bg,
+                    outer_bg,
                 },
                 &mut items,
             );
@@ -520,7 +694,26 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
             out.push(Draw::Turned { x: *x, y: *y, turn: *turn, items });
         }
         Placed::Lines { story, path, para, l0, l1, x, y, .. } => {
-            lines(LineRender { doc, story: *story, path, pl: para, range: *l0..*l1, origin: (*x, *y), opts, authors, alpha, down: false }, out)
+            let page_bg = opts.page_background(doc);
+            let cell_bg = cell_fill(&surfaces.cell_fills, *story, &path.0);
+            let outer_bg = surfaces.story_fill(doc, *story, (*x, *y), page_bg).or(page_bg);
+            lines(
+                LineRender {
+                    doc,
+                    story: *story,
+                    path,
+                    pl: para,
+                    range: *l0..*l1,
+                    origin: (*x, *y),
+                    opts,
+                    authors,
+                    alpha,
+                    down: false,
+                    cell_bg,
+                    outer_bg,
+                },
+                out,
+            )
         }
     }
 }
@@ -532,7 +725,7 @@ mod tests_clips {
 
     /// A cell whose area is told apart by `x`.
     fn cell(story: StoryRef, table: Vec<u32>, row: usize, cell: usize, clip: bool, x: f32) -> Placed {
-        Placed::Cell { rect: Rect::new(x, 0.0, 1.0, 1.0), covered: false, table: DocPath(table), row, cell, story, clip }
+        Placed::Cell { rect: Rect::new(x, 0.0, 1.0, 1.0), covered: false, table: DocPath(table), row, cell, story, clip, fill: None }
     }
 
     /// Which cell (by its `x`) clips a line at `path` of `story`.

@@ -12,6 +12,9 @@ use wordcraft_doc::Paragraph;
 use wordcraft_doc::graphic::PathSeg;
 use wordcraft_doc::para::ShapeKind;
 
+/// Lavender fill painted behind commented text ranges when comment markup is visible.
+const COMMENT_BG: Rgb = Rgb(0xEF, 0xE3, 0xF7);
+
 /// Append display items for the half-open line range `l0..l1` of a laid-out paragraph.
 /// `(x, y)` positions the paragraph's left origin and the first selected line's top; later lines
 /// retain their layout offsets. Includes glyphs, inline objects, decorations and requested markup.
@@ -27,6 +30,8 @@ pub(super) struct LineRender<'a, 'authors, 'author_doc> {
     pub authors: &'authors Authors<'author_doc>,
     pub alpha: f32,
     pub down: bool,
+    pub cell_bg: Option<Rgb>,
+    pub outer_bg: Option<Rgb>,
 }
 
 struct LineContext<'a, 'authors, 'author_doc> {
@@ -46,19 +51,41 @@ struct LineContext<'a, 'authors, 'author_doc> {
     alpha: f32,
     down: bool,
     auto: Option<Rgb>,
+    /// Paragraph or cell shading directly behind this paragraph (overrides a text box's `a:fontRef`).
+    local_bg: Option<Rgb>,
+    /// Text box fill or page colour behind the paragraph when no local shading paints over it.
+    outer_bg: Option<Rgb>,
+    /// Active comment byte ranges for this paragraph when comment markup is shown.
+    comment_ranges: &'a [(usize, usize)],
 }
 
 impl LineContext<'_, '_, '_> {
-    fn ink(&self, color: &TextColor, background: Option<Rgb>) -> Rgb {
-        match (color, self.auto) {
-            (TextColor::Auto, Some(rgb)) => rgb,
-            _ => text_color(color, background),
+    fn ink(&self, color: &TextColor, run_bg: Option<Rgb>) -> Rgb {
+        let local = run_bg.or(self.local_bg);
+        match (color, local, self.auto) {
+            (TextColor::Auto, None, Some(rgb)) => rgb,
+            _ => text_color(color, local.or(self.outer_bg)),
         }
+    }
+
+    fn in_comment(&self, cluster: &crate::para::Cluster) -> bool {
+        self.comment_ranges.iter().any(|&(start, end)| cluster.start < end && cluster.end > start)
+    }
+
+    fn comment_bg(&self, cluster: &crate::para::Cluster) -> Option<Rgb> {
+        self.in_comment(cluster).then_some(COMMENT_BG)
+    }
+
+    /// Topmost background painted directly behind `cluster` inside the line: run highlight or
+    /// character shading (painted in `character_backgrounds`), then active comment highlight
+    /// (painted underneath in `comment_backgrounds`).
+    fn run_bg(&self, rc: &wordcraft_doc::resolve::ResolvedChar, cluster: &crate::para::Cluster) -> Option<Rgb> {
+        rc.highlight.or(rc.shading).or_else(|| self.comment_bg(cluster))
     }
 }
 
 pub(super) fn lines(input: LineRender<'_, '_, '_>, out: &mut Vec<Draw>) {
-    let LineRender { doc, story, path, pl, range, origin: (x, y), opts, authors, alpha, down } = input;
+    let LineRender { doc, story, path, pl, range, origin: (x, y), opts, authors, alpha, down, cell_bg, outer_bg } = input;
     let (l0, l1) = (range.start, range.end);
     let Some(first) = pl.lines.get(l0) else { return };
     let para = doc.para(story, path);
@@ -67,12 +94,34 @@ pub(super) fn lines(input: LineRender<'_, '_, '_>, out: &mut Vec<Draw>) {
         StoryRef::Part(id) => doc.parts.get(&id).and_then(|p| p.body.auto_color),
         StoryRef::Body => None,
     };
+    let local_bg = pl.rp.shading.or(cell_bg);
+    let comment_ranges = comment_ranges(para, opts);
     for li in l0..l1 {
         let Some(line) = pl.lines.get(li) else { continue };
         let top = y + (line.top - first.top);
         let base = top + (line.baseline - line.top);
         let bottom = top + line.height;
-        let ctx = LineContext { doc, story, path, pl, para, line, li, x, top, base, bottom, opts, authors, alpha, down, auto };
+        let ctx = LineContext {
+            doc,
+            story,
+            path,
+            pl,
+            para,
+            line,
+            li,
+            x,
+            top,
+            base,
+            bottom,
+            opts,
+            authors,
+            alpha,
+            down,
+            auto,
+            local_bg,
+            outer_bg,
+            comment_ranges: &comment_ranges,
+        };
         comment_backgrounds(&ctx, out);
         character_backgrounds(&ctx, out);
         draw_label_and_hyphen(&ctx, out);
@@ -91,6 +140,7 @@ fn collect_glyph_run(
     start: usize,
     style_index: u32,
     style: &crate::para::StyleRun,
+    split_comment: Option<bool>,
 ) -> (usize, Vec<(u32, f32, f32)>, String, Vec<std::ops::Range<usize>>) {
     let (pl, para, line, x, base) = (ctx.pl, ctx.para, ctx.line, ctx.x, ctx.base);
     let si = style_index;
@@ -99,7 +149,7 @@ fn collect_glyph_run(
     let run = pl.clusters.get(start..line.c1.min(pl.clusters.len())).unwrap_or_default();
     let (n_glyphs, n_bytes) = run
         .iter()
-        .take_while(|cluster| cluster.style == si)
+        .take_while(|cluster| cluster.style == si && split_comment.is_none_or(|in_c| ctx.in_comment(cluster) == in_c))
         .filter(|cluster| matches!(cluster.kind, ClKind::Text | ClKind::Space))
         .fold((0usize, 0usize), |(glyphs, bytes), cluster| {
             (glyphs + cluster.g1.saturating_sub(cluster.g0) as usize, bytes + cluster.end.saturating_sub(cluster.start))
@@ -110,7 +160,7 @@ fn collect_glyph_run(
     let symbol_font = wordcraft_doc::symbol_fonts::is_symbol_font(&st.rc.font);
     while k < line.c1 {
         let Some(c) = pl.clusters.get(k) else { break };
-        if c.style != si {
+        if c.style != si || split_comment.is_some_and(|in_c| ctx.in_comment(c) != in_c) {
             break;
         }
         let cx = x + line.cl_left(k).unwrap_or(0.0);
@@ -198,16 +248,8 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             k += 1;
             continue;
         };
-        let run_start = k;
-        let (run_end, mut glyphs, text, ranges) = collect_glyph_run(ctx, run_start, si, st);
-        k = run_end;
         let rc = &st.rc;
         let m = &opts.revisions;
-        // Without markup a deletion is never drawn as ordinary text, even in a layout that
-        // kept it; nor when its mark is Hidden.
-        if rc.del.is_some() && (!opts.markup || m.hides_deletion(doc.move_name(rc.del).is_some())) {
-            continue;
-        }
         let shown = opts.markup && m.insertions_deletions;
         let del = rc.del.filter(|_| shown);
         let ins = rc.ins.filter(|_| shown && del.is_none());
@@ -218,14 +260,30 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         let moved_from = del.is_some() && doc.move_name(del).is_some();
         // Moved text marked (none) is plain text, its colour setting aside (Word for Mac).
         let plain_move = (moved_from && m.move_from_mark == DeleteMark::None) || (moved_to && m.move_to_mark == InsertMark::None);
-        let color = match (ins, del) {
-            _ if plain_move => text_color(&rc.color, rc.shading.or(rc.highlight)),
+        let color_for = |comment_bg: Option<Rgb>| match (ins, del) {
+            _ if plain_move => ctx.ink(&rc.color, rc.highlight.or(rc.shading).or(comment_bg)),
             (_, Some(r)) if moved_from => m.move_from_color.unwrap_or_else(|| author(r)),
             (Some(r), _) if moved_to => m.move_to_color.unwrap_or_else(|| author(r)),
             (Some(r), _) => m.insert_color.unwrap_or_else(|| author(r)),
             (None, Some(r)) => m.delete_color.unwrap_or_else(|| author(r)),
-            _ => ctx.ink(&rc.color, rc.shading.or(rc.highlight)),
+            _ => ctx.ink(&rc.color, rc.highlight.or(rc.shading).or(comment_bg)),
         };
+        let plain_color = color_for(None);
+        let comment_color = if ctx.comment_ranges.is_empty() { plain_color } else { color_for(Some(COMMENT_BG)) };
+        let (split_comment, color) = if plain_color != comment_color {
+            let in_comment = ctx.in_comment(c);
+            (Some(in_comment), if in_comment { comment_color } else { plain_color })
+        } else {
+            (None, plain_color)
+        };
+        let run_start = k;
+        let (run_end, mut glyphs, text, ranges) = collect_glyph_run(ctx, run_start, si, st, split_comment);
+        k = run_end;
+        // Without markup a deletion is never drawn as ordinary text, even in a layout that
+        // kept it; nor when its mark is Hidden.
+        if rc.del.is_some() && (!opts.markup || m.hides_deletion(doc.move_name(rc.del).is_some())) {
+            continue;
+        }
         // The highlight or shading drawn under this run (as filled in the backgrounds pass).
         let text_bg = rc.highlight.or(rc.shading);
         let ins_mark = ins.map(|_| if moved_to { m.move_to_mark } else { m.insert_mark });
@@ -427,21 +485,34 @@ fn word_spans(pl: &ParaLayout, line: &crate::para::Line, (k0, k1): (usize, usize
     words
 }
 
-fn comment_backgrounds(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
-    let Some(para) = ctx.para.filter(|_| ctx.opts.markup && ctx.opts.revisions.comments) else { return };
+fn comment_ranges(para: Option<&Paragraph>, opts: &DisplayOptions) -> Vec<(usize, usize)> {
+    let Some(para) = para.filter(|_| opts.markup && opts.revisions.comments) else {
+        return Vec::new();
+    };
     let mut open: Option<usize> = None;
     let mut ranges = Vec::new();
     for off in para.object_offsets() {
         match para.object_at(off) {
             Some(InlineObject::CommentStart { .. }) => open = open.or(Some(off)),
-            Some(InlineObject::CommentEnd { .. }) => ranges.push((open.take().unwrap_or(0), off)),
+            Some(InlineObject::CommentEnd { .. }) => {
+                let start = open.take().unwrap_or(0);
+                if start < off {
+                    ranges.push((start, off));
+                }
+            }
             _ => {}
         }
     }
-    if let Some(start) = open {
+    if let Some(start) = open
+        && start < para.len()
+    {
         ranges.push((start, para.len()));
     }
-    for (start, end) in ranges {
+    ranges
+}
+
+fn comment_backgrounds(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
+    for &(start, end) in ctx.comment_ranges {
         if end <= ctx.line.start || start >= ctx.line.stop {
             continue;
         }
@@ -449,7 +520,7 @@ fn comment_backgrounds(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             if x1 > x0 {
                 out.push(Draw::Fill {
                     rect: Rect::new(ctx.x + x0, ctx.top, x1 - x0, ctx.line.height),
-                    color: Rgb(0xEF, 0xE3, 0xF7),
+                    color: COMMENT_BG,
                     alpha: ctx.alpha,
                     text_bg: false,
                 });
@@ -460,7 +531,7 @@ fn comment_backgrounds(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
 
 /// Paint highlights and shading before glyphs, grouping adjacent equal character borders.
 fn character_backgrounds(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
-    let mut open: Option<(Border, f32, f32)> = None;
+    let mut open: Option<(Border, Rgb, f32, f32)> = None;
     for k in ctx.line.c0..ctx.line.c1 {
         let (Some(cluster), Some(left), Some(right)) = (ctx.pl.clusters.get(k), ctx.line.cl_left(k), ctx.line.cl_right(k)) else { continue };
         let Some(style) = ctx.pl.styles.get(cluster.style as usize) else { continue };
@@ -475,21 +546,21 @@ fn character_backgrounds(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 text_bg: true,
             });
         }
-        let border = style.rc.border;
-        if let Some((open_border, x0, x1)) = open.as_mut()
-            && Some(*open_border) == border
+        let border = style.rc.border.map(|b| (b, b.color.unwrap_or_else(|| ctx.ink(&TextColor::Auto, ctx.comment_bg(cluster)))));
+        if let Some((open_border, open_color, x0, x1)) = open.as_mut()
+            && Some((*open_border, *open_color)) == border
         {
             *x0 = x0.min(ctx.x + left);
             *x1 = x1.max(ctx.x + right);
             continue;
         }
-        if let Some((previous, x0, x1)) = open.take() {
-            char_box(&previous, x0, x1, ctx.top, ctx.bottom, ctx.alpha, out);
+        if let Some((previous, color, x0, x1)) = open.take() {
+            char_box(&previous, (x0, x1), (ctx.top, ctx.bottom), color, ctx.alpha, out);
         }
-        open = border.map(|border| (border, ctx.x + left, ctx.x + right));
+        open = border.map(|(border, color)| (border, color, ctx.x + left, ctx.x + right));
     }
-    if let Some((border, x0, x1)) = open {
-        char_box(&border, x0, x1, ctx.top, ctx.bottom, ctx.alpha, out);
+    if let Some((border, color, x0, x1)) = open {
+        char_box(&border, (x0, x1), (ctx.top, ctx.bottom), color, ctx.alpha, out);
     }
 }
 
@@ -664,7 +735,8 @@ fn formatting_marks(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
 fn draw_rubies(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
     let (pl, line, opts, x, base, alpha) = (ctx.pl, ctx.line, ctx.opts, ctx.x, ctx.base, ctx.alpha);
     for r in pl.rubies.iter().filter(|r| (line.c0..line.c1).contains(&r.cluster)) {
-        let Some(bst) = pl.clusters.get(r.cluster).and_then(|c| pl.styles.get(c.style as usize)) else { continue };
+        let Some(cluster) = pl.clusters.get(r.cluster) else { continue };
+        let Some(bst) = pl.styles.get(cluster.style as usize) else { continue };
         if bst.rc.del.is_some() && !opts.markup {
             continue;
         }
@@ -681,7 +753,7 @@ fn draw_rubies(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 face: st.face,
                 size: st.size,
                 glyphs: run.iter().map(|(_, g)| (g.gid, cx + g.dx, y - g.dy)).collect(),
-                color: ctx.ink(&st.rc.color, st.rc.shading.or(st.rc.highlight)),
+                color: ctx.ink(&st.rc.color, ctx.run_bg(&st.rc, cluster)),
                 alpha,
                 synth_bold: st.synth_bold,
                 synth_italic: st.synth_italic,
@@ -739,7 +811,10 @@ fn inline_objects(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             }
             Some(o @ InlineObject::Field { .. }) => {
                 if let Some(wordcraft_doc::legacy_form::LegacyForm::CheckBox { checked, .. }) = o.legacy_form() {
-                    let color = pl.styles.get(c.style as usize).map_or(Rgb::BLACK, |st| text_color(&st.rc.color, None));
+                    let color = pl
+                        .styles
+                        .get(c.style as usize)
+                        .map_or_else(|| ctx.ink(&TextColor::Auto, ctx.comment_bg(c)), |st| ctx.ink(&st.rc.color, ctx.run_bg(&st.rc, c)));
                     let frame = Rect::new(cx, base - c.obj_h.max(0.0), c.adv, c.obj_h + c.obj_d);
                     check_box(frame, checked, color, alpha, out);
                 }
@@ -787,7 +862,7 @@ fn tab_leaders(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             face: style.face,
             size: style.size,
             glyphs,
-            color: ctx.ink(&style.rc.color, None),
+            color: ctx.ink(&style.rc.color, ctx.run_bg(&style.rc, cluster)),
             alpha: ctx.alpha,
             synth_bold: false,
             synth_italic: false,
@@ -849,7 +924,7 @@ fn enclosures(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             rect,
             kind: enclosure.kind,
             fill: None,
-            stroke: Some(ctx.ink(&style.rc.color, None)),
+            stroke: Some(ctx.ink(&style.rc.color, ctx.run_bg(&style.rc, cluster))),
             stroke_width: enclosure.stroke,
             effects: Default::default(),
             corner: None,

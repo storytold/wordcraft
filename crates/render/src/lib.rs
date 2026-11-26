@@ -308,7 +308,11 @@ fn render_region_capped(doc: &Document, page: &Page, w: u32, h: u32, view: Affin
         draw_watermark(&mut ctx, view, page, wm, opts);
     }
     // A dimmed layer is drawn whole, then faded once, so its overlaps don't darken.
-    for (alpha, items) in page_layers(doc, page, &opts.display) {
+    let mut display = opts.display.clone();
+    if opts.read_paper.is_some() {
+        display.paper_override = opts.read_paper;
+    }
+    for (alpha, items) in page_layers(doc, page, &display) {
         let faded = alpha < 1.0 && !items.is_empty();
         if faded {
             ctx.push_opacity_layer(alpha);
@@ -340,7 +344,11 @@ pub fn background_at(doc: &Document, page: &Page, opts: &RenderOptions, x: f32, 
         return paper;
     }
     let mut bg = [paper.0 as f32, paper.1 as f32, paper.2 as f32];
-    for (alpha, items) in page_layers(doc, page, &opts.display) {
+    let mut display = opts.display.clone();
+    if opts.read_paper.is_some() {
+        display.paper_override = opts.read_paper;
+    }
+    for (alpha, items) in page_layers(doc, page, &display) {
         // A faded layer: its own colour there, blended in at its opacity.
         let mut layer = bg;
         blend_backgrounds(&items, wordcraft_geom::Point::new(x, y), opts, &mut layer, 0);

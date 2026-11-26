@@ -647,8 +647,8 @@ pub(crate) fn fit_box(items: Vec<Placed>, height: f32) -> Vec<Placed> {
             Placed::Fill { rect, color } if rect.y < limit => {
                 out.push(Placed::Fill { rect: Rect::new(rect.x, rect.y, rect.w, rect.h.min(limit - rect.y)), color });
             }
-            Placed::Rule { x0, y0, x1, y1, border } if y0.min(y1) < limit => {
-                out.push(Placed::Rule { x0, y0: y0.min(limit), x1, y1: y1.min(limit), border });
+            Placed::Rule { x0, y0, x1, y1, border, surface } if y0.min(y1) < limit => {
+                out.push(Placed::Rule { x0, y0: y0.min(limit), x1, y1: y1.min(limit), border, surface });
             }
             Placed::Image { rect, .. }
             | Placed::Shape { rect, .. }
@@ -922,7 +922,10 @@ pub(crate) fn push_para(
         let ty = tb.map_or(top, |t| y_own - t.space - t.width / 2.0);
         let by = bb.map_or(bottom, |t| y + h + t.space + t.width / 2.0);
         // Open at the top where it goes on over the shared line.
-        box_rules(items, (cl, ty, cr, by), [tb, bb, b.left, b.right], [e.joined[0] || shared, e.joined[1]]);
+        // A paragraph's own `w:pBdr` sits on the enclosing surface (cell, text box, or page),
+        // not inside the paragraph's own shading.
+        let surface = crate::RuleSurface { story: Some(story), fill: None };
+        box_rules(items, (cl, ty, cr, by), [tb, bb, b.left, b.right], [e.joined[0] || shared, e.joined[1]], surface);
     }
     y + h
 }
@@ -933,19 +936,25 @@ pub(crate) fn push_para(
 /// corners; a side line runs on to the outer edge of the top or bottom line it meets, or by half
 /// its own width where there is none, unless the box goes on there (`joined`: at the top, at the
 /// bottom).
-pub(crate) fn box_rules(items: &mut Vec<Placed>, (x0, y0, x1, y1): (f32, f32, f32, f32), sides: [Option<Border>; 4], joined: [bool; 2]) {
+pub(crate) fn box_rules(
+    items: &mut Vec<Placed>,
+    (x0, y0, x1, y1): (f32, f32, f32, f32),
+    sides: [Option<Border>; 4],
+    joined: [bool; 2],
+    surface: crate::RuleSurface,
+) {
     let [top, bottom, left, right] = sides.map(|b| b.filter(Border::is_visible));
     let half = |t: &Border| display::rule_width(t) / 2.0;
     for (t, y) in [(top, y0), (bottom, y1)] {
         if let Some(t) = t {
             let over = |side: Option<Border>| half(&side.unwrap_or(t));
-            items.push(Placed::Rule { x0: x0 - over(left), y0: y, x1: x1 + over(right), y1: y, border: t });
+            items.push(Placed::Rule { x0: x0 - over(left), y0: y, x1: x1 + over(right), y1: y, border: t, surface });
         }
     }
     for (t, x) in [(left, x0), (right, x1)] {
         if let Some(t) = t {
             let end = |o: Option<Border>, joined: bool| if joined { 0.0 } else { half(&o.unwrap_or(t)) };
-            items.push(Placed::Rule { x0: x, y0: y0 - end(top, joined[0]), x1: x, y1: y1 + end(bottom, joined[1]), border: t });
+            items.push(Placed::Rule { x0: x, y0: y0 - end(top, joined[0]), x1: x, y1: y1 + end(bottom, joined[1]), border: t, surface });
         }
     }
 }

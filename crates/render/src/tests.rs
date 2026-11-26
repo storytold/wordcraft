@@ -2269,3 +2269,22 @@ fn a_picture_too_large_to_decode_says_so_in_its_box() {
     assert!(grid.iter().flatten().any(|p| *p == Some(false)), "a damaged picture keeps its grey placeholder");
     assert!(!grid.iter().flatten().any(|p| *p == Some(true)), "with no size message");
 }
+
+/// Automatic text renders light on a dark document page colour and flips back to dark when Read
+/// Mode replaces the paper with a light colour (`read_paper`).
+#[test]
+fn dark_page_color_renders_light_auto_text_and_respects_read_paper_override() {
+    let mut d = Document::from_text("HHHH HHHH");
+    d.settings.page_color = Some(Rgb(0x00, 0x12, 0x36));
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let page = &l.pages[0];
+
+    let dark_doc = render_page(&d, page, 2.0, &RenderOptions::default());
+    let brightest = dark_doc.pixels.chunks(4).map(|p| p[0].min(p[1]).min(p[2])).max().unwrap_or(0);
+    assert!(brightest > 0xC0, "auto text on dark page colour must render bright white, max channel {brightest}");
+
+    let sepia = RenderOptions { read_paper: Some(SEPIA_PAPER), ..Default::default() };
+    let on_sepia = render_page(&d, page, 2.0, &sepia);
+    let darkest = on_sepia.pixels.chunks(4).map(|p| p[0].min(p[1]).min(p[2])).min().unwrap_or(255);
+    assert!(darkest < 0x40, "read_paper override must render dark text on sepia paper, min channel {darkest}");
+}

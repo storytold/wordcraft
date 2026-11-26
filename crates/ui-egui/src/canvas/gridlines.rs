@@ -181,7 +181,7 @@ pub(in crate::canvas) fn gridline_segments(page: &Page, all: bool, editing: Opti
     let body = if all { page.items.as_slice() } else { &[] };
     let mut rules: std::collections::HashMap<(bool, i64), Vec<(f32, f32, f32)>> = std::collections::HashMap::new();
     for it in body.iter().chain(&page.header).chain(&page.footer) {
-        let Placed::Rule { x0, y0, x1, y1, border } = it else { continue };
+        let Placed::Rule { x0, y0, x1, y1, border, .. } = it else { continue };
         if !border.is_visible() {
             continue;
         }

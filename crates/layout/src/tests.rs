@@ -2575,9 +2575,9 @@ fn a_joined_paragraphs_shading_and_borders_start_below_the_shared_line() {
         let rules: Vec<(f32, f32, f32, f32)> = l.pages[0]
             .items
             .iter()
-            .filter_map(
-                |i| if let Placed::Rule { x0, y0, x1, y1, border } = i { (border.width == 1.5).then_some((*x0, *y0, *x1, *y1)) } else { None },
-            )
+            .filter_map(|i| {
+                if let Placed::Rule { x0, y0, x1, y1, border, .. } = i { (border.width == 1.5).then_some((*x0, *y0, *x1, *y1)) } else { None }
+            })
             .collect();
         (alpha.top, alpha.top + alpha.height, after.top, fills, rules)
     };
@@ -17239,4 +17239,703 @@ fn header_text_covers_the_whole_band_of_centred_and_right_lines() {
         assert!(!hit(x + left - 30.0), "{align:?}: within 40pt left of the band is text");
         assert!(hit(x + left - 60.0), "{align:?}: beyond 40pt left of the band the picture is hit");
     }
+}
+
+/// Automatic text and border colours resolve against the effective background stack: run highlight
+/// / shading → paragraph shading → table cell shading → text box fill → page colour (overridden
+/// by `paper_override` in Read Mode).
+#[test]
+fn automatic_text_and_borders_contrast_with_page_cell_para_and_box_backgrounds() {
+    crate::test_fonts();
+    use wordcraft_doc::fill::Fill;
+    use wordcraft_doc::props::{Border, Borders};
+
+    let navy = Rgb(0x00, 0x12, 0x36);
+    let silver = Rgb(0xC0, 0xC0, 0xC0);
+    let accent = Rgb(0x5C, 0x9C, 0xCC);
+
+    let mut d = Document::new();
+    d.settings.page_color = Some(navy);
+
+    // Body paragraphs: plain auto, explicit accent, and light-shaded paragraph.
+    let p_auto = wordcraft_doc::Paragraph::with_text("BodyAuto", Default::default());
+    let p_accent = wordcraft_doc::Paragraph::with_text(
+        "BodyAccent",
+        wordcraft_doc::CharProps { color: Some(wordcraft_doc::TextColor::Rgb(accent)), ..Default::default() },
+    );
+    let mut p_light_bg = wordcraft_doc::Paragraph::with_text("LightPara", Default::default());
+    p_light_bg.props.shading = Some(Rgb(0xE0, 0xE0, 0xE0));
+
+    // Table with auto borders: row 0 light silver fill, row 1 transparent over dark page.
+    let mut t = Table::new(2, 1, 300.0);
+    let b = Some(Border::single(0.5));
+    t.props.borders = Some(Borders { top: b, bottom: b, left: b, right: b, between: b, inside_v: b });
+    t.rows[0].cells[0].props.shading = Some(silver);
+    let mut hdr_para = wordcraft_doc::Paragraph::with_text("HdrCell", Default::default());
+    hdr_para.props.borders = Some(Borders { bottom: b, ..Default::default() });
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(hdr_para)];
+    t.rows[1].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("DataCell", Default::default()))];
+
+    d.body = vec![
+        wordcraft_doc::para_block(p_auto),
+        wordcraft_doc::para_block(p_accent),
+        wordcraft_doc::para_block(p_light_bg),
+        std::sync::Arc::new(wordcraft_doc::Block::Table(t)),
+    ];
+
+    // Footer paragraph on dark page.
+    let ftr_id = d.add_part(
+        wordcraft_doc::PartKind::Footer,
+        vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("FooterAuto", Default::default()))],
+    );
+    d.last_section.footers.default = Some(ftr_id);
+
+    // Transparent text box (no fill) and opaque white-filled text box on dark page.
+    let _clear_box = text_box(&mut d, 0, "ClearBox", 120.0, 40.0, page_float(100.0, 400.0));
+    let white_id = d.add_part(
+        wordcraft_doc::PartKind::TextBox,
+        vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("WhiteBox", Default::default()))],
+    );
+    let white_shape = wordcraft_doc::para::InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::Rectangle,
+        w: 120.0,
+        h: 40.0,
+        fill: Some(Fill::solid(Rgb::WHITE)),
+        stroke: None,
+        stroke_width: 0.0,
+        float: page_float(260.0, 400.0),
+        story: Some(white_id),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    d.insert_object(&Pos::body(0, 0), white_shape, &Default::default()).unwrap();
+
+    let l = lay(&d);
+    let page = &l.pages[0];
+    let opts = display::DisplayOptions::default();
+    let items = display::page_display(&d, page, &opts);
+
+    let glyph_color = |draws: &[display::Draw], needle: &str| {
+        draws.iter().find_map(|i| match i {
+            display::Draw::Glyphs { text, color, .. } if text.contains(needle) => Some(*color),
+            _ => None,
+        })
+    };
+
+    assert_eq!(glyph_color(&items, "BodyAuto"), Some(Rgb::WHITE), "auto body text on dark page");
+    assert_eq!(glyph_color(&items, "BodyAccent"), Some(accent), "explicit RGB text keeps its colour");
+    assert_eq!(glyph_color(&items, "LightPara"), Some(Rgb::BLACK), "light paragraph shading overrides dark page");
+    assert_eq!(glyph_color(&items, "HdrCell"), Some(Rgb::BLACK), "light cell shading overrides dark page");
+    assert_eq!(glyph_color(&items, "DataCell"), Some(Rgb::WHITE), "transparent cell inherits dark page");
+    assert_eq!(glyph_color(&items, "FooterAuto"), Some(Rgb::WHITE), "footer auto text contrasts with dark page");
+    assert_eq!(glyph_color(&items, "ClearBox"), Some(Rgb::WHITE), "no-fill text box inherits dark page");
+    assert_eq!(glyph_color(&items, "WhiteBox"), Some(Rgb::BLACK), "white-filled text box overrides dark page");
+
+    let line_colors: Vec<Rgb> = items
+        .iter()
+        .filter_map(|i| match i {
+            display::Draw::Line { color, .. } => Some(*color),
+            _ => None,
+        })
+        .collect();
+    assert!(line_colors.contains(&Rgb::BLACK), "w:pBdr inside light-shaded header cell draws dark: {line_colors:?}");
+    assert!(line_colors.contains(&Rgb::WHITE), "outer table auto borders on dark page draw white: {line_colors:?}");
+    // ItemDisplay (used by PDF export) matches page_display across header/footer/body/table cells.
+    let shown = display::ItemDisplay::new(&d, page);
+    let pdf_items: Vec<display::Draw> = page.header.iter().chain(&page.footer).chain(&page.items).flat_map(|it| shown.draws(it, &opts)).collect();
+    assert_eq!(glyph_color(&pdf_items, "BodyAuto"), Some(Rgb::WHITE));
+    assert_eq!(glyph_color(&pdf_items, "HdrCell"), Some(Rgb::BLACK));
+    assert_eq!(glyph_color(&pdf_items, "DataCell"), Some(Rgb::WHITE));
+    assert_eq!(glyph_color(&pdf_items, "FooterAuto"), Some(Rgb::WHITE));
+    assert_eq!(glyph_color(&pdf_items, "ClearBox"), Some(Rgb::WHITE));
+    assert_eq!(glyph_color(&pdf_items, "WhiteBox"), Some(Rgb::BLACK));
+
+    // Read Mode paper override replaces page_color for auto contrast.
+    let read_opts = display::DisplayOptions { paper_override: Some(Rgb::WHITE), ..Default::default() };
+    let read_items = display::page_display(&d, page, &read_opts);
+    assert_eq!(glyph_color(&read_items, "BodyAuto"), Some(Rgb::BLACK));
+    assert_eq!(glyph_color(&read_items, "DataCell"), Some(Rgb::BLACK));
+
+    // On a white page, dark cell and paragraph shading still produce white automatic text while
+    // the table's and paragraph's own borders sit on the white page (black) and a w:pBdr inside
+    // the dark cell flips to white.
+    d.settings.page_color = None;
+    if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(&mut d.body[2]) {
+        p.props.shading = Some(navy);
+        p.props.borders = Some(Borders { bottom: b, ..Default::default() });
+    }
+    if let wordcraft_doc::Block::Table(t) = std::sync::Arc::make_mut(&mut d.body[3]) {
+        t.rows[0].cells[0].props.shading = Some(navy);
+    }
+    let l2 = lay(&d);
+    let items2 = display::page_display(&d, &l2.pages[0], &opts);
+    assert_eq!(glyph_color(&items2, "BodyAuto"), Some(Rgb::BLACK));
+    assert_eq!(glyph_color(&items2, "LightPara"), Some(Rgb::WHITE));
+    assert_eq!(glyph_color(&items2, "HdrCell"), Some(Rgb::WHITE));
+    assert_eq!(glyph_color(&items2, "DataCell"), Some(Rgb::BLACK));
+    let line_colors2: Vec<Rgb> = items2
+        .iter()
+        .filter_map(|i| match i {
+            display::Draw::Line { color, .. } => Some(*color),
+            _ => None,
+        })
+        .collect();
+    assert!(line_colors2.contains(&Rgb::BLACK), "outer table and shaded-para own borders stay black on white page: {line_colors2:?}");
+    assert!(line_colors2.contains(&Rgb::WHITE), "w:pBdr inside navy cell flips white: {line_colors2:?}");
+}
+
+/// `Placed::Rule` automatic borders (`color: None`) resolve against the enclosing surface stack
+/// (enclosing cell fill -> text-box fill -> effective page background), matching identically
+/// across screen (`page_display` / `page_layers`) and PDF (`ItemDisplay`).
+#[test]
+fn automatic_rule_borders_contrast_in_light_box_and_cell_over_dark_page() {
+    crate::test_fonts();
+    use wordcraft_doc::fill::Fill;
+    use wordcraft_doc::props::{Border, Borders};
+
+    let navy = Rgb(0x00, 0x12, 0x36);
+    let silver = Rgb(0xC0, 0xC0, 0xC0);
+    let auto_bdr = Some(Border::single(0.5));
+    let all_auto = Borders { top: auto_bdr, bottom: auto_bdr, left: auto_bdr, right: auto_bdr, between: auto_bdr, inside_v: auto_bdr };
+
+    let mut d = Document::new();
+    d.settings.page_color = Some(navy);
+
+    // On a dark navy page, a 2x1 table with automatic borders: row 0 cell 0 has light silver
+    // shading (#C0C0C0) and holds both a paragraph with w:pBdr and a nested 1x1 table with
+    // automatic borders; row 1 cell 0 is transparent over the navy page.
+    let mut pbdr_in_cell = wordcraft_doc::Paragraph::with_text("CellParaBdr", Default::default());
+    pbdr_in_cell.props.borders = Some(all_auto);
+    let mut nested = Table::new(1, 1, 200.0);
+    nested.props.borders = Some(all_auto);
+    nested.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("NestedCell", Default::default()))];
+
+    let mut outer = Table::new(2, 1, 300.0);
+    outer.props.borders = Some(all_auto);
+    outer.rows[0].cells[0].props.shading = Some(silver);
+    outer.rows[0].cells[0].props.margins = Some([4.0; 4]);
+    outer.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(pbdr_in_cell), std::sync::Arc::new(wordcraft_doc::Block::Table(nested))];
+    outer.rows[1].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("ClearRow", Default::default()))];
+
+    d.body = vec![
+        wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Anchor", Default::default())),
+        std::sync::Arc::new(wordcraft_doc::Block::Table(outer)),
+    ];
+
+    // A white-filled text box on the navy page holding a paragraph with w:pBdr and a 1x1 table
+    // with automatic borders.
+    let mut pbdr_in_box = wordcraft_doc::Paragraph::with_text("BoxParaBdr", Default::default());
+    pbdr_in_box.props.borders = Some(all_auto);
+    let mut box_tbl = Table::new(1, 1, 180.0);
+    box_tbl.props.borders = Some(all_auto);
+    box_tbl.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("BoxTableCell", Default::default()))];
+    let white_box_id = d.add_part(
+        wordcraft_doc::PartKind::TextBox,
+        vec![wordcraft_doc::para_block(pbdr_in_box), std::sync::Arc::new(wordcraft_doc::Block::Table(box_tbl))],
+    );
+    let white_box_rect = Rect::new(100.0, 420.0, 220.0, 140.0);
+    let white_shape = wordcraft_doc::para::InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::Rectangle,
+        w: white_box_rect.w,
+        h: white_box_rect.h,
+        fill: Some(Fill::solid(Rgb::WHITE)),
+        stroke: None,
+        stroke_width: 0.0,
+        float: page_float(white_box_rect.x, white_box_rect.y),
+        story: Some(white_box_id),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    d.insert_object(&Pos::body(0, 0), white_shape, &Default::default()).unwrap();
+
+    let l = lay(&d);
+    let page = &l.pages[0];
+    let opts = display::DisplayOptions::default();
+
+    // Locate the outer table's row 0 (silver) and row 1 (transparent) cell rectangles.
+    let row0_rect = page
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Cell { rect, table, row: 0, cell: 0, story: StoryRef::Body, .. } if table.0 == [1] => Some(*rect),
+            _ => None,
+        })
+        .unwrap();
+    let row1_rect = page
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Cell { rect, table, row: 1, cell: 0, story: StoryRef::Body, .. } if table.0 == [1] => Some(*rect),
+            _ => None,
+        })
+        .unwrap();
+    let box_rect = page
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Object { rect, text_box: Some(id), .. } if *id == white_box_id => Some(*rect),
+            _ => None,
+        })
+        .unwrap();
+
+    let check_draws = |label: &str, draws: &[display::Draw]| {
+        let lines: Vec<(f32, f32, f32, f32, Rgb)> = draws
+            .iter()
+            .filter_map(|d| match d {
+                display::Draw::Line { x0, y0, x1, y1, color, .. } => Some((*x0, *y0, *x1, *y1, *color)),
+                _ => None,
+            })
+            .collect();
+
+        // Every rule inside the white text box (both w:pBdr and 1x1 table auto borders) must be
+        // black, not white-on-white.
+        let in_white_box: Vec<Rgb> = lines
+            .iter()
+            .filter(|(x0, y0, x1, y1, _)| {
+                let (mx, my) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5);
+                mx >= box_rect.x - 1.0 && mx <= box_rect.right() + 1.0 && my >= box_rect.y - 1.0 && my <= box_rect.bottom() + 1.0
+            })
+            .map(|(.., c)| *c)
+            .collect();
+        assert!(in_white_box.len() >= 8, "{label}: expected w:pBdr + 1x1 table lines in white text box, got {}", in_white_box.len());
+        assert!(in_white_box.iter().all(|&c| c == Rgb::BLACK), "{label}: rules in white text box must be black: {in_white_box:?}");
+
+        // Descendant borders strictly inside the #C0C0C0 cell (w:pBdr and nested 1x1 table) sit on
+        // the #C0C0C0 surface and must be black.
+        let inside_silver_cell: Vec<Rgb> = lines
+            .iter()
+            .filter(|(x0, y0, x1, y1, _)| {
+                let (mx, my) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5);
+                mx > row0_rect.x + 0.5 && mx < row0_rect.right() - 0.5 && my > row0_rect.y + 0.5 && my < row0_rect.bottom() - 0.5
+            })
+            .map(|(.., c)| *c)
+            .collect();
+        assert!(
+            inside_silver_cell.len() >= 8,
+            "{label}: expected w:pBdr + nested table lines strictly inside #C0C0C0 cell, got {}",
+            inside_silver_cell.len()
+        );
+        assert!(
+            inside_silver_cell.iter().all(|&c| c == Rgb::BLACK),
+            "{label}: descendant borders inside #C0C0C0 cell must be black: {inside_silver_cell:?}"
+        );
+
+        // The outer table's own top/left/right borders on row 0 sit on the enclosing navy page
+        // surface and must stay crisp white.
+        let outer_row0_borders: Vec<Rgb> = lines
+            .iter()
+            .filter(|(x0, y0, x1, y1, _)| {
+                let (mx, my) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5);
+                let in_band = mx >= row0_rect.x - 1.0 && mx <= row0_rect.right() + 1.0 && my >= row0_rect.y - 1.0 && my < row0_rect.bottom() - 0.5;
+                let on_outer_edge = my <= row0_rect.y + 0.5 || mx <= row0_rect.x + 0.5 || mx >= row0_rect.right() - 0.5;
+                in_band && on_outer_edge
+            })
+            .map(|(.., c)| *c)
+            .collect();
+        assert!(outer_row0_borders.len() >= 3, "{label}: expected outer table top/left/right borders on row 0, got {}", outer_row0_borders.len());
+        assert!(
+            outer_row0_borders.iter().all(|&c| c == Rgb::WHITE),
+            "{label}: outer table borders on navy page must be white: {outer_row0_borders:?}"
+        );
+        // Left/right/bottom borders of transparent row 1 over navy must remain crisp white.
+        let on_clear_row: Vec<Rgb> = lines
+            .iter()
+            .filter(|(x0, y0, x1, y1, _)| {
+                let (mx, my) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5);
+                mx >= row1_rect.x - 1.0 && mx <= row1_rect.right() + 1.0 && my > row1_rect.y + 0.5 && my <= row1_rect.bottom() + 1.0
+            })
+            .map(|(.., c)| *c)
+            .collect();
+        assert!(on_clear_row.len() >= 3, "{label}: expected left/right/bottom borders on transparent cell, got {}", on_clear_row.len());
+        assert!(on_clear_row.iter().all(|&c| c == Rgb::WHITE), "{label}: transparent cell borders over navy must be white: {on_clear_row:?}");
+    };
+
+    let screen = display::page_display(&d, page, &opts);
+    let layers: Vec<display::Draw> = display::page_layers(&d, page, &opts).into_iter().flat_map(|(_, ds)| ds).collect();
+    let shown = display::ItemDisplay::new(&d, page);
+    let pdf: Vec<display::Draw> = page.header.iter().chain(&page.footer).chain(&page.items).flat_map(|it| shown.draws(it, &opts)).collect();
+
+    check_draws("page_display", &screen);
+    check_draws("page_layers", &layers);
+    check_draws("ItemDisplay", &pdf);
+}
+
+/// Linked text boxes with different fills (white -> navy) on the same page resolve automatic text
+/// and borders per frame deterministically across repeated `page_display`, `page_layers`, and PDF
+/// `ItemDisplay` calls.
+#[test]
+fn linked_text_boxes_with_different_fills_resolve_per_frame_deterministically() {
+    crate::test_fonts();
+    use wordcraft_doc::fill::Fill;
+    use wordcraft_doc::props::{Border, Borders};
+
+    let navy = Rgb(0x00, 0x12, 0x36);
+    let auto_bdr = Some(Border::single(0.5));
+    let all_auto = Borders { top: auto_bdr, bottom: auto_bdr, left: auto_bdr, right: auto_bdr, between: auto_bdr, inside_v: auto_bdr };
+
+    let mut d = Document::from_text("Anchor");
+    let mut p_a = wordcraft_doc::Paragraph::with_text("AlphaFirstBoxLine ".repeat(6).trim(), Default::default());
+    p_a.props.borders = Some(all_auto);
+    let mut p_b = wordcraft_doc::Paragraph::with_text("BetaSecondBoxLine ".repeat(6).trim(), Default::default());
+    p_b.props.borders = Some(all_auto);
+
+    let box_a = d.add_part(wordcraft_doc::PartKind::TextBox, vec![wordcraft_doc::para_block(p_a), wordcraft_doc::para_block(p_b)]);
+    let box_b = d.add_part(wordcraft_doc::PartKind::TextBox, vec![]);
+    d.parts.get_mut(&box_a).unwrap().body.next = Some(box_b);
+
+    // Box A (white fill, small height so p_b overflows into Box B).
+    let rect_a = Rect::new(72.0, 120.0, 180.0, 52.0);
+    let shape_a = wordcraft_doc::para::InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w: rect_a.w,
+        h: rect_a.h,
+        fill: Some(Fill::solid(Rgb::WHITE)),
+        stroke: None,
+        stroke_width: 0.0,
+        float: page_float(rect_a.x, rect_a.y),
+        story: Some(box_a),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    // Box B (navy fill, tall enough for the overflowed text).
+    let rect_b = Rect::new(72.0, 260.0, 180.0, 160.0);
+    let shape_b = wordcraft_doc::para::InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w: rect_b.w,
+        h: rect_b.h,
+        fill: Some(Fill::solid(navy)),
+        stroke: None,
+        stroke_width: 0.0,
+        float: page_float(rect_b.x, rect_b.y),
+        story: Some(box_b),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    d.insert_object(&Pos::body(0, 0), shape_a, &Default::default()).unwrap();
+    d.insert_object(&Pos::body(0, 0), shape_b, &Default::default()).unwrap();
+
+    let l = lay(&d);
+    let page = &l.pages[0];
+    let opts = display::DisplayOptions::default();
+
+    let summarize = |draws: &[display::Draw]| -> (Vec<Rgb>, Vec<Rgb>, Vec<Rgb>, Vec<Rgb>) {
+        let mut text_a = Vec::new();
+        let mut text_b = Vec::new();
+        let mut rules_a = Vec::new();
+        let mut rules_b = Vec::new();
+        for dr in draws {
+            match dr {
+                display::Draw::Glyphs { glyphs, text, color, .. } if text.contains("Alpha") || text.contains("Beta") => {
+                    if let Some(&(_, x, y)) = glyphs.first() {
+                        if x >= rect_a.x - 1.0 && x <= rect_a.right() + 1.0 && y >= rect_a.y - 1.0 && y <= rect_a.bottom() + 1.0 {
+                            text_a.push(*color);
+                        } else if x >= rect_b.x - 1.0 && x <= rect_b.right() + 1.0 && y >= rect_b.y - 1.0 && y <= rect_b.bottom() + 1.0 {
+                            text_b.push(*color);
+                        }
+                    }
+                }
+                display::Draw::Line { x0, y0, x1, y1, color, .. } => {
+                    let (mx, my) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5);
+                    if mx >= rect_a.x - 1.0 && mx <= rect_a.right() + 1.0 && my >= rect_a.y - 1.0 && my <= rect_a.bottom() + 1.0 {
+                        rules_a.push(*color);
+                    } else if mx >= rect_b.x - 1.0 && mx <= rect_b.right() + 1.0 && my >= rect_b.y - 1.0 && my <= rect_b.bottom() + 1.0 {
+                        rules_b.push(*color);
+                    }
+                }
+                _ => {}
+            }
+        }
+        (text_a, text_b, rules_a, rules_b)
+    };
+
+    let baseline = summarize(&display::page_display(&d, page, &opts));
+    let (ta, tb, ra, rb) = &baseline;
+    assert!(!ta.is_empty() && ta.iter().all(|&c| c == Rgb::BLACK), "Box A (white fill) text must be black: {ta:?}");
+    assert!(!tb.is_empty() && tb.iter().all(|&c| c == Rgb::WHITE), "Box B (navy fill) text must be white: {tb:?}");
+    assert!(!ra.is_empty() && ra.iter().all(|&c| c == Rgb::BLACK), "Box A (white fill) auto borders must be black: {ra:?}");
+    assert!(!rb.is_empty() && rb.iter().all(|&c| c == Rgb::WHITE), "Box B (navy fill) auto borders must be white: {rb:?}");
+
+    for run in 0..30 {
+        let screen = summarize(&display::page_display(&d, page, &opts));
+        let layers: Vec<display::Draw> = display::page_layers(&d, page, &opts).into_iter().flat_map(|(_, ds)| ds).collect();
+        let layers_sum = summarize(&layers);
+        let shown = display::ItemDisplay::new(&d, page);
+        let pdf: Vec<display::Draw> = page.header.iter().chain(&page.footer).chain(&page.items).flat_map(|it| shown.draws(it, &opts)).collect();
+        let pdf_sum = summarize(&pdf);
+        assert_eq!(screen, baseline, "run {run}: page_display drifted");
+        assert_eq!(layers_sum, baseline, "run {run}: page_layers differed from page_display");
+        assert_eq!(pdf_sum, baseline, "run {run}: ItemDisplay differed from page_display");
+    }
+}
+
+/// On a white page, a 3x2 table with automatic borders and a dark navy (`#001236`) header row —
+/// and a navy-shaded paragraph with automatic `w:pBdr` — resolve their automatic text to white
+/// while keeping all of their own automatic borders (top, left, right, inner gridlines, bottom,
+/// and `w:pBdr`) black `(0, 0, 0)` across `page_display`, `page_layers`, and PDF `ItemDisplay`.
+#[test]
+fn dark_header_row_and_para_shading_on_white_page_keep_black_auto_borders() {
+    crate::test_fonts();
+    use wordcraft_doc::props::{Border, Borders};
+
+    let navy = Rgb(0x00, 0x12, 0x36);
+    let auto_bdr = Some(Border::single(0.5));
+    let all_auto = Borders { top: auto_bdr, bottom: auto_bdr, left: auto_bdr, right: auto_bdr, between: auto_bdr, inside_v: auto_bdr };
+
+    let mut d = Document::new();
+    let mut p_navy = wordcraft_doc::Paragraph::with_text("NavyPara", Default::default());
+    p_navy.props.shading = Some(navy);
+    p_navy.props.borders = Some(all_auto);
+
+    let mut t = Table::new(3, 2, 360.0);
+    t.props.borders = Some(all_auto);
+    for (ci, label) in ["HdrColA", "HdrColB"].into_iter().enumerate() {
+        t.rows[0].cells[ci].props.shading = Some(navy);
+        t.rows[0].cells[ci].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(label, Default::default()))];
+    }
+    for (ri, labels) in [(1, ["Row1ColA", "Row1ColB"]), (2, ["Row2ColA", "Row2ColB"])] {
+        for (ci, label) in labels.into_iter().enumerate() {
+            t.rows[ri].cells[ci].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(label, Default::default()))];
+        }
+    }
+
+    d.body = vec![wordcraft_doc::para_block(p_navy), std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+
+    let l = lay(&d);
+    let page = &l.pages[0];
+    let opts = display::DisplayOptions::default();
+
+    let hdr_left = page
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Cell { rect, table, row: 0, cell: 0, story: StoryRef::Body, .. } if table.0 == [1] => Some(*rect),
+            _ => None,
+        })
+        .unwrap();
+    let hdr_right = page
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Cell { rect, table, row: 0, cell: 1, story: StoryRef::Body, .. } if table.0 == [1] => Some(*rect),
+            _ => None,
+        })
+        .unwrap();
+    let grid_x = hdr_left.right();
+
+    let check = |label: &str, draws: &[display::Draw]| {
+        let glyph_color = |needle: &str| {
+            draws.iter().find_map(|dr| match dr {
+                display::Draw::Glyphs { text, color, .. } if text.contains(needle) => Some(*color),
+                _ => None,
+            })
+        };
+        for white_text in ["HdrColA", "HdrColB", "NavyPara"] {
+            assert_eq!(glyph_color(white_text), Some(Rgb::WHITE), "{label}: {white_text} on navy must be white");
+        }
+        for black_text in ["Row1ColA", "Row1ColB", "Row2ColA", "Row2ColB"] {
+            assert_eq!(glyph_color(black_text), Some(Rgb::BLACK), "{label}: {black_text} on white must be black");
+        }
+
+        let lines: Vec<(f32, f32, f32, f32, Rgb)> = draws
+            .iter()
+            .filter_map(|dr| match dr {
+                display::Draw::Line { x0, y0, x1, y1, color, .. } => Some((*x0, *y0, *x1, *y1, *color)),
+                _ => None,
+            })
+            .collect();
+
+        let has_top = lines.iter().any(|(x0, y0, x1, y1, _)| {
+            (y0 - y1).abs() < 0.5 && (y0 - hdr_left.y).abs() < 1.0 && x0.min(*x1) <= hdr_left.x + 1.0 && x0.max(*x1) >= hdr_left.right() - 1.0
+        });
+        let has_left = lines.iter().any(|(x0, y0, x1, y1, _)| {
+            (x0 - x1).abs() < 0.5 && (x0 - hdr_left.x).abs() < 1.0 && y0.min(*y1) <= hdr_left.y + 1.0 && y0.max(*y1) >= hdr_left.bottom() - 1.0
+        });
+        let has_right = lines.iter().any(|(x0, y0, x1, y1, _)| {
+            (x0 - x1).abs() < 0.5
+                && (x0 - hdr_right.right()).abs() < 1.0
+                && y0.min(*y1) <= hdr_right.y + 1.0
+                && y0.max(*y1) >= hdr_right.bottom() - 1.0
+        });
+        let has_inner_v = lines.iter().any(|(x0, y0, x1, y1, _)| {
+            (x0 - x1).abs() < 0.5 && (x0 - grid_x).abs() < 1.0 && y0.min(*y1) <= hdr_left.y + 1.0 && y0.max(*y1) >= hdr_left.bottom() - 1.0
+        });
+        assert!(has_top && has_left && has_right && has_inner_v, "{label}: expected header top/left/right/inner gridlines");
+
+        let para_lines = lines.iter().filter(|(_, y0, _, y1, _)| y0.max(*y1) < hdr_left.y - 0.5).count();
+        assert_eq!(para_lines, 4, "{label}: expected 4 w:pBdr rules on navy-shaded paragraph");
+
+        let all_colors: Vec<Rgb> = lines.iter().map(|(.., c)| *c).collect();
+        assert!(
+            !all_colors.is_empty() && all_colors.iter().all(|&c| c == Rgb::BLACK),
+            "{label}: ALL header, table, and navy-para borders on white page must stay crisp black (0, 0, 0): {all_colors:?}"
+        );
+    };
+
+    let screen = display::page_display(&d, page, &opts);
+    let layers: Vec<display::Draw> = display::page_layers(&d, page, &opts).into_iter().flat_map(|(_, ds)| ds).collect();
+    let shown = display::ItemDisplay::new(&d, page);
+    let pdf: Vec<display::Draw> = page.header.iter().chain(&page.footer).chain(&page.items).flat_map(|it| shown.draws(it, &opts)).collect();
+
+    check("page_display", &screen);
+    check("page_layers", &layers);
+    check("ItemDisplay", &pdf);
+}
+
+/// Comment balloons are drawn on white cards in the markup margin, and commented body ranges get
+/// a lavender fill when comment markup is enabled. On a dark page, uncommented body text resolves
+/// to white, commented body text over lavender resolves to black (flipping back to white when
+/// markup or comments are hidden), and automatic text and borders inside the comment balloon card
+/// stay black identically across `page_display`, `page_layers`, and PDF `ItemDisplay`.
+#[test]
+fn comment_balloons_on_dark_page_keep_dark_auto_text_and_borders() {
+    crate::test_fonts();
+    use wordcraft_doc::props::{Border, Borders};
+
+    let navy = Rgb(0x00, 0x12, 0x36);
+    let auto_bdr = Some(Border::single(0.5));
+    let all_auto = Borders { top: auto_bdr, bottom: auto_bdr, left: auto_bdr, right: auto_bdr, between: auto_bdr, inside_v: auto_bdr };
+
+    let mut d = Document::from_text("Uncommented Commented");
+    d.settings.page_color = Some(navy);
+    let mut comment_p = Paragraph::with_text("CommentAutoText", CharProps::default());
+    comment_p.props.borders = Some(all_auto);
+    let part = d.add_part(wordcraft_doc::PartKind::Comment, vec![wordcraft_doc::para_block(comment_p)]);
+    d.comments.insert(0, wordcraft_doc::Comment { author: "Ada Reviewer".into(), part, parent: None, ..Default::default() });
+    let p = CharProps::default();
+    d.insert_object(&Pos::body(0, 21), InlineObject::CommentEnd { id: 0 }, &p).unwrap();
+    d.insert_object(&Pos::body(0, 12), InlineObject::CommentStart { id: 0 }, &p).unwrap();
+
+    let l = balloon_layout(&d);
+    let page = &l.pages[0];
+    let opts = display::DisplayOptions::default();
+    let markup_x = page.w - page.markup;
+
+    let card_rect = page
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Fill { rect, color } if *color == Rgb::WHITE && rect.x >= markup_x => Some(*rect),
+            _ => None,
+        })
+        .expect("expected white comment balloon card in markup area");
+
+    let glyph_color = |draws: &[display::Draw], needle: &str| {
+        draws.iter().find_map(|dr| match dr {
+            display::Draw::Glyphs { text, color, .. } if text.contains(needle) => Some(*color),
+            _ => None,
+        })
+    };
+
+    let check = |label: &str, draws: &[display::Draw]| {
+        assert_eq!(glyph_color(draws, "Uncommented"), Some(Rgb::WHITE), "{label}: uncommented body auto text on dark page must be white");
+        assert_eq!(glyph_color(draws, "Commented"), Some(Rgb::BLACK), "{label}: commented body auto text over lavender must be black");
+        assert_eq!(glyph_color(draws, "CommentAutoText"), Some(Rgb::BLACK), "{label}: comment auto text on white balloon card must be black");
+
+        let card_inner_rules: Vec<Rgb> = draws
+            .iter()
+            .filter_map(|dr| match dr {
+                display::Draw::Line { x0, y0, x1, y1, color, .. } => {
+                    let (mx, my) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5);
+                    (mx > card_rect.x + 1.0 && mx < card_rect.right() - 1.0 && my > card_rect.y + 1.0 && my < card_rect.bottom() - 1.0)
+                        .then_some(*color)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(card_inner_rules.len(), 4, "{label}: expected 4 auto w:pBdr rules inside comment card, got {card_inner_rules:?}");
+        assert!(
+            card_inner_rules.iter().all(|&c| c == Rgb::BLACK),
+            "{label}: auto borders inside comment balloon card must be black: {card_inner_rules:?}"
+        );
+    };
+
+    let screen = display::page_display(&d, page, &opts);
+    let layers: Vec<display::Draw> = display::page_layers(&d, page, &opts).into_iter().flat_map(|(_, ds)| ds).collect();
+    let shown = display::ItemDisplay::new(&d, page);
+    let pdf: Vec<display::Draw> = page.header.iter().chain(&page.footer).chain(&page.items).flat_map(|it| shown.draws(it, &opts)).collect();
+
+    check("page_display", &screen);
+    check("page_layers", &layers);
+    check("ItemDisplay", &pdf);
+
+    // When markup or comments are hidden, no lavender fill is painted, so commented body text
+    // falls back to the underlying dark page colour and renders white again.
+    for (mode, hidden_opts) in [
+        ("markup=false", display::DisplayOptions { markup: false, ..Default::default() }),
+        ("comments=false", {
+            let mut o = display::DisplayOptions::default();
+            o.revisions.comments = false;
+            o
+        }),
+    ] {
+        for (label, draws) in [
+            ("page_display", display::page_display(&d, page, &hidden_opts)),
+            ("page_layers", display::page_layers(&d, page, &hidden_opts).into_iter().flat_map(|(_, ds)| ds).collect()),
+            ("ItemDisplay", page.header.iter().chain(&page.footer).chain(&page.items).flat_map(|it| shown.draws(it, &hidden_opts)).collect()),
+        ] {
+            assert_eq!(
+                glyph_color(&draws, "Uncommented"),
+                Some(Rgb::WHITE),
+                "{mode}/{label}: uncommented body auto text on dark page must stay white"
+            );
+            assert_eq!(
+                glyph_color(&draws, "Commented"),
+                Some(Rgb::WHITE),
+                "{mode}/{label}: commented body auto text without lavender must flip back to white"
+            );
+        }
+    }
+}
+
+/// List labels and line-end hyphens do not paint a run highlight behind themselves, so automatic
+/// colours on them resolve against the paragraph/cell/box/page surface rather than a dark run
+/// highlight.
+#[test]
+fn list_labels_and_line_end_hyphens_ignore_unpainted_dark_highlights() {
+    crate::test_fonts();
+    use wordcraft_doc::props::Highlight;
+
+    let mut d = Document::from_text("HighlightedItem\nab\u{ad}cdef");
+    let num = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 })).unwrap();
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, 15), &|c| c.highlight = Some(Highlight::DarkBlue)).unwrap();
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().mark.highlight = Some(Highlight::DarkBlue);
+
+    d.format_range(&Pos::body(1, 0), &Pos::body(1, 8), &|c| c.highlight = Some(Highlight::Black)).unwrap();
+    d.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 0), &|p| p.indent_right = Some(468.0 - 26.0)).unwrap();
+
+    let opts = display::DisplayOptions::default();
+    let glyph_color = |draws: &[display::Draw], exact: &str| {
+        draws.iter().find_map(|dr| match dr {
+            display::Draw::Glyphs { text, color, .. } if text == exact => Some(*color),
+            _ => None,
+        })
+    };
+
+    // On a white page, highlighted run text turns white while the unpainted list label and
+    // trailing hyphen remain black.
+    let l = lay(&d);
+    let page = &l.pages[0];
+    for (label, draws) in [
+        ("page_display", display::page_display(&d, page, &opts)),
+        ("ItemDisplay", {
+            let shown = display::ItemDisplay::new(&d, page);
+            page.header.iter().chain(&page.footer).chain(&page.items).flat_map(|it| shown.draws(it, &opts)).collect()
+        }),
+    ] {
+        assert_eq!(glyph_color(&draws, "HighlightedItem"), Some(Rgb::WHITE), "{label}: dark-highlighted item text must be white");
+        assert_eq!(glyph_color(&draws, "1."), Some(Rgb::BLACK), "{label}: unpainted list label on white page must stay black");
+        assert_eq!(glyph_color(&draws, "ab"), Some(Rgb::WHITE), "{label}: dark-highlighted prefix before hyphen must be white");
+        assert_eq!(glyph_color(&draws, "-"), Some(Rgb::BLACK), "{label}: unpainted line-end hyphen on white page must stay black");
+    }
+
+    // On a dark page, list labels and trailing hyphens still contrast with the page surface.
+    d.settings.page_color = Some(Rgb(0x00, 0x12, 0x36));
+    let draws_dark = display::page_display(&d, page, &opts);
+    assert_eq!(glyph_color(&draws_dark, "1."), Some(Rgb::WHITE), "list label on dark page must be white");
+    assert_eq!(glyph_color(&draws_dark, "-"), Some(Rgb::WHITE), "line-end hyphen on dark page must be white");
 }
