@@ -58,6 +58,31 @@ pub(super) fn painter_double_click(app: &mut WordApp) {
     let _ = app.run("edit.formatPainter", json!({"sticky": true}));
 }
 
+/// Home › Borders: the paragraph border kinds (`para.borders` kind), with their labels and icons.
+pub(super) const BORDER_KINDS: [(&str, &str, &str); 8] = [
+    ("Bottom Border", "bottom", "borderBottom"),
+    ("Top Border", "top", "borderTop"),
+    ("Left Border", "left", "borderLeft"),
+    ("Right Border", "right", "borderRight"),
+    ("No Border", "none", "borderNone"),
+    ("All Borders", "all", "borderAll"),
+    ("Outside Borders", "outside", "borderOutside"),
+    ("Inside Borders", "inside", "borderInside"),
+];
+
+/// Canonical border kind for a `para.borders` `kind` parameter, when it is one of the eight
+/// Home › Borders menu kinds (#2718).
+pub(crate) fn border_kind(kind: &str) -> Option<&'static str> {
+    BORDER_KINDS.iter().find(|(_, k, _)| *k == kind).map(|(_, k, _)| *k)
+}
+
+/// The Borders button's icon and params: it applies the kind last picked from its menu, as Word's
+/// does, and shows that kind's icon (#2718). An unknown kind is Bottom, the default.
+pub(super) fn border_button(kind: &str) -> (&'static str, Value) {
+    let (_, k, icon) = BORDER_KINDS.iter().find(|(_, k, _)| *k == kind).copied().unwrap_or(BORDER_KINDS[0]);
+    (icon, json!({"kind": k}))
+}
+
 /// The bullets of the Bullet Library, in tile order.
 const BULLETS: [&str; 7] = ["•", "○", "▪", "◆", "➢", "✓", "–"];
 
@@ -393,27 +418,22 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                         }
                     });
                     crate::colors::shading_split(ui, app, tl!("Shading"), Target::cmd("para.shading").remember(Remember::Shading));
+                    let (border_icon, border_params) = border_button(&app.canvas.last_border);
                     SplitButton::<String>::command(
-                        CommandRef::with_params("para.borders", json!({"kind": "bottom"})),
+                        CommandRef::with_params("para.borders", border_params),
                         SplitMenu::Body(Box::new(|ui, _| {
-                            for (l, k) in [
-                                ("Bottom Border", "bottom"),
-                                ("Top Border", "top"),
-                                ("Left Border", "left"),
-                                ("Right Border", "right"),
-                                ("No Border", "none"),
-                                ("All Borders", "all"),
-                                ("Outside Borders", "outside"),
-                                ("Inside Borders", "inside"),
-                            ] {
-                                MenuItem::command(CommandRef::with_params("para.borders", json!({"kind": k}))).label(tl!(l).to_string()).show(ui);
+                            for (l, k, icon) in BORDER_KINDS {
+                                MenuItem::command(CommandRef::with_params("para.borders", json!({"kind": k})))
+                                    .icon(IconId::new(icon))
+                                    .label(tl!(l).to_string())
+                                    .show(ui);
                             }
                             Divider::horizontal().show(ui);
                             MenuItem::command(CommandRef::new("insert.horizontalLine")).label(tl!("Horizontal Line").to_string()).show(ui);
                             MenuItem::command(CommandRef::new("para.borders")).label(tl!("Borders and Shading…").to_string()).show(ui);
                         })),
                     )
-                    .icon(IconId::new("borders"))
+                    .icon(IconId::new(border_icon))
                     .tooltip(tl!("Borders").to_string())
                     .show(ui);
                 });

@@ -77,6 +77,7 @@ impl WordApp {
             return r;
         }
         let applied = applied_font(id, &params);
+        let applied_border = applied_border(id, &params);
         let previous = std::mem::replace(&mut self.user_origin, true);
         let r = self.execute_user(id, params);
         self.user_origin = previous;
@@ -86,6 +87,9 @@ impl WordApp {
         }
         if let (Ok(_), Some(name)) = (&r, applied) {
             push_recent_font(&mut self.ui.font_picker.recent, &name);
+        }
+        if let (Ok(_), Some(kind)) = (&r, applied_border) {
+            self.canvas.last_border = kind.to_string();
         }
         if matches!(id, "insert.picture" | "insert.icon") {
             self.select_inserted_picture(&r);
@@ -1286,4 +1290,10 @@ fn flushes_comment_drafts(id: &str, params: &Value) -> bool {
 /// replace only an untouched blank document, which has nothing to lose).
 pub(crate) fn discards_document(id: &str, _params: &Value) -> bool {
     id == "file.close"
+}
+
+/// The Home › Borders kind a `para.borders` call picked, if any, so the Borders button can repeat
+/// it (#2718). Dialog calls (`{}` or `{"sides": …}`) have no `kind` and leave the button alone.
+fn applied_border(id: &str, params: &Value) -> Option<&'static str> {
+    (id == "para.borders").then(|| params.get("kind").and_then(Value::as_str).and_then(crate::ribbon::border_kind)).flatten()
 }

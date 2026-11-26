@@ -33,7 +33,15 @@ static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("blockAuthors", include_bytes!("../icons/blockAuthors.svg")),
     ("bold", include_bytes!("../icons/bold.svg")),
     ("wordcraft.bookmark", include_bytes!("../icons/bookmark.svg")),
+    ("borderAll", include_bytes!("../icons/borderAll.svg")),
+    ("borderBottom", include_bytes!("../icons/borderBottom.svg")),
+    ("borderInside", include_bytes!("../icons/borderInside.svg")),
+    ("borderLeft", include_bytes!("../icons/borderLeft.svg")),
+    ("borderNone", include_bytes!("../icons/borderNone.svg")),
+    ("borderOutside", include_bytes!("../icons/borderOutside.svg")),
     ("borderPainter", include_bytes!("../icons/borderPainter.svg")),
+    ("borderRight", include_bytes!("../icons/borderRight.svg")),
+    ("borderTop", include_bytes!("../icons/borderTop.svg")),
     ("borders", include_bytes!("../icons/borders.svg")),
     ("breaks", include_bytes!("../icons/breaks.svg")),
     ("bringForward", include_bytes!("../icons/bringForward.svg")),
@@ -534,5 +542,43 @@ mod tests {
             Draw::new(ui.painter(), &record, env).icon(Rect::from_min_size(Pos2::ZERO, egui::vec2(20.0, 20.0)), &icon);
         });
         assert!(!shapes.is_empty(), "{KEY} icon must paint");
+    }
+
+    /// #2718: each of the eight border kinds has its own registered SVG icon that paints cleanly,
+    /// `borders` matches `borderBottom`, and grid dots are omitted where a border line is drawn.
+    #[test]
+    fn every_border_kind_has_its_own_icon() {
+        use craft::theme::{Contrast, Mode};
+        use craft::ui::primitives::{Draw, DrawEnv, PaintRecord};
+        use craft::ui::testing::{Frames, style};
+
+        let kinds = ["borderBottom", "borderTop", "borderLeft", "borderRight", "borderNone", "borderAll", "borderOutside", "borderInside"];
+        let svg_of = |name: &str| {
+            let (_, bytes) = WORDCRAFT_ICONS.icons.iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("{name} is not registered"));
+            std::str::from_utf8(bytes).expect("SVG icon is UTF-8")
+        };
+        let svgs: Vec<&str> = kinds.iter().map(|k| svg_of(k)).collect();
+        for (i, a) in svgs.iter().enumerate() {
+            for (j, b) in svgs.iter().enumerate().skip(i + 1) {
+                assert_ne!(a, b, "{} and {} look the same", kinds[i], kinds[j]);
+            }
+        }
+        assert_eq!(svg_of("borders"), svg_of("borderBottom"));
+        // Dots only where no line is drawn: 21 on the empty box, none once every line is drawn.
+        let dots = |name: &str| svg_of(name).matches("fill=\"currentColor\"").count();
+        assert_eq!([dots("borderNone"), dots("borderBottom"), dots("borderInside"), dots("borderAll")], [21, 16, 12, 0]);
+
+        register();
+        let tokens = style::tokens(Mode::Light, Contrast::Standard);
+        let record = std::cell::RefCell::new(PaintRecord::default());
+        let mut frames = Frames::new();
+        for name in kinds {
+            let shapes = frames.frame_shapes(|ui| {
+                let env = DrawEnv { tokens: &tokens, direction: craft::i18n::Direction::Ltr, ink: craft::ui::style::Ink::OnPanel };
+                let icon = IconSpec::svg(IconId::new(name));
+                Draw::new(ui.painter(), &record, env).icon(Rect::from_min_size(Pos2::ZERO, egui::vec2(20.0, 20.0)), &icon);
+            });
+            assert!(!shapes.is_empty(), "{name} icon must paint");
+        }
     }
 }

@@ -1231,3 +1231,56 @@ fn the_styles_gallery_reads_from_the_right_in_a_right_to_left_interface() {
         );
     }
 }
+
+/// #2718: a kind picked from the Home › Borders menu is applied and becomes the split button's:
+/// the button shows that kind's icon and applies it on a click. Bottom until a kind is picked;
+/// Horizontal Line isn't a kind and leaves the button alone; an unknown kind falls back to Bottom.
+#[test]
+fn borders_button_applies_the_last_border_picked() {
+    use super::home::border_button;
+    use egui::accesskit::Role;
+
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    assert_eq!(border_button(&app.canvas.last_border), ("borderBottom", json!({"kind": "bottom"})));
+
+    let mut h = tab_harness(app, "Home");
+    let top = |app: &WordApp| {
+        let b = app.session.doc.para_at(&app.session.sel.focus).and_then(|p| p.props.borders);
+        b.and_then(|b| b.top).is_some_and(|t| t.is_visible())
+    };
+
+    // Open the Borders drop-down (the arrow is the second "Borders" button node on the SplitButton).
+    let arrow = h.query_all(By::new().role(Role::Button).label("Borders")).nth(1).expect("Borders split-button menu arrow");
+    arrow.click();
+    crate::test_harness::frames(&mut h, 3);
+
+    click_row(&mut h, "Top Border");
+    assert_eq!(h.state().canvas.last_border, "top");
+    assert!(top(h.state()), "picking Top Border from the menu applies it");
+    assert_eq!(border_button(&h.state().canvas.last_border), ("borderTop", json!({"kind": "top"})));
+
+    // Clicking the rendered Borders split button's main face repeats Top Border (toggling it off).
+    let face = h.query_all(By::new().role(Role::Button).label("Borders")).next().expect("Borders split-button main face");
+    face.click();
+    crate::test_harness::frames(&mut h, 3);
+    assert!(!top(h.state()), "clicking the Borders button repeats the last border kind");
+    assert_eq!(h.state().canvas.last_border, "top");
+
+    // Horizontal Line leaves the remembered border kind unchanged.
+    let arrow = h.query_all(By::new().role(Role::Button).label("Borders")).nth(1).expect("Borders split-button menu arrow");
+    arrow.click();
+    crate::test_harness::frames(&mut h, 3);
+    click_row(&mut h, "Horizontal Line");
+    assert_eq!(h.state().canvas.last_border, "top");
+
+    assert_eq!(border_button("junk"), ("borderBottom", json!({"kind": "bottom"})));
+}
+
+/// #2718: the kind last picked survives switching to another document, like the Shading colour.
+#[test]
+fn the_last_border_survives_showing_another_document() {
+    let mut canvas = crate::canvas::CanvasState::default();
+    canvas.last_border = "left".into();
+    canvas.show_other_document(false);
+    assert_eq!(canvas.last_border, "left");
+}

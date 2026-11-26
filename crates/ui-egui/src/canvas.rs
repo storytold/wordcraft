@@ -176,6 +176,9 @@ pub struct CanvasState {
     pub last_highlight: String,
     pub last_font_color: String,
     pub last_shading: String,
+    /// The paragraph border kind the Home › Borders button applies: the last one picked from
+    /// its menu (`para.borders` kind; #2718).
+    pub last_border: String,
     pub open_url: Option<String>,
     /// The page being looked at (0-based), for the status bar (#3880): the caret's page while the
     /// caret is on screen, else the page at the top of the window. None until the canvas is drawn.
@@ -271,6 +274,7 @@ impl CanvasState {
             last_highlight: old.last_highlight,
             last_font_color: old.last_font_color,
             last_shading: old.last_shading,
+            last_border: old.last_border,
             tab_kind: old.tab_kind,
             // The window's page is the same widget, and keeps the keyboard it had: without its id the page would
             // count as unfocused for the pass that shows the new document, and report no editor to the input method.
@@ -419,6 +423,7 @@ impl Default for CanvasState {
             last_highlight: "yellow".into(),
             last_font_color: "C00000".into(),
             last_shading: "FFF2CC".into(),
+            last_border: "bottom".into(),
             open_url: None,
             viewed_page: None,
             ime_preedit: String::new(),
