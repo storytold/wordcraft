@@ -1227,14 +1227,30 @@ fn oversized_ime_events_are_ignored() {
 
 #[test]
 fn observe_ime_drops_a_preedit_without_focus() {
-    let ctx = egui::Context::default();
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
-    a.canvas.ime_preedit = "に".into();
-    a.canvas.ime_preedit_range = Some(0..1);
-    let r = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(10.0, 10.0));
-    observe_ime(&mut a, &ctx, Some((r, r)), false);
-    assert!(a.canvas.ime_preedit.is_empty(), "no composition is kept for an unfocused editor");
-    assert_eq!(a.canvas.ime_preedit_range, None);
+    let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let mut h = crate::test_harness::builder().allow_missing_glyphs().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    crate::test_harness::frames(&mut h, 6);
+    assert!(h.state().canvas.focused(&h.ctx.clone()), "canvas starts focused");
+
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "に".into(), active_range_chars: Some(0..1) }));
+    crate::test_harness::frames(&mut h, 1);
+    assert_eq!(h.state().canvas.ime_preedit.as_str(), "に");
+    assert_eq!(h.state().canvas.ime_preedit_range, Some(0..1));
+
+    if let Some(focused_id) = h.ctx.memory(|m| m.focused()) {
+        h.ctx.memory_mut(|m| m.surrender_focus(focused_id));
+    }
+    crate::test_harness::frames(&mut h, 1);
+    assert!(!h.state().canvas.focused(&h.ctx.clone()), "focus moved off canvas");
+    assert!(h.state().canvas.ime_preedit.is_empty(), "no composition is kept for an unfocused editor");
+    assert_eq!(h.state().canvas.ime_preedit_range, None);
 }
 
 #[test]
