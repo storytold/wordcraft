@@ -1017,10 +1017,13 @@ fn table_ribbon_menu_buttons_disable_when_unselected_or_protected() {
 
     let mut app_table2 = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
     app_table2.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
-    let h_layout = tab_harness(app_table2, "Table Layout");
+    let mut h_layout = tab_harness(app_table2, "Table Layout");
     assert!(!is_disabled(&h_layout, "Select"), "Select button should be enabled in table");
     assert!(!is_disabled(&h_layout, "Delete"), "Delete button should be enabled in table");
     assert!(!is_disabled(&h_layout, "AutoFit"), "AutoFit button should be enabled in table");
+    // Control for the shut-menu check below: an enabled Delete opens its menu.
+    click_button(&mut h_layout, "Delete");
+    assert!(h_layout.query_all(menu_row("Delete Rows")).next().is_some(), "an enabled Delete opens its menu");
 
     // 3. With an active table under document protection (read-only): mutating buttons are disabled:
     let mut app_protected_design = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
@@ -1037,7 +1040,7 @@ fn table_ribbon_menu_buttons_disable_when_unselected_or_protected() {
     let mut app_protected_layout = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
     app_protected_layout.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
     app_protected_layout.session.doc.settings.protection = Some("readOnly".into());
-    let h_prot_layout = tab_harness(app_protected_layout, "Table Layout");
+    let mut h_prot_layout = tab_harness(app_protected_layout, "Table Layout");
     assert!(!is_disabled(&h_prot_layout, "Select"), "Select button should remain enabled under protection");
     assert!(is_disabled(&h_prot_layout, "Delete"), "Delete button should be disabled under protection");
     assert!(is_disabled(&h_prot_layout, "AutoFit"), "AutoFit button should be disabled under protection");
@@ -1045,6 +1048,11 @@ fn table_ribbon_menu_buttons_disable_when_unselected_or_protected() {
         description(&h_prot_layout, "Delete").as_deref().unwrap_or("").contains("protected"),
         "Delete should indicate protection in disabled hint"
     );
+    // C2-5 (#7824): a disabled menu button's arrow stays shut: clicking it opens no menu.
+    click_button(&mut h_prot_layout, "Delete");
+    assert!(h_prot_layout.query_all(menu_row("Delete Rows")).next().is_none(), "a disabled Delete opens no menu");
+    click_button(&mut h_prot_layout, "AutoFit");
+    assert!(h_prot_layout.query_all(menu_row("AutoFit Window")).next().is_none(), "a disabled AutoFit opens no menu");
 }
 
 /// #7374: the Decorative Text / WordArt Styles dropdown menu renders compact tiles (~40×36 pt)
