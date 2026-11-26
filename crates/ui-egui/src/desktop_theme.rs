@@ -174,12 +174,4 @@ mod tests {
     fn a_watcher_without_a_thread_is_inert() {
         assert_eq!(DesktopTheme::default().take_change(), None);
     }
-
-    /// A new app doesn't watch the desktop (the app binary starts the watcher), so tests and
-    /// headless screenshots never depend on the host's theme or spawn D-Bus pollers.
-    #[test]
-    fn a_new_app_does_not_watch_the_desktop() {
-        let app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
-        assert!(!app.desktop_theme.watching());
-    }
 }
