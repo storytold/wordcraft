@@ -1,5 +1,6 @@
 # MCP server
 
+> **Last updated:** 2026-11-18 · A `tools/call` with an extra top-level argument the tool's schema does not list still runs, as it did before the shared core, while declared arguments are checked as before (#6972). Previously: the protocol core is the shared `craft-mcp-server` crate (#778); `click` and `key` list every argument they accept. Earlier: Keep the complete `type_text` description in one tool-table row; behavior wording unchanged. Delivery review fixes for #2596: unknown outcomes are not replayed, including image exports to a path; invalid UTF-8 returns a parse error without stopping later requests.
 > **Last updated:** 2026-11-20 · `wordcraft-cli mcp` starts only with both `--automation-read-root` and `--automation-write-root`, and `--connect` is refused until the desktop app confines its control channel (#7124, shared rule 18). Earlier: The bridge authenticates once per connection with the control token (`WORDCRAFT_CONTROL_TOKEN` or the app's token file). Earlier: The protocol core is the shared `craft-mcp-server` crate (#778); `click` and `key` list every argument they accept. Earlier: Keep the complete `type_text` description in one tool-table row; behavior wording unchanged. Delivery review fixes for #2596: unknown outcomes are not replayed, including image exports to a path; invalid UTF-8 returns a parse error without stopping later requests.
 
 WordCraft speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio, so
@@ -50,9 +51,13 @@ crate; WordCraft supplies the tools, resources and instructions. What that means
 
 - A request line over 1 MiB gets `-32600` "request too large" and the server keeps serving.
 - A JSON-RPC batch holds at most 1000 messages; a larger one gets `-32600` "batch too large".
-- A `tools/call` whose arguments do not match the tool's schema (a missing required argument, an
-  argument the tool does not list, or one of the wrong type) or that names an unknown tool returns
-  a tool result with `isError: true` naming the problem, not a JSON-RPC error.
+- A `tools/call` whose declared arguments do not match the tool's schema (a missing required
+  argument or one of the wrong type) or that names an unknown tool returns a tool result with
+  `isError: true` naming the problem, not a JSON-RPC error.
+- An extra top-level argument the tool's schema does not list is ignored and the call runs, as it
+  did before the shared core (#6972); the schemas leave the argument object open, so a client
+  following one may send it. Only the top level is affected: `execute`'s `params` are the
+  command's own and are passed on as sent.
 - `resources/read` with no `uri` is `-32002` (unknown resource), like any unknown `uri`.
 - `initialize` reports `listChanged: false` for tools and resources; `prompts/list` is empty.
 
