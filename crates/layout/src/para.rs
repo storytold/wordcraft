@@ -50,8 +50,10 @@ pub use proof::{ProofRun, is_list_item, paragraph_issues, proof_runs, proof_text
 pub struct ParaLayout {
     pub rp: ResolvedPara,
     /// Fonts the shown text (and list label) asks for that aren't installed, each with a face
-    /// it was drawn in instead: a substitute or a fallback face covering its characters.
-    pub substituted: Vec<(String, FaceRef)>,
+    /// it was drawn in instead: a substitute or a fallback face covering its characters; and
+    /// whether any of that text is italic, slanted because the face has no italic (its widths
+    /// are the upright face's, not the font's italic's). Each (font, face) pair once.
+    pub substituted: Vec<(String, FaceRef, bool)>,
     pub styles: Vec<StyleRun>,
     pub glyphs: Vec<Glyph>,
     pub clusters: Vec<Cluster>,
