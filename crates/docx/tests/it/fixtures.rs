@@ -2484,9 +2484,8 @@ fn east_asian_number_formats_read_label_and_round_trip() {
     let mut c = Counters::default();
     let labels: Vec<String> =
         paras(&d).iter().filter_map(|p| p.props.numbering).filter_map(|n| c.next_label(&d.numbering, n.num, n.level)).map(|l| l.0).collect();
-    assert_eq!(labels, ["一、", "二、", "三、", "第一章", "（壱）", "①", "1.", "1."]);
-    // Saved and read again, every format is the one the file had (hebrew1 too, which shows as
-    // decimal for now).
+    assert_eq!(labels, ["一、", "二、", "三、", "第一章", "（壱）", "①", "א.", "1."]);
+    // Saved and read again, every format is the one the file had.
     let out = wordcraft_docx::write(&d).unwrap();
     let back = wordcraft_docx::read(&out).unwrap();
     assert_eq!(formats(&back), want);

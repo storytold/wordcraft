@@ -289,14 +289,18 @@ impl NumFormat {
     pub fn from_ooxml(s: &str) -> NumFormat {
         NumFormat::ALL.into_iter().find(|f| f.ooxml() == s).unwrap_or(NumFormat::Decimal)
     }
-    /// Format `n` (1-based). Formats WordCraft doesn't draw yet (Hebrew, Hindi, Thai letters
-    /// and counting, Vietnamese, text amounts) show decimal, as do values past a sequence's end
-    /// (the 21st item of ①…⑳). Thai numbers are the decimal number in Thai digits (๑, ๒ … ๑๐).
+    /// Format `n` (1-based). Formats WordCraft doesn't draw yet (the Hebrew alphabet, Hindi
+    /// letters and counting, Thai letters and counting, Vietnamese, text amounts) show decimal,
+    /// as do values past a sequence's end (the 21st item of ①…⑳, Hebrew numerals past 999).
+    /// Thai and Hindi numbers are the decimal number in Thai or Devanagari digits (๑, ๒ … ๑๐;
+    /// १, २ … १०).
     pub fn format(self, n: u32) -> String {
         use crate::cjk_numbers as cjk;
         match self {
             NumFormat::DecimalZero => format!("{n:02}"),
             NumFormat::ThaiNumbers => thai_digits(n),
+            NumFormat::HindiNumbers => devanagari_digits(n),
+            NumFormat::Hebrew1 => hebrew_numeral(n),
             NumFormat::UpperRoman => roman(n).to_uppercase(),
             NumFormat::LowerRoman => roman(n),
             NumFormat::UpperLetter => letters(n).to_uppercase(),
@@ -343,11 +347,9 @@ impl NumFormat {
             | NumFormat::DecimalHalfWidth
             | NumFormat::Hex
             | NumFormat::VietnameseCounting
-            | NumFormat::Hebrew1
             | NumFormat::Hebrew2
             | NumFormat::HindiVowels
             | NumFormat::HindiConsonants
-            | NumFormat::HindiNumbers
             | NumFormat::HindiCounting
             | NumFormat::ThaiLetters
             | NumFormat::ThaiCounting
@@ -360,6 +362,46 @@ impl NumFormat {
 /// `n` in Thai digits, ๐ (U+0E50) to ๙ (#5757).
 fn thai_digits(n: u32) -> String {
     n.to_string().chars().filter_map(|c| c.to_digit(10).and_then(|d| char::from_u32(0x0E50 + d))).collect()
+}
+
+/// `n` in Devanagari digits, ० (U+0966) to ९ (#7507).
+fn devanagari_digits(n: u32) -> String {
+    n.to_string().chars().filter_map(|c| c.to_digit(10).and_then(|d| char::from_u32(0x0966 + d))).collect()
+}
+
+/// `hebrew1`: `n` in Hebrew numerals, the letters' values added up, largest first, with no
+/// geresh or gershayim: א…ט are 1–9, י…צ tens, ק…ת 100–400, and 500–900 repeat ת (תק is 500,
+/// תתק 900). 15 and 16 are טו and טז, not יה and יו, as Hebrew numerals are written. 0 and
+/// values past 999 show decimal (#7507).
+fn hebrew_numeral(n: u32) -> String {
+    const ONES: [char; 9] = ['א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט'];
+    const TENS: [char; 9] = ['י', 'כ', 'ל', 'מ', 'נ', 'ס', 'ע', 'פ', 'צ'];
+    const HUNDREDS: [char; 4] = ['ק', 'ר', 'ש', 'ת'];
+    if n == 0 || n > 999 {
+        return n.to_string();
+    }
+    let mut s = String::new();
+    let mut hundreds = (n / 100) as usize;
+    while hundreds > 4 {
+        s.push('ת');
+        hundreds -= 4;
+    }
+    if let Some(&c) = hundreds.checked_sub(1).and_then(|i| HUNDREDS.get(i)) {
+        s.push(c);
+    }
+    match n % 100 {
+        15 => s.push_str("טו"),
+        16 => s.push_str("טז"),
+        rest => {
+            if let Some(&c) = ((rest / 10) as usize).checked_sub(1).and_then(|i| TENS.get(i)) {
+                s.push(c);
+            }
+            if let Some(&c) = ((rest % 10) as usize).checked_sub(1).and_then(|i| ONES.get(i)) {
+                s.push(c);
+            }
+        }
+    }
+    s
 }
 
 /// Chicago Manual of Style note marks: *, †, ‡, §, then doubled (**, ††, …) and so on.
@@ -994,7 +1036,7 @@ mod tests {
         assert_eq!(NumFormat::ChineseCounting.format(11), "十一");
         assert_eq!(NumFormat::ChineseCountingThousand.format(101), "一百零一");
         assert_eq!(NumFormat::DecimalEnclosedCircle.format(3), "③");
-        assert_eq!(NumFormat::Hebrew1.format(3), "3", "formats not drawn yet show decimal");
+        assert_eq!(NumFormat::Hebrew2.format(3), "3", "formats not drawn yet show decimal");
         assert_eq!(NumFormat::RussianLower.format(0), "");
         assert_eq!(NumFormat::RussianUpper.format(u32::MAX).chars().count(), 30);
         for f in NumFormat::ALL {
@@ -1014,6 +1056,23 @@ mod tests {
         assert_eq!(NumFormat::from_ooxml("thaiNumbers"), NumFormat::ThaiNumbers);
         // Formats not drawn yet still show decimal.
         assert_eq!(NumFormat::ThaiLetters.format(3), "3");
+    }
+
+    /// #7507: Hindi numbers are the decimal number in Devanagari digits; Hebrew numerals add up
+    /// letter values, with 15 and 16 written טו and טז.
+    #[test]
+    fn hindi_numbers_and_hebrew_numerals() {
+        let hindi: Vec<String> = [1, 2, 3, 9, 10, 105].iter().map(|n| NumFormat::HindiNumbers.format(*n)).collect();
+        assert_eq!(hindi.join(" "), "१ २ ३ ९ १० १०५");
+        let hebrew: Vec<String> =
+            [1, 2, 3, 9, 10, 11, 14, 15, 16, 17, 20, 99, 100, 115, 400, 500, 999].iter().map(|n| NumFormat::Hebrew1.format(*n)).collect();
+        assert_eq!(hebrew.join(" "), "א ב ג ט י יא יד טו טז יז כ צט ק קטו ת תק תתקצט");
+        // Past the numerals' range, decimal.
+        assert_eq!([NumFormat::Hebrew1.format(0), NumFormat::Hebrew1.format(1000)], ["0", "1000"]);
+        assert_eq!(NumFormat::from_ooxml("hebrew1"), NumFormat::Hebrew1);
+        assert_eq!(NumFormat::from_ooxml("hindiNumbers"), NumFormat::HindiNumbers);
+        // The Hebrew alphabet is not drawn yet.
+        assert_eq!(NumFormat::Hebrew2.format(3), "3");
     }
 
     #[test]
