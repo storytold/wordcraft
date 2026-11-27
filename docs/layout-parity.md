@@ -273,6 +273,10 @@ The legacy text-shadow control compares visible grey pixels with a translated Ar
 
 Installed static fonts also resolve by their OpenType PostScript name (name ID 6), retaining the named face rather than substituting an unrelated family. Missing faces still use the existing fallback rules. A local Best for printing control from Word for Mac 16.113.2 (build 26092012) retained the directly requested Cambria-Bold face.
 
+## Diagram font fallback
+
+Graphics drawn through `graphic_draws` (SmartArt diagrams and charts) choose one shared fallback face across all text items whose primary font lacks characters, preferring a covering face that matches the serif or sans-serif classification of the first label with a missing character; when mixed symbols prevent one face from covering the whole graphic, a second pass selects a shared East Asian fallback face while symbols resolve separately (#5672). Body-text fallback ordering is unchanged. Diagram fallback results are cached by deduplicated character set, excluded face and serif preference until loaded faces or the font generation change. Verified by synthetic font and layout regressions (`fonts::fontdb::face::tests::whole_token_serif_sans_matching`, `fonts::fontdb::tests::sysfonts::fallback_order_matches_primary_font_serif_nature`, `diagram_fallback_checks_system_fonts_when_loaded_face_mismatches_serif`, `diagram_fallback_caches_a_mismatched_loaded_face_after_system_search`, `layout::tests::smart_art_diagram_cjk_labels_maintain_consistent_fallback_font`, `mixed_font_diagram_uses_covering_fallback_for_later_missing_characters`), plus an optional host CJK check; no native Word comparison was performed.
+
 ## Graphemes across drawing segments
 
 Font fallback and mixed run formatting can split a grapheme into several independently shaped

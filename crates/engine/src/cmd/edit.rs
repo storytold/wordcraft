@@ -39,7 +39,7 @@ fn has_text_sel(s: &Session) -> Option<&'static str> {
     if s.sel.is_collapsed() { Some("nothing is selected") } else { None }
 }
 
-/// Something to cut: text, or whole table cells (an empty cell's selection has no length, #1744).
+/// Something to cut: text, an object, or whole table cells (an empty cell's selection has no length, #1744).
 fn has_sel(s: &Session) -> Option<&'static str> {
     if s.sel.is_collapsed() && s.cell_range().is_none() { Some("nothing is selected") } else { None }
 }
@@ -73,7 +73,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .key("Mod+Y / Mod+Shift+Z")
         .pure(),
         CommandSpec::new("edit.cut", "Cut", "Home › Clipboard", cut).key("Mod+X").when(has_sel),
-        CommandSpec::new("edit.copy", "Copy", "Home › Clipboard", copy).key("Mod+C / Mod+Insert").pure(),
+        CommandSpec::new("edit.copy", "Copy", "Home › Clipboard", copy).key("Mod+C / Mod+Insert").pure().when(has_sel),
         // Word's Spike (Ctrl+F3, Ctrl+Shift+F3; ⌘ on the Mac): the AutoText entry "Spike", so Quick
         // Parts and AutoText insert it without emptying it, as in Word.
         CommandSpec::new("edit.spike", "Spike", "Editing", spike).key("Mod+F3").when(has_text_sel),
@@ -187,6 +187,7 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// Copy the selected text, object, or table cells to the clipboard.
 fn copy(s: &mut Session, _: &Value) -> CmdResult {
     let whole = super::table::selected_table(s);
     copy_with(s, whole.as_ref())
@@ -220,6 +221,7 @@ pub(crate) fn copy_result(s: &mut Session) -> Value {
     (s.clipboard_html, s.clipboard_rtf) = match &s.clipboard {
         Some(f) => {
             let mut d = f.to_document();
+            d.styles = s.doc.styles.clone();
             if d.media.is_empty() {
                 d.media = s.doc.media.clone();
             }
@@ -243,6 +245,7 @@ pub(crate) fn copy_result(s: &mut Session) -> Value {
     r
 }
 
+/// Cut the selection, selected object, or whole table cells to the clipboard and remove it from the document.
 fn cut(s: &mut Session, _: &Value) -> CmdResult {
     let whole = super::table::selected_table(s);
     let r = copy_with(s, whole.as_ref())?;

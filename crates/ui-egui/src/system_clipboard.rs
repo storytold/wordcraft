@@ -471,9 +471,8 @@ mod tests {
         a.run("caret.docEnd", json!({})).unwrap();
         assert!(a.session.sel.is_collapsed());
 
-        let ctx = a.ctx.clone().unwrap();
-        let empty_r = a.run("edit.copy", json!({})).unwrap();
-        put_result(&mut a, &ctx, &empty_r);
+        // Copy is greyed with nothing selected (#7675), so the command is refused before it reaches the clipboard.
+        assert!(a.run("edit.copy", json!({})).is_err(), "Copy with nothing selected is refused");
 
         assert!(a.clipboard_published, "empty copy must not change published-copy state");
         let clip = handle(&a).unwrap();
@@ -482,9 +481,7 @@ mod tests {
 
         let mut a2 = app_holding(&[]);
         assert!(!a2.clipboard_published);
-        let ctx2 = a2.ctx.clone().unwrap();
-        let empty_r2 = a2.run("edit.copy", json!({})).unwrap();
-        put_result(&mut a2, &ctx2, &empty_r2);
+        assert!(a2.run("edit.copy", json!({})).is_err(), "Copy with nothing selected is refused");
         assert!(!a2.clipboard_published, "empty copy must not change published-copy state when false");
     }
 }

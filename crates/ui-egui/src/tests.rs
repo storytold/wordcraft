@@ -27,6 +27,27 @@ fn mod_key(key: egui::Key) -> egui::Event {
     egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }
 }
 
+/// #5793: a name from a paragraph's first words, as Word suggests one: up to the first sentence or
+/// clause end, without what a file name can't hold, at most 50 characters at a word's end.
+#[test]
+fn a_suggested_name_is_the_first_words_of_the_text() {
+    use crate::app::suggested_stem as stem;
+    assert_eq!(stem("Quarterly report for the board. More follows here.").as_deref(), Some("Quarterly report for the board"));
+    assert_eq!(stem("Minutes of the meeting, 6 November").as_deref(), Some("Minutes of the meeting, 6 November"));
+    assert_eq!(stem("What happened? Nobody knows").as_deref(), Some("What happened"));
+    assert_eq!(stem("Plan: phase one").as_deref(), Some("Plan"));
+    assert_eq!(stem("Q3 / Q4 \"draft\" <final> *v2* | a\\b").as_deref(), Some("Q3 Q4 draft final v2 a b"));
+    assert_eq!(stem("  Leading   and   inner   spaces  ").as_deref(), Some("Leading and inner spaces"));
+    assert_eq!(stem("日本語の文書\u{3002}続きの文").as_deref(), Some("日本語の文書"));
+    let long = "Annual report of the regional committee on transport and infrastructure planning";
+    let got = stem(long).unwrap();
+    assert!(got.chars().count() <= 50 && long.starts_with(&got) && long[got.len()..].starts_with(' '), "{got:?}");
+    assert_eq!(stem(&"x".repeat(80)).map(|s| s.chars().count()), Some(50), "one long word is cut at 50");
+    for nothing in ["", "   ", "...", "?", "/ * |", "\u{1}"] {
+        assert_eq!(stem(nothing), None, "{nothing:?}");
+    }
+}
+
 /// #5793: Save As suggests the first words for a document that was never saved and has no title
 /// of its own (the first paragraph with text, past empty ones); a title, a file name or a path
 /// still name it.
@@ -351,6 +372,23 @@ fn default_chords_fire_their_commands() {
         eprintln!("row: {name}");
         row();
     }
+}
+
+/// Issue #772: the Find and Replace dialog left focus on the document, so typing didn't go into
+/// Find what. (Ctrl/⌘+F now searches in the Navigation pane, as in Word (#712), so this opens
+/// the dialog with Ctrl/⌘+H.)
+#[test]
+fn find_shortcut_focuses_find_what() {
+    let mut h = blank_rig();
+    press(&mut h, egui::Key::H, egui::Modifiers::COMMAND);
+    assert!(h.state().dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("find")), "Find and Replace is open");
+    h.event(egui::Event::Text("abc".into()));
+    h.step();
+    h.step();
+    assert!(body_text(h.state()).is_empty(), "nothing was typed into the document");
+    let (key, fields) = open_dialog(h.state()).expect("Find dialog open");
+    assert_eq!(key, "find");
+    assert!(fields["find"].as_str().unwrap_or_default().ends_with("abc"), "typing went into Find what: {fields:?}");
 }
 
 /// The key of the dialog a command opened, read off its reply.
@@ -1969,6 +2007,130 @@ fn the_ribbon_boxes_name_themselves_for_a_screen_reader() {
     }
 }
 
+/// All title-bar inputs have accessible names. Clicking the title opens Rename Document, and
+/// clicking Account opens Backstage options.
+#[test]
+fn title_and_account_buttons_work() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness(app());
+    h.run_steps(2);
+    for (role, label) in [
+        (Role::Switch, "AutoSave"),
+        (Role::Button, "Save"),
+        (Role::Button, "Undo"),
+        (Role::Button, "Redo"),
+        (Role::Button, "Undo History"),
+        (Role::Button, "Customize Quick Access Toolbar"),
+        (Role::Button, "Document1 \u{2014} Not saved"),
+        (Role::Button, "Discord"),
+        (Role::Button, "WordCraft User"),
+    ] {
+        assert!(h.query_by_role_and_label(role, label).is_some(), "title bar missing {role:?} {label:?}");
+    }
+    assert!(h.query_by_label("Search commands and help").is_some(), "title bar missing Search commands and help");
+
+    h.get_by_role_and_label(Role::Button, "Document1 \u{2014} Not saved").click();
+    h.step();
+    let id = craft::ui::dialog::dialog_id("renameDocument");
+    assert!(h.state().dialog_host.open_dialogs().iter().any(|d| d.id == id), "renameDocument dialog is open");
+    h.get_by_role_and_label(Role::Button, "Rename").click();
+    h.run_steps(2);
+    assert!(h.state().dialog_host.open_dialogs().is_empty());
+    assert!(h.state().session.file_name.is_none());
+    assert!(!h.state().session.dirty);
+
+    h.get_by_role_and_label(Role::Button, "Document1 \u{2014} Not saved").click();
+    h.step();
+    assert!(h.state().dialog_host.open_dialogs().iter().any(|d| d.id == id), "renameDocument dialog is open");
+    h.event(egui::Event::Key {
+        key: egui::Key::A,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers { command: true, ..Default::default() },
+    });
+    h.event(egui::Event::Text("Project notes".into()));
+    h.step();
+    h.get_by_role_and_label(Role::Button, "Rename").click();
+    h.run_steps(2);
+    assert!(h.state().dialog_host.open_dialogs().is_empty());
+    assert_eq!(h.state().title_stem(), "Project notes");
+    assert_eq!(h.state().default_save_name(), "Project notes.docx");
+    assert!(h.state().session.doc.core.title.is_empty());
+    assert!(!h.state().session.dirty);
+
+    // A long name remains clickable, and Escape leaves it unchanged.
+    let long_name = "Notes ".repeat(25);
+    h.state_mut().run("file.rename", json!({"name": long_name})).unwrap();
+    h.step();
+    h.get_by_role_and_label(Role::Button, &format!("{} \u{2014} Not saved", long_name.trim())).click();
+    h.step();
+    assert!(h.state().dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("renameDocument")));
+    h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
+    h.run_steps(2);
+    assert!(h.state().dialog_host.open_dialogs().is_empty());
+    assert_eq!(h.state().title_stem(), long_name.trim());
+
+    h.get_by_role_and_label(Role::Button, "WordCraft User").click();
+    h.run_steps(2);
+    assert!(h.state().ui.backstage);
+    assert_eq!(h.state().ui.backstage_page, "options");
+    assert_eq!(h.state().ui.options_pane, "general");
+    assert!(h.query_by_label("User name:").is_some());
+}
+
+/// A pointer drag on a pane's resize edge leaves no keyboard focus behind, so Ctrl and
+/// F-key shortcuts run right after it, docked or floating (#1756).
+#[test]
+fn shortcuts_run_after_a_pane_resize() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, Queryable};
+    type H = egui_kittest::Harness<'static, WordApp>;
+    fn key(h: &mut H, key: egui::Key, modifiers: egui::Modifiers) {
+        h.key_press_modifiers(modifiers, key);
+        h.step();
+    }
+    fn drag(h: &mut H, from: egui::Pos2, by: egui::Vec2) {
+        let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        h.event(egui::Event::PointerMoved(from));
+        h.event(button(from, true));
+        h.step();
+        h.event(egui::Event::PointerMoved(from + by));
+        h.step();
+        h.event(button(from + by, false));
+        h.step();
+    }
+    let find_open = |h: &H| h.state().dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("find"));
+    let styles_pane =
+        |h: &H| h.query_all(By::new().role(Role::Group).label("Styles")).map(|n| n.rect()).find(|r| r.height() > 300.0).expect("Styles pane frame");
+
+    let mut a = app();
+    a.run("view.stylesPane", json!({"value": true})).unwrap();
+    let mut h = harness(a);
+    h.step();
+
+    let pane = styles_pane(&h);
+    // On the pane's inner edge: drag left by 40 px to widen it.
+    drag(&mut h, egui::pos2(pane.left() + 1.0, pane.center().y), egui::vec2(-40.0, 0.0));
+    let width = h.state().ui.styles_pane_width.unwrap_or_default();
+    assert!((width - 290.0).abs() <= 2.0, "the drag widened the docked pane: {width}");
+    key(&mut h, egui::Key::H, egui::Modifiers::COMMAND);
+    assert!(find_open(&h), "Ctrl+H runs after the docked drag");
+    key(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
+    assert!(h.state().dialog_host.open_dialogs().is_empty(), "Escape closes Replace");
+
+    h.state_mut().run("view.stylesPaneDock", json!({"dock": "float"})).unwrap();
+    h.step();
+    let float_pane = styles_pane(&h);
+    let before = h.state().ui.styles_pane_float;
+    // Drag the bottom-right corner.
+    drag(&mut h, float_pane.max - egui::vec2(2.0, 2.0), egui::vec2(30.0, 30.0));
+    assert_ne!(h.state().ui.styles_pane_float, before, "the drag resized the floating pane");
+    key(&mut h, egui::Key::H, egui::Modifiers::COMMAND);
+    assert!(find_open(&h), "Ctrl+H runs after the floating pane's resize");
+}
+
 /// #3172: the Paste button is named "Paste": its tooltip adds the key as the platform writes it,
 /// so its name no longer carries macOS's "⌘V", which screen readers read on Windows as "Paste (⌘V)".
 #[test]
@@ -3178,6 +3340,32 @@ fn task_panes_share_an_edge_close_and_keep_the_styles_place() {
     assert!(junk.session.view.nav_pane, "the rest of the file still loads");
 }
 
+/// #2526: the Navigation pane stays as the person left it at the next launch, and a
+/// `ui.json` from before the setting leaves it closed.
+#[test]
+fn navigation_pane_visibility_survives_restart() {
+    let mut first = app();
+    assert!(!first.session.view.nav_pane);
+    first.session.view.nav_pane = true;
+    let saved = serde_json::to_vec(&first.prefs()).unwrap();
+
+    let mut second = app();
+    second.apply_prefs(serde_json::from_slice(&saved).unwrap());
+    assert!(second.session.view.nav_pane, "the pane is open again");
+
+    let mut closed = app();
+    closed.session.view.nav_pane = true;
+    closed.session.view.nav_pane = false;
+    let saved = serde_json::to_vec(&closed.prefs()).unwrap();
+    let mut third = app();
+    third.apply_prefs(serde_json::from_slice(&saved).unwrap());
+    assert!(!third.session.view.nav_pane, "a closed pane stays closed");
+
+    let mut old = app();
+    old.apply_prefs(serde_json::from_str(r#"{"navTab": "headings"}"#).unwrap());
+    assert!(!old.session.view.nav_pane, "no saved value: closed");
+}
+
 /// The same across windows: Check spelling as you type turned off in a second window on a document
 /// stays off when the first window's own view of it comes back, in a window on another document,
 /// back in the second window, and in the saved settings (#5740).
@@ -3941,6 +4129,29 @@ fn shift_f10_opens_the_context_menu_at_the_caret() {
     h.step();
     assert!(h.state().canvas.context_menu_open);
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Kilns fire");
+}
+
+/// #7673: with nothing selected the text menu greys Cut and Copy, as production did; a selection enables them.
+#[test]
+fn the_context_menu_greys_cut_and_copy_without_a_selection() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let row = |h: &Rig, name: &str| {
+        let node = h.query_all_by_label(name).find(|node| node.accesskit_node().role() == egui::accesskit::Role::MenuItem);
+        node.expect("the menu row").accesskit_node().is_disabled()
+    };
+    let mut h = harness(app());
+    h.run_steps(4);
+    h.event(egui::Event::Text("Kilns fire".into()));
+    h.run_steps(2);
+    h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+    h.run_steps(4);
+    assert!(row(&h, "Cut") && row(&h, "Copy"), "nothing is selected");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    h.state_mut().run("select.all", json!({})).unwrap();
+    h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+    h.run_steps(4);
+    assert!(!row(&h, "Cut") && !row(&h, "Copy"), "the text is selected");
 }
 
 /// A file dropped in the first two font-warm-up passes is taken before the early return;
