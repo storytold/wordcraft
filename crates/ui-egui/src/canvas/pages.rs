@@ -148,6 +148,12 @@ pub(crate) fn dark_page(app: &WordApp) -> bool {
     if v.read_mode { v.read_page_color == ReadPageColor::Inverse } else { v.dark_mode }
 }
 
+/// The paper as the pages draw it on screen (a dark page's included): what drawing over the pages
+/// (live ink) has to stand out against.
+pub(crate) fn page_paper(app: &WordApp) -> wordcraft_doc::props::Rgb {
+    page_render_options(app, false).paper_of(&app.session.doc)
+}
+
 /// Render options for this view's page rasters: marks, markup, dark page, header/body dimming.
 pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_render::RenderOptions {
     let mut opts = screen_render_options();

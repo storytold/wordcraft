@@ -62,7 +62,7 @@ pub(crate) use links::follow_link;
 use links::{field_link, is_followable_link, is_generated_bookmark_link};
 pub use navigation::page_to_screen;
 use navigation::viewed_page;
-pub(crate) use pages::{PageKeys, dark_page, page_doc, page_screen_scale, preview_sel, screen_render_options};
+pub(crate) use pages::{PageKeys, dark_page, page_doc, page_paper, page_screen_scale, preview_sel, screen_render_options};
 use pages::{page_render_options, shown_layout};
 use reading::{reading_anchor_page, reading_page_start, web_layout_width};
 use story::dims_body;

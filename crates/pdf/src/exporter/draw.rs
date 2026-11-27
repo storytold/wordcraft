@@ -64,7 +64,7 @@ impl Exporter<'_> {
                 s.set_fill(None);
                 s.set_stroke(None);
             }
-            Draw::Ink { pts, color, width, alpha } => {
+            Draw::Ink { pts, color, width, alpha, .. } => {
                 let mut pb = PathBuilder::new();
                 let mut used = 0usize;
                 let mut last = (0.0, 0.0);

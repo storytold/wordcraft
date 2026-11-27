@@ -49,7 +49,7 @@ fn path_fill_keeps_stroke_alpha() {
         close(rendered.pixel(64, 64), alpha);
         assert_eq!(rendered.pixel(16, 64), [0, 255, 0, 255], "stroke at fill alpha {alpha}");
     }
-    let ink = image(Draw::Ink { pts: vec![(4.0, 16.0), (28.0, 16.0)], color: RED, width: 4.0, alpha: 0.5 });
+    let ink = image(Draw::Ink { pts: vec![(4.0, 16.0), (28.0, 16.0)], color: RED, width: 4.0, alpha: 0.5, pen: true });
     close(ink.pixel(64, 64), 0.5);
 }
 
