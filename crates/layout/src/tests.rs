@@ -8745,6 +8745,73 @@ fn no_line_break_right_after_a_slash() {
     assert!(lines > 10, "{lines} lines");
 }
 
+/// Measured in Word for Windows 16.0.20527 (compatibility modes 14 and 15, TH SarabunPSK, Thai in
+/// `w:cs` runs, each side of the slash and the slash in runs of their own): a line can end right
+/// after a slash with Thai after it, in a Latin run or a `w:cs` one. With Thai only before it,
+/// only after a `w:cs` slash: in a Latin run ("แผนการพัฒนา" + "/planning") the word stays whole.
+/// A `w:cs` slash between a Latin letter or digit and Thai is a place to break before as well;
+/// between Latin letters and digits, in either run, a slash is neither.
+#[test]
+fn a_slash_next_to_thai_is_a_place_to_break_after() {
+    // (line ends after a slash, line ends before one) at widths that all hold the slashed word:
+    // words before it make it wrap, and it never splits for want of room. Eight of them, so that
+    // even after "2563" the line that breaks before the slash is wider than the narrowest.
+    let breaks = |parts: &[(&str, bool)]| {
+        let head = "word word word word word word word word ";
+        let mut p = wordcraft_doc::Paragraph::new();
+        p.text = format!("{head}{}", parts.iter().map(|(t, _)| *t).collect::<String>());
+        p.runs = std::iter::once(wordcraft_doc::Run { len: head.len(), props: Default::default() })
+            .chain(parts.iter().map(|&(t, cs)| wordcraft_doc::Run {
+                len: t.len(),
+                props: wordcraft_doc::CharProps { cs: cs.then_some(true), ..Default::default() },
+            }))
+            .collect();
+        let text = p.text.clone();
+        let (mut after, mut before) = (Vec::new(), false);
+        // 1 pt steps: the width that breaks before a slash, not after it, is as narrow as the slash.
+        for m in 100..=380 {
+            let mut d = Document::from_text("");
+            d.body = vec![wordcraft_doc::para_block(p.clone())];
+            d.last_section.margin_right = m as f32;
+            let l = lay(&d);
+            for it in &l.pages[0].items {
+                if let Placed::Lines { para, l0, l1, .. } = it {
+                    for line in &para.lines[*l0..*l1] {
+                        if line.stop < text.len() && text[..line.stop].ends_with('/') {
+                            after.push(line.stop);
+                        }
+                        before |= line.stop > head.len() && text[line.stop..].starts_with('/');
+                    }
+                }
+            }
+        }
+        (after, before, text)
+    };
+    let (t, l) = (true, false);
+    for (parts, after, before) in [
+        (&[("ดำเนินการ", t), ("/", t), ("แผนการพัฒนา", t)][..], true, false),
+        (&[("ดำเนินการ", t), ("/", l), ("แผนการพัฒนา", t)], true, false),
+        (&[("ปีงบประมาณ", t), ("/", t), ("2563", l)], true, false),
+        (&[("ปีงบประมาณ", t), ("/", l), ("2563", l)], false, false),
+        (&[("แผนการพัฒนา", t), ("/", t), ("planning", l)], true, false),
+        (&[("แผนการพัฒนา", t), ("/", l), ("planning", l)], false, false),
+        (&[("planning", l), ("/", l), ("แผนการพัฒนา", t)], true, false),
+        (&[("planning", l), ("/", t), ("แผนการพัฒนา", t)], true, true),
+        (&[("2563", l), ("/", l), ("แผนการพัฒนา", t)], true, false),
+        (&[("2563", l), ("/", t), ("แผนการพัฒนา", t)], true, true),
+        (&[("development", l), ("/", l), ("planning", l)], false, false),
+        (&[("development", l), ("/", t), ("planning", l)], false, false),
+        (&[("2563", l), ("/", t), ("2564", l)], false, false),
+    ] {
+        let (got_after, got_before, text) = breaks(parts);
+        assert_eq!((!got_after.is_empty(), got_before), (after, before), "{text:?}: (ends after a slash, ends before one)");
+    }
+    // A web address with a Thai last part breaks after the slash before the Thai only.
+    let (got, _, text) = breaks(&[("https://th.wiki.org/wiki/", l), ("ภาษาไทย", t)]);
+    assert!(!got.is_empty(), "no line of {text:?} ends after a slash");
+    assert!(got.iter().all(|&e| text[..e].ends_with("wiki/")), "{text:?} ends after another slash: {got:?}");
+}
+
 /// The text of every laid-out line.
 fn body_lines(l: &DocLayout, text: &str) -> Vec<String> {
     l.pages
