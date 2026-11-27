@@ -2687,9 +2687,9 @@ impl StoreConsumption {
     fn from_document(pkg: &Package, xml: &XmlScan, roles: &HashMap<String, scan::PartRole>) -> Self {
         observation_contract! {
             rules: "-";
-            collections: "access.into_complete_set*1,field.binding_ids*3,field.bound*1,field.bound_properties*1,field.incomplete*1,field.items*3,field.parts*2,field.rels*5,type.HashMap*4,type.HashSet*5,type.Observed*1,type.Vec*1";
+            collections: "access.into_complete_set*1,field.binding_ids*3,field.bound*1,field.bound_properties*1,field.incomplete*2,field.items*3,field.parts*2,field.rels*5,type.HashMap*4,type.HashSet*5,type.Observed*1,type.Vec*1";
             scope: "Custom XML item identities, local usage and bindings from every incoming internal relationship source, and GUID consumption from all observed stories";
-            loss: "Incomplete source syntax, unavailable or uncertain usage, relationship discovery, or allocation budget";
+            loss: "Incomplete source syntax, unavailable or uncertain usage, relationship discovery, or declaration retention in any relationships part";
             fallback: "Retain positive bindings; withhold the unused-store exemption when consumption is uncertain";
             package_loss: "independent";
         }
@@ -2711,6 +2711,7 @@ impl StoreConsumption {
         }
         let mut properties = HashMap::new();
         for rp in &pkg.rels {
+            bindings_complete &= !rp.incomplete;
             if let Some(owner) = rels_owner_name(&rp.name) {
                 properties.insert(PartId::new(&owner), rp);
             }
@@ -2784,7 +2785,11 @@ impl StoreConsumption {
         }
         stores.excluded = Observed::with_status(
             excluded,
-            if bindings_complete { Completeness::Complete } else { Completeness::Incomplete("custom XML binding sources unavailable") },
+            if bindings_complete {
+                Completeness::Complete
+            } else {
+                Completeness::Incomplete("custom XML relationship or binding sources unavailable")
+            },
         )
         .into_complete_set();
         stores
@@ -2821,7 +2826,7 @@ impl StoreConsumption {
             rules: "-";
             collections: "access.missing*1,field.items*1";
             scope: "Known custom XML item and complete exclusion set";
-            loss: "Incomplete binding or store identification";
+            loss: "Incomplete incoming relationship inventory, binding coverage, or store identification";
             fallback: "Keep XML syntax diagnostics when the unused-store exemption is unestablished";
             package_loss: "independent";
         }
@@ -8380,6 +8385,26 @@ mod round5_completeness_tests {
     #[test]
     fn empty_custom_xml_store_checks_targeting_source_with_image_relationship() {
         check_custom_xml_store_usage_coverage("image");
+    }
+
+    #[test]
+    fn empty_custom_xml_store_requires_complete_relationship_inventory() {
+        let unrelated = (0..8).map(|index| rel("hyperlink", &format!("unrelated{index}"))).collect::<String>();
+        let image = rel("image", "data.xml");
+        let main_rels = rel("customXml", "data.xml");
+        for (position, edges) in [("first", image.clone() + &unrelated), ("ninth", unrelated + &image)] {
+            let bytes = package(
+                vec![("word/data.xml", "application/xml", String::new()), ("word/_rels/settings.xml.rels", "", relationships(&edges))],
+                &main_rels,
+            );
+            for entries in [8, 9] {
+                let report = validate_bytes_limited(&bytes, Limits { entries, ..Limits::default() });
+                assert!(
+                    report.findings.iter().any(|finding| finding.rule == "XML-MALFORMED" && finding.part.as_deref() == Some("word/data.xml")),
+                    "image edge {position}, entries limit {entries}: {report:?}"
+                );
+            }
+        }
     }
 
     fn check_custom_xml_store_usage_coverage(settings_edge: &str) {
