@@ -349,6 +349,28 @@ fn an_unrelated_keys_modifiers_do_not_steer_a_later_paste() {
     }
 }
 
+/// #5616: Mod+V with `ControlLeft` released before `V` still pastes HTML formatting, and a
+/// subsequent plain `V` types `'v'` instead of pasting (extending
+/// `mod_v_released_mod_first_pastes_the_clipboard_picture` to HTML bold paste and follow-up `V`).
+#[test]
+fn paste_release_modifiers_fall_back_to_those_held_with_mod() {
+    let ctrl = mod_held();
+    let mut h = alt_frame_app();
+    run(&mut h, "text.insert", json!({"text": "x"}));
+    run(&mut h, "select.all", json!({}));
+    offer(&h, bold_flavours("external"));
+    mods_frame(&mut h, ctrl, vec![key_event(Key::ControlLeft, true, ctrl), key_event(Key::V, true, ctrl)]);
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::ControlLeft, false, Modifiers::NONE)]);
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
+    assert_eq!(body(h.state()), "external");
+    assert!(is_bold(&mut h), "Mod+V keeps HTML formatting even when Mod is released before V");
+
+    offer(&h, bold_flavours("again"));
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, true, Modifiers::NONE), egui::Event::Text("v".into())]);
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
+    assert_eq!(body(h.state()), "externalv", "plain V after Mod+V release types 'v' instead of pasting");
+}
+
 /// Paste Formatting on a chord the user bound pastes the copied formatting once.
 #[test]
 fn paste_formatting_on_another_key_pastes_the_copied_formatting() {
