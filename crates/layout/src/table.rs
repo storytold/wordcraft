@@ -837,6 +837,10 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                 it.translate(0.0, dy);
                 items.push(it);
             }
+            let content_end = items.len();
+            let fixed_overflow = t.props.fixed
+                && (c.w - c.margins[1] - c.margins[3] < 4.0
+                    || fixed_cell_object_overflow(items.get(content..content_end).unwrap_or_default(), c.x, c.x + c.w));
             let align = (dy > 0.0).then_some(CellAlign { content: content..items.len(), valign: c.valign, dy, height: align_h });
             let b = c.borders;
             let (x0, x1, y0, y1) = (c.x, c.x + c.w, 0.0, rh);
@@ -865,9 +869,9 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                 row: ri,
                 cell: ci,
                 story,
-                // A fixed table's cell too narrow for any text (its lines are laid out 4 pt wide)
-                // clips them, as Word does, rather than letting them run past its edges.
-                clip: (exact && c.h > span_h + 0.01) || (t.props.fixed && c.w - c.margins[1] - c.margins[3] < 4.0),
+                // A fixed table clips cell content when the column is too narrow for text (laid
+                // out 4 pt wide) or an inline object (e.g. an image) overflows the cell's edges.
+                clip: (exact && c.h > span_h + 0.01) || fixed_overflow,
             });
             let top = c.margins[0] + c.borders.top.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
             parts.push(CellPart { top, items: first..items.len(), end, align });
@@ -881,6 +885,28 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
         });
     }
     TableLayout { x, width: total, rows: out }
+}
+
+/// Whether any horizontal paragraph line placed in a fixed-layout cell contains an inline object
+/// (such as a picture, shape or chart) that extends past the cell's horizontal edges.
+fn fixed_cell_object_overflow(items: &[Placed], cell_left: f32, cell_right: f32) -> bool {
+    items.iter().any(|it| {
+        let Placed::Lines { x, para, l0, l1, turn: TextDirection::Horizontal, .. } = it else {
+            return false;
+        };
+        para.lines.get(*l0..*l1).into_iter().flatten().any(|line| {
+            (line.c0..line.c1).any(|k| {
+                let Some(cl) = para.clusters.get(k) else { return false };
+                if !matches!(cl.kind, crate::para::ClKind::Object(_)) || cl.adv <= 0.0 {
+                    return false;
+                }
+                let (Some(l), Some(r)) = (line.cl_left(k), line.cl_right(k)) else { return false };
+                let lo = x + l.min(r);
+                let hi = x + l.max(r);
+                lo < cell_left - 0.01 || hi > cell_right + 0.01
+            })
+        })
+    })
 }
 
 /// Split a row at `cut` (points below the row's top) so the part above fits on this page.

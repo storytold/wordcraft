@@ -78,7 +78,7 @@ use cache::{MAX_PAGE_REF_PASSES, MAX_TOTAL_PASSES, Totals};
 use ctx::picture_outline;
 use ctx::{Ctx, Pass};
 use floats::{EarlyFloats, MAX_REWRAP_PASSES, merge_early};
-pub use floats::{is_floating, shape_figure_alt};
+pub use floats::{clamps_body_para_float, is_floating, shape_figure_alt};
 #[cfg(test)]
 use floats::{left_out_objects, wrap_area};
 #[cfg(test)]

@@ -1,6 +1,6 @@
 use super::arrange::{MAX_OFFSET, move_object, unalign};
 use super::select::{FROZEN, INK_GROUP, holds_ink, min_size, movable_story, object_ref, object_selection, picked_objects, selected, shown_members};
-use super::{CmdError, CmdResult, Float, InlineObject, Pos, Selection, Session, Spin, Value, Wrap, json, sel_result};
+use super::{CmdError, CmdResult, Float, InlineObject, Pos, Selection, Session, Spin, StoryRef, Value, Wrap, json, sel_result};
 
 /// Add objects to the selection (Shift+click): the first one is selected if no object is yet;
 /// one already selected is taken out again.
@@ -160,6 +160,22 @@ pub(super) fn ungroup(s: &mut Session, _: &Value) -> CmdResult {
     let obj = s.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)).cloned().ok_or_else(|| CmdError::Failed("object vanished".into()))?;
     let Some((w, h, float)) = obj.frame() else { return Err(CmdError::Failed("object vanished".into())) };
     let float = float.clone();
+    // In Word 2013+ (compat >= 15), body wrapping floats anchored to Paragraph/Line are clamped
+    // to `page_top` (`page.body.y`). If ungrouping a group (e.g. rotated) places a member above
+    // `page_top`, pin that member's vertical anchor to `Anchor::Page` so it stays where the group
+    // showed it rather than jumping down to `page_top`.
+    use wordcraft_doc::para::Anchor;
+    let clamp_ctx = (!super::arrange::is_unclamped_view(s)
+        && pos.story == StoryRef::Body
+        && pos.path.depth() == 0
+        && wordcraft_layout::clamps_body_para_float(s.doc.settings.compat_mode, float.v_rel, float.wrap))
+    .then(|| {
+        let layout = s.layout();
+        let hit = layout.object(&pos, s.page_hint)?;
+        let page_top = layout.pages.get(hit.page)?.body.y;
+        Some((hit.rect.y, hit.origin.y, page_top))
+    })
+    .flatten();
     // Each member where the group shows it: the group's turn moves its centre about the group's
     // centre and adds to its own turn.
     let members: Vec<InlineObject> = shown_members(&obj, [0.0, 0.0, w, h])
@@ -173,7 +189,12 @@ pub(super) fn ungroup(s: &mut Session, _: &Value) -> CmdResult {
             if let Some(f) = c.float_mut() {
                 // Each member keeps its own alt text; the group's placement is shared out.
                 let alt = std::mem::take(&mut f.alt);
-                *f = Float { x: (float.x + x).clamp(-MAX_OFFSET, MAX_OFFSET), y: (float.y + y).clamp(-MAX_OFFSET, MAX_OFFSET), alt, ..float.clone() };
+                let (v_rel, fy) = match clamp_ctx {
+                    Some((group_y, _, page_top)) if group_y + y < page_top => (Anchor::Page, group_y + y),
+                    Some((group_y, origin_y, _)) => (float.v_rel, group_y + y - origin_y),
+                    None => (float.v_rel, float.y + y),
+                };
+                *f = Float { v_rel, x: (float.x + x).clamp(-MAX_OFFSET, MAX_OFFSET), y: fy.clamp(-MAX_OFFSET, MAX_OFFSET), alt, ..float.clone() };
                 f.set_spin(spin);
             }
             c
