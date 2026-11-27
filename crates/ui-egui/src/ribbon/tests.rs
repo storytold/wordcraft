@@ -1340,6 +1340,49 @@ fn a_combo_field_reached_with_tab_shows_its_hint_after_a_delay() {
     assert!(h.query_all_by_label("Font Size").count() >= 2, "hint must show after tooltip delay");
 }
 
+/// Verifies that in RTL (Hebrew), the ribbon lays out groups from the physical right edge
+/// with trailing groups overflowing off the physical left edge.
+#[test]
+fn rtl_ribbon_starts_on_right_and_overflows_left() {
+    if !crate::i18n::catalogs_embedded() {
+        return;
+    }
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("ui.language", json!({"value": "he"})).unwrap();
+    assert_eq!(app.ui.language, "he");
+    let he = crate::i18n::Lang::from_pref(&app.ui.language);
+    assert_eq!(he.code(), "he");
+    assert!(he.rtl(), "Hebrew must be registered as an RTL interface language");
+    app.ui.tab = "Home".to_string();
+    app.ui.backstage = false;
+    let width = 220.0;
+    let mut fonts = false;
+    let mut h = crate::test_harness::builder().with_size(vec2(width, 300.0)).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            // Fonts take effect the frame after they are installed.
+            if !fonts {
+                crate::app::fonts::install_ui_fonts(ui.ctx(), he);
+                fonts = true;
+                return;
+            }
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    crate::test_harness::frames(&mut h, 4);
+    assert!(crate::i18n::current().rtl(), "RTL layout mode must be active for Hebrew");
+
+    let clipboard_label = crate::i18n::tr(he, "Clipboard");
+    let editor_label = crate::i18n::tr(he, "Editor");
+    let button_rect = |h: &Harness, label: &str| h.get(By::new().role(egui::accesskit::Role::Button).label(label)).rect();
+    let clipboard_before = button_rect(&h, clipboard_label);
+    let editor_before = button_rect(&h, editor_label);
+    assert!(clipboard_before.left() > width * 0.5 && clipboard_before.right() <= width, "RTL Home tab starts on the right: {clipboard_before:?}");
+    assert!(editor_before.left() < 0.0, "trailing RTL groups overflow off the physical left edge initially: {editor_before:?}");
+}
+
 /// #7165: the Symbol drop-down's cells are compact (a thumbnail-small step, not a card) and the hover text names
 /// the character, not just the glyph.
 #[test]

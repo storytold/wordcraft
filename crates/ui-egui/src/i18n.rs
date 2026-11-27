@@ -77,7 +77,7 @@ pub struct LangInfo {
 
 /// The languages WordCraft offers, when their catalogs are embedded. English first: it is the
 /// fallback and the source language.
-pub static LANGUAGES: [LangInfo; 29] = [
+pub static LANGUAGES: [LangInfo; 30] = [
     LangInfo { code: "en", prefer_hans: false, editing_lang: None },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` resolve here (the crate's matching).
     LangInfo { code: "zh-hans", prefer_hans: true, editing_lang: None },
@@ -136,6 +136,8 @@ pub static LANGUAGES: [LangInfo; 29] = [
     LangInfo { code: "ar", prefer_hans: false, editing_lang: None },
     // Slovenian; `sl`, `sl-SI` and `sl_SI.UTF-8` resolve here.
     LangInfo { code: "sl", prefer_hans: false, editing_lang: None },
+    // Hebrew; `he`, `he-IL`, `he_IL.UTF-8` and legacy `iw`/`iw-IL` resolve here.
+    LangInfo { code: "he", prefer_hans: false, editing_lang: None },
     // Bosnian, Latin script; `bs`, `bs-BA`, `bs_BA.UTF-8` and `bs-Latn-BA` resolve here. Cyrillic
     // Bosnian (`bs-Cyrl-*`) has no catalog, so it stays in English.
     LangInfo { code: "bs", prefer_hans: false, editing_lang: None },
@@ -144,7 +146,7 @@ pub static LANGUAGES: [LangInfo; 29] = [
 /// Interface languages written right to left. Their catalogs are written in typing order and
 /// egui's text layout orders each line itself, so the lookups return them as they are; the window
 /// is mirrored ([`crate::rtl`]).
-const RTL_LANGUAGES: [&str; 1] = ["ar"];
+const RTL_LANGUAGES: [&str; 2] = ["ar", "he"];
 
 /// A language the UI can be shown in: English, or an offered language whose catalogs are embedded.
 #[derive(Clone, Copy)]
@@ -287,6 +289,15 @@ pub fn lang_from_tag(tag: &str) -> Option<Lang> {
     if non_brazilian_portuguese(tag) {
         return None;
     }
+    let trimmed = tag.trim();
+    let normalized;
+    let tag = match trimmed.split(['-', '_', '.', '@']).next() {
+        Some(first) if first.eq_ignore_ascii_case("iw") => {
+            normalized = format!("he{}", &trimmed[first.len()..]);
+            normalized.as_str()
+        }
+        _ => tag,
+    };
     I18N.match_tag(tag).and_then(|lang| Lang::from_code(I18N.code(lang)))
 }
 
