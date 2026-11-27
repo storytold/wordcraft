@@ -615,8 +615,7 @@ fn symbol_page(ui: &mut Ui, form: &mut SymbolForm, catalog: Option<&Arc<Catalog>
         form.jump_to(name);
     }
     let dark = ui.visuals().dark_mode;
-    let activated = glyph_grid(ui, form, dark);
-    recent_row(ui, form, dark);
+    let activated = glyph_grid(ui, form, dark) | recent_row(ui, form, dark);
     if let Some(c) = form.selected {
         Text::new(Label::from(format!("U+{:04X}", c as u32))).show(ui);
     }
@@ -629,10 +628,11 @@ fn symbol_page(ui: &mut Ui, form: &mut SymbolForm, catalog: Option<&Arc<Catalog>
     activated
 }
 
-/// The recently inserted symbols as one row of glyphs, each in its own font; a click picks one.
-fn recent_row(ui: &mut Ui, form: &mut SymbolForm, dark: bool) {
+/// The recently inserted symbols as one row of glyphs, each in its own font; a click picks one,
+/// and whether one was activated.
+fn recent_row(ui: &mut Ui, form: &mut SymbolForm, dark: bool) -> bool {
     if form.recent.is_empty() {
-        return;
+        return false;
     }
     let positions: Vec<usize> = (0..form.recent.len()).collect();
     let source = keyed(&positions, |at: &usize| *at);
@@ -654,18 +654,27 @@ fn recent_row(ui: &mut Ui, form: &mut SymbolForm, dark: bool) {
             .response
             .events
     };
+    let (mut picked, mut activated) = (None, false);
     for event in events {
-        if let CollectionEvent::Selection { change: SelectionChange::Set(rows), .. } = event
-            && let Some(r) = rows.last().and_then(|i| form.recent.get(*i)).cloned()
-            && let Some(c) = r.ch.chars().next()
-        {
-            form.font = r.font;
-            form.selected = Some(c);
-            form.load();
-            form.sync_code();
-            form.reveal = form.index_of(c);
+        match event {
+            CollectionEvent::Selection { change: SelectionChange::Set(rows), .. } => picked = rows.last().copied().or(picked),
+            CollectionEvent::Activate(row) => {
+                picked = Some(row);
+                activated = true;
+            }
+            _ => {}
         }
     }
+    if let Some(r) = picked.and_then(|i| form.recent.get(i)).cloned()
+        && let Some(c) = r.ch.chars().next()
+    {
+        form.font = r.font;
+        form.selected = Some(c);
+        form.load();
+        form.sync_code();
+        form.reveal = form.index_of(c);
+    }
+    activated
 }
 
 /// The characters of the shown font as a single-selection grid, each painted in the font; whether
