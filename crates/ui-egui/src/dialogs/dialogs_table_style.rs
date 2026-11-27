@@ -1072,7 +1072,7 @@ mod tests {
             let size = h.get_by_role_and_label(Role::ComboBox, "Size:").rect();
             let underline = h.get_by_role_and_label(Role::Button, "Underline").rect();
             let font_color = h.query_all_by_label("Font color: No Color").next().expect("font color field").rect();
-            let fill = h.query_all_by_label("Fill color: No Color").next().expect("fill color field").rect();
+            let fill = h.query_all_by_label("Fill color: Inherit").next().expect("fill color field").rect();
             let borders = h.get_by_role_and_label(Role::Button, "Borders:").rect();
             let align = h.get_by_role_and_label(Role::Button, "Alignment: Auto").rect();
             assert!(size.width() < font.width(), "Size box should be narrower than Font box: size={size:?} font={font:?}");
