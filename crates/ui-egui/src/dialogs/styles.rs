@@ -161,7 +161,7 @@ impl ManageStylesDialog {
         });
         for event in out.events {
             match event {
-                CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+                CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
                     if let Some(key) = keys.last() {
                         self.selected = key.clone();
                     }
