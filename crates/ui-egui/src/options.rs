@@ -854,17 +854,17 @@ fn language_name(lang: wordcraft_engine::proof::ProofLang) -> &'static str {
         ProofLang::Ru => tl!("Russian"),
         ProofLang::Cs => tl!("Czech"),
         ProofLang::Id => tl!("Indonesian"),
+        ProofLang::De => tl!("German"),
         ProofLang::Es => tl!("Spanish (Spain)"),
         ProofLang::EsMx => tl!("Spanish (Mexico)"),
         ProofLang::Es419 => tl!("Spanish (Latin America)"),
         ProofLang::EsUy => tl!("Spanish (Uruguay)"),
-        // English uses its bundled word list; Bulgarian and German have no dictionary yet.
+        // English uses its bundled word list; Bulgarian has no dictionary yet.
         ProofLang::En
         | ProofLang::EnGb
         | ProofLang::EnCa
         | ProofLang::EnAu
         | ProofLang::Bg
-        | ProofLang::De
         | ProofLang::Pack(_)
         | ProofLang::Other => "",
     }
