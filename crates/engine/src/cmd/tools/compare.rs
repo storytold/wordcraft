@@ -306,15 +306,18 @@ fn diff_blocks(ctx: &mut CompareCtx<'_>, old: &[Arc<Block>], new: &[Arc<Block>],
                         }
                         _ => {
                             let mut emitted = false;
-                            if let Some(x) = a
-                                && !(depth >= PARA_WALK_DEPTH && x.as_table().is_some())
-                            {
-                                out.push(Arc::new(mark_block(x, &|c| c.del = Some(ctx.del))));
-                                emitted = true;
+                            if let Some(x) = a {
+                                if depth >= PARA_WALK_DEPTH && x.as_table().is_some() {
+                                    *ctx.table_fallbacks = ctx.table_fallbacks.saturating_add(1);
+                                } else {
+                                    out.push(Arc::new(mark_block(x, &|c| c.del = Some(ctx.del))));
+                                    emitted = true;
+                                }
                             }
                             if let Some(x) = b {
                                 if depth >= PARA_WALK_DEPTH && x.as_table().is_some() {
                                     out.push(clean_revised_block(x));
+                                    *ctx.table_fallbacks = ctx.table_fallbacks.saturating_add(1);
                                 } else {
                                     out.push(Arc::new(mark_inserted_block(x, ctx.ins)));
                                     emitted = true;
@@ -865,6 +868,7 @@ fn diff_tables(ctx: &mut CompareCtx<'_>, out: &mut Vec<Arc<Block>>, a: &Arc<Bloc
     }
     if depth >= PARA_WALK_DEPTH {
         out.push(clean_revised_block(b));
+        *ctx.table_fallbacks = ctx.table_fallbacks.saturating_add(1);
         return;
     }
     if same_grid(&ta.grid, &tb.grid)
@@ -1712,8 +1716,8 @@ fn flatten_region(out: &mut Vec<Op>, region: &[(Op, usize, Kind)]) {
     out.extend(std::iter::repeat_n(Op::Ins, inss));
 }
 
-/// A token of a changed paragraph: a word (or character), or an inline object without text
-/// of its own (a text box anchor, a picture, a bookmark…), which is compared and kept whole.
+/// A token of a changed paragraph: a word (or character), or an inline object (a text box
+/// anchor, a picture, a bookmark, a field, an equation…), which is compared and kept whole.
 /// Each token also carries the byte range it came from in its source paragraph, so the output
 /// segment can take the formatting of the run it came from instead of the paragraph's first run.
 enum Tok<'a> {
@@ -1744,10 +1748,11 @@ fn same_objects(doc: &Document, a: &Paragraph, b: &Paragraph) -> bool {
 }
 
 /// Words with the spaces after them ("The ", "cat "), or single characters, and the objects
-/// between them. Objects with text (fields, equations…) count as their text. Each token records
-/// the byte range it came from in `p`, so its output segment can take that source run's
-/// formatting. An object's flattened text (or a broken marker's placeholder) maps to the marker's
-/// own range, which is the nearest formatting the object has.
+/// between them. Inline objects (text boxes, pictures, bookmarks, fields, equations…) are kept as
+/// atomic [`Tok::Obj`] tokens and matched via [`obj_key`]. Each token records the byte range it
+/// came from in `p`, so its output segment can take that source run's formatting. An object token
+/// (or a broken marker's placeholder) maps to the marker's own range, which is the nearest
+/// formatting the object has.
 fn tokens(p: &Paragraph, characters: bool) -> Vec<Tok<'_>> {
     fn push(v: &mut Vec<Tok<'_>>, cur: &mut String, start: usize, end: usize, c: char, characters: bool) {
         cur.push(c);
