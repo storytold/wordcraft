@@ -91,7 +91,7 @@ fn table_properties_dialog_sets_every_selected_row() {
 }
 
 /// #7885: a table's preferred width reads as its percentage, and the form sends `widthPct` or
-/// `width` by unit and `width: null` when the box is turned off.
+/// `width` by unit and `width: null` alone when the box is turned off.
 #[test]
 fn table_properties_percent_width_reads_and_writes() {
     let mut a = app();
@@ -113,11 +113,54 @@ fn table_properties_percent_width_reads_and_writes() {
 
     let mut off = form.clone();
     off.width_on = false;
-    assert_eq!(off.changes(&form)["width"], Value::Null);
+    assert_eq!(off.changes(&form), json!({"width": null}), "off sends only width: null, never a stale widthPct");
 }
 
-/// #7885: Table Properties' Width in select offers `%`; a percentage width is written as `widthPct`
-/// and reopens showing the percentage.
+/// #7885: switching the width unit alone converts the number through the text column and sends that
+/// unit's parameter alone; a point width reads as a length, not a percentage.
+#[test]
+fn table_properties_width_unit_switch_converts() {
+    let mut a = app();
+    a.run("insert.table", json!({"rows": 1, "cols": 1})).unwrap();
+    a.run("table.properties", json!({"width": 300.0})).unwrap();
+    let points = dialogs::TableForm::read(&a).expect("a table form");
+    assert_eq!(points.width_unit, "length", "a point width reads as a length");
+    assert_eq!(points.width, 300.0);
+    assert!(points.text_width > 0.0, "the text column width is known");
+
+    // The conversion is through the text column: 300 points at a 600-point column is 50%, not 300.
+    let mut sample = dialogs::TableForm::default();
+    sample.width = 300.0;
+    sample.width_unit = "length".into();
+    sample.text_width = 600.0;
+    sample.switch_width_unit("percent");
+    assert_eq!(sample.width, 50.0);
+    sample.switch_width_unit("length");
+    assert_eq!(sample.width, 300.0);
+
+    let mut percent = points.clone();
+    percent.switch_width_unit("percent");
+    let expected = (100.0 * points.width / points.text_width).clamp(1.0, 100.0);
+    assert!((percent.width - expected).abs() < 1e-3, "{} points is {}%, not {}", points.width, percent.width, expected);
+    let changes = percent.changes(&points);
+    assert!((changes["widthPct"].as_f64().unwrap() - f64::from(expected)).abs() < 1e-3, "{changes}");
+    assert!(changes.get("width").is_none(), "a unit-only switch to percent sends no width: {changes}");
+
+    let mut back = percent.clone();
+    back.switch_width_unit("length");
+    assert!((back.width - 300.0).abs() < 1e-3, "{}% is {} points, not {}", percent.width, back.width, percent.width);
+    let changes = back.changes(&percent);
+    assert!((changes["width"].as_f64().unwrap() - 300.0).abs() < 1e-3, "{changes}");
+    assert!(changes.get("widthPct").is_none(), "a unit-only switch to length sends no widthPct: {changes}");
+
+    // An old serialized form without the field is a length, not a unit change.
+    let mut legacy = points.clone();
+    legacy.width_unit.clear();
+    assert_eq!(legacy.changes(&points), json!({}), "an empty unit is a length");
+}
+
+/// #7885: Table Properties' Width in select offers `%`; the number converts to that unit, and a
+/// percentage width is written as `widthPct` and reopens showing the percentage.
 #[test]
 fn table_properties_percent_width_dialog() {
     use egui_kittest::kittest::Queryable;
@@ -127,18 +170,45 @@ fn table_properties_percent_width_dialog() {
     a.run("table.properties", json!({})).unwrap();
     let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| a);
     h.run_steps(4);
-    // The unit select shows the interface unit; pick the percentage.
+    let text_width = {
+        let host = h.state().dialog_host.get::<FormHost<dialogs::TableProperties>>().expect("the table dialog");
+        host.form().form.text_width
+    };
+    assert!(text_width > 0.0, "the text column width is known");
+    // The unit select shows the interface unit; pick the percentage. The point width converts.
     h.get_by_label("Width in").click();
     h.run_steps(3);
     h.get_by_label("%").click();
     h.run_steps(3);
-    // The table's Width field: type 60 over the point width it shows.
-    let width = h.get_all_by_label("Width").next().expect("the table's Width field");
-    width.click();
+    let expected = (100.0 * 300.0 / text_width).clamp(1.0, 100.0);
+    let converted = {
+        let host = h.state().dialog_host.get::<FormHost<dialogs::TableProperties>>().expect("the table dialog");
+        host.form().form.width
+    };
+    assert!((converted - expected).abs() < 1e-3, "300 points reads as {expected}%, not {converted}");
+    // The percentage field, not one of the length fields: its value carries `%`.
+    let percent = h.get_all_by_label("Width").find(|n| n.value().is_some_and(|v| v.ends_with('%'))).expect("the percentage Width field");
+    let shown = percent.value().unwrap_or_default();
+    assert!(shown.ends_with('%'), "{shown:?} carries the percent unit");
+    percent.click();
     h.run_steps(2);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.run_steps(1);
-    h.get_all_by_label("Width").next().expect("the table's Width field").type_text("60");
+    h.get_all_by_label("Width").find(|n| n.value().is_some_and(|v| v.ends_with('%'))).expect("the percentage Width field").type_text("150");
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    let clamped = {
+        let host = h.state().dialog_host.get::<FormHost<dialogs::TableProperties>>().expect("the table dialog");
+        host.form().form.width
+    };
+    assert_eq!(clamped, 100.0, "a typed 150 is held to the percentage range");
+    // Now set 60 and finish.
+    h.get_all_by_label("Width").find(|n| n.value().is_some_and(|v| v.ends_with('%'))).expect("the percentage Width field").click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    h.get_all_by_label("Width").find(|n| n.value().is_some_and(|v| v.ends_with('%'))).expect("the percentage Width field").type_text("60");
     h.run_steps(2);
     h.key_press(egui::Key::Tab);
     h.run_steps(2);

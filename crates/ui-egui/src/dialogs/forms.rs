@@ -290,11 +290,13 @@ impl WordForm for CustomPropertiesForm {
     }
 }
 
-/// The Table Properties dialog's fields. Lengths are in points; the length fields show them in the interface unit.
+/// The Table Properties dialog's fields. Lengths are in points (the length fields show them in the interface unit);
+/// the preferred table width may instead be a percentage of the text column.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct TableForm {
     pub width_on: bool,
+    /// The preferred width: points, or a percentage of the text column when `width_unit` is `"percent"`.
     pub width: f32,
     /// `"length"` (the interface unit) or `"percent"` (1-100): what `width` counts.
     pub width_unit: String,
@@ -319,6 +321,9 @@ pub struct TableForm {
     /// The interface unit the length fields show, set when the dialog opens; not part of the dialog's values.
     #[serde(skip)]
     unit: Option<wordcraft_geom::Unit>,
+    /// The text column's width in points when the dialog opened, to convert the preferred width between units.
+    #[serde(skip)]
+    pub(crate) text_width: f32,
 }
 
 impl TableForm {
@@ -373,18 +378,40 @@ impl TableForm {
             }
             .into(),
             unit: Some(s.units()),
+            text_width: tw,
         })
+    }
+
+    /// Changes the preferred width's unit, converting `width` through the text column width: 300 points at
+    /// a 600-point text column is 50%. A text width that is zero or not finite converts as 100 points.
+    pub fn switch_width_unit(&mut self, unit: &str) {
+        let unit = if unit.is_empty() { "length" } else { unit };
+        if unit == self.width_unit {
+            return;
+        }
+        let text_width = if self.text_width.is_finite() && self.text_width > 0.0 { self.text_width } else { 100.0 };
+        self.width = if unit == "percent" {
+            (100.0 * self.width / text_width).clamp(1.0, 100.0)
+        } else {
+            (text_width * self.width / 100.0).clamp(7.2, 1584.0)
+        };
+        self.width_unit = unit.to_owned();
     }
 
     /// `table.properties` parameters for what differs from `basis` (empty when nothing does).
     pub fn changes(&self, basis: &TableForm) -> Value {
         let moved = |a: f32, b: f32| (a - b).abs() > 1e-4;
         let mut v = serde_json::Map::new();
-        let unit_changed = self.width_unit != basis.width_unit;
+        // An empty unit is a length: an old serialized form leaves the field out.
+        let (self_unit, basis_unit) = (
+            if self.width_unit.is_empty() { "length" } else { self.width_unit.as_str() },
+            if basis.width_unit.is_empty() { "length" } else { basis.width_unit.as_str() },
+        );
+        let unit_changed = self_unit != basis_unit;
         if self.width_on != basis.width_on || (self.width_on && (moved(self.width, basis.width) || unit_changed)) {
             if !self.width_on {
                 v.insert("width".into(), Value::Null);
-            } else if self.width_unit == "percent" {
+            } else if self_unit == "percent" {
                 v.insert("widthPct".into(), json!(self.width.clamp(1.0, 100.0)));
             } else {
                 v.insert("width".into(), json!(self.width));
@@ -483,12 +510,16 @@ impl WordForm for TableProperties {
         Section::fixed(Label::from(tl!("Table").to_string())).id_salt("table").show(ui, |ui, _| {
             flag(ui, "widthOn", tl!("Preferred width").to_string(), &mut f.width_on, true);
             let units = Env::of(ui).units();
-            let unit_label = f.unit.map_or_else(|| units.symbol(UnitKind::Centimetres), |u| units.symbol(crate::options::unit_kind(u)));
+            let unit_label = f.unit.map_or_else(|| units.symbol(UnitKind::Points), |u| units.symbol(crate::options::unit_kind(u)));
             let unit_entries = [Entry::new("length".to_string(), unit_label), Entry::new("percent".to_string(), "%".to_string())];
             if f.width_unit.is_empty() {
                 f.width_unit = "length".into();
             }
-            Select::new(tl!("Width in").to_string(), Bind::bound(&mut f.width_unit), &unit_entries).enabled(f.width_on).show(ui);
+            let mut chosen_unit = f.width_unit.clone();
+            Select::new(tl!("Width in").to_string(), Bind::bound(&mut chosen_unit), &unit_entries).enabled(f.width_on).show(ui);
+            if chosen_unit != f.width_unit {
+                f.switch_width_unit(&chosen_unit);
+            }
             if f.width_unit == "percent" {
                 let mut percent = Some(f64::from(f.width));
                 NumberField::new(tl!("Width").to_string(), Bind::bound(&mut percent))
