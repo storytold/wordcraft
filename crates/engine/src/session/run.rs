@@ -269,6 +269,7 @@ impl Session {
                 self.ime_edit_outcome = ImeEditOutcome::default();
                 self.pending_ime_application_change = pending_application_change_before;
                 self.autocap = None;
+                self.forget_unfinished_paste();
                 self.prefs.default_language = default_language_before;
                 if let Some(epoch) = ime_epoch_before {
                     self.ime_body_epoch = epoch;
@@ -315,6 +316,26 @@ impl Session {
             }
         }
         result
+    }
+
+    /// After a command that may edit: the paste it just made is valid for the revision it produced;
+    /// a paste from before is over once the document has changed since, and its copy of the pasted
+    /// content (kept for Paste Options) is freed with it.
+    fn settle_last_paste(&mut self) {
+        let rev = self.rev;
+        match self.last_paste.as_mut() {
+            Some(lp) if lp.rev.is_none() => lp.rev = Some(rev),
+            Some(lp) if lp.rev.is_some_and(|r| r != rev) => self.last_paste = None,
+            _ => {}
+        }
+    }
+
+    /// A paste the failed command made was rolled back with it (it has no revision yet): the
+    /// Paste Options offer for it goes too.
+    fn forget_unfinished_paste(&mut self) {
+        if self.last_paste.as_ref().is_some_and(|lp| lp.rev.is_none()) {
+            self.last_paste = None;
+        }
     }
 
     /// After a command, formatting Backspace carried over stays only where typing would use it
@@ -404,6 +425,8 @@ impl Session {
                     self.join_anchor = false;
                 }
             }
+            // After the no-op restore above, so the paste's revision is the one the document is at.
+            self.settle_last_paste();
         }
         self.clamp_selection();
         let mut ime_outcome = self.ime_edit_outcome;

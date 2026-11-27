@@ -19,6 +19,7 @@ use crate::{Status, WordApp, backstage, canvas, chrome, colors, dialogs, file_di
 /// and, for the ribbon tab and Backstage, in [`Prefs`].
 pub(crate) struct WindowUi {
     pub(crate) canvas: canvas::CanvasState,
+    pub(crate) paste_options: crate::paste_options::PasteOptionsUi,
     pub(crate) restrict: crate::restrict_pane::RestrictPane,
     pub(crate) spelling_review: Option<crate::proofing_pane::SpellingForm>,
     pub(crate) status: Option<Status>,
@@ -74,6 +75,7 @@ impl WindowUi {
         let Prefs { tab, backstage, backstage_page, nav_collapsed, .. } = Prefs::default();
         WindowUi {
             canvas: Default::default(),
+            paste_options: Default::default(),
             restrict: Default::default(),
             spelling_review: None,
             status: None,
@@ -188,6 +190,7 @@ impl WordApp {
             // Per window.
             ui,
             canvas,
+            paste_options,
             restrict,
             spelling_review,
             status,
@@ -287,6 +290,7 @@ impl WordApp {
         } = ui;
         swap_fields!(w:
             canvas,
+            paste_options,
             restrict,
             spelling_review,
             status,

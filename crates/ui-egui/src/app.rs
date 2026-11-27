@@ -53,6 +53,7 @@ impl WordApp {
         // What the window shows starts as a new window's.
         let window_ui::WindowUi {
             canvas,
+            paste_options,
             restrict,
             spelling_review,
             status,
@@ -141,6 +142,7 @@ impl WordApp {
             closing: None,
             print_document: None,
             canvas,
+            paste_options,
             restrict,
             spelling_review,
             status,

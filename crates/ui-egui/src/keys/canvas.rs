@@ -612,6 +612,10 @@ fn cancel(app: &mut WordApp, ctx: &egui::Context) {
         app.canvas.context_menu_at = None;
         return;
     }
+    // The Paste Options button under a fresh paste closes first.
+    if crate::paste_options::dismiss(app, ctx) {
+        return;
+    }
     if app.session.painter.is_some() {
         app.session.painter = None;
         return;
@@ -680,6 +684,10 @@ pub(super) fn leave_full_screen(app: &mut WordApp, ctx: &egui::Context, key: Key
     let screen = crate::chrome::Screen::of(&app.session.view).exit_command();
     let Some(id) = screen.or(app.session.view.full_screen.then_some("view.fullScreen")) else { return false };
     if key != Key::Escape || !m.is_none() || !app.escape_free {
+        return false;
+    }
+    // A Paste Options button showing takes this Escape: it closes first.
+    if crate::paste_options::wants_escape(app, ctx) {
         return false;
     }
     // Escape with a button held (dragging a task pane's title bar, say) cancels the drag only.

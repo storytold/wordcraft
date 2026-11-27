@@ -58,6 +58,7 @@ pub mod options;
 /// The window identity of the channel this build runs as (stable or Nightly).
 pub mod os_window;
 pub mod panes;
+pub mod paste_options;
 pub mod paste_picture;
 pub mod prefs;
 pub mod previews;
@@ -418,6 +419,8 @@ pub struct WordApp {
     /// so a window can tell a new result from one it already said even when the text is the same.
     print_gen: u64,
     pub canvas: canvas::CanvasState,
+    /// The Paste Options button under a fresh paste (#1747).
+    pub paste_options: paste_options::PasteOptionsUi,
     /// The Restrict Editing pane (#412).
     pub(crate) restrict: restrict_pane::RestrictPane,
     /// The language-aware spelling and grammar task pane.
