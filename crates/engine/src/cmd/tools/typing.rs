@@ -74,6 +74,7 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
                 && letters.chars().nth(1).is_some_and(char::is_uppercase)
                 && letters.chars().next().is_some_and(char::is_uppercase))
             .then(|| letters.clone()),
+            pronoun_i: false,
             backspaced: false,
         });
         let fixed: String = reps.concat();
@@ -84,7 +85,12 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
     // A whole-word replacement, else "wait..." → "wait…". Proofing decides what is English the
     // same way (#835); every English (en-GB, en-CA…) counts (#1281).
     let english = s.doc.para_at(&f).is_none_or(|_| wordcraft_proof::ProofLang::from_tag(lang.as_deref()).is_english());
-    let found = if ac.replace_text { ac.replacement_in(&word, english) } else { None };
+    // A rejected pronoun is kept at this occurrence only, including at the start of a sentence.
+    let keep_i = s
+        .autocap
+        .take_if(|c| c.pronoun_i)
+        .is_some_and(|c| english && word == "i" && c.backspaced && c.story == f.story && c.path == f.path && c.start == start);
+    let found = if ac.replace_text && !keep_i { ac.replacement_in(&word, english) } else { None };
     let (from, rep) = match found {
         Some(r) => (start, Some(r)),
         None if ac.replace_text && word.len() > 3 && word.ends_with("...") => (start + word.len() - 3, Some("…".to_string())),
@@ -106,6 +112,18 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
         para.insert_text(from, &rep, &props)?;
         caret = (f.off + rep.len()).saturating_sub(end - from);
         s.sel = Selection::caret(Pos { off: caret, ..f.clone() });
+        if english && word == "i" && rep == "I" {
+            s.autocap = Some(AutoCap {
+                depth: u64::MAX,
+                story: f.story,
+                path: f.path.clone(),
+                start,
+                prev: String::new(),
+                two_caps: None,
+                pronoun_i: true,
+                backspaced: false,
+            });
+        }
     }
     let end = caret.saturating_sub(trigger);
     let Some(word) = s.doc.para_at(&f).and_then(|p| p.text.get(start..end)).map(str::to_string) else { return Ok(()) };
@@ -147,7 +165,7 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
     } else {
         last
     };
-    let mut sentence = sentence_on && starts_sentence(before_word, &exceptions) && should_capitalize(first, next);
+    let mut sentence = !keep_i && sentence_on && starts_sentence(before_word, &exceptions) && should_capitalize(first, next);
     let prev = if sentence { prev_token(before_word) } else { String::new() };
     // Typing the word again after backspacing an automatic capital: the user doesn't want it
     // (Word's "Automatically add words to list"); an exception, so no capital this time either.
@@ -173,7 +191,16 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
                 match s.autocap.as_mut().filter(|c| c.depth == u64::MAX) {
                     Some(c) => c.prev = prev,
                     None => {
-                        s.autocap = Some(AutoCap { depth: u64::MAX, story: f.story, path: f.path, start, prev, two_caps: None, backspaced: false })
+                        s.autocap = Some(AutoCap {
+                            depth: u64::MAX,
+                            story: f.story,
+                            path: f.path,
+                            start,
+                            prev,
+                            two_caps: None,
+                            pronoun_i: false,
+                            backspaced: false,
+                        });
                     }
                 }
             }

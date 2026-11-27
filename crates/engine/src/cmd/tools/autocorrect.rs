@@ -283,11 +283,24 @@ pub struct AutoCap {
     pub(super) prev: String,
     /// The TWo INitial CApitals word as typed ("TWo").
     pub(super) two_caps: Option<String>,
+    /// The English replacement of lowercase i with uppercase I.
+    pub(super) pronoun_i: bool,
     /// The user backspaced into the word after the change.
     pub(super) backspaced: bool,
 }
 
 impl AutoCap {
+    /// The start of a just-corrected I when Backspace removes the separator after it.
+    pub(crate) fn pronoun_before_separator(&self, a: &Pos, f: &Pos, undo_steps: u64) -> Option<Pos> {
+        (self.pronoun_i
+            && !self.backspaced
+            && self.story == f.story
+            && self.path == f.path
+            && self.start.checked_add(1) == Some(a.off)
+            && self.depth.checked_add(1) == Some(undo_steps))
+        .then(|| Pos { off: self.start, ..f.clone() })
+    }
+
     pub(crate) fn add_exceptions(self, ac: &mut AutoCorrectPrefs) {
         if ac.auto_add_first_letter && !self.prev.is_empty() {
             ac.add_exception(self.prev);
