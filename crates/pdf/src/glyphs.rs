@@ -32,22 +32,34 @@ pub(crate) fn left_to_right(glyphs: &[(u32, f32, f32)]) -> bool {
 }
 
 /// Per-glyph text ranges for clusters of several glyphs (a letter and its vowel marks) when each
-/// glyph is one of the cluster's characters (through the font's character map, one glyph at most
-/// left to take the character left over), so a viewer
-/// reversing a right-to-left word puts every mark back after its letter. Other clusters, such
-/// as a ligature drawn as two glyphs, keep their shared range.
+/// glyph is one of the cluster's characters — through the font's character map, or of their
+/// decomposition when the cluster has more glyphs than characters (Thai ำ draws as its nikhahit
+/// and aa parts) — with one glyph at most left to take the character left over, so a
+/// viewer reversing a right-to-left word puts every mark back after its letter, and every glyph
+/// carries a character of its own into the ToUnicode maps for viewers that ignore /ActualText
+/// (#5883). The returned text spells every split cluster's parts out, with both range lists
+/// based into it: each glyph's cluster (shared where a cluster stayed whole, such as a ligature
+/// drawn as two glyphs) and each glyph's own part of its cluster.
 pub(crate) fn split_clusters(
     text: &str,
     glyphs: &[(u32, f32, f32)],
     ranges: &[std::ops::Range<usize>],
     rev: &HashMap<u32, char>,
-) -> Vec<std::ops::Range<usize>> {
-    let mut out = ranges.to_vec();
+) -> (String, Vec<std::ops::Range<usize>>, Vec<std::ops::Range<usize>>) {
+    use unicode_normalization::UnicodeNormalization;
+
+    let mut out = String::with_capacity(text.len());
+    let mut clusters = Vec::with_capacity(ranges.len());
+    let mut parts = Vec::with_capacity(ranges.len());
     let mut i = 0;
     while i < ranges.len() {
         let Some(r) = ranges.get(i) else { break };
         let n = ranges.get(i..).map_or(1, |rest| rest.iter().take_while(|x| *x == r).count()).max(1);
-        let chars: Vec<(usize, char)> = text.get(r.clone()).map(|t| t.char_indices().map(|(k, c)| (r.start + k, c)).collect()).unwrap_or_default();
+        let whole: Vec<char> = text.get(r.clone()).map_or(Vec::new(), |t| t.chars().collect());
+        // More glyphs than characters: the shaper drew the parts a character decomposes into
+        // (Thai ำ is its nikhahit and aa, a compatibility decomposition).
+        let chars = if n > whole.len() { whole.iter().flat_map(|c| c.nfkd()).collect() } else { whole };
+        let mut split = None;
         if n > 1 && chars.len() == n {
             // Glyphs the character map knows take their characters; one left over (a letter's
             // contextual form, which the map doesn't list) takes the one character left.
@@ -55,7 +67,7 @@ pub(crate) fn split_clusters(
             let mut of: Vec<Option<usize>> = (i..i + n)
                 .map(|g| {
                     let c = rev.get(&glyphs.get(g)?.0)?;
-                    let k = chars.iter().enumerate().position(|(k, (_, ch))| ch == c && !used.get(k).copied().unwrap_or(true))?;
+                    let k = chars.iter().enumerate().position(|(k, ch)| ch == c && !used.get(k).copied().unwrap_or(true))?;
                     *used.get_mut(k)? = true;
                     Some(k)
                 })
@@ -64,20 +76,35 @@ pub(crate) fn split_clusters(
             if let ([k], [slot]) = (free.as_slice(), of.iter_mut().filter(|o| o.is_none()).collect::<Vec<_>>().as_mut_slice()) {
                 **slot = Some(*k);
             }
-            let parts: Option<Vec<std::ops::Range<usize>>> = of
-                .iter()
-                .map(|k| {
-                    let (a, ch) = chars.get((*k)?)?;
-                    Some(*a..a + ch.len_utf8())
-                })
-                .collect();
-            if let (Some(parts), Some(dst)) = (parts, out.get_mut(i..i + n)) {
-                dst.clone_from_slice(&parts);
+            split = of.into_iter().collect::<Option<Vec<_>>>();
+        }
+        let start = out.len();
+        match split {
+            Some(of) => {
+                let bounds: Vec<usize> = chars
+                    .iter()
+                    .map(|&c| {
+                        let a = out.len();
+                        out.push(c);
+                        a
+                    })
+                    .collect();
+                clusters.extend(std::iter::repeat_n(start..out.len(), n));
+                for k in of {
+                    let a = bounds[k];
+                    parts.push(a..a + chars[k].len_utf8());
+                }
+            }
+            None => {
+                out.push_str(text.get(r.clone()).unwrap_or(""));
+                let whole = start..out.len();
+                clusters.extend(std::iter::repeat_n(whole.clone(), n));
+                parts.extend(std::iter::repeat_n(whole, n));
             }
         }
         i += n;
     }
-    out
+    (out, clusters, parts)
 }
 
 /// Indices of a run's glyphs in visual order, left to right: its clusters (consecutive glyphs
