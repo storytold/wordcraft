@@ -138,6 +138,35 @@ fn symbol_dialog_uses_compact_tile_grids() {
     assert!(recent.height() < 80.0, "recently used symbols row should be compact: {}", recent.height());
 }
 
+/// Double-clicking a recently used symbol in the Symbol dialog inserts it and keeps the dialog open.
+#[test]
+fn double_clicking_a_recent_symbol_inserts_it() {
+    use egui::{Event, Modifiers, PointerButton, accesskit::Role};
+
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    // Put © second in the recent list so the dialog opens on Ω instead, proving activation picks and inserts ©.
+    remember_symbol(&mut a, "©", "DejaVu Sans");
+    remember_symbol(&mut a, "Ω", "DejaVu Sans");
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|_| a);
+    let id = crate::dialogs::open(h.state_mut(), "symbol", &json!({})).expect("symbol dialog opens");
+    h.run_steps(3);
+
+    let recent_rect = h.get_by_role_and_label(Role::ListBox, "Recently used symbols:").rect();
+    let at = h.query_all_by_label("©").map(|n| n.rect()).find(|r| recent_rect.contains_rect(*r)).expect("recent symbol tile").center();
+    h.event(Event::PointerMoved(at));
+    for _ in 0..2 {
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.step();
+    }
+    h.run_steps(3);
+
+    let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert!(text.starts_with('©'), "double-clicking a recent symbol inserts it: {text:?}");
+    assert!(h.state().dialog_host.get_dyn(id).is_some(), "insert mode keeps the Symbol dialog open");
+}
+
 /// The Field dialog builds the field code from its options.
 #[test]
 fn field_dialog_builds_the_instruction() {
