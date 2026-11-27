@@ -1,7 +1,5 @@
 //! Original DOCX fixtures for ordinary tabs that wrap with their following word (#2531).
 
-use std::io::{Cursor, Write};
-
 use wordcraft_doc::{Document, Pos};
 use wordcraft_layout::{LayoutCache, LayoutOptions, layout};
 
@@ -16,12 +14,11 @@ fn input(text: &str, stops: &str) -> Vec<u8> {
         </w:body></w:document>"#,
     );
     let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
-    let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    for (name, value) in [("_rels/.rels", rels), ("word/document.xml", &xml)] {
-        z.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        z.write_all(value.as_bytes()).unwrap();
+    let mut z = craft_zip::Writer::new();
+    for (name, value) in [("_rels/.rels", rels), ("word/document.xml", xml.as_str())] {
+        z.add(name, value.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    z.finish().unwrap().into_inner()
+    z.finish().unwrap()
 }
 
 const NEAR_EDGE: &str = r#"<w:tab w:val="center" w:pos="5018"/><w:tab w:val="left" w:pos="8625"/>"#;
