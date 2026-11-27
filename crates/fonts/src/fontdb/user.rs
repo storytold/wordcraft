@@ -11,6 +11,8 @@
 //! a folder (the web, tests, `WORDCRAFT_NO_PREFS`) added fonts last for the session; the web
 //! shell keeps them in the browser itself.
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -408,13 +410,14 @@ fn unwrap_web_font(decode: impl FnOnce() -> Result<Vec<u8>, wuff::WuffErr>) -> R
     }
 }
 
-/// The faces of the font file `sfnt` (plain OpenType bytes), each checked as an added font is: the
+/// The faces of the font file `bytes` (plain OpenType bytes), each checked as an added font is: the
 /// file parses, has at most [`MAX_FACES_PER_FILE`] faces, and each face parses and maps characters.
-fn check_faces(sfnt: Arc<Vec<u8>>) -> Result<Vec<super::FontFace>, UserFontError> {
-    if FileRef::new(&sfnt).is_err() {
+fn check_faces(bytes: FontBytes) -> Result<Vec<super::FontFace>, UserFontError> {
+    let sfnt = bytes.data();
+    if FileRef::new(sfnt).is_err() {
         return Err(UserFontError::Unusable("not a valid OpenType file".into()));
     }
-    let found = enumerate_faces(&sfnt, MAX_FACES_PER_FILE + 1);
+    let found = enumerate_faces(sfnt, MAX_FACES_PER_FILE + 1);
     if found.is_empty() {
         return Err(UserFontError::Unusable("no face with a family name".into()));
     }
@@ -424,7 +427,7 @@ fn check_faces(sfnt: Arc<Vec<u8>>) -> Result<Vec<super::FontFace>, UserFontError
     let mut faces = Vec::new();
     for f in found {
         let label = format!("{} {}", f.family, f.style);
-        let face = make_face(FontBytes::Owned(sfnt.clone()), f.index, f.family, f.style, f.legacy, f.coords)
+        let face = make_face(bytes.clone(), f.index, f.family, f.style, f.legacy, f.coords)
             .ok_or_else(|| UserFontError::Unusable(format!("{label} doesn't parse")))?;
         if face.skrifa().is_none_or(|s| s.charmap().mappings().next().is_none()) {
             return Err(UserFontError::Unusable(format!("{label} maps no characters")));
@@ -493,7 +496,7 @@ impl FontDb {
         }
         let file = stored_name(name, &sfnt);
         let sfnt = Arc::new(sfnt);
-        let checked = check_faces(sfnt.clone())?;
+        let checked = check_faces(FontBytes::Owned(sfnt.clone()))?;
         #[cfg(not(target_arch = "wasm32"))]
         let records: Vec<catalog::FaceRecord> = checked.iter().map(catalog::FaceRecord::of).collect();
         let mut font = self.add_user_faces(&file, checked)?;
@@ -503,8 +506,9 @@ impl FontDb {
                     font.file = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(font.file);
                     // Catalogued, so the next start lists it without reading it.
                     #[cfg(not(target_arch = "wasm32"))]
-                    if let Some(stamp) = std::fs::metadata(&path).ok().as_ref().and_then(catalog::Stamp::of) {
-                        let entry = catalog::Entry { file: font.file.clone(), stamp, faces: Ok(records) };
+                    if let Some(stamp) = std::fs::metadata(&path).ok().as_ref().and_then(catalog::Stamp::of)
+                        && let Some(entry) = path.file_name().and_then(|name| catalog::Entry::new(name, stamp, records))
+                    {
                         self.write_user().entries.push(entry);
                         self.save_catalog();
                     }
@@ -633,9 +637,10 @@ impl FontDb {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let stored: Vec<&str> = gone.iter().filter(|u| u.path.is_some()).map(|u| u.file.as_str()).collect();
+            // By the files' exact names: two names can read the same once made text.
+            let stored: Vec<&OsStr> = gone.iter().filter_map(|u| u.path.as_ref()?.file_name()).collect();
             if !stored.is_empty() {
-                self.write_user().entries.retain(|e| !stored.contains(&e.file.as_str()));
+                self.write_user().entries.retain(|e| e.name().is_none_or(|name| !stored.contains(&name.as_os_str())));
                 self.save_catalog();
             }
         }
@@ -645,67 +650,141 @@ impl FontDb {
 
     /// Use `dir` as the user font folder: list the fonts stored there, and store fonts added later
     /// there. The folder is made when the first font is stored. The fonts are listed from the
-    /// folder's catalogue ([`catalog`]), and a font's file is read when a document first uses one
-    /// of its faces; a file the catalogue doesn't describe as it is now (added or changed since) is
-    /// read and checked like an added font, and one that fails is logged and skipped. Returns the
-    /// fonts listed and the files skipped (with why).
+    /// folder's catalogue ([`catalog`]), and a font's file is read when one of its faces is first
+    /// handed out; a file the catalogue doesn't describe as it is now (added or changed since, or
+    /// unusable before) is read and checked like an added font, and one that fails is logged and
+    /// skipped. Returns the fonts listed and the files skipped (with why).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn load_user_fonts(&self, dir: &Path) -> (Vec<UserFont>, Vec<(String, String)>) {
         self.write_user().dir = Some(dir.to_path_buf());
         let mut skipped = Vec::new();
         let Ok(rd) = std::fs::read_dir(dir) else { return (Vec::new(), skipped) };
         // Each font file with its metadata (read once: it is the catalogue's key).
-        let mut paths: Vec<(PathBuf, std::fs::Metadata)> = rd
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| STORED_EXTS.contains(&e.to_ascii_lowercase().as_str())))
-            .filter_map(|p| std::fs::metadata(&p).ok().filter(std::fs::Metadata::is_file).map(|m| (p, m)))
-            .collect();
+        let mut paths: Vec<(PathBuf, std::fs::Metadata)> = Vec::new();
+        for p in rd.flatten().map(|e| e.path()) {
+            if catalog::abandoned(&p) {
+                // A catalogue write that never finished: its process stopped.
+                let _ = std::fs::remove_file(&p);
+            } else if p.extension().and_then(OsStr::to_str).is_some_and(|e| STORED_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+                && let Some(m) = std::fs::metadata(&p).ok().filter(std::fs::Metadata::is_file)
+            {
+                paths.push((p, m));
+            }
+        }
         paths.sort_by(|a, b| a.0.cmp(&b.0));
         let mut known = catalog::read(dir);
         let described = known.len();
         let mut listed = Vec::new();
         let mut changed = false;
         for (p, m) in paths {
-            let file = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let Some(name) = p.file_name() else { continue };
+            let file = name.to_string_lossy().into_owned();
             let meta = if m.len() > MAX_FONT_FILE_BYTES as u64 {
                 Err(UserFontError::TooLarge { bytes: usize::try_from(m.len()).unwrap_or(usize::MAX) })
             } else {
                 Ok(m)
             };
             let stamp = meta.as_ref().ok().and_then(catalog::Stamp::of);
-            // What the file holds: as catalogued while it is unchanged, else read and checked now.
-            // Kept in the catalogue: what reading it found, a reason to skip it included; not
-            // kept: an error reading it, which may pass, and a size refused before reading.
-            let (faces, keep) = match (meta, known.remove(&file).filter(|e| stamp == Some(e.stamp))) {
+            // What the file holds: as catalogued while it is the same file, else read and checked
+            // now (`fresh`). The catalogue keeps a usable file's faces; a reason to skip a file
+            // isn't kept, so the file is read again at the next start and a repair shows.
+            let (faces, fresh) = match (meta, known.remove(name).filter(|e| stamp == Some(e.stamp))) {
                 (Err(e), _) => (Err(e.to_string()), false),
-                (Ok(_), Some(entry)) => (entry.faces, true),
+                (Ok(_), Some(entry)) => (Ok(entry.faces), false),
                 (Ok(_), None) => match catalog::scan(&p, &self.files) {
                     Ok(faces) => {
-                        changed = true;
+                        changed |= faces.is_ok() && stamp.is_some() && catalog::keeps(name);
                         (faces, true)
                     }
-                    Err(e) => (Err(UserFontError::Unusable(e.to_string()).to_string()), false),
+                    Err(e) => (Err(UserFontError::Unusable(e.to_string()).to_string()), true),
                 },
             };
             if let Err(why) = &faces {
                 log::warn!("skipped the user font {}: {why}", p.display());
                 skipped.push((file.clone(), why.clone()));
             }
-            listed.push(Listed { file, path: p, stamp: stamp.filter(|_| keep), faces });
+            listed.push(Listed { file, path: p, stamp, faces, fresh });
         }
         let (loaded, refused) = self.add_catalogued(&listed);
         skipped.extend(refused);
         skipped.sort();
         let entries: Vec<catalog::Entry> =
-            listed.into_iter().filter_map(|l| Some(catalog::Entry { file: l.file, stamp: l.stamp?, faces: l.faces })).collect();
-        // Rewritten when a file was read, or one it described is gone.
+            listed.into_iter().filter_map(|l| catalog::Entry::new(l.path.file_name()?, l.stamp?, l.faces.ok()?)).collect();
+        // Rewritten when a file was read and kept, or one it described is gone or unusable now.
         let save = changed || entries.len() != described;
         self.write_user().entries = entries;
         if save {
             self.save_catalog();
         }
         (loaded, skipped)
+    }
+
+    /// Is `face` fit to hand out? A face listed from the catalogue is checked against its file the
+    /// first time one of the file's faces is handed out ([`FontDb::face`] and the fallback
+    /// searches), which reads the file: when its faces aren't the ones the catalogue described, they
+    /// are made again from its bytes (or dropped, when it can't be used any more), the catalogue
+    /// is corrected, and the answer is no, so the caller looks again.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn checked(&self, face: &super::FontFace) -> bool {
+        // Faces made from the bytes (named instances, or faces a check made again) fit them.
+        let (FontBytes::File(file), Some(_)) = (&face.bytes, &face.described) else { return true };
+        file.listed_faces_fit(|| {
+            let real = check_faces(FontBytes::File(file.clone()));
+            let records: Option<Vec<catalog::FaceRecord>> = real.as_ref().ok().map(|faces| faces.iter().map(catalog::FaceRecord::of).collect());
+            let name = file.path().file_name().map(OsStr::to_os_string);
+            let fits = records.as_ref().is_some_and(|r| self.read_user().entries.iter().any(|e| e.name() == name && e.faces == *r));
+            if !fits {
+                self.refresh(file, real, records);
+            }
+            fits
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn checked(&self, _face: &super::FontFace) -> bool {
+        true
+    }
+
+    /// Replace the faces listed for `file` with `real`, the faces its bytes hold (in the same
+    /// place in the face list, leaving out those already available), or drop them when it can't be
+    /// used; describe it afresh in the catalogue (with `records`), and forget lookups made with the
+    /// old faces ([`FontDb::generation`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn refresh(&self, file: &Arc<catalog::FontFile>, real: Result<Vec<super::FontFace>, UserFontError>, records: Option<Vec<catalog::FaceRecord>>) {
+        match &real {
+            Ok(_) => log::warn!("the added font {} isn't as its catalogue described it: its faces are read from it again", file.path().display()),
+            Err(e) => log::warn!("skipped the user font {}: {e}", file.path().display()),
+        }
+        let ours = |f: &super::FontFace| matches!(&f.bytes, FontBytes::File(g) if Arc::ptr_eq(g, file));
+        let key = |f: &super::FontFace| (f.family.to_ascii_lowercase(), f.style.to_ascii_lowercase());
+        {
+            let mut user = self.write_user();
+            let mut faces = self.faces.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let stale: Vec<u32> = faces.iter().filter(|f| ours(f)).map(|f| f.id).collect();
+            let at = faces.iter().position(|f| ours(f)).unwrap_or(faces.len());
+            faces.retain(|f| !ours(f));
+            let present: std::collections::HashSet<(String, String)> = faces.iter().map(|f| key(f)).collect();
+            let added: Vec<Arc<super::FontFace>> = real.into_iter().flatten().filter(|f| !present.contains(&key(f))).map(Arc::new).collect();
+            faces.splice(at..at, added.iter().cloned());
+            drop(faces);
+            if let Some(i) = user.fonts.iter().position(|u| u.face_ids.iter().any(|id| stale.contains(id))) {
+                if added.is_empty() {
+                    user.fonts.remove(i);
+                } else {
+                    user.fonts[i].faces = added.iter().map(|f| (f.family.clone(), f.style.clone())).collect();
+                    user.fonts[i].face_ids = added.iter().map(|f| f.id).collect();
+                }
+            }
+            let name = file.path().file_name().map(OsStr::to_os_string);
+            user.entries.retain(|e| e.name() != name);
+            if let (Some(name), Some(stamp), Some(records)) = (&name, file.stamp(), records)
+                && let Some(entry) = catalog::Entry::new(name, stamp, records)
+            {
+                user.entries.push(entry);
+            }
+        }
+        self.save_catalog();
+        self.fonts_changed();
     }
 
     /// The web has no font folder: its shell keeps added fonts in the browser itself.
@@ -727,7 +806,7 @@ impl FontDb {
         // Indexed: a folder may hold a thousand fonts.
         let key = |family: &str, style: &str| (family.to_ascii_lowercase(), style.to_ascii_lowercase());
         let mut present: std::collections::HashSet<(String, String)> = faces.iter().map(|f| key(&f.family, &f.style)).collect();
-        for Listed { file, path, stamp, faces: records } in listed {
+        for Listed { file, path, stamp, faces: records, fresh: scanned } in listed {
             let Ok(records) = records else { continue };
             let refuse = |e: UserFontError| {
                 log::warn!("skipped the user font {}: {e}", path.display());
@@ -745,7 +824,7 @@ impl FontDb {
                 refused.push(refuse(UserFontError::AlreadyAvailable(families)));
                 continue;
             }
-            let shared = Arc::new(catalog::FontFile::new(path.clone(), *stamp, self.files.clone()));
+            let shared = Arc::new(catalog::FontFile::new(path.clone(), *stamp, self.files.clone(), *scanned));
             let added: Vec<Arc<super::FontFace>> = fresh.iter().map(|(r, _)| Arc::new(r.face(&shared))).collect();
             present.extend(fresh.into_iter().map(|(_, k)| k));
             faces.extend(added.iter().cloned());
@@ -782,14 +861,15 @@ impl FontDb {
     }
 }
 
-/// A file in the user font folder, as a start found it: its faces (or why it can't be used) and
-/// the stamp to catalogue them under (`None`: not kept).
+/// A file in the user font folder, as a start found it: its faces (or why it can't be used), its
+/// stamp, and whether this start read it (`fresh`) or the catalogue described it.
 #[cfg(not(target_arch = "wasm32"))]
 struct Listed {
     file: String,
     path: PathBuf,
     stamp: Option<catalog::Stamp>,
     faces: Result<Vec<catalog::FaceRecord>, String>,
+    fresh: bool,
 }
 
 /// `name`, or `name` with `-2`, `-3`… before its extension, the first that `taken` refuses.

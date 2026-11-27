@@ -409,12 +409,7 @@ pub(super) fn make_face(
     legacy_family: String,
     coords: Vec<([u8; 4], f32)>,
 ) -> Option<FontFace> {
-    let data: &[u8] = match &bytes {
-        FontBytes::Static(b) => b,
-        FontBytes::Owned(v) => v.as_slice(),
-        #[cfg(not(target_arch = "wasm32"))]
-        FontBytes::File(file) => file.data(),
-    };
+    let data: &[u8] = bytes.data();
     let f = skrifa::FontRef::from_index(data, index).ok()?;
     let settings: Vec<(skrifa::Tag, f32)> = coords.iter().map(|(t, v)| (skrifa::Tag::new(t), *v)).collect();
     let location = if coords.is_empty() { Location::default() } else { f.axes().location(settings.iter().copied()) };

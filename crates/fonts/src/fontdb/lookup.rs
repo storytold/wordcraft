@@ -10,8 +10,20 @@ impl FontDb {
     /// Resolve a family + style to a face, falling back to the closest style of the family, then to
     /// Source Sans 3 Regular. `family` is a typographic family ("Roboto") or a face's legacy family
     /// name ("Roboto Light", whose styles are Light and Light Italic). Installed system fonts are
-    /// found by name whatever ran before. An exact full or PostScript name selects its face.
+    /// found by name whatever ran before. An exact full or PostScript name selects its face. An
+    /// added font's face listed from its catalogue is checked against the font's file before it is
+    /// first handed out.
     pub fn face(&self, family: &str, style: &str) -> Arc<FontFace> {
+        loop {
+            let face = self.resolve(family, style);
+            if self.checked(&face) {
+                return face;
+            }
+        }
+    }
+
+    /// [`FontDb::face`] before the check.
+    fn resolve(&self, family: &str, style: &str) -> Arc<FontFace> {
         if let Some(f) = self.find(family, style) {
             return f;
         }
@@ -49,6 +61,16 @@ impl FontDb {
     /// memory; only fonts actually used load for good. `None` when no font has that name, or its
     /// file is too large to read just for a preview.
     pub fn preview_face(&self, family: &str) -> Option<Arc<FontFace>> {
+        loop {
+            let face = self.unchecked_preview(family)?;
+            if self.checked(&face) {
+                return Some(face);
+            }
+        }
+    }
+
+    /// [`FontDb::preview_face`] before the check.
+    fn unchecked_preview(&self, family: &str) -> Option<Arc<FontFace>> {
         if let Some(f) = self.find(family, "Regular") {
             return Some(unshared_if_unread(f));
         }

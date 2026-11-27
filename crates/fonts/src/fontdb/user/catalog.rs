@@ -1,19 +1,32 @@
 //! The added fonts' catalogue: what each file in the user font folder holds, kept beside the files
 //! (`.catalog.json`), so a start reads that one small file instead of every font file, and a
-//! font's file is read the first time a document uses one of its faces. Startup no longer grows
-//! with the fonts the user added and doesn't use, and neither does memory.
+//! font's file is read the first time one of its faces is used. A start still lists the folder and
+//! reads each file's metadata, and the faces' descriptions take memory; the fonts' bytes don't.
 //!
-//! An entry is keyed by the file's name, size and modification time. A file added, replaced or
-//! changed since is read and checked again, as an added font is, and an unusable one is skipped
-//! with its reason, which the entry keeps, so the next start skips it without reading it. The
-//! whole catalogue is made again when WordCraft's version or the catalogue's format changes, so
-//! what it says always comes from the code that loads the fonts: each face carries the
-//! descriptions [`make_face`](super::super::names::make_face) works out (names, weight, metrics)
-//! and the answers fallback searches and font lists ask of it, which a loaded face would give.
+//! An entry describes the file of one exact name while its size, its modification time and what
+//! changes when a file is replaced or rewritten (its inode and status-change time on Unix, its
+//! creation time on Windows) are as they were. A file added, replaced or changed since is read and
+//! checked again, as an added font is. A file that can't be used isn't kept: it is read and
+//! checked at every start, so a repaired one shows.
+//!
+//! The catalogue's first line is a digest of the rest: a damaged or edited catalogue is made again
+//! from the fonts, as it is when WordCraft's version or the catalogue's format changes. A face
+//! listed from it is checked against its file before it is first handed out
+//! ([`FontDb::face`](super::super::FontDb::face) and the fallback searches), so a description
+//! that doesn't match the file never reaches layout: the file's faces are made again from its
+//! bytes, and the entry with them.
+//!
+//! Each write goes to a temporary file of its own, renamed over the catalogue once complete, so a
+//! reader finds a whole catalogue, old or new, whatever other writers (other instances of the app)
+//! are doing.
 
+use std::collections::HashMap;
+use std::ffi::{OsStr, OsString};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -26,19 +39,29 @@ use super::{MAX_FACES_PER_FILE, MAX_FONT_FILE_BYTES, UserFontError, decode_owned
 pub(super) const CATALOG_FILE: &str = ".catalog.json";
 
 /// Bump when what an entry holds, or how it is worked out, changes.
-const FORMAT: u32 = 1;
+const FORMAT: u32 = 2;
 
 /// The largest catalogue read (a face takes a few hundred bytes; 1,000 fonts of 256 faces each
 /// would be about 80 MB).
 const MAX_CATALOG_BYTES: u64 = 128 << 20;
 
-/// A file's size and modification time: an entry describes the file only while both match.
+/// A temporary catalogue this old belongs to a write that never finished (its process stopped).
+const ABANDONED: Duration = Duration::from_secs(60 * 60);
+
+/// What tells a file's contents apart without reading them: its size, its modification time, and
+/// what changes when the file is replaced or rewritten even when both are kept (as a restore can
+/// keep them). An entry describes the file only while all of them match.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Stamp {
     len: u64,
     /// Seconds from 1970 (negative before) and the nanoseconds past them.
     secs: i64,
     nanos: u32,
+    /// The inode (Unix).
+    node: u64,
+    /// The status-change time (Unix), which no program can set back; the creation time (Windows).
+    changed: i64,
+    changed_nanos: u32,
 }
 
 impl Stamp {
@@ -49,12 +72,33 @@ impl Stamp {
             Ok(d) => (i64::try_from(d.as_secs()).ok()?, d.subsec_nanos()),
             Err(e) => (i64::try_from(e.duration().as_secs()).ok()?.checked_neg()?, e.duration().subsec_nanos()),
         };
-        Some(Stamp { len: meta.len(), secs, nanos })
+        let (node, changed, changed_nanos) = identity(meta);
+        Some(Stamp { len: meta.len(), secs, nanos, node, changed, changed_nanos })
     }
 
     fn of_path(path: &Path) -> Option<Stamp> {
         std::fs::metadata(path).ok().as_ref().and_then(Stamp::of)
     }
+}
+
+#[cfg(unix)]
+fn identity(meta: &std::fs::Metadata) -> (u64, i64, u32) {
+    use std::os::unix::fs::MetadataExt;
+    (meta.ino(), meta.ctime(), u32::try_from(meta.ctime_nsec()).unwrap_or(0))
+}
+
+/// Windows offers no inode or status-change time without a handle: a file rewritten in place
+/// keeping its size and both times shows when its faces are first handed out (they are checked
+/// against the file then).
+#[cfg(windows)]
+fn identity(meta: &std::fs::Metadata) -> (u64, i64, u32) {
+    use std::os::windows::fs::MetadataExt;
+    (0, i64::try_from(meta.creation_time()).unwrap_or(i64::MAX), 0)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn identity(_: &std::fs::Metadata) -> (u64, i64, u32) {
+    (0, 0, 0)
 }
 
 /// One face of a catalogued file, as [`make_face`](super::super::names::make_face) made it.
@@ -81,7 +125,7 @@ pub(crate) struct FaceRecord {
 }
 
 impl FaceRecord {
-    /// The record of `face` (a face made from the whole file).
+    /// The record of `face` (a face made from the whole file, or listed from a record).
     pub(super) fn of(face: &FontFace) -> FaceRecord {
         FaceRecord {
             index: face.index,
@@ -102,17 +146,6 @@ impl FaceRecord {
             avg_char_width: face.avg_char_width,
             described: Described { east_asian: face.is_east_asian(), serif: face.is_serif(), layout_tables: face.has_layout_tables() },
         }
-    }
-
-    /// Could [`make_face`](super::super::names::make_face) have made it? A catalogue is read from
-    /// disk: one with impossible values (damaged, or written by hand) describes no face.
-    fn plausible(&self) -> bool {
-        let finite = [f64::from(self.weight), self.ascent, self.descent, self.cap_height, self.x_height, self.avg_char_width];
-        !self.family.is_empty()
-            && self.upem >= 1.0
-            && self.upem.is_finite()
-            && finite.iter().all(|v| v.is_finite())
-            && self.coords.iter().all(|(_, v)| v.is_finite())
     }
 
     /// The face it describes, reading `file` only when the face is first used.
@@ -167,62 +200,109 @@ pub(crate) struct Described {
     pub(crate) layout_tables: bool,
 }
 
-/// What one file in the folder holds: its faces, or why it can't be used.
+/// What one usable file in the folder holds.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Entry {
+    /// The file's name as text (exactly that name when it is valid Unicode).
     pub(super) file: String,
+    /// The file's exact name when it isn't valid Unicode (its bytes, Unix), so that an entry stands
+    /// for one file only, never for another whose name reads the same once made text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    raw: Option<Vec<u8>>,
     pub(super) stamp: Stamp,
-    pub(super) faces: Result<Vec<FaceRecord>, String>,
+    pub(super) faces: Vec<FaceRecord>,
 }
 
-#[derive(Serialize, Deserialize)]
-struct CatalogFile {
+impl Entry {
+    /// The entry for the file named `name`: `None` when the name can't be kept exactly (a name
+    /// that isn't valid Unicode, outside Unix), and the file is read at every start.
+    pub(super) fn new(name: &OsStr, stamp: Stamp, faces: Vec<FaceRecord>) -> Option<Entry> {
+        let raw = match name.to_str() {
+            Some(_) => None,
+            None => Some(name_bytes(name)?),
+        };
+        Some(Entry { file: name.to_string_lossy().into_owned(), raw, stamp, faces })
+    }
+
+    /// The exact name of the file it describes.
+    pub(super) fn name(&self) -> Option<OsString> {
+        match &self.raw {
+            None => Some(OsString::from(&self.file)),
+            Some(bytes) => name_from_bytes(bytes),
+        }
+    }
+}
+
+/// Can a file named `name` be catalogued (see [`Entry::new`])?
+pub(super) fn keeps(name: &OsStr) -> bool {
+    name.to_str().is_some() || cfg!(unix)
+}
+
+#[cfg(unix)]
+fn name_bytes(name: &OsStr) -> Option<Vec<u8>> {
+    use std::os::unix::ffi::OsStrExt;
+    Some(name.as_bytes().to_vec())
+}
+
+#[cfg(not(unix))]
+fn name_bytes(_: &OsStr) -> Option<Vec<u8>> {
+    None
+}
+
+#[cfg(unix)]
+fn name_from_bytes(bytes: &[u8]) -> Option<OsString> {
+    use std::os::unix::ffi::OsStringExt;
+    Some(OsString::from_vec(bytes.to_vec()))
+}
+
+#[cfg(not(unix))]
+fn name_from_bytes(_: &[u8]) -> Option<OsString> {
+    None
+}
+
+#[derive(Serialize)]
+struct CatalogOut<'a> {
+    format: u32,
+    version: &'a str,
+    files: &'a [Entry],
+}
+
+#[derive(Deserialize)]
+struct CatalogIn {
     format: u32,
     version: String,
     files: Vec<Entry>,
 }
 
-/// The catalogue kept in `dir`, by file name; empty when there is none, it can't be read, or an
-/// earlier format or WordCraft version wrote it.
-pub(super) fn read(dir: &Path) -> std::collections::HashMap<String, Entry> {
-    use std::io::Read;
-    let mut text = String::new();
-    let read = std::fs::File::open(dir.join(CATALOG_FILE)).and_then(|f| f.take(MAX_CATALOG_BYTES).read_to_string(&mut text));
-    let Ok(_) = read else { return Default::default() };
-    match serde_json::from_str::<CatalogFile>(&text) {
+/// The catalogue kept in `dir`, by exact file name; empty when there is none, it can't be read,
+/// its digest doesn't match (damaged or edited), or an earlier format or WordCraft version wrote it.
+pub(super) fn read(dir: &Path) -> HashMap<OsString, Entry> {
+    let mut text = Vec::new();
+    let read = std::fs::File::open(dir.join(CATALOG_FILE)).and_then(|f| f.take(MAX_CATALOG_BYTES).read_to_end(&mut text));
+    let Ok(_) = read else { return HashMap::new() };
+    let parsed = unseal(&text)
+        .ok_or_else(|| "its digest doesn't match".to_string())
+        .and_then(|body| serde_json::from_slice::<CatalogIn>(body).map_err(|e| e.to_string()));
+    match parsed {
         Ok(c) if c.format == FORMAT && c.version == env!("CARGO_PKG_VERSION") => {
-            // An entry describing an impossible face is left out: its file is read again.
-            let plausible = |e: &Entry| e.faces.as_ref().map_or(true, |f| f.len() <= MAX_FACES_PER_FILE && f.iter().all(FaceRecord::plausible));
-            c.files.into_iter().filter(plausible).map(|e| (e.file.clone(), e)).collect()
+            c.files.into_iter().filter(|e| e.faces.len() <= MAX_FACES_PER_FILE).filter_map(|e| Some((e.name()?, e))).collect()
         }
-        Ok(_) => Default::default(),
+        Ok(_) => HashMap::new(),
         Err(e) => {
-            log::warn!("the added fonts' catalogue in {} can't be read ({e}): reading the fonts again", dir.display());
-            Default::default()
+            log::warn!("the added fonts' catalogue in {} can't be used ({e}): reading the fonts again", dir.display());
+            HashMap::new()
         }
     }
 }
 
-/// Keep `entries` as the catalogue in `dir`, replacing the old one whole (through a temporary
-/// file, so a crash never leaves half a catalogue).
+/// Keep `entries` as the catalogue in `dir`, replacing the old one whole: written to a temporary
+/// file of this write's own, then renamed over the catalogue. Another writer's temporary file is
+/// never opened, reused or removed, so no writer can publish another's unfinished file.
 pub(super) fn write(dir: &Path, entries: &[Entry]) -> std::io::Result<()> {
-    // One write at a time; another process's write may still land last, which is fine: either
-    // describes files that are there, and an entry that no longer matches is read again.
-    static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _held = WRITE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let text = serde_json::to_string(&CatalogFile { format: FORMAT, version: env!("CARGO_PKG_VERSION").into(), files: entries.to_vec() })
-        .map_err(std::io::Error::other)?;
-    let tmp = dir.join(format!("{CATALOG_FILE}.part"));
-    // Created afresh, never through what is there (see `write_unique`).
-    let create = || std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp);
-    let mut file = match create() {
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            std::fs::remove_file(&tmp)?;
-            create()?
-        }
-        r => r?,
-    };
-    let written = std::io::Write::write_all(&mut file, text.as_bytes());
+    let body =
+        serde_json::to_vec(&CatalogOut { format: FORMAT, version: env!("CARGO_PKG_VERSION"), files: entries }).map_err(std::io::Error::other)?;
+    let (tmp, mut file) = own_temporary(dir)?;
+    let written = file.write_all(format!("{:016x}\n", seal(&body)).as_bytes()).and_then(|()| file.write_all(&body));
     drop(file);
     if let Err(e) = written.and_then(|()| std::fs::rename(&tmp, dir.join(CATALOG_FILE))) {
         let _ = std::fs::remove_file(&tmp);
@@ -231,14 +311,64 @@ pub(super) fn write(dir: &Path, entries: &[Entry]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// A new temporary file for one catalogue write (`.catalog.json.<process>-<n>.part`), created
+/// afresh: never opened through a name that is there already.
+fn own_temporary(dir: &Path) -> std::io::Result<(PathBuf, std::fs::File)> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let mut taken = None;
+    for _ in 0..16 {
+        let tmp = dir.join(format!("{CATALOG_FILE}.{}-{}.part", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(file) => return Ok((tmp, file)),
+            // Left by an earlier process that had the same id: another name.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => taken = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(taken.unwrap_or_else(|| std::io::Error::other("no free temporary name")))
+}
+
+/// Is `path` a temporary catalogue whose write never finished (left for [`ABANDONED`])?
+pub(super) fn abandoned(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(OsStr::to_str) else { return false };
+    name.starts_with(CATALOG_FILE)
+        && name.len() > CATALOG_FILE.len()
+        && name.ends_with(".part")
+        && std::fs::symlink_metadata(path).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > ABANDONED)
+}
+
+/// A digest of `body`, enough to notice a damaged or edited catalogue (64-bit FNV-1a).
+fn seal(body: &[u8]) -> u64 {
+    body.iter().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3))
+}
+
+/// The catalogue `text` without its first line, when that line is the digest of the rest.
+fn unseal(text: &[u8]) -> Option<&[u8]> {
+    let (head, body) = text.split_first_chunk::<17>()?;
+    let digest = std::str::from_utf8(&head[..16]).ok().and_then(|h| u64::from_str_radix(h, 16).ok())?;
+    (head[16] == b'\n' && digest == seal(body)).then_some(body)
+}
+
+/// Give the catalogue in `dir` the digest of what it holds now, as though it had been written so
+/// (tests: a catalogue that is whole but describes its files wrongly).
+#[cfg(test)]
+pub(super) fn reseal(dir: &Path) {
+    let path = dir.join(CATALOG_FILE);
+    let text = std::fs::read(&path).unwrap();
+    let body = &text[17..];
+    let mut sealed = format!("{:016x}\n", seal(body)).into_bytes();
+    sealed.extend_from_slice(body);
+    std::fs::write(&path, sealed).unwrap();
+}
+
 /// Read the font file at `path` whole and check it as an added font is checked
-/// ([`check_faces`](super::check_faces)): its faces, or why it can't be used (kept with the entry),
-/// or an error reading it now (which may pass, so it isn't kept).
+/// ([`check_faces`](super::check_faces)): its faces, or why it can't be used, or an error reading
+/// it now.
 pub(super) fn scan(path: &Path, shared: &FileShared) -> std::io::Result<Result<Vec<FaceRecord>, String>> {
     shared.count_read();
     let bytes = std::fs::read(path)?;
     Ok(decode_owned(bytes)
-        .and_then(|sfnt| super::check_faces(Arc::new(sfnt)))
+        .and_then(|sfnt| super::check_faces(FontBytes::Owned(Arc::new(sfnt))))
         .map(|faces| faces.iter().map(FaceRecord::of).collect())
         .map_err(|e| e.to_string()))
 }
@@ -264,16 +394,53 @@ impl FileShared {
 /// An added font's file, read the first time one of its faces is used and kept from then on.
 pub(crate) struct FontFile {
     path: PathBuf,
-    /// The size and modification time it had when it was read and checked.
+    /// The stamp it had when it was listed: the bytes are read only while it still has it.
     stamp: Option<Stamp>,
     /// Its bytes once read; empty when it couldn't be read.
     bytes: OnceLock<Vec<u8>>,
+    /// Were the faces listed for it checked against its bytes (or made from them, by a start that
+    /// read it)?
+    checked: AtomicBool,
+    /// The check found them unlike the file: they were replaced by faces made from its bytes.
+    unfit: AtomicBool,
+    /// Held while the file is checked, so it is checked once.
+    checking: Mutex<()>,
     shared: Arc<FileShared>,
 }
 
 impl FontFile {
-    pub(super) fn new(path: PathBuf, stamp: Option<Stamp>, shared: Arc<FileShared>) -> FontFile {
-        FontFile { path, stamp, bytes: OnceLock::new(), shared }
+    /// `checked`: the faces listed for it were made from what a read of it found at this start.
+    pub(super) fn new(path: PathBuf, stamp: Option<Stamp>, shared: Arc<FileShared>, checked: bool) -> FontFile {
+        FontFile {
+            path,
+            stamp,
+            bytes: OnceLock::new(),
+            checked: AtomicBool::new(checked),
+            unfit: AtomicBool::new(false),
+            checking: Mutex::new(()),
+            shared,
+        }
+    }
+
+    pub(super) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(super) fn stamp(&self) -> Option<Stamp> {
+        self.stamp
+    }
+
+    /// Do the faces listed for the file fit it? The first call runs `check` (which reads the file
+    /// and answers that), with other callers waiting for it; later calls give its answer.
+    pub(super) fn listed_faces_fit(&self, check: impl FnOnce() -> bool) -> bool {
+        if !self.checked.load(Ordering::Acquire) {
+            let _one = self.checking.lock().unwrap_or_else(PoisonError::into_inner);
+            if !self.checked.load(Ordering::Acquire) {
+                self.unfit.store(!check(), Ordering::Release);
+                self.checked.store(true, Ordering::Release);
+            }
+        }
+        !self.unfit.load(Ordering::Acquire)
     }
 
     /// The file's bytes, read on the first call.
@@ -307,7 +474,7 @@ impl FontFile {
         self.bytes.get().is_some_and(Vec::is_empty)
     }
 
-    /// The file, if it is still the one the catalogue describes, as plain OpenType bytes.
+    /// The file, if it is still the one it was when listed, as plain OpenType bytes.
     fn read(&self) -> Result<Vec<u8>, UserFontError> {
         let changed = || UserFontError::Unusable("the file changed since it was added".into());
         let meta = std::fs::metadata(&self.path).map_err(|e| UserFontError::Unusable(e.to_string()))?;

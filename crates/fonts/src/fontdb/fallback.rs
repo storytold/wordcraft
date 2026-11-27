@@ -18,6 +18,16 @@ impl FontDb {
     /// [`Self::fallback_for`], preferring a bold and/or italic face of the chosen family (so
     /// bold Persian text in a font without Persian letters stays bold).
     pub fn fallback_styled(&self, c: char, exclude: u32, bold: bool, italic: bool) -> Option<Arc<FontFace>> {
+        // An added font's face is checked against its file before it is first handed out.
+        loop {
+            let face = self.styled_fallback(c, exclude, bold, italic)?;
+            if self.checked(&face) {
+                return Some(face);
+            }
+        }
+    }
+
+    fn styled_fallback(&self, c: char, exclude: u32, bold: bool, italic: bool) -> Option<Arc<FontFace>> {
         let base = self.cached_fallback(c, exclude)?;
         if !bold && !italic {
             return Some(base);
@@ -153,6 +163,15 @@ impl FontDb {
     /// Cached per (character set, excluded face, bold, italic) and dropped when the loaded faces
     /// change, like [`Self::fallback_for`], so relayout doesn't repeat the search.
     pub fn fallback_for_run(&self, chars: &[char], exclude: u32, bold: bool, italic: bool) -> Option<Arc<FontFace>> {
+        loop {
+            let face = self.run_fallback(chars, exclude, bold, italic)?;
+            if self.checked(&face) {
+                return Some(face);
+            }
+        }
+    }
+
+    fn run_fallback(&self, chars: &[char], exclude: u32, bold: bool, italic: bool) -> Option<Arc<FontFace>> {
         if chars.is_empty() {
             return None;
         }
@@ -265,6 +284,15 @@ impl FontDb {
     /// diagram's primary style, #5672). Does not alter body text fallback ordering. Cached until
     /// the loaded faces or font database generation changes, so page redraws do not repeat system scans.
     pub fn fallback_for_diagram(&self, chars: &[char], exclude: u32, prefer_serif: bool) -> Option<Arc<FontFace>> {
+        loop {
+            let face = self.diagram_fallback(chars, exclude, prefer_serif)?;
+            if self.checked(&face) {
+                return Some(face);
+            }
+        }
+    }
+
+    fn diagram_fallback(&self, chars: &[char], exclude: u32, prefer_serif: bool) -> Option<Arc<FontFace>> {
         if chars.is_empty() {
             return None;
         }

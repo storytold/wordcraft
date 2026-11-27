@@ -38,6 +38,18 @@ pub(super) enum FontBytes {
     File(Arc<super::user::catalog::FontFile>),
 }
 
+impl FontBytes {
+    /// The font file's bytes (an added font's file is read the first time this is asked).
+    pub(super) fn data(&self) -> &[u8] {
+        match self {
+            FontBytes::Static(b) => b,
+            FontBytes::Owned(v) => v.as_slice(),
+            #[cfg(not(target_arch = "wasm32"))]
+            FontBytes::File(f) => f.data(),
+        }
+    }
+}
+
 /// One loaded font face.
 pub struct FontFace {
     pub(super) id: u32,
@@ -202,12 +214,7 @@ impl FontFace {
     /// The font file's bytes. An added font's file is read the first time this is asked (empty
     /// when it can't be read any more, see [`FontFace::usable`]).
     pub fn data(&self) -> &[u8] {
-        match &self.bytes {
-            FontBytes::Static(b) => b,
-            FontBytes::Owned(v) => v.as_slice(),
-            #[cfg(not(target_arch = "wasm32"))]
-            FontBytes::File(f) => f.data(),
-        }
+        self.bytes.data()
     }
     pub fn skrifa(&self) -> Option<skrifa::FontRef<'_>> {
         skrifa::FontRef::from_index(self.data(), self.index).ok()

@@ -568,14 +568,17 @@ fn an_added_font_is_read_when_a_document_first_uses_it() {
     std::fs::write(dir.join("b.ttf"), numbered(2)).unwrap();
     restart(&dir);
     let (db, _, _) = restart(&dir);
-    // Resolving the family and measuring its lines read nothing: the catalogue has the metrics.
+    assert_eq!(reads(&db), 0);
+    // Resolving the family reads that one file, once: its faces are checked against it before
+    // anything uses their metrics.
     let face = db.face("Userfont 00001", "Italic");
     assert_eq!(face.family, "Userfont 00001");
     assert!(face.ascent > 0.0);
-    assert_eq!(reads(&db), 0);
-    // Shaping text in it reads that one file, once.
+    assert_eq!(reads(&db), 1);
+    // Shaping text in it, or resolving it again, reads nothing more.
     assert!(crate::shape(&face, "office", &[], |c| c).iter().all(|g| g.gid != 0 && g.x_advance > 0));
     crate::shape(&face, "affine", &[], |c| c);
+    db.face("Userfont 00001", "Italic");
     assert_eq!(reads(&db), 1);
     assert_eq!(db.loaded_font_bytes(), std::fs::metadata(dir.join("a.ttf")).unwrap().len() as usize);
     let _ = std::fs::remove_dir_all(&dir);
@@ -616,7 +619,8 @@ fn a_damaged_file_is_skipped_with_its_reason_at_every_start() {
     assert_eq!(first.iter().map(|(f, _)| f.as_str()).collect::<Vec<_>>(), ["cut.ttf", "empty.ttf"]);
     let (db, loaded, again) = restart(&dir);
     assert_eq!(again, first, "skipped for the same reasons");
-    assert_eq!((reads(&db), loaded.len()), (0, 1), "without reading them again");
+    // Read again (a file repaired since would be used), the catalogued one isn't.
+    assert_eq!((reads(&db), loaded.len()), (2, 1));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -716,7 +720,7 @@ fn catalogued_faces_answer_and_draw_as_loaded_faces_do() {
     let mut faces = 0;
     for (file, bytes) in &fonts {
         let font = loaded.iter().find(|f| f.file == *file).unwrap();
-        let whole = check_faces(Arc::new(bytes.clone())).unwrap();
+        let whole = check_faces(FontBytes::Owned(Arc::new(bytes.clone()))).unwrap();
         assert_eq!(font.faces.len(), whole.len(), "{file}");
         for made in &whole {
             let listed = db.face(&made.family, &made.style);
@@ -736,12 +740,12 @@ fn an_added_font_whose_file_is_gone_when_first_used_falls_back() {
     restart(&dir);
     let (db, _, _) = restart(&dir);
     std::fs::remove_file(dir.join("a.ttf")).unwrap();
-    let face = db.face("Userfont 00001", "Italic");
     let generation = db.generation();
-    assert!(crate::shape(&face, "abc", &[], |c| c).iter().all(|g| g.gid == 0), "nothing to draw it with");
-    assert!(!face.usable() && !face.covers('a'));
-    assert!(db.generation() > generation, "lookups made with it are made again");
+    // Checked against its file before it is handed out: there is nothing to draw it with, so its
+    // text is drawn in the fallback, it is no longer listed, and lookups made with it are made again.
     assert_eq!(db.face("Userfont 00001", "Italic").family, super::super::FALLBACK_FAMILY);
+    assert!(!db.is_loaded("Userfont 00001") && db.user_fonts().is_empty());
+    assert!(db.generation() > generation);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -803,5 +807,270 @@ fn fonts_added_or_removed_in_a_session_are_catalogued_for_the_next_start() {
     let (last, loaded, _) = restart(&dir);
     assert_eq!((reads(&last), loaded.len()), (0, 1));
     assert!(last.has_family("Userfont 00002") && !last.has_family("Userfont 00001"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// The review's four reproductions (27 Nov), as regressions: each fails on 6f7b5328.
+
+/// Two files whose names aren't valid Unicode but read the same once made text
+/// (`font-\u{FFFD}.ttf`), with equal sizes and times, as legacy-encoded names restored from an
+/// archive can be. Each keeps its own fonts, and removing one removes its own file.
+#[cfg(all(unix, not(target_vendor = "apple")))]
+#[test]
+fn files_whose_names_read_alike_keep_their_own_fonts() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = temp_dir("alike");
+    std::fs::create_dir_all(&dir).unwrap();
+    let named = |b: u8| dir.join(std::ffi::OsStr::from_bytes(&[b"font-".as_slice(), &[b], b".ttf"].concat()));
+    let (one, two) = (named(0xFE), named(0xFF));
+    let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    for (path, n) in [(&one, 1), (&two, 2)] {
+        std::fs::write(path, numbered(n)).unwrap();
+        std::fs::File::options().write(true).open(path).unwrap().set_modified(when).unwrap();
+    }
+    assert_eq!(restart(&dir).1.len(), 2);
+    let (db, loaded, skipped) = restart(&dir);
+    assert_eq!((loaded.len(), skipped.len()), (2, 0), "{skipped:?}");
+    assert!(db.has_family("Userfont 00001") && db.has_family("Userfont 00002"));
+    assert_eq!(reads(&db), 0, "each listed from its own entry");
+    db.remove_user_font("Userfont 00002").unwrap();
+    assert!(one.exists() && !two.exists(), "the removed font's own file is deleted");
+    let (db, loaded, _) = restart(&dir);
+    assert_eq!(loaded.len(), 1);
+    assert!(db.has_family("Userfont 00001") && !db.has_family("Userfont 00002"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The catalogue's text with `edit` applied to its JSON (what comes before it kept as it was), as
+/// a hand edit or a damaged disk could leave it: still a catalogue to read.
+fn edit_catalogue(dir: &Path, edit: impl FnOnce(&str) -> String) {
+    let path = dir.join(catalog::CATALOG_FILE);
+    let text = std::fs::read_to_string(&path).unwrap();
+    let at = text.find('{').unwrap();
+    let edited = format!("{}{}", &text[..at], edit(&text[at..]));
+    assert_ne!(edited, text);
+    std::fs::write(&path, edited).unwrap();
+}
+
+/// Where the words of a line set in `face` at 12 pt begin and end, in points, as layout places
+/// them: shaped advances over the face's em.
+fn word_positions(face: &super::super::FontFace) -> Vec<f64> {
+    let width = |text: &str| crate::shape(face, text, &[], |c| c).iter().map(|g| f64::from(g.x_advance)).sum::<f64>() * 12.0 / face.upem;
+    let mut x = 0.0;
+    let mut at = Vec::new();
+    for word in "Quiet fields and silver leaves".split(' ') {
+        at.push(x);
+        x += width(word);
+        at.push(x);
+        x += width(" ");
+    }
+    at
+}
+
+#[test]
+fn a_cached_metric_unlike_the_font_never_reaches_layout() {
+    // A catalogue that still reads as one but gives the font a tenth of its em: words set in the
+    // font stand where the font itself puts them, at the first start after and at the next.
+    let dir = temp_dir("metric");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.ttf"), numbered(1)).unwrap();
+    let eager = db();
+    eager.install_font("a.ttf", &numbered(1)).unwrap();
+    let reference = eager.face("Userfont 00001", "Italic");
+    restart(&dir);
+    edit_catalogue(&dir, |json| {
+        let upem = number_after(json, "\"upem\":");
+        json.replacen(&format!("\"upem\":{upem}"), &format!("\"upem\":{:?}", upem.parse::<f64>().unwrap() / 10.0), 1)
+    });
+    for _ in 0..2 {
+        let (db, loaded, _) = restart(&dir);
+        assert_eq!(loaded.len(), 1);
+        let face = db.face("Userfont 00001", "Italic");
+        assert_eq!((face.upem, face.ascent, face.descent), (reference.upem, reference.ascent, reference.descent));
+        assert_eq!(word_positions(&face), word_positions(&reference));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Wait until the file system's clock is past when `path` last changed (file times can be coarse,
+/// a few milliseconds), so a rewrite now comes later than the catalogue, as any restore does.
+#[cfg(unix)]
+fn after_last_change(path: &Path) {
+    use std::os::unix::fs::MetadataExt;
+    let changed = |p: &Path| std::fs::metadata(p).map(|m| (m.ctime(), m.ctime_nsec())).unwrap();
+    let before = changed(path);
+    let probe = path.with_extension("clock");
+    for _ in 0..2000 {
+        std::fs::write(&probe, b"").unwrap();
+        if changed(&probe) > before {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let _ = std::fs::remove_file(&probe);
+}
+
+/// Write `bytes` over the font file at `path` in place keeping its size and modification time, as
+/// a restore can.
+#[cfg(unix)]
+fn rewrite_keeping_size_and_time(path: &Path, bytes: &[u8]) {
+    let meta = std::fs::metadata(path).unwrap();
+    assert_eq!(meta.len(), bytes.len() as u64);
+    after_last_change(path);
+    std::fs::write(path, bytes).unwrap();
+    std::fs::File::options().write(true).open(path).unwrap().set_modified(meta.modified().unwrap()).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_font_replaced_keeping_size_and_time_is_read_again() {
+    let dir = temp_dir("same-stamp");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.ttf"), numbered(1)).unwrap();
+    restart(&dir);
+    rewrite_keeping_size_and_time(&dir.join("a.ttf"), &numbered(2));
+    let (db, loaded, skipped) = restart(&dir);
+    assert_eq!((loaded.len(), skipped.len()), (1, 0));
+    assert!(db.has_family("Userfont 00002") && !db.has_family("Userfont 00001"));
+    assert_eq!(db.face("Userfont 00002", "Italic").family, "Userfont 00002");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_font_damaged_keeping_size_and_time_is_skipped() {
+    let dir = temp_dir("same-stamp-damaged");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.ttf"), numbered(1)).unwrap();
+    restart(&dir);
+    // The signature kept, nothing else.
+    let mut damaged = numbered(1);
+    damaged[4..].fill(0);
+    rewrite_keeping_size_and_time(&dir.join("a.ttf"), &damaged);
+    let (db, loaded, skipped) = restart(&dir);
+    assert_eq!(loaded.len(), 0);
+    assert_eq!(skipped.iter().map(|(f, _)| f.as_str()).collect::<Vec<_>>(), ["a.ttf"]);
+    assert_eq!(db.face("Userfont 00001", "Italic").family, super::super::FALLBACK_FAMILY);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_damaged_font_repaired_keeping_size_and_time_is_used() {
+    let dir = temp_dir("repaired");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("a.ttf");
+    let mut damaged = numbered(1);
+    damaged[4..].fill(0);
+    let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    for bytes in [damaged, numbered(1)] {
+        std::fs::write(&path, bytes).unwrap();
+        std::fs::File::options().write(true).open(&path).unwrap().set_modified(when).unwrap();
+        restart(&dir);
+    }
+    let (db, loaded, skipped) = restart(&dir);
+    assert_eq!((loaded.len(), skipped.len()), (1, 0), "{skipped:?}");
+    assert_eq!(db.face("Userfont 00001", "Italic").family, "Userfont 00001");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_catalogue_write_leaves_another_writers_unfinished_file_alone() {
+    // Another instance of the app is part-way through writing the catalogue (a shell holding the
+    // temporary file open, half written) when this one writes it: each publishes only its own
+    // whole file, and a reader finds a whole catalogue, old or new, throughout.
+    use std::io::{BufRead, Write};
+    let dir = temp_dir("two-writers");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.ttf"), numbered(1)).unwrap();
+    restart(&dir);
+    let catalogue = dir.join(catalog::CATALOG_FILE);
+    // What the other writer publishes: a whole catalogue (describing a.ttf only).
+    let whole = dir.with_extension("whole");
+    std::fs::copy(&catalogue, &whole).unwrap();
+    let half = std::fs::metadata(&whole).unwrap().len() / 2;
+    let theirs = dir.join(format!("{}.part", catalog::CATALOG_FILE));
+    let script = r#"exec 3>"$1" && head -c "$2" "$3" >&3 && echo ready && read go && tail -c +"$(($2 + 1))" "$3" >&3 && exec 3>&- && mv "$1" "$4" && echo done"#;
+    let mut other = std::process::Command::new("sh")
+        .args(["-c", script, "other-writer"])
+        .arg(&theirs)
+        .arg(half.to_string())
+        .arg(&whole)
+        .arg(&catalogue)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut said = std::io::BufReader::new(other.stdout.take().unwrap());
+    let mut line = String::new();
+    said.read_line(&mut line).unwrap();
+    assert_eq!(line.trim(), "ready");
+    // This instance writes the catalogue meanwhile: a font was added.
+    std::fs::write(dir.join("b.ttf"), numbered(2)).unwrap();
+    assert_eq!(restart(&dir).1.len(), 2);
+    assert_eq!(std::fs::metadata(&theirs).map(|m| m.len()).ok(), Some(half), "the other writer's file is left alone");
+    let (db, loaded, _) = restart(&dir);
+    assert_eq!((reads(&db), loaded.len()), (0, 2), "the whole of what this instance wrote");
+    writeln!(other.stdin.take().unwrap(), "go").unwrap();
+    line.clear();
+    said.read_line(&mut line).unwrap();
+    assert_eq!(line.trim(), "done");
+    assert!(other.wait().unwrap().success());
+    let (db, loaded, _) = restart(&dir);
+    assert_eq!((reads(&db), loaded.len()), (1, 2), "the whole of what it wrote: b.ttf, which it didn't describe, is read");
+    let _ = std::fs::remove_file(&whole);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_whole_catalogue_unlike_a_file_is_corrected_when_the_font_is_first_used() {
+    // A catalogue whose digest matches but whose entry doesn't fit its file (as a build describing
+    // faces another way would leave): believed at start, then the face is checked against the
+    // file before it is handed out, made again from it, and the catalogue corrected.
+    let dir = temp_dir("unfit");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.ttf"), numbered(1)).unwrap();
+    let eager = db();
+    eager.install_font("a.ttf", &numbered(1)).unwrap();
+    let reference = eager.face("Userfont 00001", "Italic");
+    restart(&dir);
+    edit_catalogue(&dir, |json| {
+        let ascent = number_after(json, "\"ascent\":");
+        json.replacen(&format!("\"ascent\":{ascent}"), &format!("\"ascent\":{:?}", ascent.parse::<f64>().unwrap() * 2.0), 1)
+    });
+    catalog::reseal(&dir);
+    let (db, loaded, _) = restart(&dir);
+    assert_eq!((reads(&db), loaded.len()), (0, 1), "a whole catalogue is believed at start");
+    let generation = db.generation();
+    let face = db.face("Userfont 00001", "Italic");
+    assert_eq!(described(&face), described(&reference));
+    assert_eq!(reads(&db), 1);
+    assert!(db.generation() > generation, "lookups made with the faces it replaced are made again");
+    assert_eq!(db.user_fonts()[0].faces, [("Userfont 00001".to_string(), "Italic".to_string())]);
+    // Corrected for the next start: listed without reading the file, then found fitting when
+    // first handed out.
+    let (db, loaded, _) = restart(&dir);
+    assert_eq!((reads(&db), loaded.len()), (0, 1));
+    let generation = db.generation();
+    assert_eq!(db.face("Userfont 00001", "Italic").ascent, reference.ascent);
+    assert_eq!((reads(&db), db.generation()), (1, generation));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_catalogue_write_that_never_finished_is_cleared_away_later() {
+    let dir = temp_dir("abandoned");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.ttf"), numbered(1)).unwrap();
+    let old = dir.join(format!("{}.1-0.part", catalog::CATALOG_FILE));
+    let young = dir.join(format!("{}.2-0.part", catalog::CATALOG_FILE));
+    for path in [&old, &young] {
+        std::fs::write(path, b"{\"format\"").unwrap();
+    }
+    let hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 60 * 60);
+    std::fs::File::options().write(true).open(&old).unwrap().set_modified(hours_ago).unwrap();
+    assert_eq!(restart(&dir).1.len(), 1);
+    assert!(!old.exists(), "left by a writer that stopped long ago");
+    assert!(young.exists(), "another writer may still be writing it");
     let _ = std::fs::remove_dir_all(&dir);
 }

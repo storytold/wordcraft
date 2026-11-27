@@ -153,7 +153,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
-- 2026-11-27: Fonts the user added no longer slow start-up: they are listed from a catalogue kept in their folder, and a font's file is read when a document first uses it. With 1,000 added fonts a start spends about 10 ms on them instead of 0.5–2 s, and holds none of their bytes until they are used.
+- 2026-11-27: Fonts the user added no longer slow every start: a start lists them from a catalogue kept in their folder, and a font's file is read, and checked against the catalogue, when a document first uses it. With 1,000 added fonts, a start that finds the catalogue spends about 12 ms on them on a Linux test machine instead of 0.2–1 s, and holds none of their bytes until they are used; the first start after an update reads them all once.
 - 2026-11-24: Pasting a plain table over selected cells overwrites from the selection's top-left, even when the copy is wider than the selection (#6742).
 - 2026-11-21: Layout: strict column balancing measures a kept paragraph again in each candidate column, so a float in one column does not make the paragraph skip another where it fits (#6821). Readiness estimates unchanged.
 
