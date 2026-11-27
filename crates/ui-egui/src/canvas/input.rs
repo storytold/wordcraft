@@ -271,7 +271,11 @@ impl CanvasTool for PageTextTool<'_> {
         if let Some(c) = ObjectGesture::cursor(&*self.app, &self.layout, self.body, pointer.pos, pointer.mods) {
             return c;
         }
-        let Some((page, x, y)) = page_of(self.body.pages, pointer.pos) else { return Cursor::System(CursorIcon::Default) };
+        // Off the paper the arrow shows, except while a drag that began on the page is still held.
+        let Some((page, x, y)) = page_of(self.body.pages, pointer.pos) else {
+            let held = self.app.canvas.dragging || self.app.canvas.unit_drag.is_some();
+            return if held { text() } else { Cursor::System(CursorIcon::Default) };
+        };
         // The selection bar keeps its arrow.
         if self.app.session.sel.focus.story == StoryRef::Body && !pointer.mods.alt && self.layout.selection_bar_at(page, x, y).is_some() {
             return Cursor::System(CursorIcon::Default);
