@@ -332,34 +332,8 @@ mod bar {
         pub(crate) input: Vec<egui::Event>,
     }
 
-    /// Labels only the menu bar uses, in Italian (the catalogs have the rest; other languages
-    /// fall back to English for these few).
-    const EXTRA_IT: &[(&str, &str)] = &[
-        ("Services", "Servizi"),
-        ("Hide WordCraft", "Nascondi WordCraft"),
-        ("Hide Others", "Nascondi altre"),
-        ("Show All", "Mostra tutte"),
-        ("Quit WordCraft", "Esci da WordCraft"),
-        ("Minimize", "Riduci a icona"),
-        ("Zoom", "Ingrandisci"),
-        ("Enter Full Screen", "Attiva modalità a tutto schermo"),
-        ("Bring All to Front", "Porta tutto in primo piano"),
-        ("Edit", "Modifica"),
-        ("Go", "Vai"),
-        ("Open Recent", "Apri recenti"),
-        ("About WordCraft", "Informazioni su WordCraft"),
-        ("New from Template…", "Nuovo da modello…"),
-        ("Export…", "Esporta…"),
-        ("Table", "Tabella"),
-    ];
-
-    /// A translated label.
+    /// A translated label via the shared i18n catalog.
     fn t(s: &str) -> &str {
-        if i18n::current().code() == "it"
-            && let Some((_, it)) = EXTRA_IT.iter().find(|(en, _)| *en == s)
-        {
-            return it;
-        }
         i18n::t(s)
     }
 
