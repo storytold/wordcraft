@@ -154,6 +154,18 @@ fn screen_hinting_refuses_hostile_sizes() {
     assert!(db.hinted_outline(&face, u32::MAX, 20.0).is_none_or(|o| o.elements().is_empty()));
 }
 
+#[test]
+fn bounded_outline_cache_evicts_oldest_incrementally() {
+    let mut c = BoundedCache::new(2);
+    c.insert(1u32, "a");
+    c.insert(2u32, "b");
+    c.insert(3u32, "c");
+    assert_eq!(c.len(), 2);
+    assert!(c.get(&1).is_none(), "oldest entry evicted");
+    assert_eq!(c.get(&2), Some(&"b"), "newer entry retained");
+    assert_eq!(c.get(&3), Some(&"c"));
+}
+
 /// The issue's run (#1549): Thai letters and digits, Latin letters, digits and the baht sign.
 const THAI_RUN: &str = "[D] น้ำ ค่ำ ปั้น ฝั่ง ปู่ ๑๒๓๔๕๖๗๘๙๐ ฿1,250.50";
 

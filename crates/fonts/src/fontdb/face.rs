@@ -541,9 +541,13 @@ fn is_explicit_serif(name: &str) -> bool {
 
 pub(super) static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 
-pub(super) const OUTLINE_CACHE_MAX: usize = 50_000;
+/// Unhinted glyph outlines kept per (face, glyph).
+pub(super) const OUTLINE_CACHE_MAX: usize = 16_384;
+/// Screen-hinted outlines kept per (face, glyph, ppem bits); narrower than [`OUTLINE_CACHE_MAX`]
+/// because zoom changes create entries per size.
+pub(super) const HINTED_CACHE_MAX: usize = 8_192;
 /// Hinting instances kept (one per face and text size on screen).
-pub(super) const HINTER_CACHE_MAX: usize = 256;
+pub(super) const HINTER_CACHE_MAX: usize = 128;
 /// Sizes hinted, in device pixels per em: below, text is too small to read anyway; above, the
 /// half-pixel hinting moves is invisible (and each size would cost a cache entry).
 pub(super) const HINT_PPEM: std::ops::RangeInclusive<f32> = 4.0..=96.0;

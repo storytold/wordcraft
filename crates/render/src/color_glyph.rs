@@ -4,7 +4,7 @@
 //! and turns it into vello fills. The colours come from the font: a dark page doesn't invert them,
 //! the same as pictures. Only the font's "text colour" entries follow the run's colour.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use vello_cpu::kurbo::{self, Affine, Point, Rect, Shape};
@@ -29,15 +29,17 @@ impl Drawable {
     }
 }
 
-/// Upper bounds on the colour-glyph cache: entries and approximate bytes. Past either it starts over.
+/// Upper bounds on the colour-glyph cache: entries and approximate bytes. Evicts oldest entries
+/// incrementally past either cap.
 const CACHE_ENTRIES: usize = 4096;
-const CACHE_BYTES: usize = 64 * 1024 * 1024;
+const CACHE_BYTES: usize = 32 * 1024 * 1024;
 
 type Key = (u32, u32, u32);
 
 #[derive(Default)]
 struct Cache {
-    map: HashMap<Key, Option<Arc<Drawable>>>,
+    map: HashMap<Key, (Option<Arc<Drawable>>, usize)>,
+    order: VecDeque<Key>,
     bytes: usize,
 }
 
@@ -62,21 +64,38 @@ pub(crate) fn drawable(face: &FontFace, gid: u32, ppem: f64, cached: bool) -> Op
         return build(face, gid, bucket).map(Arc::new);
     }
     let key = (face.id(), gid, bucket);
-    if let Some(v) = crate::lock(cache()).map.get(&key) {
+    if let Some((v, _)) = crate::lock(cache()).map.get(&key) {
         return v.clone();
     }
     let d = build(face, gid, bucket).map(Arc::new);
     let size = d.as_ref().map_or(0, |d| d.bytes()).saturating_add(64);
     let mut c = crate::lock(cache());
-    if c.map.len() >= CACHE_ENTRIES || c.bytes.saturating_add(size) > CACHE_BYTES {
-        c.map.clear();
-        c.bytes = 0;
-    }
     if size <= CACHE_BYTES {
-        c.map.insert(key, d.clone());
-        c.bytes = c.bytes.saturating_add(size);
+        c.insert(key, d.clone(), size);
     }
     d
+}
+
+impl Cache {
+    fn insert(&mut self, key: Key, val: Option<Arc<Drawable>>, size: usize) {
+        if let Some((_, old_size)) = self.map.remove(&key) {
+            self.bytes = self.bytes.saturating_sub(old_size);
+        }
+        while self.map.len() >= CACHE_ENTRIES || self.bytes.saturating_add(size) > CACHE_BYTES {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            if let Some((_, old_size)) = self.map.remove(&oldest) {
+                self.bytes = self.bytes.saturating_sub(old_size);
+            }
+        }
+        if self.map.capacity() > self.map.len().saturating_mul(4).max(64) {
+            self.map.shrink_to(self.map.len().saturating_mul(2).max(32));
+        }
+        self.order.push_back(key);
+        self.map.insert(key, (val, size));
+        self.bytes = self.bytes.saturating_add(size);
+    }
 }
 
 fn build(face: &FontFace, gid: u32, ppem: u32) -> Option<Drawable> {
@@ -437,5 +456,16 @@ mod tests {
         let p = wordcraft_geom::picture::probe(&bytes).unwrap();
         assert_eq!((p.width, p.height), (4, 4), "a plain glyph reads");
         assert_eq!(decode_png(&png(1, 1), 1, 1).map(|p| (p.width(), p.height())), Some((1, 1)));
+    }
+
+    #[test]
+    fn color_glyph_cache_evicts_oldest_within_byte_budget() {
+        let mut c = Cache::default();
+        let entry = CACHE_BYTES / 2 + 1;
+        c.insert((1, 1, 16), None, entry);
+        c.insert((1, 2, 16), None, entry);
+        assert!(!c.map.contains_key(&(1, 1, 16)), "oldest entry evicted to stay under budget");
+        assert!(c.map.contains_key(&(1, 2, 16)), "newest entry retained");
+        assert!(c.bytes <= CACHE_BYTES);
     }
 }
