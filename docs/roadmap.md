@@ -1,5 +1,7 @@
 # WordCraft roadmap: milestones and what's next
 
+> **Validation status:** 2026-11-12 · minor · #5875 round 18: package entry and availability lookups carry explicit absence/unknown states; the observation gate resolves bounded helper/accessor aliases and pins completeness predicates and reader derives. Qualified standard macros and four inert attributes are supported; named-field bindings and trait bodies remain closed grammar. Synthetic controls only; independent endpoint review remains required and readiness estimates are unchanged.
+
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged); previously minor (M15: Arabic mirrored UI #1195; 28 UI languages; Hebrew UI and native IME acceptance remain open); previously trivial (HTML import keeps preformatted lines with CR, CRLF or LF input newlines (#4810); numeric character references retain their separate meaning; readiness estimates unchanged; previously trivial: egui 0.37 migration: 27 interface languages remain pinned by `craft-i18n.rev` (9205108…), and the input-method handling has synthetic regressions while managed CI passed and native acceptance (#155–#164) remains open; previously trivial: M6: Manage Sources imports Word's `Sources.xml`, #2640; previously minor: Czech proofing review fixes; previously minor: Portuguese proofing; previously minor: Polish interface and Polish proofing; previously trivial: M7: formatting revisions landed, #41; previously trivial: M5: Draw Table and Eraser landed, #303; previously minor: beta distance restated: ~15 points, ~150–230 h; previously: alpha gate checked: six core workflows pass; previously major: milestones moved here from ROADMAP.md; Current focus set from the re-measured gaps) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 Forward-looking plan. The summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work list is
@@ -74,6 +76,7 @@ languages, screen-reader access, ecosystem decisions (VBA, add-ins, cloud), an i
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | minor | #5875 round 18: package entry and availability lookups carry explicit absence/unknown states; the observation gate resolves bounded helper/accessor aliases and pins completeness predicates and reader derives. Qualified standard macros and four inert attributes are supported; named-field bindings and trait bodies remain closed grammar. Synthetic controls only; independent endpoint review remains required and readiness estimates are unchanged. |
 | 2026-11-03 | trivial | DOCX text-frame anchor locks survive JSON and two save/reopen cycles, including position and size edits |
 | 2026-11-03 | minor | M15: Arabic mirrored interface (#1195); 28 UI languages from craft-i18n; Hebrew UI, native-speaker review and native IME acceptance (#155–#164) remain open |
 | 2026-10-31 | minor | #3398: persistent screen-only green, cream and gray paper presets, with document backgrounds and export colors retained. Read Mode None follows the screen preset; Sepia/Inverse retain priority. |

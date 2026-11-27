@@ -9,6 +9,7 @@ use std::cell::Cell;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use craft::behavior::intent::EditCommand;
 use craft::behavior::kurbo::{Point, Size};
 use craft::pages::layout::{Fit, LayoutOptions, PageDisplay, SCREEN_POINTS_PER_POINT};
 use craft::pages::ui::reading::{ReadingMetrics, reading_size};
@@ -17,7 +18,7 @@ use craft::ui::canvas::{Autoscroll, ContextSource, MiddleButton, NavigationOptio
 use craft::ui::contract::Show as _;
 
 use craft::ui::runtime::env::Env;
-use craft::ui::runtime::focus::{self, FocusTarget};
+use craft::ui::runtime::focus::{self, EditSet, FocusTarget};
 use craft::ui::style::DataColor;
 use egui::{Color32, Pos2, Rect, Ui, pos2, vec2};
 use serde_json::json;
@@ -644,7 +645,7 @@ fn sync_view_state(app: &WordApp, state: &mut PageViewState) {
     // A wheel or pinch zoom is the view's own, anchored at the pointer, and reaches the session rounded to a whole
     // percent (`show_pages`): the view keeps its exact zoom while it rounds to the session's, or the rounding would
     // move the place under the pointer on the next pass.
-    let session_zoom = f64::from(v.zoom.clamp(0.1, 5.0));
+    let session_zoom = f64::from(if v.zoom.is_finite() { v.zoom.clamp(0.1, 5.0) } else { 1.0 });
     if (state.zoom * 100.0).round() != (session_zoom * 100.0).round() {
         state.zoom = session_zoom;
     }
@@ -808,12 +809,19 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     let mut fix = ScrollFix::default();
     // The caret the follow wants whose page the pass did not place: its page, the page's height and the caret.
     let mut unplaced = None;
+    // The page answers for the linked Cut and Copy while it has focus: with nothing selected they are inactive, so the
+    // ribbon, the context menu and the command search grey them as production did.
+    let inactive_edits = [(EditCommand::Cut, "edit.cut"), (EditCommand::Copy, "edit.copy")]
+        .into_iter()
+        .filter(|(_, id)| !crate::app::command_board::command_enabled(app, id))
+        .fold(EditSet::NONE, |set, (command, _)| set.with(command));
     let out = PageView::new(tl!("Document"), &source, &mut state, paper)
         .options(options)
         // Hide White Space cuts each page to its text area: without the bodies the pages show whole.
         .bodies(&bodies)
         .navigation(navigation_options())
         .editor(craft::ui::primitives::EditorPurpose::Text)
+        .inactive_edits(inactive_edits)
         .rulers(show_rulers)
         .snap(crate::objects::snap(app, layout))
         .tool_regions(regions)
