@@ -40,7 +40,7 @@ pub(super) fn design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             );
             menu_button(
                 ui,
-                Button::new(crate::tl!("Fonts")).icon(IconId::new("fonts")).tooltip(crate::tl!("Theme Fonts")),
+                Button::new(crate::tl!("Fonts")).icon(crate::icons::spec("fonts")).tooltip(crate::tl!("Theme Fonts")),
                 crate::tl!("Theme Fonts"),
                 Some("design.themeFonts"),
                 |ui, _| {
@@ -87,7 +87,10 @@ pub(super) fn design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     row.group(RibbonGroup::new("Page Background", crate::tl!("Page Background"), IconId::new("pageColor").into()), |ui| {
         menu_button(
             ui,
-            Button::new(crate::tl!("Watermark")).icon(IconId::new("watermark")).tooltip(crate::tl!("Watermark")).arrangement(Arrangement::Stacked),
+            Button::new(crate::tl!("Watermark"))
+                .icon(crate::icons::spec("watermark"))
+                .tooltip(crate::tl!("Watermark"))
+                .arrangement(Arrangement::Stacked),
             crate::tl!("Watermark"),
             Some("design.watermark"),
             |ui, _| {

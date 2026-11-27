@@ -75,7 +75,7 @@ pub(super) fn layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             // Text Direction works on what the caret is in: table cells, a text box, else the section.
             let dir = wordcraft_engine::cmd::page::text_direction_at(&app.session);
             let stacked =
-                |label: &'static str, icon: &'static str| Button::new(tl!(label)).icon(crate::icons::id(icon)).arrangement(Arrangement::Stacked);
+                |label: &'static str, icon: &'static str| Button::new(tl!(label)).icon(crate::icons::spec(icon)).arrangement(Arrangement::Stacked);
             menu_button(ui, stacked("Text\nDirection", "textDirection"), tl!("Text Direction"), Some("layout.textDirection"), |ui, _| {
                 use wordcraft_doc::props::TextDirection;
                 for (label, d) in [
@@ -96,7 +96,7 @@ pub(super) fn layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             menu_button(ui, stacked("Size", "size"), tl!("Size"), Some("layout.size"), |ui, _| size_menu(ui, app));
             menu_button(ui, stacked("Columns", "columns"), tl!("Columns"), Some("layout.columns"), |ui, _| columns_items(ui, app));
             Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-                let inline = |label: &'static str, icon: &'static str| Button::new(tl!(label)).icon(crate::icons::id(icon));
+                let inline = |label: &'static str, icon: &'static str| Button::new(tl!(label)).icon(crate::icons::spec(icon));
                 menu_button(ui, inline("Breaks", "breaks"), tl!("Breaks"), Some("layout.break"), |ui, _| {
                     MenuItem::heading(tl!("Page Breaks")).show(ui);
                     for (l, k) in [("Page", "page"), ("Column", "column"), ("Text Wrapping", "textWrapping")] {

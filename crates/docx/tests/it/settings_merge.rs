@@ -66,7 +66,15 @@ const SETTINGS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?
 <w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" mc:Ignorable="w14 w15"><w:zoom w:percent="120"/><w:removePersonalInformation/><w:removeDateAndTime/><w:proofState w:spelling="clean" w:grammar="clean"/><w:mailMerge><w:mainDocumentType w:val="formLetters"/><w:dataSource r:id="rId9"/></w:mailMerge><w:trackRevisions/><w:defaultTabStop w:val="708"/><w:hyphenationZone w:val="425"/><w:characterSpacingControl w:val="doNotCompress"/><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/><w:compatSetting w:name="overrideTableStyleFontSizeAndJustification" w:uri="http://schemas.microsoft.com/office/word" w:val="1"/><w:compatSetting w:name="enableOpenTypeFeatures" w:uri="http://schemas.microsoft.com/office/word" w:val="1"/></w:compat><w:docVars><w:docVar w:name="ClauseSet" w:val="B"/></w:docVars><w:rsids><w:rsidRoot w:val="00A1B2C3"/><w:rsid w:val="00A1B2C3"/></w:rsids><m:mathPr><m:mathFont m:val="Cambria Math"/><m:smallFrac m:val="0"/></m:mathPr><w:themeFontLang w:val="pl-PL"/><w:decimalSymbol w:val=","/><w:listSeparator w:val=";"/><w14:docId w14:val="1A2B3C4D"/></w:settings>"#;
 
 fn with_settings(settings: &str) -> Vec<u8> {
-    package("<w:p><w:r><w:t>Text</w:t></w:r></w:p>", &[("rId1", &format!("{REL}/settings"), "settings.xml")], &[], &[("word/settings.xml", settings)])
+    let sources = format!(
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="{REL}/mailMergeSource" Target="file:///__wordcraft_missing_source__/letters.xlsx" TargetMode="External"/></Relationships>"#
+    );
+    package(
+        "<w:p><w:r><w:t>Text</w:t></w:r></w:p>",
+        &[("rId1", &format!("{REL}/settings"), "settings.xml")],
+        &[],
+        &[("word/settings.xml", settings), ("word/_rels/settings.xml.rels", &sources)],
+    )
 }
 
 fn pos(s: &str, needle: &str) -> usize {
@@ -97,11 +105,22 @@ fn unmodelled_settings_survive_a_save_and_owned_ones_follow_the_model() {
     ] {
         assert!(s.contains(kept), "{kept} lost: {s}");
     }
-    // Owned: Track Changes was turned off; one compatibility mode; the mail merge source (a
-    // relationship that isn't carried) is dropped rather than left dangling.
+    // Owned: Track Changes was turned off; one compatibility mode. Mail merge keeps its external
+    // source relationship.
     assert!(!s.contains("trackRevisions"), "{s}");
     assert_eq!(s.matches("compatibilityMode").count(), 1, "{s}");
-    assert!(!s.contains("mailMerge") && !s.contains("rId9"), "{s}");
+    assert!(s.contains("mailMerge"), "{s}");
+    let rel_id = s
+        .split("<w:dataSource")
+        .nth(1)
+        .and_then(|after| after.split("r:id=\"").nth(1))
+        .and_then(|after| after.split('"').next())
+        .expect("dataSource r:id");
+    let rels = text(&files, "word/_rels/settings.xml.rels");
+    let expected_rel = format!(
+        r#"<Relationship Id="{rel_id}" Type="{REL}/mailMergeSource" Target="file:///__wordcraft_missing_source__/letters.xlsx" TargetMode="External"/>"#
+    );
+    assert!(rels.contains(&expected_rel), "missing matching relationship for {rel_id}: {rels}");
     // The privacy options are the model's (#1062): written once each, and gone when turned off.
     assert_eq!(s.matches("removePersonalInformation").count(), 1, "{s}");
     assert_eq!(s.matches("removeDateAndTime").count(), 1, "{s}");
@@ -121,6 +140,37 @@ fn unmodelled_settings_survive_a_save_and_owned_ones_follow_the_model() {
     // A second generation is identical.
     let again = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
     assert_eq!(text(&save(&again), "word/settings.xml"), s);
+}
+
+#[test]
+fn changed_zoom_survives_merged_settings_and_reads_back_as_page_width() {
+    let old_zoom = r#"<w:zoom w:percent="120"/>"#;
+    let updated_zoom = r#"<w:zoom w:val="bestFit" w:percent="145"/>"#;
+    for original in [SETTINGS.to_string(), SETTINGS.replace(old_zoom, "")] {
+        let mut doc = wordcraft_docx::read(&with_settings(&original)).unwrap();
+        assert!(doc.passthrough.contains_key("wordcraft:settings.orig"));
+        doc.settings.zoom = Some(wordcraft_doc::Zoom { percent: 145, fit: Some(wordcraft_doc::ZoomFit::PageWidth) });
+        let bytes = wordcraft_docx::write(&doc).unwrap();
+        let settings = text(&unzip(&bytes), "word/settings.xml");
+        assert_eq!(settings.matches("<w:zoom ").count(), 1, "{settings}");
+        assert!(settings.contains(updated_zoom), "{settings}");
+        // The retained root and unrelated child bytes still belong to the original file.
+        let root_end = original.find("><w:").unwrap() + 1;
+        assert!(settings.starts_with(&original[..root_end]), "{settings}");
+        for kept in [
+            r#"<w:proofState w:spelling="clean" w:grammar="clean"/>"#,
+            r#"<w:docVars><w:docVar w:name="ClauseSet" w:val="B"/></w:docVars>"#,
+            r#"<w:rsids><w:rsidRoot w:val="00A1B2C3"/><w:rsid w:val="00A1B2C3"/></w:rsids>"#,
+        ] {
+            assert!(settings.contains(kept), "{kept} lost: {settings}");
+        }
+        assert!(pos(&settings, "<w:zoom ") < pos(&settings, "<w:proofState"));
+        let again = wordcraft_docx::read(&bytes).unwrap();
+        let zoom = again.settings.zoom.unwrap();
+        assert_eq!(zoom.percent, 145);
+        assert!(matches!(zoom.fit, Some(wordcraft_doc::ZoomFit::PageWidth)));
+        assert_eq!(text(&save(&again), "word/settings.xml"), settings);
+    }
 }
 
 #[test]
