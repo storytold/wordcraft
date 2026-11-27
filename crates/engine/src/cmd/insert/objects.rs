@@ -23,8 +23,13 @@ fn insert_block_at_caret(s: &mut Session, block: Block) -> Result<Path, CmdError
     Ok(insert_at)
 }
 
+/// Most rows an inserted table has. The table model holds more, but an inserted table starts
+/// small: the command that inserts one clamps to this, so the others read it rather than
+/// repeating the number.
+pub const MAX_TABLE_ROWS: usize = 1_000;
+
 pub(super) fn table(s: &mut Session, v: &Value) -> CmdResult {
-    let rows = p::u64(v, "rows").unwrap_or(2).clamp(1, 1000) as usize;
+    let rows = p::u64(v, "rows").unwrap_or(2).clamp(1, MAX_TABLE_ROWS as u64) as usize;
     let cols = p::u64(v, "cols").unwrap_or(2).clamp(1, 63) as usize;
     let width = s.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
     let mut t = Table::new(rows, cols, width);

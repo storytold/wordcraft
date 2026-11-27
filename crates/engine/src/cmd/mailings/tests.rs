@@ -2,9 +2,54 @@ use super::*;
 
 #[test]
 fn csv_parsing() {
-    let r = parse_csv("Name,City\n\"Smith, Ann\",Paris\r\nBo,\"Oslo \"\"N\"\"\"\n\n");
+    let r = parse_csv("Name,City\n\"Smith, Ann\",Paris\r\nBo,\"Oslo \"\"N\"\"\"\n\n", &RECIPIENT_LIMITS).unwrap();
     assert_eq!(r, vec![vec!["Name", "City"], vec!["Smith, Ann", "Paris"], vec!["Bo", "Oslo \"N\""]]);
-    assert_eq!(parse_csv("a;b\n1;2")[1], vec!["1", "2"]);
+    assert_eq!(parse_csv("a;b\n1;2", &RECIPIENT_LIMITS).unwrap()[1], vec!["1", "2"]);
+}
+
+/// The parser keeps its limits while it reads the list, so a hostile list is refused
+/// instead of being built and then cut.
+#[test]
+fn csv_parsing_refuses_a_list_over_its_limits() {
+    // A record wider than the limit.
+    let e = parse_csv("a,b,c,d,e", &CsvLimits { fields: 4, cells: 100, text: 1_000 }).unwrap_err();
+    assert!(e.to_string().contains("4 columns"), "{e}");
+    // More cells than the list keeps.
+    let e = parse_csv("a,b\nc,d\ne,f\ng,h\ni,j\nk,l", &CsvLimits { fields: 10, cells: 10, text: 1_000 }).unwrap_err();
+    assert!(e.to_string().contains("10 cells"), "{e}");
+    // More text than the list keeps.
+    let e = parse_csv("abcdefghij", &CsvLimits { fields: 10, cells: 100, text: 8 }).unwrap_err();
+    assert!(e.to_string().contains("of text"), "{e}");
+    // A list inside the limits still parses.
+    let limits = CsvLimits { fields: 4, cells: 10, text: 1_000 };
+    assert_eq!(parse_csv("a,b\nc,d", &limits).unwrap(), vec![vec!["a", "b"], vec!["c", "d"]]);
+}
+
+/// A recipient list over its limits is refused, not built.
+#[test]
+fn a_recipient_list_over_its_limits_is_refused() {
+    // A record wider than the list's fields.
+    let wide = format!("{}\nvalue", "f,".repeat(MAX_FIELDS + 1));
+    let e = parse_csv(&wide, &RECIPIENT_LIMITS).unwrap_err();
+    assert!(e.to_string().contains(&format!("{MAX_FIELDS} columns")), "{e}");
+
+    // A record of exactly the limit's width is kept.
+    let exact = format!("{}\nvalue", "f,".repeat(MAX_FIELDS - 1));
+    assert_eq!(parse_csv(&exact, &RECIPIENT_LIMITS).unwrap()[0].len(), MAX_FIELDS);
+
+    // A wide header over many records: the list would cost more cells than it keeps, and
+    // every record is padded to the header's width.
+    let mut csv = format!("{}\n", (0..MAX_FIELDS).map(|i| format!("f{i}")).collect::<Vec<_>>().join(","));
+    for _ in 0..=MAX_CELLS / MAX_FIELDS {
+        csv.push_str("value\n");
+    }
+    let e = parse_csv(&csv, &RECIPIENT_LIMITS).unwrap_err();
+    assert!(e.to_string().contains(&format!("{MAX_CELLS} cells")), "{e}");
+
+    // The command refuses it too, with a message of its own.
+    let mut s = Session::new(Document::new());
+    let e = s.run("mailings.recipients", &json!({"csv": wide})).unwrap_err();
+    assert!(e.to_string().contains("columns"), "{e}");
 }
 
 /// #4001: finishing a merge opens a new document, with a new undo history. It is not an
@@ -56,13 +101,16 @@ fn csv_delimiter_reads_complete_header_record() {
             let quoted = header.replace('"', "\"\"");
             let text = format!("\"{quoted}\"{sep}City{sep}{sep}\r\nAda{sep}Paris{sep}{sep}\nBo{sep}Oslo{sep}{sep}");
             assert_eq!(
-                parse_csv(&text),
+                parse_csv(&text, &RECIPIENT_LIMITS).unwrap(),
                 vec![vec![header.as_str(), "City", "", ""], vec!["Ada", "Paris", "", ""], vec!["Bo", "Oslo", "", ""]],
                 "separator {sep:?}, embedded newline {newline:?}"
             );
             // A multiline field after an ordinary column must not end detection either.
             let text = format!("ID{sep}\"{quoted}\"{sep}City\n1{sep}Ada{sep}Paris\n2{sep}Bo{sep}Oslo");
-            assert_eq!(parse_csv(&text), vec![vec!["ID", header.as_str(), "City"], vec!["1", "Ada", "Paris"], vec!["2", "Bo", "Oslo"]]);
+            assert_eq!(
+                parse_csv(&text, &RECIPIENT_LIMITS).unwrap(),
+                vec![vec!["ID", header.as_str(), "City"], vec!["1", "Ada", "Paris"], vec!["2", "Bo", "Oslo"]]
+            );
         }
     }
 }
@@ -74,7 +122,7 @@ fn csv_delimiter_reads_multiline_headers_after_blank_lines() {
             let header = format!("Given{newline}Family");
             for prefix in ["\n\r\n", "\r", "\r\r"] {
                 let text = format!("{prefix}\"{header}\"{sep}City\rAda{sep}Paris");
-                assert_eq!(parse_csv(&text), vec![vec![header.as_str(), "City"], vec!["Ada", "Paris"]]);
+                assert_eq!(parse_csv(&text, &RECIPIENT_LIMITS).unwrap(), vec![vec![header.as_str(), "City"], vec!["Ada", "Paris"]]);
             }
         }
     }
@@ -99,34 +147,41 @@ fn recipient_csv_blank_prefix_keeps_columns_without_dropping_literal_records() {
     let rows = s.merge.rows.clone();
     assert!(s.run("mailings.recipients", &json!({"csv": " \t\r\n \r"})).is_err());
     assert_eq!(s.merge.rows, rows, "an empty headered list must not replace existing recipients");
-    assert_eq!(parse_csv(" \nName,Email\nAda,ada@example.com")[0], vec![" "], "the shared CSV reader keeps literal whitespace rows");
+    assert_eq!(
+        parse_csv(" \nName,Email\nAda,ada@example.com", &RECIPIENT_LIMITS).unwrap()[0],
+        vec![" "],
+        "the shared CSV reader keeps literal whitespace rows"
+    );
 }
 
 #[test]
 fn csv_delimiter_keeps_record_boundaries_and_ties() {
     // Later records cannot choose the header's delimiter.
-    assert_eq!(parse_csv("Name;City\rAda;Paris,,,,\rBo;Oslo"), vec![vec!["Name", "City"], vec!["Ada", "Paris,,,,"], vec!["Bo", "Oslo"]]);
+    assert_eq!(
+        parse_csv("Name;City\rAda;Paris,,,,\rBo;Oslo", &RECIPIENT_LIMITS).unwrap(),
+        vec![vec!["Name", "City"], vec!["Ada", "Paris,,,,"], vec!["Bo", "Oslo"]]
+    );
     // Existing ties prefer tab, then semicolon, then comma.
-    assert_eq!(parse_csv("A,B;C\n1,2;3"), vec![vec!["A,B", "C"], vec!["1,2", "3"]]);
-    assert_eq!(parse_csv("A;B\tC\n1;2\t3"), vec![vec!["A;B", "C"], vec!["1;2", "3"]]);
-    assert_eq!(parse_csv("Name\nAda,Paris;Oslo"), vec![vec!["Name"], vec!["Ada,Paris;Oslo"]]);
-    assert!(parse_csv("").is_empty());
-    assert_eq!(parse_csv("\nName\nAda"), vec![vec!["Name"], vec!["Ada"]]);
+    assert_eq!(parse_csv("A,B;C\n1,2;3", &RECIPIENT_LIMITS).unwrap(), vec![vec!["A,B", "C"], vec!["1,2", "3"]]);
+    assert_eq!(parse_csv("A;B\tC\n1;2\t3", &RECIPIENT_LIMITS).unwrap(), vec![vec!["A;B", "C"], vec!["1;2", "3"]]);
+    assert_eq!(parse_csv("Name\nAda,Paris;Oslo", &RECIPIENT_LIMITS).unwrap(), vec![vec!["Name"], vec!["Ada,Paris;Oslo"]]);
+    assert!(parse_csv("", &RECIPIENT_LIMITS).unwrap().is_empty());
+    assert_eq!(parse_csv("\nName\nAda", &RECIPIENT_LIMITS).unwrap(), vec![vec!["Name"], vec!["Ada"]]);
     // The reader remains permissive about an unterminated quoted cell.
-    assert_eq!(parse_csv("Name,City\nAda,\"Paris\nOslo"), vec![vec!["Name", "City"], vec!["Ada", "Paris\nOslo"]]);
+    assert_eq!(parse_csv("Name,City\nAda,\"Paris\nOslo", &RECIPIENT_LIMITS).unwrap(), vec![vec!["Name", "City"], vec!["Ada", "Paris\nOslo"]]);
 }
 
 #[test]
 fn csv_delimiter_ignores_quoted_text() {
-    let r = parse_csv("\"Name, first, last\";City\nAnn;Paris\n");
+    let r = parse_csv("\"Name, first, last\";City\nAnn;Paris\n", &RECIPIENT_LIMITS).unwrap();
     assert_eq!(r, vec![vec!["Name, first, last", "City"], vec!["Ann", "Paris"]]);
 }
 
 #[test]
 fn csv_delimiter_skips_leading_blank_lines() {
     let want = vec![vec!["Name", "Email"], vec!["Ann", "ann@x.org"]];
-    assert_eq!(parse_csv("\nName,Email\nAnn,ann@x.org\n"), want);
-    assert_eq!(parse_csv("\r\n\r\nName;Email\r\nAnn;ann@x.org"), want);
+    assert_eq!(parse_csv("\nName,Email\nAnn,ann@x.org\n", &RECIPIENT_LIMITS).unwrap(), want);
+    assert_eq!(parse_csv("\r\n\r\nName;Email\r\nAnn;ann@x.org", &RECIPIENT_LIMITS).unwrap(), want);
 }
 
 /// Field types ignore case (ECMA-376 Part 1, 17.16.1), and `MERGEFIELDX` is another field.

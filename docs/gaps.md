@@ -352,6 +352,9 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | 2026-10-24 | trivial | Exact-spacing table contact uses the specified line height in row selection and word skipping; large/small mark regressions in modes 11/12/14/15 (#3977); shape estimates unchanged |
 | 2026-10-24 | trivial | Floating tables count exact line-bottom contact; shapes keep strict overlap (#3977); original boundary/skip regressions in modes 11/12/14/15, expected Word rule from cyril265; readiness estimates unchanged |
 | 2026-10-23 | trivial | A command that changes nothing adds no undo step, marks no unsaved changes and evicts nothing from the undo history; the redo stack survives it. No gap row (defect fix); estimates unchanged. |
+| 2026-10-23 | trivial | Recipient lists: a text list over what a list keeps is refused while it is read — 1,000 columns, 2 M cells (its records times its widest record) and 64 MiB of cell text — instead of being built and then cut |
+| 2026-10-23 | trivial | Insert › Table › Spreadsheet Table: a CSV the table cannot hold is refused, not cut — a list longer than the table's 1,000 rows or wider than its 63 columns was written into a shorter table, so the records above it were lost quietly |
+| 2026-10-23 | trivial | A recipient list over what it keeps is refused while it is read: 1,000 columns, 2 M cells (its records times its widest record) and 64 MiB of cell text, so a hostile file is never built and then cut. No gap row (limits fix); estimates unchanged |
 | 2026-10-23 | trivial | cu20we: preserve and render outline caps across DOCX/VML, screen and PDF; synthetic regressions; readiness estimates unchanged |
 | 2026-10-23 | trivial | cu20we: paragraph-relative box floats use the pre-spacing origin; header/footer/cell/text-box regressions; readiness estimates unchanged |
 | 2026-10-22 | trivial | View windows: several open documents and Switch Windows in the engine |

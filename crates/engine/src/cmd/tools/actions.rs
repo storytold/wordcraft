@@ -1,5 +1,10 @@
 use super::{Arc, CmdError, CmdResult, Document, Pos, Selection, Session, StoryRef, Value, delete_selection, json, p, sel_result};
+use crate::cmd::insert::MAX_TABLE_ROWS;
+use crate::cmd::mailings::{CsvLimits, MAX_TEXT_BYTES};
 use wordcraft_doc::CharProps;
+use wordcraft_doc::table::MAX_COLS;
+
+const TABLE_LIMITS: CsvLimits = CsvLimits { fields: MAX_COLS, cells: MAX_TABLE_ROWS * MAX_COLS, text: MAX_TEXT_BYTES };
 
 /// Options › Language › Set as default: only the saved default proofing language (what future
 /// blank documents are written in), as Word's Set as Preferred. A setting, like `file.options`: the
@@ -458,7 +463,14 @@ pub(super) fn customize_ribbon(s: &mut Session, v: &Value) -> CmdResult {
 pub(super) fn spreadsheet_rows(v: &Value) -> Result<Vec<Vec<String>>, CmdError> {
     // The CSV fallback is for an absent `values`; an explicit null is a malformed argument.
     let Some(values) = v.get("values") else {
-        return Ok(crate::cmd::mailings::parse_csv(p::str(v, "csv").unwrap_or("A,B,C\n1,2,3\n4,5,6")));
+        let rows = crate::cmd::mailings::parse_csv(p::str(v, "csv").unwrap_or("A,B,C\n1,2,3\n4,5,6"), &TABLE_LIMITS)
+            .map_err(|e| CmdError::Failed(format!("{e}; a table holds at most {MAX_TABLE_ROWS} rows of {MAX_COLS} columns")))?;
+        // A table holds so many rows: a longer list would lose its records quietly, because
+        // the table the command inserts is shorter than the list.
+        if rows.len() > MAX_TABLE_ROWS {
+            return Err(CmdError::Failed(format!("a table holds at most {MAX_TABLE_ROWS} rows")));
+        }
+        return Ok(rows);
     };
     let list = values.as_array().ok_or_else(|| CmdError::Params("`values` must be an array of rows".into()))?;
     if list.is_empty() || list.len() > 1000 {
