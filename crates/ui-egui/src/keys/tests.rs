@@ -330,6 +330,25 @@ fn a_desktop_paste_after_mod_shift_v_is_not_swallowed() {
     assert_eq!(body(h.state()), "source later");
 }
 
+/// #5616: Mod+Shift+C (Copy Formatting), Shift released, Mod still held or released: Mod+C's
+/// chord isn't the paste's modifiers, so a subsequent Mod+V paste keeps HTML's formatting (bold).
+#[test]
+fn an_unrelated_keys_modifiers_do_not_steer_a_later_paste() {
+    for mod_still_held in [false, true] {
+        let mut h = alt_frame_app();
+        offer(&h, bold_flavours("external"));
+        let chord = Modifiers { shift: true, ..mod_held() };
+        mods_frame(&mut h, chord, vec![key_event(Key::C, true, chord)]);
+        let after = if mod_still_held { mod_held() } else { Modifiers::NONE };
+        mods_frame(&mut h, after, vec![key_event(Key::C, false, after)]);
+        let ctrl = mod_held();
+        mods_frame(&mut h, ctrl, vec![key_event(Key::V, true, ctrl)]);
+        mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
+        assert_eq!(body(h.state()), "external");
+        assert!(is_bold(&mut h), "held={mod_still_held}: Mod+V keeps the HTML's bold");
+    }
+}
+
 /// Paste Formatting on a chord the user bound pastes the copied formatting once.
 #[test]
 fn paste_formatting_on_another_key_pastes_the_copied_formatting() {
@@ -420,6 +439,36 @@ fn mod_v_pastes_rich_only_clipboard_and_preserves_picture_routing() {
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(pictures(h.state_mut()), 1, "URI list+HTML with no plain text routes to picture file paste");
     assert_eq!(body(h.state()), "", "picture file paste does not fall back to HTML text");
+}
+
+/// #819: Alt+Q reaches Search/commands even when the canvas does not hold focus.
+#[test]
+fn alt_shortcuts_work_without_the_canvas_focused() {
+    if cfg!(target_os = "macos") {
+        return;
+    }
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Text")), Default::default());
+    app.run("view.focus", json!({})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    crate::test_harness::frames(&mut h, 4);
+    if let Some(focused_id) = h.ctx.memory(|m| m.focused()) {
+        h.ctx.memory_mut(|m| m.surrender_focus(focused_id));
+    }
+    crate::test_harness::frames(&mut h, 1);
+    assert!(!h.state().canvas.focused(&h.ctx.clone()), "canvas is unfocused");
+
+    let alt = egui::Modifiers { alt: true, ..Default::default() };
+    mods_frame(&mut h, alt, vec![key_event(Key::Q, true, alt)]);
+    crate::test_harness::frames(&mut h, 2);
+    use egui_kittest::kittest::Queryable as _;
+    assert!(h.query_by_role(egui::accesskit::Role::Dialog).is_some(), "Alt+Q opens Search/commands with canvas unfocused");
 }
 
 /// Alt held, keypad 0 2 3 3, Alt released: é (й on a Russian system) is typed, the digits
