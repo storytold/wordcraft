@@ -149,6 +149,7 @@ const LOCALES: &[(&str, &[&str], Option<&str>)] = &[
     ("ro", &["ro", "ro-RO", "ro-MD"], Some("Română")),
     ("sl", &["sl", "sl-SI", "SL-si"], Some("Slovenščina")),
     ("bs", &["bs", "bs-BA", "bs-Latn-BA"], Some("Bosanski")),
+    ("ka", &["ka", "ka-GE", "ka_GE.UTF-8", "KA-ge"], Some("ქართული")),
     ("ar", &["ar", "ar-MA", "ar_EG.UTF-8", "AR-sa", "ar-Arab-AE"], None),
 ];
 
