@@ -40,6 +40,8 @@ mod ownership;
 mod package;
 use observed::{CompleteSet, Completeness, Observed};
 use ownership::{OwnerContext, OwnerId, PartGraph, PartId, owner_scopes};
+mod relationship_use;
+use relationship_use::{Consumers, Consumption, FallbackImages, Uses};
 mod reserved;
 mod resolution;
 #[cfg(test)]
@@ -238,8 +240,8 @@ pub(crate) const XML_UNDECLARED_PREFIX: RuleSpec =
 pub(crate) const XML_INVALID_CHAR: RuleSpec = RuleSpec { id: "XML-INVALID-CHAR", severity: Severity::Corrupt, evidence: Evidence::ByConstruction };
 /// `REL-DUP-ID`: the same `Id` twice within one `.rels` part. Observed: view-only banner.
 pub(crate) const REL_DUP_ID: RuleSpec = RuleSpec { id: "REL-DUP-ID", severity: Severity::Error, evidence: Evidence::Observed };
-/// `REL-DANGLING`: an internal relationship target is not in the package. Observed: Word web opens
-/// in editing mode with the referenced content lost.
+/// `REL-DANGLING`: an internal relationship target needed by content or package structure is absent.
+/// An unsubstituted missing image is a Warning: Word opens with the picture missing.
 pub(crate) const REL_DANGLING: RuleSpec = RuleSpec { id: "REL-DANGLING", severity: Severity::Error, evidence: Evidence::Observed };
 /// `REL-TYPED`: a header/footer/image relationship targets the wrong content type. Observed.
 pub(crate) const REL_TYPED: RuleSpec = RuleSpec { id: "REL-TYPED", severity: Severity::Error, evidence: Evidence::Observed };
@@ -466,17 +468,10 @@ pub(crate) const MOVE_RANGE_COUNT: RuleSpec = RuleSpec { id: "MOVE-RANGE-COUNT",
 /// `NOTE-PR-LISTING`: a special footnote/endnote (separator,
 /// continuationSeparator, continuationNotice) whose id no `footnotePr` /
 /// `endnotePr` lists. ECMA-376 Part 1 §17.11.9: it "shall not be loaded",
-/// and the document is non-conformant when the note "is required by the
-/// document content" — a conformance claim, graded ByConstruction.
-/// Batch b6 (Word for the web, 2026-11-07): an unlisted separator set
-/// opened clean and the footnote rendered with its separator, so the
-/// load failure the standard describes is not observed there and every
-/// case reports at Warning there. Batch Mac-2 (Word for Mac,
-/// 2026-11-08): the same fixture rendered its first screenful and then
-/// left Word unresponsive — killed at the 3-minute observation limit,
-/// the footnote check uncompletable. Verdicts combine by union across
-/// consumers, so the rule reports at Error.
-pub(crate) const NOTE_PR_LISTING: RuleSpec = RuleSpec { id: "NOTE-PR-LISTING", severity: Severity::Error, evidence: Evidence::Observed };
+/// and the document is non-conformant when the note is required by the document content.
+/// The 2026-11-23 isolated separator and continuation-separator probes opened in Word for the
+/// web and Mac; the corresponding sample documents opened in Windows Word.
+pub(crate) const NOTE_PR_LISTING: RuleSpec = RuleSpec { id: "NOTE-PR-LISTING", severity: Severity::Warning, evidence: Evidence::Observed };
 /// `NOTE-PR-DANGLING`: a `footnotePr` / `endnotePr` listing names a note
 /// id that no footnote/endnote defines. Nothing documents Word loading or
 /// rejecting such a listing; it is dead configuration, reported at the
@@ -608,7 +603,7 @@ impl Acc {
     /// no per-rule budget is touched.
     fn absence_suppressed(&self, rule: &str, severity: Severity) -> bool {
         self.unknown_unreadable
-            && matches!(severity, Severity::Corrupt | Severity::Error)
+            && (matches!(severity, Severity::Corrupt | Severity::Error) || rule == NOTE_PR_LISTING.id)
             && contracts_generated::PACKAGE_ABSENCE_RULES.contains(&rule)
     }
 
@@ -1246,6 +1241,7 @@ struct PartFacts {
     syntax: Completeness,
     references: Observed<Vec<RefFact>>,
     drawing_refs_complete: bool,
+    usage: Uses,
     content: Observed<Vec<RelId>>,
     exemptions: Observed<Vec<RelId>>,
     facts: scan::StoryFacts,
@@ -1282,11 +1278,37 @@ impl PartFacts {
                 if references_complete { Completeness::Complete } else { Completeness::Incomplete("relationship reference source or budget") },
             ),
             drawing_refs_complete,
+            usage: Uses::default(),
             content: Observed::with_status(Vec::new(), syntax),
             exemptions: Observed::with_status(Vec::new(), syntax),
             listings: (Observed::with_status(Vec::new(), note_status), Observed::with_status(Vec::new(), note_status)),
             special_notes: Observed::with_status(Vec::new(), note_status),
         }
+    }
+}
+impl PartFacts {
+    /// An identity that several package entries map to has no single source: every observation stored under it is
+    /// incomplete, so no consumer can conclude absence or non-use from the surviving entry's facts.
+    fn poison(&mut self) {
+        observation_contract! {
+            rules: "-";
+            collections: "access.invalidate*7,field.content*1,field.exemptions*1,field.listings*2,field.references*1,field.special_notes*1";
+            scope: "one package identity shared by several ZIP entries";
+            loss: "case collision, duplicate entry or undecodable sibling";
+            fallback: "every observation under the identity is incomplete; no negative membership";
+            package_loss: "independent";
+        }
+
+        const REASON: &str = "ambiguous package identity";
+        self.syntax = Completeness::Incomplete(REASON);
+        self.drawing_refs_complete = false;
+        self.facts.invalidate(REASON);
+        self.references.invalidate(REASON);
+        self.content.invalidate(REASON);
+        self.exemptions.invalidate(REASON);
+        self.listings.0.invalidate(REASON);
+        self.listings.1.invalidate(REASON);
+        self.special_notes.invalidate(REASON);
     }
 }
 impl XmlScan {
@@ -1421,11 +1443,50 @@ fn xml_source_complete(xml: &XmlScan, entry: &package::Entry) -> bool {
     !entry.content_unavailable && xml.parts.get(&PartId::new(&entry.name)).is_some_and(|p| p.syntax == Completeness::Complete)
 }
 
+/// Package identities that more than one XML entry maps to (case collision or duplicate name).
+fn ambiguous_xml_identities(pkg: &Package) -> HashSet<PartId> {
+    observation_contract! {
+        rules: "-";
+        collections: "field.entries*1,type.HashSet*3";
+        scope: "one package identity shared by several ZIP entries";
+        loss: "case collision, duplicate entry or undecodable sibling";
+        fallback: "an ambiguous identity has no trustworthy source; its consumption is undecided";
+        package_loss: "independent";
+    }
+
+    let mut seen = HashSet::new();
+    let mut ambiguous = HashSet::new();
+    for e in pkg.entries.iter().filter(|e| !e.is_dir && package::is_xml_part(pkg, &e.name)) {
+        if !seen.insert(PartId::new(&e.name)) {
+            ambiguous.insert(PartId::new(&e.name));
+        }
+    }
+    ambiguous
+}
+
+/// Mark every observation stored under an ambiguous identity incomplete.
+fn poison_ambiguous(parts: &mut std::collections::BTreeMap<PartId, PartFacts>, ambiguous: &HashSet<PartId>) {
+    observation_contract! {
+        rules: "-";
+        collections: "type.BTreeMap*1,type.HashSet*1";
+        scope: "one package identity shared by several ZIP entries";
+        loss: "case collision, duplicate entry or undecodable sibling";
+        fallback: "an ambiguous identity has no trustworthy source; its consumption is undecided";
+        package_loss: "independent";
+    }
+
+    for id in ambiguous {
+        if let Some(part) = parts.get_mut(id) {
+            part.poison();
+        }
+    }
+}
+
 /// Scan all XML parts for well-formedness, undeclared prefixes, illegal characters, and extract story facts.
 fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     observation_contract! {
         rules: "HEADERSOURCE-PRESENT,MATH-PLACEMENT,PROTECTION-PASSWORD,STRUCT-END-P,XML-INVALID-CHAR,XML-MALFORMED,XML-UNDECLARED-PREFIX";
-        collections: "access.prefix*1,access.retain_budget*1,field.comment_para_ids*1,field.content_part_exemptions*2,field.content_parts*2,field.entries*1,field.ink_content_parts*2,field.note_listings*1,field.refs*5,field.special_notes*1,field.unknown_prefixes*1,type.BTreeMap*1,type.HashMap*2,type.HashSet*2,type.Vec*13";
+        collections: "access.prefix*1,access.retain_budget*1,field.comment_para_ids*1,field.content_part_exemptions*2,field.content_parts*2,field.entries*1,field.ink_content_parts*2,field.note_listings*1,field.refs*5,field.special_notes*1,field.unknown_prefixes*1,type.BTreeMap*1,type.HashMap*2,type.HashSet*2,type.Vec*16";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -1448,6 +1509,7 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
         acc.set_incomplete();
     }
     let mut parts = std::collections::BTreeMap::new();
+    let ambiguous_identities = ambiguous_xml_identities(pkg);
     let mut fact_budget = [0usize; 14];
 
     let mut refs: Vec<(String, Vec<RefFact>)> = Vec::new();
@@ -1464,6 +1526,9 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     let mut note_incomplete_parts: HashMap<String, u8> = HashMap::new();
     let mut pooled_capped = false;
     let mut facts_pooled_part: Option<String> = None;
+    let mut usage_budget = acc.limits.facts;
+    let mut empty_xml = Vec::new();
+    let mut held: Vec<PendingMalformed> = Vec::new();
     let mut pooled_refs = 0usize;
     let mut refs_pooled_capped = false;
     let mut refs_pooled_part: Option<String> = None;
@@ -1483,7 +1548,7 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
         if let Some(err) = &e.decode_error {
             match err {
                 DecodeError::Malformed(msg) => {
-                    report_malformed(pkg, &e.name, msg, acc);
+                    report_malformed(pkg, &e.name, msg, &mut held);
                 }
                 DecodeError::Unsupported(enc) => {
                     acc.note(format!("{} declares the unsupported encoding {enc}; its checks were skipped", e.name));
@@ -1514,9 +1579,8 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
                 compat_on = true;
             }
         }
-        if let Some(err) = &scanned.malformed {
-            report_malformed(pkg, &e.name, err, acc);
-        }
+        record_xml_malformed(pkg, e, scanned.malformed, &mut empty_xml, &mut held);
+        scanned.usage.charge_package_budget(&mut usage_budget);
         for prefix in &scanned.unknown_prefixes {
             acc.add("XML-UNDECLARED-PREFIX", Some(e.name.clone()), format!("the namespace prefix `{prefix}` used in {} is not declared", e.name));
         }
@@ -1531,10 +1595,10 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
         }
         let references_complete = scanned.facts_complete && !refs_pooled_capped && pooled_refs.saturating_add(scanned.refs.len()) <= acc.limits.facts;
         let drawing_refs_complete = scanned.drawing_refs_complete && role.is_story() && !role.conflicting();
-        parts.insert(
-            PartId::new(&e.name),
-            PartFacts::new(&e.name, scanned.facts, scanned.syntax_complete, !role.conflicting(), references_complete, drawing_refs_complete),
-        );
+        let mut part =
+            PartFacts::new(&e.name, scanned.facts, scanned.syntax_complete, !role.conflicting(), references_complete, drawing_refs_complete);
+        part.usage = scanned.usage;
+        parts.insert(PartId::new(&e.name), part);
         if scanned.content_part_capped {
             content_part_capped_any = true;
             content_part_incomplete_owners.insert(e.name.clone());
@@ -1620,7 +1684,55 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     }
     store_note_observations(&mut parts, note_listings, special_notes, note_incomplete_parts, acc.limits.facts);
     store_relationship_observations(&mut parts, refs, content_parts, content_part_exemptions, content_part_incomplete_owners);
-    XmlScan { graph, parts, compat }
+    poison_ambiguous(&mut parts, &ambiguous_identities);
+    let xml = XmlScan { graph, parts, compat };
+    if !empty_xml.is_empty() {
+        let stores = StoreConsumption::from_document(pkg, &xml, &roles);
+        report_empty_xml(pkg, &stores, empty_xml, &mut held);
+    }
+    flush_malformed(held, acc);
+    xml
+}
+
+fn record_xml_malformed<'a>(
+    pkg: &Package,
+    entry: &'a package::Entry,
+    error: Option<String>,
+    empty: &mut Vec<(&'a str, String)>,
+    held: &mut Vec<PendingMalformed>,
+) {
+    observation_contract! {
+        rules: "XML-MALFORMED";
+        collections: "field.bytes*1,type.Vec*3";
+        scope: "XML parse defect from one ZIP entry";
+        loss: "Payload unavailable or XML scan stopped at a resource limit";
+        fallback: "Only an observed zero-byte payload can defer to the custom XML binding check";
+        package_loss: "independent";
+    }
+
+    let Some(error) = error else { return };
+    if entry.bytes.as_ref().is_some_and(Vec::is_empty) {
+        empty.push((&entry.name, error));
+    } else {
+        report_malformed(pkg, &entry.name, &error, held);
+    }
+}
+
+fn report_empty_xml(pkg: &Package, stores: &StoreConsumption, empty: Vec<(&str, String)>, held: &mut Vec<PendingMalformed>) {
+    observation_contract! {
+        rules: "XML-MALFORMED";
+        collections: "type.Vec*2";
+        scope: "Zero-byte entries with a parse defect and package-wide custom XML binding facts";
+        loss: "Binding or store consumption unavailable";
+        fallback: "Retain the syntax diagnostic unless the item is established as unused";
+        package_loss: "independent";
+    }
+
+    for (name, error) in empty {
+        if !stores.unused_item(name) {
+            report_malformed(pkg, name, &error, held);
+        }
+    }
 }
 
 /// Attach each relationship fact collection's loss to its contributing source.
@@ -1987,7 +2099,7 @@ fn check_owner_note_pr(
 ) {
     observation_contract! {
         rules: "NOTE-PR-DANGLING,NOTE-PR-LISTING";
-        collections: "access.into_complete_set*2,access.missing*2,access.prefix*2,field.endnote_defs*1,field.footnote_defs*1,field.note_listings*1,field.special_notes*1,type.HashSet*3,type.Observed*3";
+        collections: "access.into_complete_set*2,access.missing*2,access.prefix*2,field.endnote_defs*1,field.footnote_defs*1,field.note_listings*1,field.special_notes*1,type.HashSet*3,type.Observed*2";
         scope: "each established owner and its selected supporting sources; shared parts in every owner; unowned references excluded; explicit no-root fallback only";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap; unknown or ambiguous source discovery; source-local pooled-budget loss";
         fallback: "suppress only dependent absence directions and report Incomplete; independent owner and prefix findings survive";
@@ -2016,8 +2128,8 @@ fn check_owner_note_pr(
         let listed = if *is_end { &listed_e } else { &listed_f };
         if listed.as_ref().is_some_and(|set| set.missing(id)) {
             let (note, pr) = if *is_end { ("endnote", "endnotePr") } else { ("footnote", "footnotePr") };
-            acc.add_graded(
-                "NOTE-PR-LISTING", Severity::Error, Evidence::Observed, Some(part.clone()),
+            acc.add(
+                NOTE_PR_LISTING.id, Some(part.clone()),
                 format!("the {note} with id {id} in {part} has type {t} but is not listed in its owner's {pr}; ECMA-376 says such a note shall not be loaded"),
             );
         }
@@ -2085,10 +2197,10 @@ fn check_content_part_types(pkg: &Package, content_parts: &[(String, Vec<RelId>)
 }
 
 /// Report an `XML-MALFORMED` finding with severity graded by whether the malformed part is main, reachable, or unused.
-fn report_malformed(pkg: &Package, name: &str, err: &str, acc: &mut Acc) {
+fn report_malformed(pkg: &Package, name: &str, err: &str, pending: &mut Vec<PendingMalformed>) {
     observation_contract! {
         rules: "XML-MALFORMED";
-        collections: "field.reachable*1,type.Observed*1";
+        collections: "field.reachable*1,type.Observed*1,type.Vec*1";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -2108,7 +2220,39 @@ fn report_malformed(pkg: &Package, name: &str, err: &str, acc: &mut Acc) {
     } else {
         (Severity::Warning, Evidence::Observed)
     };
-    acc.add_graded("XML-MALFORMED", severity, evidence, Some(name.to_string()), format!("{name} is not well-formed XML: {err}"));
+    pending.push(PendingMalformed { severity, evidence, name: name.to_string(), message: format!("{name} is not well-formed XML: {err}") });
+}
+
+/// An `XML-MALFORMED` finding held back so the per-rule budget can be spent in severity order.
+struct PendingMalformed {
+    severity: Severity,
+    evidence: Evidence,
+    name: String,
+    message: String,
+}
+
+/// Record the held `XML-MALFORMED` findings, Corrupt first, then Error, then Warning, so a main or
+/// reachable part's finding is never displaced by a Warning from an unused part, whatever the part
+/// order or the budget.
+fn flush_malformed(mut pending: Vec<PendingMalformed>, acc: &mut Acc) {
+    observation_contract! {
+        rules: "XML-MALFORMED";
+        collections: "type.Vec*1";
+        scope: "Held XML parse defects from every part, graded main, reachable or unused";
+        loss: "Per-rule finding budget";
+        fallback: "Record Corrupt and Error findings before Warnings so the budget never displaces them";
+        package_loss: "independent";
+    }
+
+    let rank = |s: Severity| match s {
+        Severity::Corrupt => 0,
+        Severity::Error => 1,
+        Severity::Warning => 2,
+    };
+    pending.sort_by_key(|p| rank(p.severity));
+    for p in pending {
+        acc.add_graded("XML-MALFORMED", p.severity, p.evidence, Some(p.name), p.message);
+    }
 }
 
 /// Classify the story parts from their effective content type and the relationships that reach
@@ -2176,7 +2320,7 @@ fn relationship_role(kind: Option<&str>) -> Option<scan::PartRole> {
 fn check_rels(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
     observation_contract! {
         rules: "REL-DANGLING,REL-DUP-ID,REL-REF-MISSING,REL-TYPED";
-        collections: "field.references*1,field.rels*3,lookup.canonical_entry*1";
+        collections: "field.references*1,field.rels*1";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -2189,34 +2333,115 @@ fn check_rels(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
         report_duplicate_rel_ids(rp, acc);
     }
     acc.ran("REL-DANGLING");
-    for rp in &pkg.rels {
-        for r in &rp.rels {
-            let Some(target) = &r.target_abs else { continue };
-            // An unexamined archive suffix may still contain this target.
-            if match package::canonical_entry(pkg, target) {
-                Resolution::One(_) => false,
-                Resolution::Absent => true,
-                Resolution::Unknown(_) => false,
-                Resolution::Ambiguous(_) => false,
-            } {
-                acc.add(
-                    "REL-DANGLING",
-                    Some(rp.name.clone()),
-                    format!(
-                        "relationship {} in {} targets {target}, which is missing from the package; the referenced content is lost",
-                        r.id, rp.name
-                    ),
-                );
-            }
-        }
-    }
     acc.ran("REL-TYPED");
-    check_typed_targets(pkg, acc);
+    check_typed_targets(pkg, xml, acc);
     check_typed_image_refs(pkg, &refs, acc);
     if check_part_refs(pkg, xml, acc).ran() {
         acc.ran("REL-REF-MISSING");
     }
     check_typed_content(pkg, xml, acc);
+}
+
+fn xml_main_rels(pkg: &Package) -> Option<String> {
+    match &pkg.main {
+        Resolution::One(name) => Some(rels_part_name(name)),
+        _ => None,
+    }
+}
+
+fn relationship_source<'a>(xml: &'a XmlScan, rp: &RelsPart) -> Option<&'a PartFacts> {
+    observation_contract! {
+        rules: "-";
+        collections: "field.parts*1";
+        scope: "One relationship owner identified by the OPC relationships part name";
+        loss: "Absent or unreadable XML source";
+        fallback: "No positive usage evidence without a scanned source";
+        package_loss: "independent";
+    }
+
+    xml.parts.get(&PartId::new(&rels_owner_name(&rp.name)?))
+}
+
+/// These relationships are read by role, without an explicit relationship ID in a story.
+fn implicit_relationship(pkg: &Package, rp: &RelsPart, rel: &package::Rel) -> bool {
+    observation_contract! {
+        rules: "-";
+        collections: "field.reachable*1";
+        scope: "Root office document and role-selected supporting relationships from reachable sources";
+        loss: "Unknown relationship kind or unreachable source";
+        fallback: "Require explicit consumption for other edges";
+        package_loss: "independent";
+    }
+
+    let kind = rel.role.kind();
+    if rp.name.eq_ignore_ascii_case("_rels/.rels") {
+        return kind == Some("officeDocument");
+    }
+    let Some(source) = rels_owner_name(&rp.name) else { return false };
+    pkg.reachable.contains(&source)
+        && matches!(
+            kind,
+            Some(
+                "numbering"
+                    | "glossaryDocument"
+                    | "styles"
+                    | "settings"
+                    | "fontTable"
+                    | "theme"
+                    | "webSettings"
+                    | "comments"
+                    | "commentsExtended"
+                    | "commentsIds"
+                    | "people"
+                    | "footnotes"
+                    | "endnotes"
+                    | "bibliography"
+            )
+        )
+}
+
+fn dangling_relationship_severity(pkg: &Package, rp: &RelsPart, rel: &package::Rel, use_of: Consumption) -> Option<Severity> {
+    observation_contract! {
+        rules: "REL-DANGLING";
+        collections: "-";
+        scope: "Known missing target and established structural or XML consumption";
+        loss: "Unestablished substitution or usage";
+        fallback: "Preserve structurally needed targets; warn for unresolved pictures";
+        package_loss: "REL-DANGLING";
+    }
+
+    if rel.role.kind() == Some("numbering") || rel.fragment_only && rel.role.kind() == Some("hyperlink") {
+        return None;
+    }
+    let severity = if implicit_relationship(pkg, rp, rel) {
+        Severity::Error
+    } else {
+        match use_of {
+            Consumption::Substituted | Consumption::Unused | Consumption::Undecided => return None,
+            Consumption::Picture if matches!(rel.role.kind(), Some("image" | "hdphoto")) => Severity::Warning,
+            _ => Severity::Error,
+        }
+    };
+    Some(severity)
+}
+
+fn report_dangling_relationship(rp: &RelsPart, rel: &package::Rel, target: &str, severity: Severity, acc: &mut Acc) {
+    observation_contract! {
+        rules: "REL-DANGLING";
+        collections: "type.Observed*1";
+        scope: "Graded missing relationship targets";
+        loss: "Per-rule finding budget";
+        fallback: "Record truncation when a finding exceeds the budget";
+        package_loss: "REL-DANGLING";
+    }
+
+    acc.add_graded(
+        REL_DANGLING.id,
+        severity,
+        Evidence::Observed,
+        Some(rp.name.clone()),
+        format!("relationship {} in {} targets {target}, which is missing from the package; the referenced content is lost", rel.id, rp.name),
+    );
 }
 
 /// Find duplicate relationship IDs within a single `.rels` part and report `REL-DUP-ID` findings.
@@ -2296,7 +2521,7 @@ fn check_part_refs(pkg: &Package, xml: &XmlScan, acc: &mut Acc) -> JoinCompletio
 fn check_typed_image_refs(pkg: &Package, refs: &[(String, Vec<RefFact>)], acc: &mut Acc) {
     observation_contract! {
         rules: "REL-TYPED";
-        collections: "field.content_types*2,field.incomplete*1,field.rels*1,lookup.content_unavailable*1,type.HashSet*2,type.Vec*1";
+        collections: "field.content_types*2,field.incomplete*1,field.rels*1,lookup.canonical_entry*1,lookup.content_unavailable*1,type.HashSet*2,type.Vec*1";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -2322,6 +2547,9 @@ fn check_typed_image_refs(pkg: &Package, refs: &[(String, Vec<RefFact>)], acc: &
                     ),
                 );
             } else if let Some(target) = &rel.target_abs {
+                if matches!(canonical_entry(pkg, target), Resolution::Absent) {
+                    continue;
+                }
                 // The relationship resolves and targets an internal part. Only the next conclusion
                 // depends on the manifest: when its content could not be read the target's declared
                 // type is unknown, not absent, so it is skipped. (The non-image-relationship and
@@ -2381,55 +2609,177 @@ fn part_rel_ids(pkg: &Package, part: &str) -> HashSet<RelId> {
     }
 }
 
-/// Verify that typed relationships in the main document part target parts with matching content types.
-fn check_typed_targets(pkg: &Package, acc: &mut Acc) {
+/// Package identities shared by several archive entries (a case collision, a duplicate name or a collapsed record), computed once.
+struct AmbiguousIdentities(Vec<PartId>);
+
+impl AmbiguousIdentities {
+    /// One pass over the collapsed names, the entries and the relationships parts.
+    fn new(pkg: &Package) -> Self {
+        observation_contract! {
+            rules: "-";
+            collections: "field.collapsed_names*1,field.entries*1,field.rels*1,type.HashMap*4,type.Vec*1";
+            scope: "one package identity shared by several ZIP entries";
+            loss: "case collision, duplicate entry or undecodable sibling";
+            fallback: "an ambiguous identity has no trustworthy source; its consumption is undecided";
+            package_loss: "independent";
+        }
+
+        let mut ids: Vec<PartId> = pkg.collapsed_names.iter().map(|n| PartId::new(n)).collect();
+        let mut entry_counts: HashMap<PartId, usize> = HashMap::new();
+        for e in pkg.entries.iter().filter(|e| !e.is_dir) {
+            *entry_counts.entry(PartId::new(&e.name)).or_insert(0) += 1;
+        }
+        let mut rels_counts: HashMap<PartId, usize> = HashMap::new();
+        for rp in &pkg.rels {
+            *rels_counts.entry(PartId::new(&rp.name)).or_insert(0) += 1;
+        }
+        ids.extend(entry_counts.into_iter().chain(rels_counts).filter(|(_, n)| *n > 1).map(|(id, _)| id));
+        ids.sort();
+        ids.dedup();
+        Self(ids)
+    }
+
+    /// Whether `name` normalizes to an ambiguous identity; a lookup that allocates nothing.
+    fn contains(&self, name: &str) -> bool {
+        observation_contract! {
+            rules: "-";
+            collections: "field.bytes*2";
+            scope: "one package identity shared by several ZIP entries";
+            loss: "case collision, duplicate entry or undecodable sibling";
+            fallback: "an ambiguous identity has no trustworthy source; its consumption is undecided";
+            package_loss: "independent";
+        }
+
+        let key = || name.trim_start_matches('/').bytes().map(|b| b.to_ascii_lowercase());
+        self.0.binary_search_by(|id| id.as_str().bytes().cmp(key())).is_ok()
+    }
+}
+
+/// Check missing targets package-wide and check declared target types on the main story.
+fn check_typed_targets(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
+    observation_contract! {
+        rules: "REL-DANGLING,REL-TYPED";
+        collections: "field.content_types*1,field.entries*1,field.rels*3,lookup.canonical_entry*1,type.Vec*1";
+        scope: "Missing targets package-wide and declared header, footer and image types for the selected main story; first-bound XML references";
+        loss: "Unknown archive identity, declaration cap, or incomplete picture substitution";
+        fallback: "Only an established missing entry dangles; emit dangling Errors before bounded Warnings; suppress a choice image mismatch only with a usable local fallback";
+        package_loss: "REL-DANGLING,REL-TYPED";
+    }
+
+    let main_rels = xml_main_rels(pkg);
+    if let Resolution::One(main) = &pkg.main
+        && !pkg.rels.iter().any(|rp| main_rels.as_ref().is_some_and(|name| name.eq_ignore_ascii_case(&rp.name)))
+    {
+        acc.note(format!("the main part {main} has no relationships part; typed targets were not checked"));
+    }
+    let ambiguous = AmbiguousIdentities::new(pkg);
+    let mut images = FallbackImages::new(pkg, acc.limits);
+    let mut warnings = Vec::new();
+    for rp in &pkg.rels {
+        let source = relationship_source(xml, rp);
+        // The part whose scan decides use: a scanned owner, else an XML owner present but never scanned (undecodable).
+        let owner_entry = rels_owner_name(&rp.name).and_then(|owner| pkg.entries.iter().find(|e| !e.is_dir && e.name.eq_ignore_ascii_case(&owner)));
+        let unscanned_owner = source.is_none() && owner_entry.is_some_and(|e| package::is_xml_part(pkg, &e.name));
+        let owner_text = rels_owner_name(&rp.name);
+        let owner_name =
+            source.map(|s| s.name.as_str()).or(owner_entry.map(|e| e.name.as_str())).or(owner_text.as_deref()).unwrap_or(rp.name.as_str());
+        // Several entries mapping to the owner's or the declarations' identity leave both without one trustworthy source.
+        let ambiguous_identity = ambiguous.contains(&rp.name) || owner_text.as_deref().is_some_and(|owner| ambiguous.contains(owner));
+        let mut consumers = None;
+        let bindings = package::relationship_bindings(rp);
+        let is_main = main_rels.as_ref().is_some_and(|main| main.eq_ignore_ascii_case(&rp.name));
+        for rel in &rp.rels {
+            let Some(target) = &rel.target_abs else { continue };
+            let kind = rel.role.kind();
+            let mut use_of = || {
+                if !bindings.is_first(rel) {
+                    return Consumption::Unused;
+                }
+                if ambiguous_identity {
+                    return Consumption::Undecided;
+                }
+                source.map_or(if unscanned_owner { Consumption::Undecided } else { Consumption::Unused }, |source| {
+                    consumers.get_or_insert_with(|| Consumers::new(&source.usage, source.syntax == Completeness::Complete)).consumption(
+                        &rel.id,
+                        &bindings,
+                        &mut images,
+                    )
+                })
+            };
+            if match package::canonical_entry(pkg, target) {
+                Resolution::Absent => true,
+                Resolution::One(_) | Resolution::Unknown(_) | Resolution::Ambiguous(_) => false,
+            } {
+                let consumption = use_of();
+                let assessed =
+                    !implicit_relationship(pkg, rp, rel) && !matches!(kind, Some("numbering")) && !(kind == Some("hyperlink") && rel.fragment_only);
+                if assessed && source.is_some_and(|source| source.usage.capped) {
+                    acc.note(format!(
+                        "{owner_name} (owner of {}) exceeded the relationship consumption fact budget; some missing targets were not assessed",
+                        rp.name
+                    ));
+                    acc.set_incomplete();
+                } else if assessed && consumption == Consumption::Undecided {
+                    acc.note(format!(
+                        "{owner_name} was not scanned to its end, so whether relationship {} in {} (missing target {target}) is used was not decided; its dangling target was not assessed",
+                        rel.id, rp.name
+                    ));
+                    acc.set_incomplete();
+                }
+                match dangling_relationship_severity(pkg, rp, rel, consumption) {
+                    Some(Severity::Warning) => {
+                        // Keep one extra Warning to trigger the existing truncation note.
+                        if warnings.len() <= acc.limits.findings_per_rule {
+                            warnings.push((rp, rel, target));
+                        }
+                    }
+                    Some(severity) => report_dangling_relationship(rp, rel, target, severity, acc),
+                    None => {}
+                }
+            } else if is_main
+                && (matches!(kind, Some("header" | "footer"))
+                    || kind == Some("image")
+                        && !pkg.content_types.of(target).is_some_and(|ct| ct.starts_with("image/"))
+                        && use_of() != Consumption::Substituted)
+            {
+                check_declared_target_type(pkg, rp, rel, target, acc);
+            }
+        }
+    }
+    for (rp, rel, target) in warnings {
+        report_dangling_relationship(rp, rel, target, Severity::Warning, acc);
+    }
+}
+
+fn check_declared_target_type(pkg: &Package, rp: &RelsPart, r: &package::Rel, target: &str, acc: &mut Acc) {
     observation_contract! {
         rules: "REL-TYPED";
-        collections: "field.content_types*2,field.incomplete*1,field.rels*2,lookup.content_unavailable*1";
-        scope: "source-local bounded extraction; no implicit document owner";
-        loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
-        fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
+        collections: "field.content_types*2,field.incomplete*1,lookup.content_unavailable*1";
+        scope: "A declared main-story header, footer or image relationship";
+        loss: "Manifest unavailable or declaration cap";
+        fallback: "Keep established mismatches and withhold unestablished types";
         package_loss: "REL-TYPED";
     }
 
-    // Every conclusion here compares a target's declared content type; when the manifest's content
-    // could not be read, a target's type is UNKNOWN, not absent, so no type conclusion is
-    // established. (The run is already INCOMPLETE from loading the manifest.)
-    if match package::content_unavailable(pkg, "[Content_Types].xml") {
-        Resolution::One(unavailable) => unavailable,
-        Resolution::Absent => false,
-        Resolution::Unknown(_) => true,
-        Resolution::Ambiguous(_) => true,
-    } {
+    if !matches!(package::content_unavailable(pkg, "[Content_Types].xml"), Resolution::One(false) | Resolution::Absent) {
         return;
     }
-    let Resolution::One(main) = &pkg.main else { return };
-    let want = rels_part_name(main);
-    let Some(rp) = pkg.rels.iter().find(|r| r.name.eq_ignore_ascii_case(&want)) else {
-        acc.note(format!("the main part {main} has no relationships part; typed targets were not checked"));
+    let ct = pkg.content_types.of(target);
+    if ct.is_none() && pkg.content_types.incomplete {
         return;
+    }
+    let message = match r.role.kind() {
+        Some("header") if ct != Some(package::HEADER_CONTENT_TYPE) => header_footer_message("header", &r.id, target, ct),
+        Some("footer") if ct != Some(package::FOOTER_CONTENT_TYPE) => header_footer_message("footer", &r.id, target, ct),
+        Some("image") if !ct.is_some_and(|c| c.starts_with("image/")) => {
+            format!("image relationship {} targets {target}, whose content type is {}", r.id, ct.unwrap_or("(none)"))
+        }
+        _ => return,
     };
-    for r in &rp.rels {
-        let Some(target) = &r.target_abs else { continue };
-        let ct = pkg.content_types.of(target);
-        if ct.is_none() && pkg.content_types.incomplete {
-            continue;
-        }
-        let (matched, message) = match r.role.kind() {
-            Some("header") if ct != Some(package::HEADER_CONTENT_TYPE) => (true, header_footer_message("header", &r.id, target, ct)),
-            Some("footer") if ct != Some(package::FOOTER_CONTENT_TYPE) => (true, header_footer_message("footer", &r.id, target, ct)),
-            Some("image") if !ct.is_some_and(|c| c.starts_with("image/")) => {
-                (true, format!("image relationship {} targets {target}, whose content type is {}", r.id, ct.unwrap_or("(none)")))
-            }
-            _ => (false, String::new()),
-        };
-        if matched {
-            if ct.is_some() {
-                acc.add_proven("REL-TYPED", Some(rp.name.clone()), message);
-            } else {
-                acc.add("REL-TYPED", Some(rp.name.clone()), message);
-            }
-        }
+    if ct.is_some() {
+        acc.add_proven(REL_TYPED.id, Some(rp.name.clone()), message);
+    } else {
+        acc.add(REL_TYPED.id, Some(rp.name.clone()), message);
     }
 }
 
@@ -2451,8 +2801,8 @@ fn header_footer_message(kind: &str, id: &str, target: &str, ct: Option<&str>) -
 /// stay `REL-TYPED`'s alone, so the same part is never reported twice. Kinds the catalogue leaves
 /// type-free or extension-dependent — image / media, embedded package, OLE, altChunk, content
 /// parts, recipient data — prescribe no type and are deliberately absent; no pairing is invented
-/// for them. The `customXml` row is applied only when the relationship is not consumed by a
-/// `w:contentPart` element or a native `w14:contentPart` reaching InkML (see [`check_typed_content`]).
+/// for them. Custom XML pairings require a consumer. The existing content-part rules account for
+/// `w:contentPart` and native `w14:contentPart` targeting InkML.
 pub(crate) const FIXED_REL_CONTENT_TYPES: &[(&str, &str)] = &[
     ("glossaryDocument", package::GLOSSARY_CONTENT_TYPE),
     ("styles", package::STYLES_CONTENT_TYPE),
@@ -2495,6 +2845,169 @@ fn rels_owner_name(rels_name: &str) -> Option<String> {
         return None;
     }
     Some(if dir.is_empty() { owner_file.to_string() } else { format!("{dir}/{owner_file}") })
+}
+
+/// Join bindings to the GUID in the properties linked from each custom XML item.
+struct StoreConsumption {
+    items: HashSet<PartId>,
+    bound: HashSet<PartId>,
+    bound_properties: HashSet<(PartId, PartId)>,
+    story_bindings_complete: bool,
+    excluded: Option<CompleteSet<PartId>>,
+}
+
+impl StoreConsumption {
+    fn from_document(pkg: &Package, xml: &XmlScan, roles: &HashMap<String, scan::PartRole>) -> Self {
+        observation_contract! {
+            rules: "-";
+            collections: "access.into_complete_set*1,field.binding_ids*3,field.bound*1,field.bound_properties*1,field.incomplete*2,field.items*3,field.parts*2,field.rels*5,type.HashMap*4,type.HashSet*5,type.Observed*1,type.Vec*1";
+            scope: "Custom XML item identities, local usage and bindings from every incoming internal relationship source, and GUID consumption from all observed stories";
+            loss: "Incomplete source syntax, unavailable or uncertain usage, relationship discovery, or declaration retention in any relationships part";
+            fallback: "Retain positive bindings; withhold the unused-store exemption when consumption is uncertain";
+            package_loss: "independent";
+        }
+
+        let mut stores =
+            Self { items: HashSet::new(), bound: HashSet::new(), bound_properties: HashSet::new(), story_bindings_complete: true, excluded: None };
+        let mut excluded = HashSet::new();
+        let mut ids = HashSet::new();
+        for (name, role) in roles {
+            if !role.is_story() {
+                continue;
+            }
+            if let Some(source) = xml.parts.get(&PartId::new(name)) {
+                ids.extend(source.usage.binding_ids.iter());
+                stores.story_bindings_complete &= source.syntax == Completeness::Complete && !source.usage.capped && !source.usage.uncertain_binding;
+            } else {
+                stores.story_bindings_complete = false;
+            }
+        }
+        let mut bindings_complete = stores.story_bindings_complete && !discovery_unavailable(pkg, None);
+        let mut properties = HashMap::new();
+        for rp in &pkg.rels {
+            bindings_complete &= !rp.incomplete;
+            if let Some(owner) = rels_owner_name(&rp.name) {
+                properties.insert(PartId::new(&owner), rp);
+            }
+            for rel in &rp.rels {
+                if rel.role.kind() == Some("customXml")
+                    && let Some(target) = &rel.target_abs
+                {
+                    stores.items.insert(PartId::new(target));
+                }
+            }
+        }
+        let mut local_bindings: HashMap<PartId, Vec<&[String]>> = HashMap::new();
+        for rp in &pkg.rels {
+            let source = relationship_source(xml, rp);
+            let source_complete =
+                source.is_some_and(|source| source.syntax == Completeness::Complete && !source.usage.capped && !source.usage.uncertain_binding);
+            let bindings = package::relationship_bindings(rp);
+            for rel in &rp.rels {
+                let Some(target) = &rel.target_abs else { continue };
+                let Some(item) = stores.items.get(&PartId::new(target)) else { continue };
+                if let Some(source) = source
+                    && !source.usage.binding_ids.is_empty()
+                {
+                    local_bindings.entry(item.clone()).or_default().push(&source.usage.binding_ids);
+                }
+                if !source_complete
+                    || implicit_relationship(pkg, rp, rel)
+                    || bindings.is_first(rel) && source.is_some_and(|source| source.usage.uses(&rel.id))
+                {
+                    excluded.insert(item.clone());
+                }
+            }
+        }
+        if !ids.is_empty() || !local_bindings.is_empty() {
+            for item in &stores.items {
+                let local = local_bindings.get(item);
+                if ids.is_empty() && local.is_none() {
+                    continue;
+                }
+                let mut known = false;
+                if let Some(rp) = properties.get(item) {
+                    for rel in &rp.rels {
+                        if rel.role.kind() != Some("customXmlProps") {
+                            continue;
+                        }
+                        let Some(target) = &rel.target_abs else { continue };
+                        if let Some(props) = xml.parts.get(&PartId::new(target))
+                            && props.syntax == Completeness::Complete
+                            && let Some(id) = &props.usage.store_id
+                        {
+                            if ids.contains(id) {
+                                stores.bound.insert(item.clone());
+                                stores.bound_properties.insert((item.clone(), PartId::new(target)));
+                                excluded.insert(item.clone());
+                            } else if local.is_some_and(|sources| sources.iter().any(|bindings| bindings.iter().any(|binding| binding == id))) {
+                                // Local bindings also block the XML exemption. Content-type
+                                // pairing continues to use the story bindings above.
+                                excluded.insert(item.clone());
+                            }
+                            known = true;
+                        } else {
+                            excluded.insert(item.clone());
+                        }
+                    }
+                    known &= !rp.incomplete;
+                }
+                if !known {
+                    excluded.insert(item.clone());
+                }
+            }
+        }
+        stores.excluded = Observed::with_status(
+            excluded,
+            if bindings_complete {
+                Completeness::Complete
+            } else {
+                Completeness::Incomplete("custom XML relationship or binding sources unavailable")
+            },
+        )
+        .into_complete_set();
+        stores
+    }
+
+    fn bound_item(&self, name: &str) -> bool {
+        observation_contract! {
+            rules: "-";
+            collections: "field.bound*1";
+            scope: "Positive GUID-to-store matches";
+            loss: "Incomplete relationship or binding discovery";
+            fallback: "An unobserved match supplies no positive consumption";
+            package_loss: "independent";
+        }
+
+        self.bound.contains(&PartId::new(name))
+    }
+
+    fn bound_properties(&self, item: &str, properties: &str) -> bool {
+        observation_contract! {
+            rules: "-";
+            collections: "field.bound_properties*1";
+            scope: "Positive GUID matches on an item and its properties target";
+            loss: "Incomplete relationship or binding discovery";
+            fallback: "An unobserved match supplies no positive consumption";
+            package_loss: "independent";
+        }
+
+        self.bound_properties.contains(&(PartId::new(item), PartId::new(properties)))
+    }
+
+    fn unused_item(&self, name: &str) -> bool {
+        observation_contract! {
+            rules: "-";
+            collections: "access.missing*1,field.items*1";
+            scope: "Known custom XML item and complete exclusion set";
+            loss: "Incomplete incoming relationship inventory, binding coverage, or store identification";
+            fallback: "Keep XML syntax diagnostics when the unused-store exemption is unestablished";
+            package_loss: "independent";
+        }
+
+        let item = PartId::new(name);
+        self.items.contains(&item) && self.excluded.as_ref().is_some_and(|excluded| excluded.missing(&item))
+    }
 }
 
 /// Per-part consumption evidence; no caller reconstructs completeness with a parallel ledger.
@@ -2548,10 +3061,10 @@ fn content_consumption(pkg: &Package, xml: &XmlScan, rp: &RelsPart) -> Observed<
 fn check_typed_content(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
     observation_contract! {
         rules: "CT-MISMATCH";
-        collections: "access.into_complete_set*1,access.missing*1,field.content_types*1,field.rels*2,lookup.canonical_entry*1,type.HashSet*2,type.Observed*1";
-        scope: "per owning XML part consumption; first-bound contentPart relationship only; skipped text/xml and native InkML exemptions separate";
-        loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
-        fallback: "suppress customXml pairing when consumption unavailable; keep other relationships and independent contentPart presence/type findings";
+        collections: "access.into_complete_set*1,access.missing*1,field.bound_properties*1,field.content_types*1,field.rels*2,lookup.canonical_entry*1,type.HashSet*2,type.Observed*1";
+        scope: "per owning XML part consumption and cross-story custom XML bindings; first-bound contentPart relationship only; skipped text/xml and native InkML exemptions separate";
+        loss: "source unavailable or malformed; XML event/depth budget; category allocation cap; uncertain story binding facts";
+        fallback: "keep positive consumption matches; mark skipped custom XML item or properties pairings incomplete when story binding evidence is incomplete; keep other relationships and independent contentPart presence/type findings";
         package_loss: "independent";
     }
 
@@ -2567,7 +3080,9 @@ fn check_typed_content(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
         .filter(|owner| !main_rels.as_deref().is_some_and(|m| m.eq_ignore_ascii_case(&rels_part_name(owner))))
         .map(|owner| rels_part_name(owner).to_ascii_lowercase())
         .collect();
+    let mut stores = None;
     let mut skipped_consumption = HashSet::new();
+    let mut reported_binding_loss = false;
     for rp in &pkg.rels {
         let is_non_main_owner = non_main_owner_rels.contains(&rp.name.to_ascii_lowercase());
         let rp_key = rp.name.to_ascii_lowercase();
@@ -2581,6 +3096,7 @@ fn check_typed_content(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
             if matches!(kind, "header" | "footer") && !is_non_main_owner {
                 continue;
             }
+            let Resolution::One(part) = canonical_entry(pkg, target) else { continue };
             if kind == "customXml" {
                 if consumed.is_none() {
                     // Explain only an actual skipped pairing; unrelated malformed parts have no
@@ -2600,6 +3116,34 @@ fn check_typed_content(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
             if ct == want {
                 continue;
             }
+            let explicitly_used = first_with_id && relationship_source(xml, rp).is_some_and(|source| source.usage.uses(&r.id));
+            let used = match kind {
+                "customXml" | "customXmlProps" => {
+                    let stores = stores.get_or_insert_with(|| StoreConsumption::from_document(pkg, xml, &story_roles(pkg)));
+                    explicitly_used
+                        || if kind == "customXml" {
+                            stores.bound_item(target)
+                        } else {
+                            rels_owner_name(&rp.name).is_some_and(|item| stores.bound_properties(&item, target))
+                        }
+                }
+                _ => explicitly_used || implicit_relationship(pkg, rp, r),
+            };
+            if !used {
+                if !reported_binding_loss
+                    && matches!(kind, "customXml" | "customXmlProps")
+                    && stores.as_ref().is_some_and(|stores| !stores.story_bindings_complete)
+                {
+                    acc.note("Story bindings were not fully examined; some custom XML content types were not assessed".to_string());
+                    acc.set_incomplete();
+                    reported_binding_loss = true;
+                }
+                if relationship_source(xml, rp).is_some_and(|source| source.usage.capped) {
+                    acc.note(format!("{} exceeded the relationship consumption fact budget; some content types were not assessed", rp.name));
+                    acc.set_incomplete();
+                }
+                continue;
+            }
             // The finding belongs to the mistyped part itself. The glossaryDocument,
             // commentsExtended, commentsIds and people pairings carry the 2026-11-06 observations
             // (the three extension rows on one combined A/B observation: see the rule's doc
@@ -2608,12 +3152,6 @@ fn check_typed_content(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
                 Evidence::Observed
             } else {
                 Evidence::MsDocumented
-            };
-            let part = match canonical_entry(pkg, target) {
-                Resolution::One(name) => name,
-                Resolution::Absent => target.clone(),
-                Resolution::Unknown(_) => target.clone(),
-                Resolution::Ambiguous(_) => target.clone(),
             };
             acc.add_graded(
                 "CT-MISMATCH",
@@ -6888,8 +7426,7 @@ mod budget_tests {
 
     /// The #5982 exemption is per-owner: when the MAIN part's
     /// contentPart collection caps out, a different owner whose
-    /// collection completed (here a header with no contentParts at
-    /// all) still gets its customXml pairing judged.
+    /// collection completed (a header with an explicit reference) still gets its customXml pairing judged.
     #[test]
     fn ct_mismatch_survives_another_owners_capped_contentpart_collection() {
         let ct = format!(
@@ -6909,16 +7446,17 @@ mod budget_tests {
             r#"<Relationship Id="rIdH" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>"#,
         );
         let doc_rels = rels(&rel_body);
-        let header = format!(r#"<?xml version="1.0"?><w:hdr xmlns:w="{NS_W}"><w:p/></w:hdr>"#).into_bytes();
+        let header =
+            format!(r#"<?xml version="1.0"?><w:hdr xmlns:w="{NS_W}" xmlns:r="{NS_R}"><w:p><w:hyperlink r:id="rIdX"/></w:p></w:hdr>"#).into_bytes();
         let header_rels = rels(
             r#"<Relationship Id="rIdX" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="data/bad.xml"/>"#,
         );
         let bytes = tiny_zip(&[
             ("[Content_Types].xml", ct.into_bytes()),
             ("_rels/.rels", package_rels()),
+            ("word/header1.xml", header),
             ("word/document.xml", doc),
             ("word/_rels/document.xml.rels", doc_rels),
-            ("word/header1.xml", header),
             ("word/_rels/header1.xml.rels", header_rels),
             ("word/data/bad.xml", b"<root/>".to_vec()),
             ("word/data.xml", b"<root/>".to_vec()),
@@ -7829,7 +8367,7 @@ mod round3_note_cap_tests {
                         "{kind}, dangling {dangling}, pooled {pooled}: {limited:?}"
                     );
                     if !dangling {
-                        assert_eq!(limited.verdict, Verdict::Fail, "{limited:?}");
+                        assert_eq!(limited.verdict, Verdict::Incomplete, "{limited:?}");
                         assert!(
                             limited.findings.iter().any(|f| f.rule == rule && f.part.as_deref() == Some(&format!("word/{kind}s.xml"))),
                             "{limited:?}"
@@ -7987,6 +8525,225 @@ mod round5_completeness_tests {
         format!(
             r#"<Relationship Id="{target}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{kind}" Target="{target}"/>"#
         )
+    }
+
+    /// Stored archive of `entries` in the given order.
+    fn ordered_zip(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (name, bytes) in entries {
+            zip.start_file(name.as_str(), options).unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn xml_malformed_budget_keeps_the_main_part_ahead_of_unused_part_warnings() {
+        let types = format!(
+            r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="{}"/></Types>"#,
+            package::MAIN_CONTENT_TYPE
+        );
+        let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rM" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+        for main in ["", "<"] {
+            for position in [0, 1, 3] {
+                for budget in [1, 2] {
+                    let mut entries =
+                        vec![("[Content_Types].xml".to_string(), types.clone().into_bytes()), ("_rels/.rels".to_string(), root.as_bytes().to_vec())];
+                    for index in 0..3 {
+                        entries.push((format!("word/orphan{index}.xml"), b"<".to_vec()));
+                    }
+                    entries.insert(2 + position, ("word/document.xml".to_string(), main.as_bytes().to_vec()));
+                    let limits = Limits { findings_per_rule: budget, ..Limits::default() };
+                    let report = validate_bytes_limited(&ordered_zip(&entries), limits);
+                    let malformed: Vec<_> = report.findings.iter().filter(|f| f.rule == "XML-MALFORMED").collect();
+                    let case = format!("main {main:?} at {position} with budget {budget}: {report:?}");
+                    assert_eq!(report.verdict, Verdict::Fail, "{case}");
+                    assert!(malformed.iter().any(|f| f.part.as_deref() == Some("word/document.xml") && f.severity == Severity::Corrupt), "{case}");
+                    assert!(malformed.len() <= budget, "{case}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unobserved_relationship_on_an_incomplete_source_is_undecided_not_unused() {
+        let reference = r#"<w:p><w:hyperlink r:id="missing.docx"/></w:p>"#;
+        let rels = rel("hyperlink", "missing.docx");
+        let build = |body: &str| {
+            let document = format!(r#"<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}"><w:body>{body}</w:body></w:document>"#);
+            replace_part(&package(vec![], &rels), "word/document.xml", &document)
+        };
+        let padding = "<w:p/>".repeat(100);
+        let nesting = format!("{}{}", "<w:sdt>".repeat(20), "</w:sdt>".repeat(20));
+        let undecided = |report: &Report| report.coverage_notes.iter().any(|note| note.contains("missing.docx") && note.contains("not decided"));
+
+        // A complete source with no reference keeps the relationship unused.
+        let report = validate_bytes(&build(&padding));
+        assert!(!report.findings.iter().any(|f| f.rule == "REL-DANGLING") && !undecided(&report), "{report:?}");
+        // A reference seen before the stop is still reported.
+        let events = Limits { events: 60, ..Limits::default() };
+        let report = validate_bytes_limited(&build(&format!("{reference}{padding}")), events);
+        assert!(report.findings.iter().any(|f| f.rule == "REL-DANGLING"), "{report:?}");
+        // A reference after an event or depth stop leaves the check undecided, and the run incomplete.
+        let depth = Limits { depth: 8, ..Limits::default() };
+        for (body, limits) in [(format!("{padding}{reference}"), events), (format!("{nesting}{reference}"), depth)] {
+            let report = validate_bytes_limited(&build(&body), limits);
+            assert!(undecided(&report), "{report:?}");
+            assert_eq!(report.verdict, Verdict::Incomplete, "{report:?}");
+        }
+        // So does a reference after a syntax error, which leaves only the Corrupt finding otherwise.
+        for broken in ["<w:p></w:q>", "<w:p a=b/>", "<w:p>&</w:p>"] {
+            let report = validate_bytes(&build(&format!("{broken}{reference}")));
+            assert!(undecided(&report), "{broken}: {report:?}");
+            assert!(report.findings.iter().any(|f| f.rule == "XML-MALFORMED"), "{broken}: {report:?}");
+        }
+    }
+
+    #[test]
+    fn undecodable_owner_leaves_the_dangling_check_recorded_as_unassessed() {
+        let rels = rel("hyperlink", "missing.docx");
+        let base = package(vec![], &rels);
+        let body =
+            format!(r#"<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}"><w:body><w:p><w:hyperlink r:id="missing.docx"/></w:p></w:body></w:document>"#);
+        let owners: Vec<Vec<u8>> = vec![
+            format!(r#"<?xml version="1.0" encoding="x-unknown-encoding"?>{body}"#).into_bytes(),
+            [b"<w:document \xff\xfe".as_slice(), body.as_bytes()].concat(),
+            b"<?xml version=\"1.0\"".to_vec(),
+        ];
+        for owner in owners {
+            let report = validate_bytes(&replace_part_bytes(&base, "word/document.xml", &owner));
+            let note = report.coverage_notes.iter().find(|n| n.contains("missing.docx") && n.contains("not decided"));
+            assert!(note.is_some(), "{:?}: {report:?}", String::from_utf8_lossy(&owner));
+            assert!(note.is_some_and(|n| n.starts_with("word/document.xml ")), "{note:?}");
+            assert!(report.verdict != Verdict::Pass, "{report:?}");
+        }
+    }
+
+    #[test]
+    fn early_stop_note_names_the_truncated_owner_not_its_relationships_part() {
+        let reference = r#"<w:p><w:hyperlink r:id="missing.docx"/></w:p>"#;
+        let rels = rel("hyperlink", "missing.docx");
+        let build = |body: &str| {
+            let document = format!(r#"<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}"><w:body>{body}</w:body></w:document>"#);
+            replace_part(&package(vec![], &rels), "word/document.xml", &document)
+        };
+        let padding = "<w:p/>".repeat(100);
+        let nesting = format!("{}{}", "<w:sdt>".repeat(20), "</w:sdt>".repeat(20));
+        let events = Limits { events: 60, ..Limits::default() };
+        let depth = Limits { depth: 8, ..Limits::default() };
+        let cases = [
+            (format!("{padding}{reference}"), events),
+            (format!("{nesting}{reference}"), depth),
+            (format!("<w:p></w:q>{reference}"), Limits::default()),
+        ];
+        for (body, limits) in cases {
+            let report = validate_bytes_limited(&build(&body), limits);
+            let note = report.coverage_notes.iter().find(|n| n.contains("not decided")).unwrap_or_else(|| panic!("{report:?}"));
+            assert!(note.starts_with("word/document.xml was not scanned"), "{note}");
+            assert!(!note.starts_with("word/_rels/"), "{note}");
+        }
+    }
+
+    #[test]
+    fn dangling_relationship_budget_keeps_structural_error_after_picture_warnings() {
+        let limits = Limits { findings_per_rule: 1, ..Limits::default() };
+        for picture_count in [1, 2, 16] {
+            let mut pictures = String::new();
+            let mut rels = String::new();
+            for index in 0..picture_count {
+                let target = format!("missing{index}.png");
+                pictures.push_str(&format!(r#"<a:blip xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" r:embed="{target}"/>"#));
+                rels.push_str(&rel("image", &target));
+            }
+            let document = format!(r#"<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}"><w:body><w:p>{pictures}</w:p></w:body></w:document>"#);
+            for structural_error in [false, true] {
+                let rels = if structural_error { rels.clone() + &rel("settings", "missing-settings.xml") } else { rels.clone() };
+                let bytes = replace_part(&package(vec![], &rels), "word/document.xml", &document);
+                let report = validate_bytes_limited(&bytes, limits);
+                let dangling: Vec<_> = report.findings.iter().filter(|finding| finding.rule == REL_DANGLING.id).collect();
+                assert_eq!(dangling.len(), 1, "{report:?}");
+                let overflow = report.coverage_notes.iter().any(|note| note.starts_with("more than 1 REL-DANGLING"));
+                assert_eq!(overflow, structural_error || picture_count > 1, "{report:?}");
+                if structural_error {
+                    assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
+                    assert_eq!(dangling[0].severity, Severity::Error);
+                    assert!(dangling[0].message.contains("missing-settings.xml"));
+                } else {
+                    assert_eq!(report.verdict, if overflow { Verdict::Incomplete } else { Verdict::Pass }, "{report:?}");
+                    assert_eq!(dangling[0].severity, Severity::Warning);
+                    assert!(dangling[0].message.contains("missing0.png"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn empty_custom_xml_store_requires_usage_coverage_from_every_targeting_source() {
+        check_custom_xml_store_usage_coverage("customXml");
+    }
+
+    #[test]
+    fn empty_custom_xml_store_checks_targeting_source_with_image_relationship() {
+        check_custom_xml_store_usage_coverage("image");
+    }
+
+    #[test]
+    fn empty_custom_xml_store_requires_complete_relationship_inventory() {
+        let unrelated = (0..8).map(|index| rel("hyperlink", &format!("unrelated{index}"))).collect::<String>();
+        let image = rel("image", "data.xml");
+        let main_rels = rel("customXml", "data.xml");
+        for (position, edges) in [("first", image.clone() + &unrelated), ("ninth", unrelated + &image)] {
+            let bytes = package(
+                vec![("word/data.xml", "application/xml", String::new()), ("word/_rels/settings.xml.rels", "", relationships(&edges))],
+                &main_rels,
+            );
+            for entries in [8, 9] {
+                let report = validate_bytes_limited(&bytes, Limits { entries, ..Limits::default() });
+                assert!(
+                    report.findings.iter().any(|finding| finding.rule == "XML-MALFORMED" && finding.part.as_deref() == Some("word/data.xml")),
+                    "image edge {position}, entries limit {entries}: {report:?}"
+                );
+            }
+        }
+    }
+
+    fn check_custom_xml_store_usage_coverage(settings_edge: &str) {
+        let complete = format!(r#"<w:settings xmlns:w="{NS_W}"/>"#);
+        let incomplete = format!(r#"<w:settings xmlns:w="{NS_W}">"#);
+        let uncertain = format!(r#"<w:settings xmlns:w="{NS_W}"><w:dataBinding/></w:settings>"#);
+        let capped = format!(r#"<w:settings xmlns:w="{NS_W}"><w:dataBinding w:storeItemID="B"/><w:dataBinding w:storeItemID="A"/></w:settings>"#);
+        let binding = |id| format!(r#"<w:settings xmlns:w="{NS_W}"><w:dataBinding w:storeItemID="{id}"/></w:settings>"#);
+        let props = format!(r#"<ds:datastoreItem xmlns:ds="{NS_DS}" ds:itemID="A"/>"#);
+        let settings_rels = relationships(&rel(settings_edge, "data.xml"));
+        let item_rels = relationships(&rel("customXmlProps", "props.xml"));
+        let main_rels = rel("settings", "settings.xml") + &rel("customXml", "data.xml");
+
+        for (case, settings, limits, report_malformed) in [
+            ("absent owner", None, Limits::default(), true),
+            ("incomplete syntax", Some(incomplete), Limits::default(), true),
+            ("uncertain binding", Some(uncertain), Limits::default(), true),
+            ("capped usage", Some(capped), Limits { facts: 1, ..Limits::default() }, true),
+            ("no binding", Some(complete), Limits::default(), false),
+            ("nonmatching binding", Some(binding("B")), Limits::default(), false),
+            ("matching binding", Some(binding("A")), Limits::default(), true),
+        ] {
+            let mut parts = vec![
+                ("word/data.xml", "application/xml", String::new()),
+                ("word/_rels/settings.xml.rels", "", settings_rels.clone()),
+                ("word/_rels/data.xml.rels", "", item_rels.clone()),
+                ("word/props.xml", package::CUSTOM_XML_PROPS_CONTENT_TYPE, props.clone()),
+            ];
+            if let Some(settings) = settings {
+                parts.push(("word/settings.xml", package::SETTINGS_CONTENT_TYPE, settings));
+            }
+            let report = validate_bytes_limited(&package(parts, &main_rels), limits);
+            assert_eq!(
+                report.findings.iter().any(|finding| finding.rule == "XML-MALFORMED" && finding.part.as_deref() == Some("word/data.xml")),
+                report_malformed,
+                "{case} via {settings_edge}: {report:?}"
+            );
+        }
     }
 
     /// Comment paragraphs use the same ids as the threading records.
@@ -8365,6 +9122,10 @@ mod round5_completeness_tests {
 
     /// Repack one synthetic part while preserving archive ordering and all other payloads.
     fn replace_part(bytes: &[u8], target: &str, text: &str) -> Vec<u8> {
+        replace_part_bytes(bytes, target, text.as_bytes())
+    }
+
+    fn replace_part_bytes(bytes: &[u8], target: &str, text: &[u8]) -> Vec<u8> {
         use std::io::Read;
         let mut input = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
         let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
@@ -8373,7 +9134,7 @@ mod round5_completeness_tests {
             let mut data = Vec::new();
             entry.read_to_end(&mut data).unwrap();
             output.start_file(entry.name(), zip::write::SimpleFileOptions::default()).unwrap();
-            output.write_all(if entry.name() == target { text.as_bytes() } else { &data }).unwrap();
+            output.write_all(if entry.name() == target { text } else { &data }).unwrap();
         }
         output.finish().unwrap().into_inner()
     }
@@ -8678,7 +9439,12 @@ mod round6_tests {
                 assert_eq!(report.verdict, Verdict::Pass, "{namespace}/{kind}: {report:?}");
                 let bytes = fixture(&format!("{namespace}/{kind}"), "application/xml", body.as_bytes());
                 let report = validate_bytes(&bytes);
-                assert_eq!(report.findings.iter().any(|f| f.rule == "CT-MISMATCH"), *ct != "application/xml", "{namespace}/{kind}: {report:?}");
+                let implicit = !matches!(*kind, "chart" | "customXmlProps");
+                assert_eq!(
+                    report.findings.iter().any(|f| f.rule == "CT-MISMATCH"),
+                    implicit && *ct != "application/xml",
+                    "{namespace}/{kind}: {report:?}"
+                );
             }
         }
     }

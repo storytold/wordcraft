@@ -71,9 +71,8 @@ fn note_joins_ignore_orphan_custom_and_descendant_sources() {
     for shape in ["C0", "C1", "C2", "H1", "H2", "H3", "H4", "D2"] {
         let report = validate_bytes(&note_fixture(shape).build());
         eprintln!("fixture {shape}: {}", serde_json::to_string(&report).unwrap());
-        let expected = if shape == "D2" { Verdict::Pass } else { Verdict::Fail };
-        let listing = report.findings.iter().any(|f| f.rule == "NOTE-PR-LISTING");
-        if report.verdict != expected || listing != (shape != "D2") {
+        let listing = report.findings.iter().any(|f| f.rule == "NOTE-PR-LISTING" && f.severity == wordcraft_validate::Severity::Warning);
+        if report.verdict != Verdict::Pass || listing != (shape != "D2") {
             failures.push(shape);
         }
     }

@@ -52,6 +52,7 @@ fn round18_entry_lookup_truth_table() {
         d.set_doc_rels(
             r#"<Relationship Id="h" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="Header.XML"/>"#,
         );
+        d.set_document(r#"<w:p/><w:sectPr><w:headerReference w:type="default" r:id="h"/></w:sectPr>"#);
         if reverse {
             d.entries.reverse();
         }
@@ -145,7 +146,7 @@ fn round18_content_availability_sites() {
             check_typed_image_refs(&pkg, &xml.references(), &mut acc);
             assert_eq!(acc.findings.iter().any(|f| f.rule == "REL-TYPED"), !skip, "2034/{state}");
             let mut acc = Acc::with_limits(Limits::default());
-            check_typed_targets(&pkg, &mut acc);
+            check_typed_targets(&pkg, &xml, &mut acc);
             assert_eq!(acc.findings.iter().any(|f| f.rule == "REL-TYPED"), !skip, "2097/{state}");
             // Site 3650's manifest-driven note belongs to the explicit no-owner fallback.
             pkg.main = Resolution::Absent;
@@ -190,7 +191,7 @@ fn round18_archive_prefix_permutations() {
     }
 }
 
-/// R18/2304: the name lookup only supplies display spelling to an independent typed finding.
+/// A mistyped consumed part requires established entry identity and uses the stored spelling.
 #[test]
 fn round18_typed_finding_display_polarity() {
     for state in ["found", "absent", "unknown"] {
@@ -199,6 +200,7 @@ fn round18_typed_finding_display_polarity() {
         d.set_doc_rels(
             r#"<Relationship Id="c" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="mixed.xml"/>"#,
         );
+        d.set_document(r#"<w:p><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="c"/></w:p>"#);
         let mut pkg = package::load(&d.build(), &mut Acc::with_limits(Limits::default())).unwrap();
         if state != "found" {
             pkg.entries.retain(|e| e.name != "word/Mixed.XML");
@@ -209,9 +211,62 @@ fn round18_typed_finding_display_polarity() {
         let mut acc = Acc::with_limits(Limits::default());
         check_typed_content(&pkg, &xml, &mut acc);
         let report = acc.finish();
-        let finding = report.findings.iter().find(|f| f.rule == "CT-MISMATCH").unwrap();
-        assert_eq!(finding.part.as_deref(), Some(if state == "found" { "word/Mixed.XML" } else { "word/mixed.xml" }), "{state}");
+        let finding = report.findings.iter().find(|f| f.rule == "CT-MISMATCH");
+        if state == "found" {
+            assert_eq!(finding.unwrap().part.as_deref(), Some("word/Mixed.XML"));
+        } else {
+            assert!(finding.is_none(), "{state}: {report:?}");
+        }
     }
+}
+
+fn check_custom_xml_binding_coverage(cap_header_usage: bool) {
+    const STORE_ID: &str = "{12345678-1234-1234-1234-123456789ABC}";
+    let binding_id = if cap_header_usage { STORE_ID } else { "{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}" };
+    for mistyped_item in [true, false] {
+        let mut d = Doc::minimal();
+        d.set_doc_rels(&format!(
+            r#"<Relationship Id="h" Type="{NS_R}/header" Target="header.xml"/><Relationship Id="store" Type="{NS_R}/customXml" Target="item.xml"/>"#,
+        ));
+        d.add_with_override(
+            "word/header.xml",
+            common::CT_HEADER,
+            format!(r#"<w:hdr {NS}><w:sdt><w:sdtPr><w:dataBinding w:storeItemID="{binding_id}"/></w:sdtPr></w:sdt></w:hdr>"#),
+        );
+        let item_type = if mistyped_item { "text/xml" } else { package::XML_CONTENT_TYPE };
+        let props_type = if mistyped_item { package::CUSTOM_XML_PROPS_CONTENT_TYPE } else { "application/xml" };
+        d.add_with_override("word/item.xml", item_type, "<item/>");
+        d.add_with_override("word/props.xml", props_type, format!(r#"<ds:datastoreItem xmlns:ds="{NS_DS}" ds:itemID="{STORE_ID}"/>"#));
+        d.set(
+            "word/_rels/item.xml.rels",
+            format!(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="props" Type="{NS_R}/customXmlProps" Target="props.xml"/></Relationships>"#),
+        );
+        let mut scan_acc = Acc::with_limits(Limits::default());
+        let pkg = package::load(&d.build(), &mut scan_acc).unwrap();
+        let mut xml = check_xml(&pkg, &mut scan_acc);
+        if cap_header_usage {
+            let usage = &mut xml.parts.get_mut(&PartId::new("word/header.xml")).unwrap().usage;
+            assert!(!usage.binding_ids.is_empty());
+            usage.charge_package_budget(&mut 0);
+        }
+
+        let mut acc = Acc::with_limits(Limits::default());
+        check_typed_content(&pkg, &xml, &mut acc);
+        let report = acc.finish();
+        assert!(report.findings.is_empty(), "{report:?}");
+        let expected = if cap_header_usage { Verdict::Incomplete } else { Verdict::Pass };
+        assert_eq!(report.verdict, expected, "mistyped_item={mistyped_item}: {report:?}");
+    }
+}
+
+#[test]
+fn typed_custom_xml_records_incomplete_story_binding_coverage() {
+    check_custom_xml_binding_coverage(true);
+}
+
+#[test]
+fn typed_custom_xml_skips_complete_story_binding_nonmatch() {
+    check_custom_xml_binding_coverage(false);
 }
 
 /// CodeRabbit PR#18: proven REL-TYPED mismatches survive unknown_unreadable, while absence stays suppressed.
@@ -250,7 +305,7 @@ fn rel_typed_preserves_proven_mismatches_under_unknown_unreadable() {
 
     let mut acc = Acc::with_limits(Limits::default());
     acc.set_unknown_unreadable();
-    check_typed_targets(&pkg, &mut acc);
+    check_typed_targets(&pkg, &xml, &mut acc);
     let image_refs: Vec<(String, Vec<RefFact>)> = xml.parts.values().map(|p| (p.name.clone(), p.references.prefix().to_vec())).collect();
     check_typed_image_refs(&pkg, &image_refs, &mut acc);
     let report = acc.finish();

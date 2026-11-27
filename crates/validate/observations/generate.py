@@ -304,6 +304,13 @@ def unit_audit(name, func, header, body, semantic_json, fields, enum_variants,
         ('lib.rs', 'absence_suppressed', 'PACKAGE_ABSENCE_RULES'),
         ('lib.rs', 'check_note_pr', 'reverse_ok'),
         ('lib.rs', 'report_malformed', 'pkg.reachable'),
+        # Positive indices for custom XML and relationship use; the unused store verdict
+        # still requires CompleteSet::missing on the complete exclusion collection.
+        ('lib.rs', 'from_document', 'ids'),
+        ('lib.rs', 'bound_item', 'self.bound'),
+        ('lib.rs', 'bound_properties', 'self.bound_properties'),
+        ('lib.rs', 'unused_item', 'self.items'),
+        ('relationship_use.rs', 'uses', 'self.sites'),
         ('lib.rs', 'check_typed_content', 'non_main_owner_rels'),
         ('lib.rs', 'report_unreferenced_comments', 'incomplete_owners'),
         ('lib.rs', 'supporting_part', 'acc.coverage'),
@@ -540,8 +547,12 @@ fn unregistered_read(pkg: &Package) -> usize { (|package_pattern!(items): &Packa
       'R18 raw slice alias': ('package.rs', lambda s: s+'\ntype HiddenEntries = [Entry]; fn unregistered_absence(entries: &HiddenEntries, name: &str) -> bool { !entries.iter().any(|entry| entry.name == name) }'),
       'R18 fabricated absence': ('package.rs', lambda s: s+'\nfn invented() -> Resolution<()> { Resolution::Absent }'),
       'R18 fabricated completeness': ('package.rs', lambda s: s.replace('Resolution::discovered(canonical(&pkg.entries, name), !pkg.entries_truncated && !pkg.identity_incomplete)', 'Resolution::discovered(canonical(&pkg.entries, name), true)', 1)),
-      'R18 Unknown-or-Absent': ('lib.rs', lambda s: s.replace('Resolution::Absent => true,\n                Resolution::Unknown(_) => false,', 'Resolution::Absent | Resolution::Unknown(_) => true,', 1)),
-      'R18 missing Unknown': ('lib.rs', lambda s: s.replace('                Resolution::Unknown(_) => false,\n', '', 1)),
+      'R18 Unknown-or-Absent': ('lib.rs', lambda s: s.replace(
+          'Resolution::Absent => true,\n                Resolution::One(_) | Resolution::Unknown(_) | Resolution::Ambiguous(_) => false,',
+          'Resolution::Absent | Resolution::Unknown(_) => true,\n                Resolution::One(_) | Resolution::Ambiguous(_) => false,', 1)),
+      'R18 missing Unknown': ('lib.rs', lambda s: s.replace(
+          'Resolution::One(_) | Resolution::Unknown(_) | Resolution::Ambiguous(_) => false,',
+          'Resolution::One(_) | Resolution::Ambiguous(_) => false,', 1)),
       'R18 direct state deletion': ('lib.rs', lambda s: s.replace('pkg.entries_truncated || pkg.identity_incomplete', 'pkg.identity_incomplete', 1)),
       'R18 direct state negation': ('lib.rs', lambda s: s.replace('pkg.entries_truncated || pkg.identity_incomplete', '!pkg.entries_truncated || pkg.identity_incomplete', 1)),
       'R18 discovery complete deletion': ('lib.rs', lambda s: s.replace('!pkg.entries_truncated\n        && !pkg.identity_incomplete', '!pkg.identity_incomplete', 1)),

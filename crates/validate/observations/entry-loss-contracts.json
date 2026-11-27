@@ -3,7 +3,7 @@
     "self . unknown_unreadable = true"
   ],
   "lib.rs::absence_suppressed": [
-    "self . unknown_unreadable && matches ! (severity , Severity :: Corrupt | Severity :: Error) && contracts_generated :: PACKAGE_ABSENCE_RULES . contains (& rule)"
+    "self . unknown_unreadable && (matches ! (severity , Severity :: Corrupt | Severity :: Error) || rule == NOTE_PR_LISTING . id) && contracts_generated :: PACKAGE_ABSENCE_RULES . contains (& rule)"
   ],
   "lib.rs::discovery_unavailable": [
     "pkg . entries_truncated || pkg . identity_incomplete"
