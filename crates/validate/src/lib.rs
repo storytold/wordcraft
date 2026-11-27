@@ -2680,6 +2680,7 @@ struct StoreConsumption {
     items: HashSet<PartId>,
     bound: HashSet<PartId>,
     bound_properties: HashSet<(PartId, PartId)>,
+    story_bindings_complete: bool,
     excluded: Option<CompleteSet<PartId>>,
 }
 
@@ -2694,9 +2695,9 @@ impl StoreConsumption {
             package_loss: "independent";
         }
 
-        let mut stores = Self { items: HashSet::new(), bound: HashSet::new(), bound_properties: HashSet::new(), excluded: None };
+        let mut stores =
+            Self { items: HashSet::new(), bound: HashSet::new(), bound_properties: HashSet::new(), story_bindings_complete: true, excluded: None };
         let mut excluded = HashSet::new();
-        let mut bindings_complete = !discovery_unavailable(pkg, None);
         let mut ids = HashSet::new();
         for (name, role) in roles {
             if !role.is_story() {
@@ -2704,11 +2705,12 @@ impl StoreConsumption {
             }
             if let Some(source) = xml.parts.get(&PartId::new(name)) {
                 ids.extend(source.usage.binding_ids.iter());
-                bindings_complete &= source.syntax == Completeness::Complete && !source.usage.capped && !source.usage.uncertain_binding;
+                stores.story_bindings_complete &= source.syntax == Completeness::Complete && !source.usage.capped && !source.usage.uncertain_binding;
             } else {
-                bindings_complete = false;
+                stores.story_bindings_complete = false;
             }
         }
+        let mut bindings_complete = stores.story_bindings_complete && !discovery_unavailable(pkg, None);
         let mut properties = HashMap::new();
         for rp in &pkg.rels {
             bindings_complete &= !rp.incomplete;
@@ -2888,9 +2890,9 @@ fn check_typed_content(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
     observation_contract! {
         rules: "CT-MISMATCH";
         collections: "access.into_complete_set*1,access.missing*1,field.bound_properties*1,field.content_types*1,field.rels*2,lookup.canonical_entry*1,type.HashSet*2,type.Observed*1";
-        scope: "per owning XML part consumption; first-bound contentPart relationship only; skipped text/xml and native InkML exemptions separate";
-        loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
-        fallback: "suppress customXml pairing when consumption unavailable; keep other relationships and independent contentPart presence/type findings";
+        scope: "per owning XML part consumption and cross-story custom XML bindings; first-bound contentPart relationship only; skipped text/xml and native InkML exemptions separate";
+        loss: "source unavailable or malformed; XML event/depth budget; category allocation cap; uncertain story binding facts";
+        fallback: "keep positive consumption matches; mark skipped custom XML item or properties pairings incomplete when story binding evidence is incomplete; keep other relationships and independent contentPart presence/type findings";
         package_loss: "independent";
     }
 
@@ -2908,6 +2910,7 @@ fn check_typed_content(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
         .collect();
     let mut stores = None;
     let mut skipped_consumption = HashSet::new();
+    let mut reported_binding_loss = false;
     for rp in &pkg.rels {
         let is_non_main_owner = non_main_owner_rels.contains(&rp.name.to_ascii_lowercase());
         let rp_key = rp.name.to_ascii_lowercase();
@@ -2955,6 +2958,14 @@ fn check_typed_content(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
                 _ => explicitly_used || implicit_relationship(pkg, rp, r),
             };
             if !used {
+                if !reported_binding_loss
+                    && matches!(kind, "customXml" | "customXmlProps")
+                    && stores.as_ref().is_some_and(|stores| !stores.story_bindings_complete)
+                {
+                    acc.note("Story bindings were not fully examined; some custom XML content types were not assessed".to_string());
+                    acc.set_incomplete();
+                    reported_binding_loss = true;
+                }
                 if relationship_source(xml, rp).is_some_and(|source| source.usage.capped) {
                     acc.note(format!("{} exceeded the relationship consumption fact budget; some content types were not assessed", rp.name));
                     acc.set_incomplete();
