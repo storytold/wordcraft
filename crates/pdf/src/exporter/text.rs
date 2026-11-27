@@ -108,8 +108,13 @@ impl Exporter<'_> {
         let (txt, ranges) = if valid { (text.to_string(), known.to_vec()) } else { self.map_text(face, glyphs, text) };
         let upem = face.upem.max(1.0) as f32;
         // Right-to-left text is written left to right as it appears (see `left_to_right`); glyphs
-        // already in that order are written as they are.
-        let (order, ranges) = if left_to_right(glyphs) {
+        // already in that order are written as they are. So is left-to-right text whose glyphs
+        // only step back for a mark or a vowel sign drawn before its consonant (Devanagari «ि»,
+        // Bengali, Tamil …): split into single glyphs in visual order, a cluster's text would come
+        // out with the vowel sign first («इंजीिनयर»). Kept in logical order, each cluster keeps
+        // its whole text and reads right (krilla writes it as one ActualText span).
+        let rtl_text = ranges.iter().any(|r| txt.get(r.clone()).is_some_and(|t| t.chars().any(wordcraft_fonts::is_rtl)));
+        let (order, ranges) = if left_to_right(glyphs) || !rtl_text {
             ((0..glyphs.len()).collect(), ranges)
         } else {
             let parts = split_clusters(&txt, glyphs, &ranges, &self.cmap(face));
