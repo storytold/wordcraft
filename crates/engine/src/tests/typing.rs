@@ -4361,6 +4361,7 @@ fn zwnj_types_the_persian_half_space_inside_a_word() {
     let (a, b) = s.sel.ordered();
     assert_eq!(text.get(a.off..b.off).map(str::trim_end), Some("می\u{200C}خواهم"));
     // Over a selection it replaces the selection, like typing.
+    let expected = format!("{}\u{200C}{}", &text[..a.off], &text[b.off..]);
     run(&mut s, "text.zwnj", json!({}));
-    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text.chars().next(), Some('\u{200C}'));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, expected);
 }
