@@ -391,6 +391,34 @@ fn find_shortcut_focuses_find_what() {
     assert!(fields["find"].as_str().unwrap_or_default().ends_with("abc"), "typing went into Find what: {fields:?}");
 }
 
+/// #1610: opening a hyperlink must direct typing and paste into its address.
+#[test]
+fn hyperlink_shortcut_focuses_address_and_preserves_document() {
+    let mut a = app();
+    a.run("text.insert", json!({"text": "Keep this text"})).unwrap();
+    a.run("select.text", json!({"text": "Keep this text"})).unwrap();
+    let mut h = harness(a);
+    h.run_steps(2);
+
+    for (event, expected) in [
+        (egui::Event::Paste("https://example.com".into()), "https://example.com"),
+        (egui::Event::Text("https://example.org".into()), "https://example.org"),
+    ] {
+        press(&mut h, egui::Key::K, egui::Modifiers::COMMAND);
+        assert!(h.state().dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("link")), "Link dialog open");
+        h.event(event);
+        h.run_steps(2);
+        let address = h.get_by_label("Address:").value().unwrap_or_default();
+        assert_eq!(address, expected, "input replaces the initial address");
+        let display = h.get_by_label("Text to display:").value().unwrap_or_default();
+        assert_eq!(display, "Keep this text");
+        assert_eq!(body_text(h.state()), "Keep this text");
+        press(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
+        assert!(h.state().dialog_host.open_dialogs().is_empty(), "Cancel closes the dialog");
+        assert_eq!(h.state().session.selected_text(), "Keep this text", "Cancel preserves selection");
+    }
+}
+
 /// The key of the dialog a command opened, read off its reply.
 fn pending_of(reply: &Value) -> Option<&str> {
     reply.get("pending").and_then(Value::as_str)
