@@ -281,6 +281,7 @@ pub(super) fn arabic_block(c: char) -> bool {
 #[derive(Default)]
 pub(super) struct FallbackCache {
     pub(super) faces: usize,
+    pub(super) generation: u64,
     pub(super) map: HashMap<(char, u32), Option<Arc<FontFace>>>,
 }
 
@@ -288,13 +289,29 @@ pub(super) struct FallbackCache {
 pub(super) type RunFallbackKey = (Vec<char>, u32, bool, bool);
 
 /// [`FontDb::fallback_for_run`] results: (sorted, deduplicated chars, excluded face, bold,
-/// italic) → face, valid while the loaded face count is `faces`.
+/// italic) → face, valid while the loaded face count is `faces` and [`FontDb::generation`] is
+/// `generation`.
 #[derive(Default)]
 pub(super) struct RunFallbackCache {
     pub(super) faces: usize,
+    pub(super) generation: u64,
     /// Chars held in the keys (bounds memory: hostile runs can be long).
     pub(super) chars: usize,
     pub(super) map: HashMap<RunFallbackKey, Option<Arc<FontFace>>>,
+}
+
+/// What a diagram-level fallback lookup is keyed by: sorted, deduplicated chars, excluded face,
+/// serif preference.
+pub(super) type DiagramFallbackKey = (Vec<char>, u32, bool);
+
+/// [`FontDb::fallback_for_diagram`] results, valid while the loaded face count and generation match.
+#[derive(Default)]
+pub(super) struct DiagramFallbackCache {
+    pub(super) faces: usize,
+    pub(super) generation: u64,
+    /// Chars held in the keys (bounds memory: diagram text can be long).
+    pub(super) chars: usize,
+    pub(super) map: HashMap<DiagramFallbackKey, Option<Arc<FontFace>>>,
 }
 
 /// Most cached run-level fallbacks, and most chars in their keys, before the cache is reset.
