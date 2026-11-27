@@ -414,6 +414,9 @@ impl<'a> Flow<'a> {
     /// next alone moves a paragraph only when it would fit here by itself (Word for Windows): one
     /// that doesn't breaks as usual, its last lines going over with the next paragraph. Returns
     /// the space before applied (`before`, or what is left of it at the top of the next column).
+    /// A paragraph that opens with a page or column break is moved by its break, once: kept here
+    /// too, it went to the next column and the break then took it one further, skipping a column
+    /// or leaving a blank page (#3009; Word, observed with synthetic documents).
     fn keep_together(&self, ctx: &mut Ctx, pb: &mut PageBuilder, rooms: Rooms, before: f32) -> f32 {
         let rp = &self.pl.rp;
         // A terminal page-break mark stays with the break and draws no bottom border there.
@@ -423,7 +426,7 @@ impl<'a> Flow<'a> {
                 line.end == LineEnd::PageBreak && self.pl.lines.last().is_some_and(|mark| only_markers(self.p, mark.start..mark.stop))
             });
         let height = self.pl.height + rooms.top + if break_mark { 0.0 } else { rooms.bottom };
-        if !(rp.keep_lines || (rp.keep_next && pb.y + height <= pb.bottom + 0.01)) {
+        if !((rp.keep_lines || (rp.keep_next && pb.y + height <= pb.bottom + 0.01)) && (pb.web || !self.pl.opens_with_break())) {
             return before;
         }
         // A paragraph closing a section that the next one starts on a new page keeps with
@@ -544,7 +547,7 @@ impl<'a> Flow<'a> {
             if over && fit.l1 > l0 && !split {
                 break;
             }
-            if over && fit.l1 == l0 && !pb.fresh() && !split && !self.stays_at_bottom(pb, l) {
+            if over && fit.l1 == l0 && !pb.fresh() && !split && !self.stays_at_bottom(pb, fit.l1) {
                 break;
             }
             fit.notes.extend(line_notes);
@@ -556,23 +559,19 @@ impl<'a> Flow<'a> {
         fit
     }
 
-    /// Whether the line (the paragraph's line `l0`) may overflow the page: one holding nothing but
-    /// a page or column break, with text after it in the paragraph, stays at the bottom of the
+    /// Whether the line `li` (the paragraph's line `l0`) may overflow the page: one holding nothing
+    /// but a page or column break, with text after it in the paragraph, stays at the bottom of the
     /// page even when it doesn't fit (it only ends the page, and moving it would leave a blank
     /// page behind it, as in Word), and so does an empty paragraph closing a section before a new
     /// page (measured in Word: it stays on a full page instead of starting one of its own).
+    /// Markers such as a bookmark may stand next to the break (#3009).
     /// Measured in Word: a paragraph of only a page break is an ordinary line, and when its mark's
     /// text doesn't fit it goes to the next page, blank page and all.
-    fn stays_at_bottom(&self, pb: &PageBuilder, l: &para::Line) -> bool {
+    fn stays_at_bottom(&self, pb: &PageBuilder, li: usize) -> bool {
         let p = self.p;
-        let mark_only_after =
-            l.end == LineEnd::PageBreak && self.pl.lines.get(self.l0 + 1..).is_some_and(|rest| rest.iter().all(|m| only_markers(p, m.start..m.stop)));
-        let only_break = matches!(l.end, LineEnd::PageBreak | LineEnd::ColumnBreak)
-            && !mark_only_after
-            && p.text
-                .get(l.start..l.stop)
-                .is_some_and(|t| t.chars().all(|c| matches!(c, wordcraft_doc::para::PAGE_BREAK | wordcraft_doc::para::COLUMN_BREAK)));
-        only_break || (pb.next_starts_page && p.section.is_some() && p.text.is_empty())
+        let mark_only_after = self.pl.lines.get(li).is_some_and(|l| l.end == LineEnd::PageBreak)
+            && self.pl.lines.get(li + 1..).is_some_and(|rest| rest.iter().all(|m| only_markers(p, m.start..m.stop)));
+        (self.pl.only_break(li) && !mark_only_after) || (pb.next_starts_page && p.section.is_some() && p.text.is_empty())
     }
 
     /// Whether the line (just taken, `fit.l1` is after it) forces a break, noted in `fit`.
@@ -1193,6 +1192,11 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, new_pa
                     Arc::new(para::layout_para(p, &env))
                 }
             };
+            // One that opens with a page or column break needs no room here: its break line stays
+            // at the bottom of the column and the rest goes on past the break (#3009).
+            if pl.opens_with_break() && !matches!(ctx.opts.view, ViewMode::Web | ViewMode::Draft | ViewMode::Outline) {
+                return 0.0;
+            }
             // Its border room, unless it joins the paragraph before (or after) in one box.
             let own = Edges::own(&pl, 0, pl.lines.len());
             let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own.top };
