@@ -7,19 +7,17 @@ mod thumbs;
 
 use std::cell::{Cell, RefCell};
 
-use craft::behavior::IconId;
 use craft::theme::Variant;
 use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
 use craft::ui::buttons::ControlPlace;
-use craft::ui::buttons::IconButton;
 use craft::ui::contract::{
     BodyCx, CollectionEvent, Commands as _, Gap, LeastWidth, Pad, Props as _, Scroll, Show as _, ShowContainer as _, Sizing, clicked,
 };
 use craft::ui::display::Text;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::notices::Notice;
-use craft::ui::primitives::{HAlign, IconSpec};
+use craft::ui::primitives::HAlign;
 use craft::ui::runtime::env::{Label, with_env};
 use craft::ui::runtime::inspect;
 use craft::ui::style::{SurfaceKind, TypeRole};
@@ -254,7 +252,23 @@ fn side_menu(ui: &mut Ui, band: f32, current: &str, has_document: bool, show_dis
         .scroll(Scroll::vertical())
         .header(move |ui, _| {
             ui.add_space(band);
-            let _ = IconButton::command(IconSpec::svg(IconId::new("chevronLeft")), BackstagePageCommand::Back).show(ui);
+            // Escape remains available without a document. Only the Start screen's button is disabled.
+            with_env(
+                ui,
+                |overrides| {
+                    overrides.values.set(ControlPlace::SideMenu);
+                },
+                |ui| {
+                    let _ = Button::command(BackstagePageCommand::Back)
+                        .label(label("Back"))
+                        .icon(crate::icons::id("chevronLeft"))
+                        .variant(Variant::GHOST)
+                        .sizing(Sizing::FillWidth)
+                        .align(HAlign::Start)
+                        .enabled(!back_disabled(has_document, current))
+                        .show(ui);
+                },
+            );
         })
         // The community link above About, both at the reading start, as production's bottom links: rows of the side
         // menu place too, so they read in the rail's white ink over the brand colour, not a panel button's dark ink.
@@ -355,6 +369,12 @@ pub(crate) fn go_to_page(app: &mut WordApp, id: &str) {
         }
         _ => app.ui.backstage_page = id.into(),
     }
+}
+
+/// Whether Back is greyed out (#6782): on the Start screen, where no document is open and the page
+/// is Home, New or Open, there is nothing to go back to.
+fn back_disabled(has_document: bool, page: &str) -> bool {
+    !has_document && matches!(page, "home" | "new" | "open")
 }
 
 /// The Backstage pages that work while no document is open (#1129).

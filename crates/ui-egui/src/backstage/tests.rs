@@ -37,6 +37,50 @@ fn file_page(mut a: WordApp, page: &str) -> egui_kittest::Harness<'static, WordA
     harness(a, egui::vec2(1440.0, 900.0))
 }
 
+/// #6782: the Start screen exposes a disabled Back button. Escape, Options and a document
+/// retain their path back to the editor.
+#[test]
+fn back_is_off_on_the_start_screen() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::NodeT;
+
+    let mut app = new_app();
+    app.ui.start_screen = true;
+    assert!(app.start_screen());
+    let mut h = harness(app, egui::vec2(1440.0, 900.0));
+    crate::test_harness::frames(&mut h, 2);
+    assert!(!h.state().has_document() && h.state().ui.backstage);
+    let back = h.get_by_role_and_label(Role::Button, "Back");
+    assert!(back.accesskit_node().is_disabled());
+    let open = h.get_by_role_and_label(Role::Button, "Open");
+    assert!(back.rect().width() >= open.rect().width(), "Back should occupy a full menu row");
+    back.click();
+    crate::test_harness::frames(&mut h, 4);
+    assert!(h.state().ui.backstage);
+
+    h.key_press(egui::Key::Escape);
+    crate::test_harness::frames(&mut h, 4);
+    assert!(!h.state().ui.backstage);
+
+    h.state_mut().run("ui.backstage", json!({"value": true, "page": "options"})).unwrap();
+    crate::test_harness::frames(&mut h, 4);
+    let back = h.get_by_role_and_label(Role::Button, "Back");
+    assert!(!back.accesskit_node().is_disabled());
+    back.click();
+    crate::test_harness::frames(&mut h, 4);
+    assert!(!h.state().ui.backstage);
+
+    h.state_mut().run("file.new", json!({})).unwrap();
+    h.state_mut().run("ui.backstage", json!({"value": true, "page": "info"})).unwrap();
+    crate::test_harness::frames(&mut h, 4);
+    assert!(h.state().has_document());
+    let back = h.get_by_role_and_label(Role::Button, "Back");
+    assert!(!back.accesskit_node().is_disabled());
+    back.click();
+    crate::test_harness::frames(&mut h, 4);
+    assert!(!h.state().ui.backstage);
+}
+
 /// A recent row by its file name. The framework names a row with its folder after the file name
 /// (`name` then the path), so a row is found by that prefix, not by the exact label.
 fn recent_row<'a>(h: &'a egui_kittest::Harness<'static, WordApp>, name: &'a str) -> Option<egui_kittest::Node<'a>> {

@@ -11,7 +11,7 @@ fn empty_window_ribbon_tabs_reach_the_start_screen() {
     a.start_screen();
     let mut h = harness(a);
     h.run_steps(4);
-    // Esc (or the back arrow) leaves the Start screen for the empty window, as #1129 has it.
+    // Esc leaves the Start screen for the empty window (#1129). Back is disabled there (#6782).
     h.key_press(egui::Key::Escape);
     h.run_steps(4);
     assert!(!h.state().ui.backstage, "the empty window");
