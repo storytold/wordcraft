@@ -253,6 +253,11 @@ fn current_of(app: &mut WordApp, target: &Target) -> Option<Rgb> {
     }
 }
 
+/// Whether the selection's font colour is uniformly Automatic.
+fn current_is_auto(app: &WordApp) -> bool {
+    wordcraft_engine::cmd::format::state(&app.session).get("color").and_then(Value::as_str) == Some("auto")
+}
+
 /// The colour a split button's main part applies: what its target remembers, else what is in effect.
 fn remembered(app: &mut WordApp, target: &Target) -> Option<Rgb> {
     match target {
@@ -287,9 +292,9 @@ pub struct ColorPick {
     pub response: egui::Response,
     /// The colour picked in this pass.
     pub picked: Option<Rgb>,
-    /// What the pointer over a swatch did to the live preview: it shows while the pointer is over a
-    /// swatch and ends when it leaves.
-    pub preview: craft::behavior::Preview<Rgb>,
+    /// What the pointer over a swatch or menu choice did to the live preview: `Some(c)` for a
+    /// palette colour, `None` for Automatic / No Color, and `Ended` when the pointer leaves.
+    pub preview: craft::behavior::Preview<Option<Rgb>>,
     /// The main part's stay of a split button; `Hover::default()` for a body without one.
     pub hover: Hover,
 }
@@ -318,14 +323,34 @@ fn swatch_table(
     (picked, preview, out.response)
 }
 
-/// Two previews of one pass: a start wins over an end, as the pointer moving from one table to
+/// Two previews of one pass: a start wins over an end, as the pointer moving from one control to
 /// the next ends one and starts the other.
-fn merge_preview(a: craft::behavior::Preview<Rgb>, b: craft::behavior::Preview<Rgb>) -> craft::behavior::Preview<Rgb> {
+fn merge_preview<T>(a: craft::behavior::Preview<T>, b: craft::behavior::Preview<T>) -> craft::behavior::Preview<T> {
     use craft::behavior::Preview;
     match (a, b) {
         (Preview::Shows(c), _) | (_, Preview::Shows(c)) => Preview::Shows(c),
         (Preview::Ended, _) | (_, Preview::Ended) => Preview::Ended,
         _ => Preview::Unchanged,
+    }
+}
+
+/// Tracks hover preview transitions for a single `MenuItem` inside a colour drop-down so hovering
+/// it previews `None` and leaving or closing the drop-down ends the preview.
+fn item_preview(ctx: &egui::Context, key: egui::Id, hovered: bool, open: bool) -> craft::behavior::Preview<Option<Rgb>> {
+    use craft::behavior::Preview;
+    let was = ctx.data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
+    if !open {
+        if was {
+            ctx.data_mut(|d| d.remove::<bool>(key));
+            return Preview::Ended;
+        }
+        return Preview::Unchanged;
+    }
+    if hovered != was {
+        ctx.data_mut(|d| d.insert_temp(key, hovered));
+        if hovered { Preview::Shows(None) } else { Preview::Ended }
+    } else {
+        Preview::Unchanged
     }
 }
 
@@ -360,7 +385,7 @@ pub fn palette(ui: &mut Ui, app: &mut WordApp, target: Target) -> ColorPick {
     if more.ran {
         open_for(app, &target, current, ColorPickerTab::Standard);
     }
-    ColorPick { response: more.response, picked, preview, hover: Hover::default() }
+    ColorPick { response: more.response, picked, preview: preview.map(Some), hover: Hover::default() }
 }
 
 /// A command colour drop-down's body: [`palette`]; the caller closes the drop-down.
@@ -390,30 +415,33 @@ enum Above {
 }
 
 /// A split button whose main part runs `main` and whose arrow opens `body`.
+/// `body` returns its `ColorPick` and whether its `Automatic` / `No Color` item is hovered.
 fn split_with(
     ui: &mut Ui,
     app: &mut WordApp,
     label: Label,
     icon: IconSpec<'static>,
     main: CommandRef,
-    mut body: impl FnMut(&mut Ui, &mut WordApp, &mut BodyCx<'_>) -> ColorPick,
+    mut body: impl FnMut(&mut Ui, &mut WordApp, &mut BodyCx<'_>) -> (ColorPick, bool),
 ) -> ColorPick {
-    let mut inner: Option<(Option<Rgb>, craft::behavior::Preview<Rgb>)> = None;
+    let mut inner: Option<(Option<Rgb>, craft::behavior::Preview<Option<Rgb>>, bool)> = None;
     // The arrow is its own button, named "<label> options" so it is told from the main part (#3172).
     let arrow_name = crate::i18n::fmt(tl!("{name} options"), &[("name", label.as_str())]);
     let out = SplitButton::<NoValue>::command(
         main,
         SplitMenu::Body(Box::new(|ui: &mut Ui, cx: &mut BodyCx<'_>| {
-            let pick = body(ui, app, cx);
-            inner = Some((pick.picked, pick.preview));
+            let (pick, empty_hovered) = body(ui, app, cx);
+            inner = Some((pick.picked, pick.preview, empty_hovered));
         })),
     )
     .label(label)
     .arrow_label(arrow_name)
     .icon(icon)
     .show(ui);
-    let (picked, preview) = inner.unwrap_or((None, craft::behavior::Preview::Unchanged));
-    ColorPick { response: out.response, picked, preview, hover: out.hover }
+    let open = inner.is_some();
+    let (picked, swatch_preview, empty_hovered) = inner.unwrap_or((None, craft::behavior::Preview::Unchanged, false));
+    let empty_preview = item_preview(ui.ctx(), out.response.id.with("empty_hover"), empty_hovered, open);
+    ColorPick { response: out.response, picked, preview: merge_preview(swatch_preview, empty_preview), hover: out.hover }
 }
 
 /// The split button of a colour `target`: the icon of its command with a bar of the remembered
@@ -433,24 +461,29 @@ fn color_split(ui: &mut Ui, app: &mut WordApp, label: Label, target: Target, abo
         _ => CommandRef::new(cmd.clone()),
     };
     split_with(ui, app, label, icon, main, |ui, app, cx| {
+        let mut empty_hovered = false;
         match above {
             Above::Nothing => {}
             Above::Automatic => {
                 let auto = CommandRef::with_params("format.color", json!({"color": "auto"}));
-                if MenuItem::new(tl!("Automatic").to_string()).command(auto).show(ui).ran {
+                let item = MenuItem::new(tl!("Automatic").to_string()).command(auto).check(current_is_auto(app)).show(ui);
+                if item.ran {
                     cx.request_close();
                 }
+                empty_hovered = item.response.hovered() && !item.ran;
             }
             Above::NoColor => {
                 let none = CommandRef::with_params(cmd.clone(), json!({"color": null}));
-                if MenuItem::new(tl!("No Color").to_string()).command(none).show(ui).ran {
+                let item = MenuItem::new(tl!("No Color").to_string()).command(none).show(ui);
+                if item.ran {
                     cx.request_close();
                 }
+                empty_hovered = item.response.hovered() && !item.ran;
             }
         }
         let pick = menu(ui, app, target.clone());
         close_after(&pick, cx);
-        pick
+        (pick, empty_hovered)
     })
 }
 
@@ -480,7 +513,7 @@ pub(crate) fn highlight_button_appearance(name: &str) -> (&'static str, Option<C
 /// The highlight drop-down: the highlight colours five to a row, then No Color. A pick, No Color
 /// too, becomes the split button's colour, as in Word: after No Color a click on the button
 /// removes highlighting (#2105).
-fn highlight_body(ui: &mut Ui, app: &mut WordApp, cx: &mut BodyCx<'_>) -> ColorPick {
+fn highlight_body(ui: &mut Ui, app: &mut WordApp, cx: &mut BodyCx<'_>) -> (ColorPick, bool) {
     use wordcraft_doc::props::Highlight;
     let in_effect = Some(wordcraft_engine::cmd::format::state(&app.session))
         .and_then(|st| st.get("highlight").and_then(Value::as_str).map(str::to_string))
@@ -500,16 +533,20 @@ fn highlight_body(ui: &mut Ui, app: &mut WordApp, cx: &mut BodyCx<'_>) -> ColorP
         cx.request_close();
     }
     let preview = match out.preview {
-        craft::behavior::Preview::Shows(i) => shown.get(i).map_or(craft::behavior::Preview::Unchanged, |(_, c)| craft::behavior::Preview::Shows(*c)),
+        craft::behavior::Preview::Shows(i) => {
+            shown.get(i).map_or(craft::behavior::Preview::Unchanged, |(_, c)| craft::behavior::Preview::Shows(Some(*c)))
+        }
         craft::behavior::Preview::Ended => craft::behavior::Preview::Ended,
         _ => craft::behavior::Preview::Unchanged,
     };
     let none = CommandRef::with_params("format.highlight", json!({"color": "none"}));
-    if MenuItem::new(tl!("No Color").to_string()).command(none).show(ui).ran {
+    let no_color = MenuItem::new(tl!("No Color").to_string()).command(none).check(in_effect == "none").show(ui);
+    if no_color.ran {
         app.canvas.last_highlight = "none".into();
         cx.request_close();
     }
-    ColorPick { response: out.response, picked, preview, hover: Hover::default() }
+    let empty_hovered = no_color.response.hovered() && !no_color.ran;
+    (ColorPick { response: out.response, picked, preview, hover: Hover::default() }, empty_hovered)
 }
 
 /// Text Highlight Color: the highlight grid under the arrow; the main part applies the remembered
