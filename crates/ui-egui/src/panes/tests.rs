@@ -317,14 +317,8 @@ fn search_results_tell_their_page_on_hover() {
     assert_eq!(app.session.layout().pages.len(), 3);
     app.ui.nav_tab = "results".into();
     // Only the pane is drawn, so no status bar or Pages list says "Page 3" for it.
-    let mut fonts = false;
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(300.0, 600.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(300.0, 600.0)).build_ui_state(
         |ui, app: &mut crate::WordApp| {
-            if !fonts {
-                crate::theme::install_fonts(ui.ctx());
-                fonts = true;
-                return;
-            }
             super::nav::nav(app, ui);
         },
         app,
@@ -332,6 +326,7 @@ fn search_results_tell_their_page_on_hover() {
     h.run_steps(4);
     assert!(h.query_by_label("Page 3").is_none(), "no tip before the pointer is on the result");
     h.get_by_label_contains("Ovens bake bread.").hover();
-    h.run_steps(4);
+    // Craft tooltips appear after DELAY (0.6s), not on the first hovered frames.
+    crate::test_harness::frames(&mut h, 40);
     assert!(h.query_by_label("Page 3").is_some(), "the result found on the third page says so");
 }
