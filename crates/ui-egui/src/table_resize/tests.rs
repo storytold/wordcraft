@@ -380,3 +380,79 @@ fn double_clicking_a_column_border_fits_the_column() {
     assert!((b1.w - b.w).abs() < 1.0 && (b1.x - b.x - (a1.w - a.w)).abs() < 1.0, "the next column keeps its width and moves along");
     assert_eq!(h.state().session.undo_depth(), depth + 1, "one undo step");
 }
+
+/// The widths Alt shows on the ruler are in the File › Options unit, written the region's way:
+/// centimetres with a decimal comma in Brazil, not inches (#5231).
+#[test]
+fn alt_column_widths_are_in_the_regions_unit() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.session.system_region = wordcraft_engine::Region::from_tag("pt-BR");
+    a.run("insert.table", json!({"rows": 2, "cols": 3})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h, 2);
+    let a = cell(&mut h, 0, 0);
+    let y = a.y + a.h / 2.0;
+    let (start, end) = (screen(&mut h, a.right(), y), screen(&mut h, a.right() + 18.0, y));
+    h.event(egui::Event::PointerMoved(start));
+    h.app_frame();
+    button(&h, start, true);
+    h.app_frame();
+    h.event(egui::Event::PointerMoved(end));
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
+    h.app_frame();
+    let layout = h.state_mut().session.layout();
+    let w = super::widths(h.state(), &h.ctx, &layout, 0);
+    let want = h.state().session.format_length(w[0].1);
+    assert!(want.ends_with(" cm") && want.contains(','), "{want}");
+    fn texts(s: &egui::Shape, out: &mut Vec<String>) {
+        match s {
+            egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| texts(s, out)),
+            _ => {}
+        }
+    }
+    let mut shown = Vec::new();
+    h.output().shapes.iter().for_each(|s| texts(&s.shape, &mut shown));
+    assert!(shown.contains(&want), "{want} not among {shown:?}");
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    button(&h, end, false);
+    h.app_frame();
+}
+
+/// Alt while a column border is dragged reports each column's width on the ruler, as it is
+/// going to be (#7586).
+#[test]
+fn alt_shows_the_column_widths_while_dragging() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("insert.table", json!({"rows": 2, "cols": 3})).unwrap();
+    let layout = app.session.layout();
+    let cell_rect = |c| {
+        layout.pages[0]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                wordcraft_layout::Placed::Cell { rect, row: 0, cell, .. } if *cell == c => Some(*rect),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let (a, b) = (cell_rect(0), cell_rect(1));
+    let y = a.y + a.h / 2.0;
+    let target = table_resize::resize_target(&layout, &app.session.doc, 0, a.right(), y, 1.0).unwrap();
+    app.canvas.table_resize = Some(ResizeDrag { page: 0, from: (a.right(), y), to: (a.right() + 18.0, y), target, ruler: false });
+    let ctx = egui::Context::default();
+    assert!(super::widths(&app, &ctx, &layout, 0).is_empty(), "not without Alt");
+    ctx.input_mut(|i| i.modifiers = egui::Modifiers::ALT);
+    let w = super::widths(&app, &ctx, &layout, 0);
+    assert_eq!(w.len(), 3, "{w:?}");
+    assert!((w[0].1 - (a.w + 18.0)).abs() < 0.5 && (w[1].1 - (b.w - 18.0)).abs() < 0.5, "{w:?}");
+    app.canvas.table_resize = None;
+    assert!(super::widths(&app, &ctx, &layout, 0).is_empty(), "gone with the drag");
+}
