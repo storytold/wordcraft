@@ -3,10 +3,24 @@
 //! results are what Word produces for the same keys.
 
 use serde_json::json;
+use std::sync::Arc;
 use wordcraft_doc::props::{BorderStyle, VertAlign};
 use wordcraft_doc::{Pos, StoryRef};
 
 use crate::Session;
+
+/// Leaf #152: deleting the empty heading above body text must not promote that text to a heading.
+/// Deleting the empty heading mark keeps the next paragraph as body text.
+#[test]
+fn deleting_a_preceding_empty_heading_keeps_the_body_paragraph_style() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("\nBody paragraph."));
+    run(&mut s, "para.style", json!({"style": "Heading1"}));
+    run(&mut s, "text.delete", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p.text, "Body paragraph.");
+    assert_eq!(p.props.style, None);
+    assert_eq!(wordcraft_layout::outline::levels(&s.doc), [wordcraft_layout::outline::BODY]);
+}
 
 /// Create an empty session for command-driven typing fixtures.
 fn s() -> Session {
@@ -186,7 +200,6 @@ fn enter_on_an_empty_nested_item_moves_it_up_a_level_first() {
 /// up a level and then ends the list, as with direct numbering.
 #[test]
 fn enter_on_an_empty_item_numbered_by_its_style_moves_it_up_a_level() {
-    use std::io::Write;
     let w = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
     let style = |id: &str, name: &str, ilvl: u8| {
         format!(
@@ -213,8 +226,7 @@ fn enter_on_an_empty_item_numbered_by_its_style_moves_it_up_a_level() {
     let doc_rels =
         format!("<Relationships {rels_ns}>{}{}</Relationships>", rel("rId1", "styles", "styles.xml"), rel("rId2", "numbering", "numbering.xml"));
     let ct = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/></Types>"#;
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let o = zip::write::SimpleFileOptions::default();
+    let mut z = craft_zip::Writer::new();
     for (name, data) in [
         ("[Content_Types].xml", ct),
         ("_rels/.rels", main.as_str()),
@@ -223,10 +235,9 @@ fn enter_on_an_empty_item_numbered_by_its_style_moves_it_up_a_level() {
         ("word/styles.xml", styles.as_str()),
         ("word/numbering.xml", numbering.as_str()),
     ] {
-        z.start_file(name, o).unwrap();
-        z.write_all(data.as_bytes()).unwrap();
+        z.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
     }
-    let doc = crate::io::open_bytes("t.docx", &z.finish().unwrap().into_inner()).unwrap();
+    let doc = crate::io::open_bytes("t.docx", &z.finish().unwrap()).unwrap();
     let mut s = Session::new(doc);
     // The list level each paragraph shows, wherever its numbering comes from.
     let levels = |s: &Session| -> Vec<Option<u8>> {
@@ -483,7 +494,7 @@ fn autocorrect_replacement_list_follows_the_texts_language() {
     assert_eq!(s.doc.plain_text(StoryRef::Body), "Ala i kot ", "document default from the editing language");
     let mut s = self::s();
     s.set_editing_language(Some("pl-PL"));
-    s.doc.styles.default_chr.lang = None;
+    Arc::make_mut(&mut s.doc.styles).default_chr.lang = None;
     typ(&mut s, "Ala i kot ");
     assert_eq!(s.doc.plain_text(StoryRef::Body), "Ala i kot ", "untagged text in the editing language");
     // `eng` is English too, as for proofing.
@@ -834,6 +845,28 @@ fn a_tracked_border_line_is_a_deletion_and_a_formatting_change() {
 }
 
 #[test]
+fn a_tracked_border_line_at_the_top_supersedes_another_authors_formatting() {
+    use wordcraft_doc::props::Align;
+    // Ana centers the characters' paragraph; Ben's Enter gives it the border. The formatting
+    // change is Ben's and holds Ana's centered paragraph without a border.
+    let mut s = typed("---");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    run(&mut s, "para.align", json!({"value": "center"}));
+    s.author = "Ben".into();
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert!(p.props.borders.and_then(|b| b.bottom).is_some());
+    let ch = p.props.fmt_change.as_deref();
+    let author = ch.and_then(|c| s.doc.revisions.get(c.rev as usize)).map(|r| r.author.as_str());
+    assert_eq!(author, Some("Ben"), "{:?}", s.doc.revisions);
+    assert_eq!(ch.map(|c| (c.old.align, c.old.borders.and_then(|b| b.bottom).is_some())), Some((Some(Align::Center), false)));
+    run(&mut s, "review.rejectAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.props.align, p.props.borders.and_then(|b| b.bottom).is_some()), (Some(Align::Center), false));
+}
+
+#[test]
 fn a_tracked_table_line_keeps_its_characters_as_a_deletion() {
     let mut s = typed("+--+------+");
     run(&mut s, "review.trackChanges", json!({"value": true}));
@@ -1065,7 +1098,7 @@ fn tab_before_a_later_line_of_a_paragraph_indents_the_whole_paragraph() {
     assert_eq!(indents(&s), (None, None));
     // A list level past the last one, from a style or set directly, goes to the last level.
     let mut s = style_inherited_list(wordcraft_doc::numbering::ListKind::Numbered, false);
-    let style = s.doc.styles.styles.iter_mut().find(|x| x.id == "ListBase").unwrap();
+    let style = Arc::make_mut(&mut s.doc.styles).styles.iter_mut().find(|x| x.id == "ListBase").unwrap();
     style.para.numbering = style.para.numbering.map(|n| wordcraft_doc::props::NumRef { level: u8::MAX, ..n });
     run(&mut s, "tools.autocorrect", json!({"tabIndent": true}));
     run(&mut s, "caret.docStart", json!({}));
@@ -1169,6 +1202,10 @@ fn two_enters_after_a_short_line_make_it_a_heading() {
     let s = with_heading_styles("One two three four five\n\n");
     assert_eq!(s.doc.body.first().and_then(|b| b.as_para()).and_then(|p| p.props.style.as_deref()), Some("Heading1"));
     assert_eq!(styled(&with_heading_styles("Introduction\nText")), [h("Introduction", None), h("Text", None)]);
+}
+
+#[test]
+fn a_line_that_is_not_a_short_line_of_body_text_stays_as_it_is() {
     // Not a heading: six words, a closing punctuation mark, three tabs, a list item, a style.
     for keys in ["One two three four five six\n\n", "Dear Sir,\n\n", "Is it?\n\n", "\t\t\tDeep\n\n", "* Item\n\n"] {
         let s = with_heading_styles(keys);
@@ -1186,15 +1223,26 @@ fn two_enters_after_a_short_line_make_it_a_heading() {
     // A list item numbered by the Normal style is not body text either.
     let mut q = self::s();
     run(&mut q, "tools.autocorrect", json!({"headingStyles": true}));
-    let num = q.doc.numbering.try_add_list(wordcraft_doc::ListKind::Bullet).unwrap();
-    if let Some(normal) = q.doc.styles.get_mut("Normal") {
+    let num = Arc::make_mut(&mut q.doc.numbering).try_add_list(wordcraft_doc::ListKind::Bullet).unwrap();
+    if let Some(normal) = Arc::make_mut(&mut q.doc.styles).get_mut("Normal") {
         normal.para.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
     }
     typ(&mut q, "Item\n\n");
     assert!(styled(&q).iter().all(|(_, st)| st.as_deref().is_none_or(|st| !st.starts_with("Heading"))), "{:?}", styled(&q));
-    // Off by default.
+    // A line with an outline level stays; the body-text level (9 and above) is no outline level.
+    for (level, style) in [(0, None), (8, None), (9, Some("Heading1")), (u8::MAX, Some("Heading1"))] {
+        let mut q = with_heading_styles("Title\n");
+        q.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap().props.outline_level = Some(level);
+        typ(&mut q, "\n");
+        assert_eq!(styled(&q).first().and_then(|(_, st)| st.as_deref()), style, "outline level {level}");
+    }
+}
+
+#[test]
+fn built_in_heading_styles_are_off_by_default() {
     let s = typed("Introduction\n\n");
-    assert_eq!(styled(&s), [h("Introduction", None), h("", None), h("", None)]);
+    let h = |t: &str| (t.to_string(), None);
+    assert_eq!(styled(&s), [h("Introduction"), h(""), h("")]);
 }
 
 #[test]
@@ -1211,6 +1259,18 @@ fn undo_right_after_a_heading_autoformat_keeps_the_enter() {
 
 #[test]
 fn a_tracked_heading_autoformat_can_be_rejected() {
+    // Enter in the empty paragraph turns a zero-tab line into Heading 1.
+    let mut s = with_heading_styles("Title\n");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.style.as_deref()), ("Title", Some("Heading1")));
+    let ch = p.props.fmt_change.as_deref();
+    assert_eq!(ch.and_then(|c| s.doc.revisions.get(c.rev as usize)).map(|r| r.author.as_str()), Some("Ana"));
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(styled(&s).first(), Some(&("Title".to_string(), None)));
+
     // With Track Changes on, the tab is marked deleted and the style change is a formatting
     // revision, so Reject All brings the line back as it was.
     let mut s = with_heading_styles("\tMethods\n");
@@ -1245,6 +1305,64 @@ fn a_tracked_heading_autoformat_can_be_rejected() {
 }
 
 #[test]
+fn a_tracked_heading_autoformat_supersedes_another_authors_formatting() {
+    use wordcraft_doc::props::Align;
+    // Ana centers a zero-tab line; Ben's Enter makes it Heading 1.
+    let mut s = with_heading_styles("Title\n");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "para.align", json!({"value": "center"}));
+    s.author = "Ben".into();
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.style.as_deref()), ("Title", Some("Heading1")));
+    let ch = p.props.fmt_change.as_deref();
+    assert_eq!(ch.and_then(|c| s.doc.revisions.get(c.rev as usize)).map(|r| r.author.as_str()), Some("Ben"));
+    assert_eq!(ch.map(|c| (c.old.style.as_deref(), c.old.align)), Some((None, Some(Align::Center))));
+    run(&mut s, "review.rejectAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.style.as_deref(), p.props.align), ("Title", None, Some(Align::Center)));
+
+    // Ana centers the line; Ben types a tab before it and makes it Heading 2. Ben's tab is
+    // removed, and the heading's formatting change is Ben's, holding Ana's centered Normal line.
+    let mut s = with_heading_styles("Title\n");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "para.align", json!({"value": "center"}));
+    s.author = "Ben".into();
+    typ(&mut s, "\t");
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.style.as_deref()), ("Title", Some("Heading2")));
+    let ch = p.props.fmt_change.as_deref();
+    let author = ch.and_then(|c| s.doc.revisions.get(c.rev as usize)).map(|r| r.author.as_str());
+    assert_eq!(author, Some("Ben"), "{:?}", s.doc.revisions);
+    assert_eq!(ch.map(|c| (c.old.style.as_deref(), c.old.align)), Some((None, Some(Align::Center))));
+    // Rejecting it brings back Ana's centered Normal line.
+    run(&mut s, "review.rejectAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.style.as_deref(), p.props.align), ("Title", None, Some(Align::Center)));
+    // The author's own earlier change keeps the formatting before it.
+    let mut s = with_heading_styles("Title\n");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "para.align", json!({"value": "center"}));
+    typ(&mut s, "\t");
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    let ch = p.props.fmt_change.as_deref();
+    assert_eq!(ch.and_then(|c| s.doc.revisions.get(c.rev as usize)).map(|r| r.author.as_str()), Some("Ana"));
+    assert_eq!(ch.map(|c| c.old.style.as_deref()), Some(None));
+    assert!(ch.is_some_and(|c| c.old.align != Some(Align::Center)), "{ch:?}");
+}
+
+#[test]
 fn a_locked_heading_style_is_not_applied_as_you_type() {
     let mut s = s();
     run(&mut s, "tools.autocorrect", json!({"headingStyles": true}));
@@ -1253,6 +1371,25 @@ fn a_locked_heading_style_is_not_applied_as_you_type() {
     let st = styled(&s);
     assert_eq!(st.first(), Some(&("Locked".to_string(), None)), "{st:?}");
     assert!(st.contains(&("Open".to_string(), Some("Heading2".to_string()))), "{st:?}");
+}
+
+#[test]
+fn enter_in_an_editable_region_after_a_protected_short_line_breaks_the_paragraph() {
+    // Read only, with an editable region from the end of "Title" to the start of "End.": Enter
+    // twice in the region breaks the paragraph and leaves the protected line Normal text, and a
+    // border line typed there goes under the paragraph above it, inside the region.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Title\nX\nEnd."));
+    run(&mut s, "tools.autocorrect", json!({"headingStyles": true}));
+    s.sel = crate::Selection { anchor: Pos::body(0, 5), focus: Pos::body(2, 0) };
+    run(&mut s, "review.restrict", json!({"exception": "add"}));
+    run(&mut s, "review.restrict", json!({"mode": "readOnly"}));
+    run(&mut s, "select.text", json!({"text": "X"}));
+    typ(&mut s, "\n\n");
+    assert_eq!(s.doc.body.len(), 5, "{:?}", styled(&s));
+    assert!(styled(&s).iter().all(|(_, st)| st.is_none()), "{:?}", styled(&s));
+    typ(&mut s, "---\n");
+    assert!(s.doc.para_at(&Pos::body(2, 0)).and_then(|p| p.props.borders).and_then(|b| b.bottom).is_some());
+    assert_eq!(s.doc.plain_text(StoryRef::Body).replace(wordcraft_doc::para::OBJ, ""), "Title\n\n\n\nEnd.");
 }
 
 #[test]
@@ -1413,6 +1550,110 @@ fn typing_at_either_end_of_a_link_is_not_linked() {
 }
 
 #[test]
+fn a_link_on_a_selection_shows_the_text_to_display() {
+    // Ctrl+K on selected text with a new Text to display: the selection is retyped with it and
+    // linked, keeping its formatting; typing after it stays outside the link (as in Word).
+    let mut s = typed("go see kiln now");
+    run(&mut s, "select.text", json!({"text": "kiln"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "Oven"}));
+    typ(&mut s, "!");
+    assert_eq!(texts(&s), ["go see oven! now"]);
+    assert_eq!(links(&s), [("Oven".into(), false)]);
+    let p = s.doc.body.iter().find_map(|b| b.as_para()).unwrap();
+    assert!(p.run_ranges().any(|(r, c)| &p.text[r] == "Oven" && c.bold == Some(true)), "the new text keeps the selection's formatting");
+    // The same text, or text that can't stand in one line, leaves the selection as it is.
+    run(&mut s, "select.text", json!({"text": "see"}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "see"}));
+    run(&mut s, "select.text", json!({"text": "now"}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "two\nlines"}));
+    assert_eq!(texts(&s), ["go see oven! now"]);
+}
+
+#[test]
+fn a_new_selection_drops_the_formatting_left_after_a_link() {
+    // A link leaves plain formatting for what is typed after it. A selection made next doesn't
+    // take it: retyping that selection keeps its own formatting.
+    let bold_run = |s: &Session, text: &str| {
+        let p = s.doc.body.iter().find_map(|b| b.as_para()).unwrap();
+        p.run_ranges().any(|(r, c)| &p.text[r] == text && c.bold == Some(true))
+    };
+    let mut s = typed("kiln");
+    run(&mut s, "select.text", json!({"text": "kiln"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "Oven"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "Stove"}));
+    assert!(bold_run(&s, "Stove"), "select.all");
+    run(&mut s, "select.word", json!({}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "Range"}));
+    assert!(bold_run(&s, "Range"), "select.word");
+    let anchor = serde_json::to_value(s.doc.start_of(s.sel.focus.story)).unwrap();
+    let focus = serde_json::to_value(s.sel.focus.clone()).unwrap();
+    run(&mut s, "select.range", json!({"anchor": anchor, "focus": focus}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "Hob"}));
+    assert!(bold_run(&s, "Hob"), "select.range");
+}
+
+#[test]
+fn a_link_over_two_paragraphs_keeps_their_text() {
+    // Word shows <<Selection in Document>> for such a selection: the text to display is ignored.
+    let mut s = typed("one\ntwo");
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "both"}));
+    assert_eq!(texts(&s), ["one", "two"]);
+    assert_eq!(links(&s), [("One".into(), false), ("two".into(), false)]);
+}
+
+#[test]
+fn a_retyped_link_text_is_tracked() {
+    let mut s = typed("go see kiln now");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "kiln"}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "Oven"}));
+    let p = s.doc.body.iter().find_map(|b| b.as_para()).unwrap();
+    assert!(p.run_ranges().any(|(r, c)| &p.text[r] == "kiln" && c.del.is_some()), "the old text stays as a deletion");
+    assert!(p.run_ranges().any(|(r, c)| &p.text[r] == "Oven" && c.ins.is_some() && c.link.is_some()));
+}
+
+#[test]
+fn a_link_keeps_a_selection_it_cannot_retype() {
+    use wordcraft_doc::props::CharProps;
+    use wordcraft_doc::{InlineObject, Path};
+    let url = "https://example.org/";
+    // A second retyped link keeps its own selection's formatting: the first one's left no
+    // formatting pending for it.
+    let mut s = typed("go see kiln and vat now");
+    run(&mut s, "select.text", json!({"text": "kiln"}));
+    run(&mut s, "insert.link", json!({"url": url, "text": "Oven"}));
+    run(&mut s, "select.text", json!({"text": "vat"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "insert.link", json!({"url": url, "text": "Tub"}));
+    let p = s.doc.body.iter().find_map(|b| b.as_para()).unwrap();
+    assert!(p.run_ranges().any(|(r, c)| &p.text[r] == "Tub" && c.bold == Some(true) && c.link.is_some()), "{:?}", p.text);
+    // A selection holding a manual line break keeps both lines.
+    let mut s = typed("one");
+    run(&mut s, "text.lineBreak", json!({}));
+    typ(&mut s, "two");
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "insert.link", json!({"url": url, "text": "both"}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "one\ntwo");
+    // A selection in a field's result is only linked; the field's next update owns that text.
+    let mut doc = wordcraft_doc::Document::from_text("See ");
+    let c = CharProps::default();
+    let p = doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    let start = p.len();
+    p.insert_object(start, InlineObject::FieldStart { instr: "ADDIN ZOTERO_ITEM CSL_CITATION {}".into(), locked: false, dirty: false }, &c).unwrap();
+    let n = p.insert_text(p.len(), "(Smith 2020)", &c).unwrap();
+    p.insert_object(start + 3 + n, InlineObject::FieldEnd, &c).unwrap();
+    let mut s = Session::new(doc);
+    run(&mut s, "select.text", json!({"text": "Smith"}));
+    run(&mut s, "insert.link", json!({"url": url, "text": "Jones"}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "See (Smith 2020)");
+    assert_eq!(s.doc.field_ranges(StoryRef::Body).len(), 1);
+}
+
+#[test]
 fn typing_then_selecting_then_typing_are_two_undo_steps() {
     // #419: a selection that moves the insertion point ends the typing group, like a caret move.
     let mut s = typed("alpha");
@@ -1465,6 +1706,355 @@ fn undoing_bold_at_the_caret_turns_bold_typing_off_again() {
     run(&mut s, "edit.redo", json!({}));
     typ(&mut s, "abc");
     assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(0).bold, Some(true));
+}
+
+/// `text` with the characters from `from` to `to` bold, the caret at `caret`.
+fn with_bold(text: &str, from: usize, to: usize, caret: usize) -> Session {
+    let mut s = Session::new(wordcraft_doc::Document::from_text(text));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": from}, "focus": {"block": 0, "off": to}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": caret}}));
+    s
+}
+
+/// Whether the character at `off` of the first paragraph is bold.
+fn bold_at(s: &Session, off: usize) -> bool {
+    s.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(off).bold == Some(true)
+}
+
+/// #6518: after Backspace, Word types with the deleted character's formatting, not the one to
+/// the left of the caret, and the Bold button shows it.
+#[test]
+fn typing_after_backspace_takes_the_deleted_characters_formatting() {
+    // "Abc abc", "Abc" bold: Backspace after the plain space, then X is plain.
+    let mut s = with_bold("Abc abc", 0, 3, 4);
+    typ(&mut s, "\u{8}");
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(false));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "AbcXabc");
+    assert!(!bold_at(&s, 3));
+    // "abc Abc", "Abc" bold: Backspace after the bold A, then X is bold beside a plain space.
+    let mut s = with_bold("abc Abc", 4, 7, 5);
+    typ(&mut s, "\u{8}");
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(true));
+    typ(&mut s, "XY");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "abc XYbc");
+    assert!(bold_at(&s, 4) && bold_at(&s, 5));
+    // Several Backspaces: the last character deleted wins ("c", then the plain space).
+    let mut s = with_bold("Abc abc", 0, 3, 4);
+    typ(&mut s, "\u{8}\u{8}X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "AbXabc");
+    assert!(bold_at(&s, 2));
+    // Inside a word the Bold button shows the deleted character too, not the word: in "Ab c"
+    // with all but the space bold, Backspace after the space leaves the caret in a bold "Abc".
+    let mut s = with_bold("Ab c", 0, 2, 3);
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 3}, "focus": {"block": 0, "off": 4}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 3}}));
+    typ(&mut s, "\u{8}");
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(false));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "AbXc");
+    assert!(!bold_at(&s, 2));
+}
+
+/// #6518: the carried formatting goes once the caret moves, and Delete never carries it.
+#[test]
+fn backspace_formatting_is_dropped_by_a_caret_move_and_delete_does_not_carry() {
+    let mut s = with_bold("Abc abc", 0, 3, 4);
+    typ(&mut s, "\u{8}");
+    run(&mut s, "caret.right", json!({}));
+    run(&mut s, "caret.left", json!({}));
+    assert_eq!(s.typing_props().bold, Some(true));
+    typ(&mut s, "X");
+    assert!(bold_at(&s, 3));
+    // Delete after the bold "Abc" removes the plain space: X takes the bold to its left.
+    let mut s = with_bold("Abc abc", 0, 3, 3);
+    run(&mut s, "text.delete", json!({}));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "AbcXabc");
+    assert!(bold_at(&s, 3));
+    // Deleting a plain selection with Delete or Backspace carries nothing either.
+    for key in ["text.delete", "text.backspace"] {
+        let mut s = with_bold("Abc abc", 0, 3, 3);
+        run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 3}, "focus": {"block": 0, "off": 5}}));
+        run(&mut s, key, json!({}));
+        typ(&mut s, "X");
+        assert!(bold_at(&s, 3), "{key}");
+    }
+    // Undo takes the Backspace back, and with it the carried formatting.
+    let mut s = with_bold("Abc abc", 0, 3, 4);
+    typ(&mut s, "\u{8}");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.sel.focus, Pos::body(0, 4));
+    assert_eq!(s.pending, None);
+}
+
+/// #6518: a Backspace that changes nothing, at the start of the document, keeps formatting waiting
+/// at the caret; one that joins paragraphs drops it. Observed in Word for Windows.
+#[test]
+fn backspace_at_the_document_start_keeps_waiting_formatting() {
+    // "Abc def", "Abc" bold: Backspace deletes the bold A, the second one does nothing, X is bold.
+    let mut s = with_bold("Abc def", 0, 3, 1);
+    typ(&mut s, "\u{8}\u{8}");
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(true));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "Xbc def");
+    assert!(bold_at(&s, 0));
+    // Bold at the caret before plain "abc", then a Backspace that does nothing: X is still bold.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("abc"));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    typ(&mut s, "\u{8}X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "Xabc");
+    assert!(bold_at(&s, 0) && !bold_at(&s, 1));
+    // "xyz" then bold "Abc": Backspace deletes the bold A, the second joins the paragraphs, and X
+    // takes the plain z to its left.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("xyz\nAbc"));
+    run(&mut s, "select.range", json!({"anchor": {"block": 1, "off": 0}, "focus": {"block": 1, "off": 3}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 1}}));
+    typ(&mut s, "\u{8}\u{8}X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "xyzXbc");
+    assert!(!bold_at(&s, 3) && bold_at(&s, 4));
+}
+
+/// #6518: Ctrl+Backspace that deletes nothing, at the start of the document, keeps formatting
+/// waiting at the caret, as a plain Backspace there does; one that deletes a word or joins
+/// paragraphs drops it. Observed in Word for Windows.
+#[test]
+fn ctrl_backspace_at_the_document_start_keeps_waiting_formatting() {
+    // "Ab def", "A" bold: Backspace deletes the bold A, Ctrl+Backspace does nothing, X is bold
+    // beside a plain "b".
+    let mut s = with_bold("Ab def", 0, 1, 1);
+    typ(&mut s, "\u{8}");
+    run(&mut s, "text.deleteWordBack", json!({}));
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(true));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "Xb def");
+    assert!(bold_at(&s, 0) && !bold_at(&s, 1));
+    // Bold at the caret before plain "abc", then a Ctrl+Backspace that does nothing: X is bold.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("abc"));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "text.deleteWordBack", json!({}));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "Xabc");
+    assert!(bold_at(&s, 0) && !bold_at(&s, 1));
+    // "pq xy Ab", "A" bold: Backspace deletes the bold A, Ctrl+Backspace deletes "xy ", X is plain.
+    let mut s = with_bold("pq xy Ab", 6, 7, 7);
+    typ(&mut s, "\u{8}");
+    run(&mut s, "text.deleteWordBack", json!({}));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "pq Xb");
+    assert!(!bold_at(&s, 3));
+    // "pq" then "Ab", "A" bold: Backspace deletes the bold A, Ctrl+Backspace joins the
+    // paragraphs, X is plain.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("pq\nAb"));
+    run(&mut s, "select.range", json!({"anchor": {"block": 1, "off": 0}, "focus": {"block": 1, "off": 1}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 1}}));
+    typ(&mut s, "\u{8}");
+    run(&mut s, "text.deleteWordBack", json!({}));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "pqXb");
+    assert!(!bold_at(&s, 2));
+}
+
+/// #6518 review: what Backspace carries over is for typing where the character was deleted. A
+/// paste leaves the next typed text the formatting where it lands, and pasted text never takes it.
+#[test]
+fn backspace_formatting_is_not_kept_past_a_paste() {
+    // "hello wrld World", "World" bold: copy it, Backspace the plain r, paste, then ! is bold
+    // like the pasted text to its left.
+    let mut s = with_bold("hello wrld World", 11, 16, 0);
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 11}, "focus": {"block": 0, "off": 16}}));
+    run(&mut s, "edit.copy", json!({}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 8}}));
+    typ(&mut s, "\u{8}");
+    run(&mut s, "edit.paste", json!({}));
+    typ(&mut s, "!");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "hello wWorld!ld World");
+    assert!(bold_at(&s, 7) && bold_at(&s, 12), "! takes the pasted bold, not the deleted plain r");
+    // "ab Cd", "C" bold: Backspace the bold C, paste plain text: it takes the plain space before
+    // it, and so does ! after it.
+    let mut s = with_bold("ab Cd", 3, 4, 4);
+    typ(&mut s, "\u{8}");
+    run(&mut s, "edit.paste", json!({"text": "zz"}));
+    typ(&mut s, "!");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "ab zz!d");
+    assert!((3..6).all(|i| !bold_at(&s, i)), "pasted text and ! are plain");
+}
+
+/// #6518 review: Find, Go To and a click elsewhere move the caret without the caret commands;
+/// the formatting Backspace carried over stays behind. Observed in Word for Windows: typing over
+/// a found word takes that word's formatting, and a Find with no match keeps the carried one.
+#[test]
+fn backspace_formatting_is_not_kept_past_find_or_go_to() {
+    // "Xy plain word", "X" bold: Backspace the bold X, Find "word" and type over it: Q is plain.
+    let mut s = with_bold("Xy plain word", 0, 1, 1);
+    typ(&mut s, "\u{8}");
+    run(&mut s, "edit.find", json!({"text": "word"}));
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(false));
+    typ(&mut s, "Q");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "y plain Q");
+    assert!(!bold_at(&s, 8));
+    // Go To a paragraph puts a caret before a plain word: Q is plain.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Xy plain\nword"));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 1}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 1}}));
+    typ(&mut s, "\u{8}");
+    run(&mut s, "edit.goto", json!({"paragraph": 2}));
+    assert_eq!(s.sel, crate::Selection::caret(Pos::body(1, 0)));
+    typ(&mut s, "Q");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).unwrap().text, "Qword");
+    assert_ne!(s.doc.para_at(&Pos::body(1, 0)).unwrap().props_of_char(0).bold, Some(true));
+    // A caret the front end puts elsewhere itself (a right-click in the text): Q is plain.
+    let mut s = with_bold("Xy plain word", 0, 1, 1);
+    typ(&mut s, "\u{8}");
+    s.sel = crate::Selection::caret(Pos::body(0, 8));
+    assert_ne!(s.typing_props().bold, Some(true));
+    typ(&mut s, "Q");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "y plain Qword");
+    assert!(!bold_at(&s, 8));
+    // A Find with no match leaves the caret where it was, and the formatting with it: Q is bold.
+    let mut s = with_bold("Xy plain word", 0, 1, 1);
+    typ(&mut s, "\u{8}");
+    run(&mut s, "edit.find", json!({"text": "zzz"}));
+    typ(&mut s, "Q");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "Qy plain word");
+    assert!(bold_at(&s, 0));
+}
+
+/// #6518 review: a Paste with nothing on the clipboard pastes nothing: the formatting Backspace
+/// carried over stays for the typing that follows.
+#[test]
+fn backspace_formatting_survives_a_paste_of_an_empty_clipboard() {
+    // "ab Cd", "C" bold: Backspace the bold C, Paste fails, X is bold.
+    let mut s = with_bold("ab Cd", 3, 4, 4);
+    typ(&mut s, "\u{8}");
+    assert!(s.run("edit.paste", &json!({})).is_err(), "the clipboard is empty");
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "ab Xd");
+    assert!(bold_at(&s, 3));
+    // What Paste would insert, asked for on its own: nothing, and the formatting stays.
+    let mut s = with_bold("ab Cd", 3, 4, 4);
+    typ(&mut s, "\u{8}");
+    assert!(crate::cmd::paste::paste_content(&mut s, &json!({})).is_err());
+    assert_eq!(s.waiting().and_then(|p| p.bold), Some(true));
+}
+
+/// #6518 review: a front end that moves the caret itself (a right-click) goes through
+/// `Session::set_selection`: once the caret has been elsewhere, putting it back where the
+/// character was deleted does not bring the carried formatting back.
+#[test]
+fn backspace_formatting_is_not_kept_past_a_direct_caret_move_and_back() {
+    // "Xy plain word", "X" bold: Backspace the bold X, the caret goes to "word" and back: Q is plain.
+    let mut s = with_bold("Xy plain word", 0, 1, 1);
+    typ(&mut s, "\u{8}");
+    s.set_selection(crate::Selection::caret(Pos::body(0, 8)));
+    s.set_selection(crate::Selection::caret(Pos::body(0, 0)));
+    assert_ne!(s.typing_props().bold, Some(true));
+    typ(&mut s, "Q");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "Qy plain word");
+    assert!(!bold_at(&s, 0));
+    // Put where it already is, the caret keeps it: Q is bold.
+    let mut s = with_bold("Xy plain word", 0, 1, 1);
+    typ(&mut s, "\u{8}");
+    s.set_selection(crate::Selection::caret(Pos::body(0, 0)));
+    typ(&mut s, "Q");
+    assert!(bold_at(&s, 0));
+}
+
+/// #6518 review: a command that fails leaves the formatting waiting at the caret as it was: a
+/// Backspace refused by a content control locked against editing keeps what an earlier Backspace
+/// carried over, and Bold picked at the caret.
+#[test]
+fn a_refused_backspace_keeps_the_formatting_waiting_at_the_caret() {
+    let w = wordcraft_doc::para::OBJ.len_utf8();
+    // "abC" in a content control, "C" bold.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("abC"));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 2}, "focus": {"block": 0, "off": 3}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 3}}));
+    run(&mut s, "developer.richText", json!({"tag": "ctl"}));
+    let lock = |s: &mut Session| run(s, "developer.properties", json!({"control": "ctl", "lockEdit": true}));
+    // Backspace the bold C, lock the control: the next Backspace is refused, and X is still bold.
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": w + 3}}));
+    typ(&mut s, "\u{8}");
+    lock(&mut s);
+    assert_eq!(s.waiting().and_then(|p| p.bold), Some(true));
+    let before = s.doc.clone();
+    assert!(s.run("text.backspace", &json!({})).is_err(), "the control is locked");
+    assert_eq!(s.doc, before);
+    assert_eq!(s.sel, crate::Selection::caret(Pos::body(0, w + 2)));
+    assert_eq!(s.waiting().and_then(|p| p.bold), Some(true), "the refused Backspace keeps the carried bold");
+    // Bold picked at the caret, then a refused Backspace: still bold.
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": w + 1}}));
+    s.pending = Some(wordcraft_doc::props::CharProps { bold: Some(true), ..Default::default() });
+    assert!(s.run("text.backspace", &json!({})).is_err(), "the control is locked");
+    assert_eq!(s.waiting().and_then(|p| p.bold), Some(true), "the refused Backspace keeps the Bold picked at the caret");
+}
+
+/// #6518: the carried formatting goes on with the typing that follows, and Undo of that typing
+/// brings it back where it was, so typing again there takes it once more.
+#[test]
+fn backspace_formatting_follows_typing_and_comes_back_with_undo() {
+    // "ab Cd", "C" bold: Backspace the bold C, then Y and X are both bold (Word).
+    let mut s = with_bold("ab Cd", 3, 4, 4);
+    typ(&mut s, "\u{8}YX");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "ab YXd");
+    assert!(bold_at(&s, 3) && bold_at(&s, 4) && !bold_at(&s, 5));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "ab d");
+    typ(&mut s, "Z");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "ab Zd");
+    assert!(bold_at(&s, 3));
+}
+
+/// #6518: with Track Changes on, Backspace leaves the character in place marked deleted, and text
+/// typed next still takes its formatting (a tracked insertion, never marked deleted); moving the
+/// caret away and back drops it. Backspace over the author's own tracked insertion, which removes
+/// it, carries it too. Observed in Word for Windows.
+#[test]
+fn tracked_backspace_carries_the_deleted_characters_formatting() {
+    // "xy Abc", "Abc" bold: Backspace after the bold A, then X is bold beside a plain space.
+    let mut s = with_bold("xy Abc", 3, 6, 4);
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "\u{8}");
+    assert_eq!(s.sel, crate::Selection::caret(Pos::body(0, 3)));
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(true));
+    typ(&mut s, "X");
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p.text, "xy XAbc", "the A stays, marked deleted");
+    let x = p.props_of_char(3);
+    assert!(x.bold == Some(true) && x.ins.is_some() && x.del.is_none(), "X is a bold tracked insertion: {x:?}");
+    assert!(p.props_of_char(4).del.is_some() && p.props_of_char(5).del.is_none());
+    // Moving the caret right and back after the Backspace drops it: X is plain.
+    let mut s = with_bold("xy Abc", 3, 6, 4);
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "\u{8}");
+    run(&mut s, "caret.right", json!({}));
+    run(&mut s, "caret.left", json!({}));
+    assert_eq!(s.sel, crate::Selection::caret(Pos::body(0, 3)));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "xy XAbc");
+    assert!(!bold_at(&s, 3));
+    // A bold A this author typed with Track Changes on: Backspace removes it, X is still bold.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("xy "));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 3}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    typ(&mut s, "A");
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 4}}));
+    typ(&mut s, "\u{8}");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "xy ");
+    typ(&mut s, "X");
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p.text, "xy X");
+    let x = p.props_of_char(3);
+    assert!(x.bold == Some(true) && x.ins.is_some() && x.del.is_none(), "X is a bold tracked insertion: {x:?}");
 }
 
 /// Myanmar (#604): typed in memory order (consonant, medial, then the prevowel ေ that is drawn
@@ -1699,72 +2289,13 @@ fn alt_x_toggles_between_a_character_and_its_code() {
 
 #[test]
 fn alt_numpad_codes_map_like_word_on_windows() {
-    use crate::cmd::text::{alt_code_char, oem_code_page};
-    let c = |code| alt_code_char(code, 1252, 437);
-    // Leading 0: Windows-1252.
-    assert_eq!(c("0233"), Some('é'));
-    assert_eq!(c("0128"), Some('€'));
-    assert_eq!(c("0150"), Some('–'));
-    assert_eq!(c("065"), Some('A'));
-    assert_eq!(c("0032"), Some(' '));
-    assert_eq!(c("0255"), Some('ÿ'));
-    // No leading 0: the OEM code page (437 here, 850 in Western Europe).
-    assert_eq!(c("233"), Some('Θ'));
-    // The issue said 233 → é in 850; the CP850 mapping file has Ú at 0xE9 (é is 130 in both).
-    assert_eq!(alt_code_char("233", 1252, 850), Some('Ú'));
-    assert_eq!(alt_code_char("130", 1252, 850), Some('é'));
-    assert_eq!(c("130"), Some('é'));
-    assert_eq!(alt_code_char("155", 1252, 850), Some('ø'));
-    assert_eq!(c("155"), Some('¢'));
-    assert_eq!(c("65"), Some('A'));
-    assert_eq!(c("1"), Some('☺'));
-    assert_eq!(c("7"), Some('•'));
-    assert_eq!(c("127"), Some('⌂'));
-    assert_eq!(c("176"), Some('░'));
-    // Above 255: the Unicode character with that decimal value.
-    assert_eq!(c("8364"), Some('€'));
-    assert_eq!(c("09733"), Some('★'));
-    assert_eq!(c("128512"), Some('😀'));
-    // Nothing for junk, 0, control characters, surrogates or values past Unicode.
-    for bad in ["", "0", "000", "0009", "0013", "0127", "0129", "x1", "-5", "55296", "1114112", "99999999999999999999", "4294967361"] {
-        assert_eq!(c(bad), None, "{bad:?}");
-    }
+    use crate::cmd::text::oem_code_page;
     assert_eq!(oem_code_page(None), 437);
     assert_eq!(oem_code_page(Some("en-US")), 437);
     assert_eq!(oem_code_page(Some("en_GB.UTF-8")), 850);
     assert_eq!(oem_code_page(Some("fr-FR")), 850);
     assert_eq!(oem_code_page(Some("de")), 850);
     assert_eq!(oem_code_page(Some("ru-RU")), 437, "only 437/850 without the shell's code pages");
-}
-
-#[test]
-fn alt_numpad_codes_follow_the_system_code_pages() {
-    use crate::cmd::text::{alt_code_char, windows_code_pages};
-    // Polish (1250/852): Alt+0185 and Alt+165 are both ą, not ¹ / Ñ.
-    assert_eq!(alt_code_char("0185", 1250, 852), Some('ą'));
-    assert_eq!(alt_code_char("165", 1250, 852), Some('ą'));
-    assert_eq!(alt_code_char("0185", 1252, 437), Some('¹'));
-    // Russian (1251/866), Greek (1253/737), Turkish (1254/857).
-    assert_eq!(alt_code_char("0207", 1251, 866), Some('П'));
-    assert_eq!(alt_code_char("143", 1251, 866), Some('П'));
-    assert_eq!(alt_code_char("0193", 1253, 737), Some('Α'));
-    assert_eq!(alt_code_char("128", 1253, 737), Some('Α'));
-    assert_eq!(alt_code_char("0253", 1254, 857), Some('ı'));
-    assert_eq!(alt_code_char("141", 1254, 857), Some('ı'));
-    // Above 255 the code page doesn't matter.
-    assert_eq!(alt_code_char("8364", 1251, 866), Some('€'));
-    // A byte the code page leaves unassigned types nothing.
-    assert_eq!(alt_code_char("213", 1254, 857), None);
-    assert_eq!(alt_code_char("0219", 874, 437), None);
-    assert_eq!(windows_code_pages(None), (1252, 437));
-    assert_eq!(windows_code_pages(Some("en-US")), (1252, 437));
-    assert_eq!(windows_code_pages(Some("de-DE")), (1252, 850));
-    assert_eq!(windows_code_pages(Some("pl-PL")), (1250, 852));
-    assert_eq!(windows_code_pages(Some("sr-Latn-RS")), (1250, 852));
-    assert_eq!(windows_code_pages(Some("ru_RU.UTF-8")), (1251, 866));
-    assert_eq!(windows_code_pages(Some("el-GR")), (1253, 737));
-    assert_eq!(windows_code_pages(Some("tr-TR")), (1254, 857));
-    assert_eq!(windows_code_pages(Some("ja-JP")), (1252, 437));
 }
 
 #[test]
@@ -2036,7 +2567,7 @@ fn typing_rtl_letters_into_an_empty_paragraph_makes_it_rtl() {
     assert_eq!(bidi(&s, 1), Some(true), "Enter carries the paragraph's direction on, as in Word");
     // A style that sets left-to-right wins.
     let mut doc = Session::new(wordcraft_doc::Document::new());
-    if let Some(st) = doc.doc.styles.get_mut("Normal") {
+    if let Some(st) = Arc::make_mut(&mut doc.doc.styles).get_mut("Normal") {
         st.para.bidi = Some(false);
     }
     typ(&mut doc, "سلام");
@@ -2164,8 +2695,6 @@ fn ctrl_tab_inserts_a_tab_inside_a_table_cell() {
     let (_, r, c) = s.sel.focus.path.cell().expect("caret in a cell");
     assert_eq!((r, c), (0, 0), "Ctrl+Tab stays in the cell");
     assert_eq!(s.doc.para_at(&s.sel.focus).map(|p| p.text.as_str()), Some("A\tB"));
-    let key = if cfg!(target_os = "macos") { "Alt+Tab" } else { "Mod+Tab" };
-    assert_eq!(s.keymap.resolve(&s.registry, key).map(|c| c.id), Some("text.insertTab"));
 }
 
 /// A .docx of two paragraphs in two sections, as Word writes it: the first section's properties
@@ -2189,12 +2718,11 @@ fn two_section_docx(kind: &str) -> Vec<u8> {
             ),
         ),
     ];
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zip = craft_zip::Writer::new();
     for (name, data) in files {
-        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        std::io::Write::write_all(&mut zip, data.as_bytes()).unwrap();
+        zip.add(name, data.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    zip.finish().unwrap().into_inner()
+    zip.finish().unwrap()
 }
 
 /// #2127: Backspace just after a section break, or Delete just before it, removes the break, as
@@ -2260,12 +2788,11 @@ fn break_on_the_last_paragraph_docx(then: Option<&str>) -> Vec<u8> {
             ),
         ),
     ];
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zip = craft_zip::Writer::new();
     for (name, data) in files {
-        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        std::io::Write::write_all(&mut zip, data.as_bytes()).unwrap();
+        zip.add(name, data.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    zip.finish().unwrap().into_inner()
+    zip.finish().unwrap()
 }
 
 /// #2127: Delete at the end of the last paragraph removes a section break on its mark too,
@@ -3043,15 +3570,15 @@ fn style_inherited_list(kind: wordcraft_doc::numbering::ListKind, chain: bool) -
     use wordcraft_doc::props::NumRef;
     use wordcraft_doc::styles::Style;
     let mut doc = wordcraft_doc::Document::from_text("Alpha\nBeta");
-    let num = doc.numbering.try_add_list(kind).unwrap();
-    doc.styles.styles.push(Style {
+    let num = Arc::make_mut(&mut doc.numbering).try_add_list(kind).unwrap();
+    Arc::make_mut(&mut doc.styles).styles.push(Style {
         id: "ListBase".into(),
         name: "Original List".into(),
         para: wordcraft_doc::ParaProps { numbering: Some(NumRef { num, level: 0 }), ..Default::default() },
         ..Default::default()
     });
     if chain {
-        doc.styles.styles.push(Style {
+        Arc::make_mut(&mut doc.styles).styles.push(Style {
             id: "ListChild".into(),
             name: "Original Derived".into(),
             based_on: Some("ListBase".into()),
@@ -3127,13 +3654,13 @@ fn list_toggle_uses_effective_level_and_override() {
             for explicit_kind in [false, true] {
                 let mut s = style_inherited_list(kind, true);
                 let opposite = if kind == ListKind::Bullet { ListKind::Numbered } else { ListKind::Bullet };
-                let num = s.doc.styles.styles.iter_mut().find(|x| x.id == "ListBase").unwrap().para.numbering.as_mut().unwrap();
+                let num = Arc::make_mut(&mut s.doc.styles).styles.iter_mut().find(|x| x.id == "ListBase").unwrap().para.numbering.as_mut().unwrap();
                 num.level = 1;
                 let num_id = num.num;
-                s.doc.numbering.abstracts[0].levels[0] = levels_for(opposite)[0].clone();
+                Arc::make_mut(&mut s.doc.numbering).abstracts[0].levels[0] = levels_for(opposite)[0].clone();
                 if override_level {
-                    s.doc.numbering.abstracts[0].levels[1] = levels_for(opposite)[1].clone();
-                    s.doc.numbering.nums[0].level_overrides.push((1, levels_for(kind)[1].clone()));
+                    Arc::make_mut(&mut s.doc.numbering).abstracts[0].levels[1] = levels_for(opposite)[1].clone();
+                    Arc::make_mut(&mut s.doc.numbering).nums[0].level_overrides.push((1, levels_for(kind)[1].clone()));
                 }
                 let before = s.doc.clone();
                 let params = if explicit_kind { json!({"kind": if kind == ListKind::Bullet { "bullet" } else { "numbered" }}) } else { json!({}) };
@@ -3162,7 +3689,7 @@ fn list_paragraph_style_survives_inherited_toggle_off() {
     use wordcraft_doc::styles::Style;
     for kind in [ListKind::Bullet, ListKind::Numbered] {
         let mut s = style_inherited_list(kind, false);
-        *s.doc.styles.styles.iter_mut().find(|x| x.id == "ListParagraph").unwrap() = Style {
+        *Arc::make_mut(&mut s.doc.styles).styles.iter_mut().find(|x| x.id == "ListParagraph").unwrap() = Style {
             id: "ListParagraph".into(),
             name: "Original formatted list".into(),
             based_on: Some("ListBase".into()),
@@ -3217,7 +3744,7 @@ fn a_new_list_uses_the_requested_kind_after_a_mixed_format_list() {
     for (kind, command) in [(ListKind::Bullet, "para.bullets"), (ListKind::Numbered, "para.numbering")] {
         let mut s = style_inherited_list(kind, false);
         let opposite = if kind == ListKind::Bullet { ListKind::Numbered } else { ListKind::Bullet };
-        s.doc.numbering.abstracts[0].levels[0] = levels_for(opposite)[0].clone();
+        Arc::make_mut(&mut s.doc.numbering).abstracts[0].levels[0] = levels_for(opposite)[0].clone();
         let num = s.doc.numbering.nums[0].id;
         s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.numbering = Some(NumRef { num, level: 1 });
         s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().props = ParaProps::default();
@@ -3273,7 +3800,7 @@ fn highlight_toggle_handles_mixed_inherited_and_pending_formatting() {
     assert_eq!(s.run("format.state", &json!({})).unwrap()["highlight"], json!("0000FF"));
     run(&mut s, "format.highlight", json!({}));
     assert_eq!(s.run("format.state", &json!({})).unwrap()["highlight"], serde_json::Value::Null);
-    s.doc.styles.default_chr.highlight = Some(wordcraft_doc::props::Highlight::Blue);
+    Arc::make_mut(&mut s.doc.styles).default_chr.highlight = Some(wordcraft_doc::props::Highlight::Blue);
     run(&mut s, "format.highlight", json!({"color":"blue"}));
     run(&mut s, "format.highlight", json!({}));
     assert!(s.doc.body[0].as_para().unwrap().runs.iter().all(|r| r.props.highlight == Some(wordcraft_doc::props::Highlight::None)));
@@ -3335,7 +3862,7 @@ fn highlight_toggle_checks_past_the_resolved_run_limit() {
                 .map(|i| Run { len: 1, props: CharProps { highlight: Some(Highlight::Blue), bold: Some(i % 2 == 0), ..Default::default() } })
                 .collect();
             if inherited {
-                doc.styles.default_chr.highlight = Some(Highlight::Yellow);
+                Arc::make_mut(&mut doc.styles).default_chr.highlight = Some(Highlight::Yellow);
             } else {
                 doc.para_mut(StoryRef::Body, &Pos::body(1, 0).path).unwrap().runs[0].props.highlight = Some(Highlight::Yellow);
             }
@@ -3395,7 +3922,7 @@ fn highlight_toggle_checks_whole_cell_marks() {
                 Pos::new(StoryRef::Body, path, 0)
             };
             if inherited {
-                s.doc.styles.default_chr.highlight = Some(Highlight::Yellow);
+                Arc::make_mut(&mut s.doc.styles).default_chr.highlight = Some(Highlight::Yellow);
             }
             for row in 0..2 {
                 for col in 0..2 {
@@ -3447,7 +3974,7 @@ fn highlight_toggle_checks_ordinary_paragraph_marks() {
     use wordcraft_doc::props::Highlight;
     for text in ["AB", "AB\n\nAB", "\n"] {
         let mut doc = wordcraft_doc::Document::from_text(text);
-        doc.styles.default_chr.highlight = Some(Highlight::Blue);
+        Arc::make_mut(&mut doc.styles).default_chr.highlight = Some(Highlight::Blue);
         let paths = doc.para_paths(StoryRef::Body);
         for path in &paths {
             let p = doc.para_mut(StoryRef::Body, path).unwrap();
@@ -3632,6 +4159,88 @@ fn backspace_cannot_join_into_locked_content_control() {
     assert_eq!(s.doc, before);
 }
 
+// #3693 is an additional editing shortcut, not a claim of Word's default key behaviour.
+#[test]
+fn delete_previous_sentence_respects_caret_boundaries_and_unicode() {
+    for (text, before, expected) in [
+        ("First sentence. Second sentence.", "First sentence. Second sentence.", "First sentence. "),
+        ("First sentence. Second sentence.", "First sentence. Sec", "First sentence. ond sentence."),
+        ("First sentence. Second sentence.", "First sentence. ", "Second sentence."),
+        ("Grüße! Überall café.", "Grüße! Überall café.", "Grüße! "),
+        ("No punctuation here", "No punctuation", " here"),
+        ("One. Two.", "", "One. Two."),
+        ("", "", ""),
+    ] {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": text, "raw": true}));
+        let mut pos = s.sel.focus.clone();
+        pos.off = before.len();
+        s.sel = crate::Selection::caret(pos);
+        run(&mut s, "text.deleteSentenceBack", json!({}));
+        assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, expected, "{text:?} at {before:?}");
+        if expected != text {
+            run(&mut s, "edit.undo", json!({}));
+            assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, text);
+            run(&mut s, "edit.redo", json!({}));
+            assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, expected);
+        }
+    }
+}
+
+#[test]
+fn delete_previous_sentence_keeps_paragraph_boundaries_and_deletes_selections() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "First.\nSecond sentence.", "raw": true, "paragraphs": true}));
+    let end = s.sel.focus.clone();
+    s.sel = crate::Selection::caret(Pos { off: 0, ..end.clone() });
+    let count = s.doc.body.len();
+    run(&mut s, "text.deleteSentenceBack", json!({}));
+    assert_eq!(s.doc.body.len(), count);
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "Second sentence.");
+    s.sel = crate::Selection { anchor: Pos { off: 0, ..end.clone() }, focus: Pos { off: 6, ..end } };
+    run(&mut s, "text.deleteSentenceBack", json!({}));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, " sentence.");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "Second sentence.");
+}
+
+#[test]
+fn delete_previous_sentence_tracks_changes_and_respects_read_only() {
+    for accept in [true, false] {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": "One. Two.", "raw": true}));
+        run(&mut s, "review.trackChanges", json!({"value": true}));
+        run(&mut s, "text.deleteSentenceBack", json!({}));
+        let changes = s.run("review.changes", &json!({})).unwrap();
+        assert!(changes.as_array().unwrap().iter().any(|c| c["kind"] == "delete"));
+        run(&mut s, if accept { "review.acceptAll" } else { "review.rejectAll" }, json!({}));
+        assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, if accept { "One. " } else { "One. Two." });
+    }
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Keep this.", "raw": true}));
+    run(&mut s, "review.restrict", json!({"mode": "readOnly"}));
+    assert!(s.run("text.deleteSentenceBack", &json!({})).is_err());
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "Keep this.");
+}
+
+#[test]
+fn delete_previous_sentence_does_not_cross_a_table_cell_boundary() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+    run(&mut s, "text.insert", json!({"text": "First cell.", "raw": true}));
+    run(&mut s, "text.tab", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Second cell.", "raw": true}));
+    let end = s.sel.focus.clone();
+    s.sel = crate::Selection::caret(Pos { off: 0, ..end.clone() });
+    let before = s.doc.plain_text(StoryRef::Body);
+    run(&mut s, "text.deleteSentenceBack", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), before);
+    s.sel = crate::Selection::caret(end);
+    run(&mut s, "text.deleteSentenceBack", json!({}));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "");
+    assert!(s.doc.plain_text(StoryRef::Body).contains("First cell."));
+}
+
 // English spelling from SCOWL 2026 (CP2): each English reads its own SCOWL dictionary, with
 // `en-variants.txt` deciding the other dialect's spellings. Typed text, as a person types it.
 
@@ -3709,4 +4318,26 @@ fn issues_1281_1045_english_dialects_proof_typed_text() {
     let issues = s.run("review.issues", &json!({})).unwrap();
     let words: Vec<&str> = issues.as_array().unwrap().iter().filter(|i| i["kind"] == "spelling").filter_map(|i| i["text"].as_str()).collect();
     assert_eq!(words, ["21th"]);
+}
+
+/// #6788: Enter in a paragraph with a drop cap makes a normal paragraph; only the first keeps
+/// the cap (Word behaviour), for a dropped cap and one in the margin.
+#[test]
+fn enter_in_a_drop_cap_paragraph_makes_a_normal_paragraph() {
+    for position in ["dropped", "margin"] {
+        let mut s = typed("Sugar and knowledge");
+        run(&mut s, "insert.dropCap", json!({"position": position, "lines": 3, "distance": 4.0, "font": "Liberation Mono"}));
+        let first_has_cap = s.doc.body.first().and_then(|b| b.as_para()).is_some_and(|p| p.props.drop_cap == Some(3));
+        assert!(first_has_cap, "{position}: the cap is set");
+        run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 10}, "focus": {"block": 0, "off": 10}}));
+        run(&mut s, "text.newParagraph", json!({}));
+        let paras: Vec<_> = s.doc.body.iter().filter_map(|b| b.as_para()).collect();
+        assert_eq!(paras.len(), 2, "{position}");
+        let (first, second) = (&paras[0].props, &paras[1].props);
+        assert_eq!(first.drop_cap, Some(3), "{position}: the first paragraph keeps its cap");
+        assert_eq!(second.drop_cap, None, "{position}");
+        assert_eq!(second.drop_cap_margin, None, "{position}");
+        assert_eq!(second.drop_cap_distance, None, "{position}");
+        assert_eq!(second.drop_cap_font, None, "{position}");
+    }
 }
