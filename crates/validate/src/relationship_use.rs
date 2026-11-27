@@ -197,9 +197,9 @@ impl Uses {
     fn compatibility_scope(&mut self, parent: Scope, local: &str, attrs: &[Attribute], resolver: &NamespaceResolver, cap: usize) -> Scope {
         observation_contract! {
             rules: "-";
-            collections: "access.prefix*1,field.blocks*5,field.branches*3,type.Vec*1";
+            collections: "access.prefix*1,field.blocks*6,field.branches*3,type.Vec*1";
             scope: "Direct Choice and Fallback siblings of a namespace-qualified compatibility block";
-            loss: "Ambiguous nesting or source-local allocation cap";
+            loss: "Ambiguous nesting, a Choice after Fallback, or source-local allocation cap";
             fallback: "Only complete, ordered sibling alternatives qualify for substitution";
             package_loss: "independent";
         }
@@ -222,17 +222,16 @@ impl Uses {
         {
             let choice = local == "Choice";
             let index = self.branches.len();
-            let eligible = if choice {
-                self.blocks[block].fallback.is_none()
-                    && attr_plain(attrs, b"Requires").is_some_and(|requires| {
-                        !requires.trim().is_empty()
-                            && requires.split_ascii_whitespace().all(|prefix| {
-                                matches!(
-                                    resolver.resolve_prefix(QName(format!("{prefix}:requires").as_bytes()).prefix(), false),
-                                    ResolveResult::Bound(_)
-                                )
-                            })
-                    })
+            let eligible = if choice && self.blocks[block].fallback.is_some() {
+                self.blocks[block].ambiguous = true;
+                false
+            } else if choice {
+                attr_plain(attrs, b"Requires").is_some_and(|requires| {
+                    !requires.trim().is_empty()
+                        && requires.split_ascii_whitespace().all(|prefix| {
+                            matches!(resolver.resolve_prefix(QName(format!("{prefix}:requires").as_bytes()).prefix(), false), ResolveResult::Bound(_))
+                        })
+                })
             } else {
                 if self.blocks[block].fallback.replace(index).is_some() {
                     self.blocks[block].ambiguous = true;

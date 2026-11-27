@@ -779,8 +779,7 @@ fn only_a_part_bearing_link_or_used_metadata_relationship_dangles() {
     assert_eq!(finding.severity, Severity::Error);
 }
 
-#[test]
-fn compatible_picture_substitution_requires_a_renderable_fallback_for_every_picture() {
+fn picture_substitution_fixture() -> Doc {
     let mut d = Doc::minimal();
     d.set_doc_rels(concat!(
         r#"<Relationship Id="choice" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="choice.bin"/>"#,
@@ -792,6 +791,12 @@ fn compatible_picture_substitution_requires_a_renderable_fallback_for_every_pict
     encoder.set_color(png::ColorType::Grayscale);
     encoder.write_header().unwrap().write_image_data(&[0]).unwrap();
     d.add_with_override("word/fallback.png", "image/png", png);
+    d
+}
+
+#[test]
+fn compatible_picture_substitution_requires_a_renderable_fallback_for_every_picture() {
+    let mut d = picture_substitution_fixture();
     let image = r#"<a:blip xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" r:embed="choice"/>"#;
     let fallback = r#"<v:imagedata xmlns:v="urn:schemas-microsoft-com:vml" r:id="fallback"/>"#;
     let content = |choices: &str, fallback: &str, active: &str| {
@@ -811,6 +816,38 @@ fn compatible_picture_substitution_requires_a_renderable_fallback_for_every_pict
     d.set_document(&content(image, fallback, ""));
     d.set("word/fallback.png", b"\x89PNG\r\n\x1a\n".to_vec());
     assert!(has(&validate(&d), "REL-TYPED"), "a signature alone cannot prove substitution");
+}
+
+#[test]
+fn choice_after_fallback_prevents_picture_substitution_in_the_block() {
+    let mut d = picture_substitution_fixture();
+    d.set_document(concat!(
+        r#"<w:p><mc:AlternateContent xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">"#,
+        r#"<mc:Choice Requires="a"><a:blip r:embed="choice"/></mc:Choice>"#,
+        r#"<mc:Fallback><a:blip r:embed="fallback"/></mc:Fallback>"#,
+        r#"<mc:Choice Requires="a"/></mc:AlternateContent></w:p>"#,
+    ));
+    let report = validate(&d);
+    let finding = assert_finding(&report, "REL-TYPED", Some("word/_rels/document.xml.rels"));
+    assert_eq!(finding.severity, Severity::Error);
+    assert!(finding.message.contains("choice.bin"), "{finding:?}");
+}
+
+#[test]
+fn unresolved_namespace_in_fallback_preserves_picture_substitution() {
+    let mut d = picture_substitution_fixture();
+    let body = concat!(
+        r#"<w:p><mc:AlternateContent xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">"#,
+        r#"<mc:Choice Requires="a"><a:blip r:embed="choice"/></mc:Choice>"#,
+        r#"<mc:Fallback><a:blip r:embed="fallback"/><x:blip xmlns:x="&drawing;"/></mc:Fallback>"#,
+        r#"</mc:AlternateContent></w:p>"#,
+    );
+    let doctype = r#"<!DOCTYPE w:document [<!ENTITY drawing "http://schemas.openxmlformats.org/drawingml/2006/main">]>"#;
+    d.set("word/document.xml", with_doctype(document_xml(body), doctype));
+    assert!(!has(&validate(&d), "REL-TYPED"));
+
+    d.set_document(&body.replace("&drawing;", "http://schemas.openxmlformats.org/drawingml/2006/main"));
+    assert!(has(&validate(&d), "REL-TYPED"));
 }
 
 #[test]
