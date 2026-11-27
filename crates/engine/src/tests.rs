@@ -22,6 +22,7 @@ mod page_number_formats_in_lists;
 mod para_tools;
 mod paste_table_in_cell;
 mod revision_checks;
+mod shrink_font_steps;
 mod typing;
 mod wordart;
 

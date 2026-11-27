@@ -593,6 +593,10 @@ Increase/Decrease Font Size and the one-point shortcuts transform each selected
 run from its own resolved size, including paragraph and character style inheritance
 (#4903). The existing button steps are unchanged: 20 pt and 10 pt become 22 pt and
 10.5 pt with Increase Font Size; Grow Font 1 Point makes them 21 pt and 11 pt.
+Decrease Font Size steps one point at a time below 8 pt (8, 7 … 1) and, mirroring
+Increase Font Size, by 10 pt above 72 pt (100, 90, 80, 72), as in Word.
+A fractional size below 8 pt steps to the whole point below it (7.5 to 7), mirroring
+Increase Font Size (7.5 to 8), so both directions land on whole points.
 Both commands continue to set normal and complex-script sizes explicitly. Whole-body
 selections visit the selected paragraph paths once, without repeated prefix scans.
 
@@ -623,6 +627,7 @@ DOCX and Undo/Redo (Leaf #152). No new Word or native UI comparison was run.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-17 | trivial | Backspace, then type: the carried formatting is dropped by a paste (whose text never takes it), Find, Go To or a click elsewhere (also one back to the same place), not only by the caret keys; an empty paste or a refused command keeps it; it follows typing and comes back with Undo; with Track Changes on it carries too, as in Word for Windows, and the typed text is a tracked insertion (#6518) |
+| 2026-11-20 | trivial | Decrease Font Size steps one point below 8 pt and 10 pt above 72 pt, as in Word; a fractional size below 8 pt steps to the whole point below it (7.5 to 7), mirroring Increase Font Size (7.5 to 8), so both directions land on whole points. |
 | 2026-11-15 | trivial | Enter in a paragraph with a drop cap: the new paragraph gets no drop cap (#6788); synthetic coverage, offset 0 unchanged and not compared with Word |
 | 2026-11-15 | trivial | Paste Formatting row: Ctrl/Cmd+Shift+V pastes the picked-up formatting, else text only; Ctrl/Cmd+Shift+C no longer arms the Format Painter (#1537, #4943); the chord's V release never pastes again (Shift up first); web text paste relies on the browser sending its paired Paste event, and the formatting paste drops that event only within about a second |
 | 2026-11-13 | trivial | Backspace, then type: the new text takes the deleted character's formatting (the Bold button shows it) until the caret moves; Delete, deleted selections and tracked Backspace carry nothing; a Backspace or Ctrl+Backspace that deletes nothing at the start of the document keeps it; observed in Word for Windows (#6518) |
@@ -632,6 +637,7 @@ DOCX and Undo/Redo (Leaf #152). No new Word or native UI comparison was run.
 | 2026-11-06 | trivial | Track Changes: resolving away an empty paragraph with a section break removes it whole; the next paragraph keeps its style (#5667) |
 | 2026-11-03 | trivial | Alt+numpad codes type their character in text boxes too (Find what, dialog fields), not the digits or nothing (#4403) |
 | 2026-11-03 | trivial | Find smart-quoted text with a keyboard apostrophe (#5388); exact search modes and replacement spelling preserved. |
+| 2026-11-11 | trivial | P0236: Decrease Font Size steps one point below 8 pt and 10 pt above 72 pt, as in Word. |
 | 2026-11-01 | minor | English spelling by dialect from SCOWL 2026: typed British, Canadian and Australian text, modern words and ordinals pinned (#40, #520, #1281, #1045; CP2) |
 | 2026-10-31 | minor | #3693: Delete Previous Sentence command and keyboard dispatch, with sentence/paragraph/cell, selection, undo and tracking regressions. Additional WordCraft behavior; Word-parity estimates unchanged. |
 | 2026-10-29 | trivial | Relative font-size commands preserve mixed sizes in the selection (#4903); existing button steps and one-point shortcuts are unchanged; readiness estimates unchanged |
