@@ -1,4 +1,112 @@
+use super::items::MAX_PAGE_TEXT;
 use super::*;
+
+/// The footer `insert.pageNumber` writes: its text (fields as their results) and field codes.
+fn page_footer(s: &mut Session, v: Value) -> (String, Vec<String>) {
+    let id = s.run("insert.pageNumber", &v).unwrap()["story"].as_u64().unwrap() as u32;
+    // Each one replaces the number the one before made, in whatever words it was in.
+    assert_eq!(s.doc.parts[&id].blocks.len(), 1, "{v}: one page number");
+    let para = s.doc.parts[&id].blocks[0].as_para().unwrap().clone();
+    let codes = para.objects.iter().filter_map(|o| if let InlineObject::Field { instr, .. } = o { Some(instr.clone()) } else { None }).collect();
+    (para.plain_text(), codes)
+}
+
+/// #4466: "Page X of Y" is written in the document's language, else the editing language,
+/// and `text` sets the words, with `{page}` and `{pages}` where the fields go.
+#[test]
+fn page_x_of_y_follows_the_document_language() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let x_of_y = json!({"format": "x of y"});
+    assert_eq!(page_footer(&mut s, x_of_y.clone()), ("Page 1 of 1".into(), vec!["PAGE".into(), "NUMPAGES".into()]));
+    std::sync::Arc::make_mut(&mut s.doc.styles).default_chr.lang = Some("it-IT".into());
+    assert_eq!(page_footer(&mut s, x_of_y.clone()).0, "Pagina 1 di 1");
+    std::sync::Arc::make_mut(&mut s.doc.styles).default_chr.lang = None;
+    s.editing_lang = Some("de-DE".into());
+    assert_eq!(page_footer(&mut s, x_of_y.clone()).0, "Seite 1 von 1");
+    // A document language with no words listed falls back to the editing language, not English;
+    // a listed one (English too) wins over it.
+    std::sync::Arc::make_mut(&mut s.doc.styles).default_chr.lang = Some("ja-JP".into());
+    assert_eq!(page_footer(&mut s, x_of_y.clone()).0, "Seite 1 von 1");
+    std::sync::Arc::make_mut(&mut s.doc.styles).default_chr.lang = Some("en-US".into());
+    assert_eq!(page_footer(&mut s, x_of_y.clone()).0, "Page 1 of 1");
+    s.editing_lang = Some("ja-JP".into());
+    std::sync::Arc::make_mut(&mut s.doc.styles).default_chr.lang = Some("zh-CN".into());
+    assert_eq!(page_footer(&mut s, x_of_y.clone()).0, "Page 1 of 1");
+    // Serbian keeps its script: Cyrillic unless the tag says Latin.
+    for (lang, words) in
+        [("sr-Cyrl-RS", "Страница 1 од 1"), ("sr", "Страница 1 од 1"), ("sr-Latn-RS", "Stranica 1 od 1"), ("hr-HR", "Stranica 1 od 1")]
+    {
+        std::sync::Arc::make_mut(&mut s.doc.styles).default_chr.lang = Some(lang.into());
+        assert_eq!(page_footer(&mut s, x_of_y.clone()).0, words, "{lang}");
+    }
+
+    let (text, codes) = page_footer(&mut s, json!({"text": "{pages} pp. – p. {page}"}));
+    assert_eq!((text.as_str(), codes), ("1 pp. – p. 1", vec!["NUMPAGES".to_string(), "PAGE".into()]));
+    // Hostile templates: nothing but placeholders, broken ones, and a very long one.
+    assert_eq!(page_footer(&mut s, json!({"text": "{page}{pages}{page"})).0, "11{page");
+    let long = format!("{{page}}{}", "é".repeat(10_000));
+    assert_eq!(page_footer(&mut s, json!({"text": long})).0.chars().count(), MAX_PAGE_TEXT - "{page}".len() + 1);
+    // #4466 review: a template without {page} isn't a page number, and adds nothing.
+    let before = s.doc.clone();
+    for text in ["", "no number here", "{pages} pages", "é".repeat(10_000).as_str()] {
+        assert!(s.run("insert.pageNumber", &json!({"text": text})).is_err(), "{text:.20}");
+        assert!(s.run("insert.pageNumber", &json!({"text": text, "position": "current"})).is_err(), "{text:.20}");
+    }
+    assert!(s.doc == before, "nothing added");
+}
+
+/// #4466 review: at the current position the words and fields are typed in, as text is: under
+/// Track Changes a new insertion of the author's; with it off, never another author's insertion
+/// that is at the caret.
+#[test]
+fn page_number_at_the_current_position_follows_track_changes() {
+    // The inserted words' and fields' insertion revisions (the text between "a" and "b").
+    let inserted = |s: &Session| -> Vec<Option<u32>> {
+        let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+        let end = p.text.len() - 1;
+        p.text.char_indices().filter(|(i, _)| *i > 0 && *i < end).map(|(i, _)| p.props_of_char(i).ins).collect()
+    };
+    let x_of_y = json!({"position": "current", "format": "x of y"});
+    let mut s = Session::new(wordcraft_doc::Document::from_text("ab"));
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.sel = Selection::caret(Pos::body(0, 1));
+    s.run("insert.pageNumber", &x_of_y).unwrap();
+    let ins = inserted(&s);
+    assert_eq!(ins.len(), 11, "\"Page \", PAGE, \" of \", NUMPAGES: {ins:?}");
+    let rid = ins[0].expect("an insertion");
+    assert!(ins.iter().all(|r| *r == Some(rid)), "{ins:?}");
+    let rev = &s.doc.revisions[rid as usize];
+    assert_eq!((rev.kind, rev.author.as_str()), (wordcraft_doc::RevisionKind::Insert, s.author.as_str()));
+
+    let mut s = Session::new(wordcraft_doc::Document::from_text("ab"));
+    s.doc.revisions.push(wordcraft_doc::Revision::new(wordcraft_doc::RevisionKind::Insert, "Zed", ""));
+    for r in &mut s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().runs {
+        r.props.ins = Some(0);
+    }
+    s.sel = Selection::caret(Pos::body(0, 1));
+    s.run("insert.pageNumber", &x_of_y).unwrap();
+    assert!(inserted(&s).iter().all(Option::is_none), "{:?}", inserted(&s));
+}
+
+/// At the current position `text` and "x of y" go in at the caret too, not just a PAGE field.
+#[test]
+fn page_number_at_the_current_position_takes_the_template() {
+    let at_caret = |v: Value| {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("ab"));
+        s.sel = Selection::caret(Pos::body(0, 1));
+        s.run("insert.pageNumber", &v).unwrap();
+        let para = s.doc.para_at(&Pos::body(0, 0)).unwrap().clone();
+        let codes: Vec<String> =
+            para.objects.iter().filter_map(|o| if let InlineObject::Field { instr, .. } = o { Some(instr.clone()) } else { None }).collect();
+        (para.plain_text(), codes, s.sel.focus.off == para.len() - 1)
+    };
+    let (text, codes, caret_after) = at_caret(json!({"position": "current", "text": "p. {page}/{pages}"}));
+    assert_eq!((text.as_str(), codes), ("ap. 1/1b", vec!["PAGE".to_string(), "NUMPAGES".into()]));
+    assert!(caret_after, "the caret goes after what was inserted");
+    assert_eq!(at_caret(json!({"position": "current", "format": "x of y"})).0, "aPage 1 of 1b");
+    let (text, codes, _) = at_caret(json!({"position": "current"}));
+    assert_eq!((text.as_str(), codes), ("a1b", vec!["PAGE".to_string()]));
+}
 
 /// #3619: a huge finite width can't make a tall picture's height infinite, which a `.json` save
 /// writes as `null` and can't read back.
