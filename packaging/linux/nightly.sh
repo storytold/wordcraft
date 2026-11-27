@@ -20,10 +20,11 @@ STAGE="$NIGHTLY_WORK/stage"
 mkdir -p "$STAGE"
 # An unpacked GUI tar is isolated too: `wordcraft` is the channel's launcher and `wordcraft-bin`
 # is the GUI it starts beside it. Redirecting XDG_* instead is refused by the build's root
-# validator.
+# validator. This launcher is craft-common-actions' canonical template rendered for this app
+# (scripts/nightly_app.py launcher); every packaged format keeps packaging/linux/nightly-launcher.sh.
 cp "$NIGHTLY_GUI" "$STAGE/wordcraft-bin"
 chmod 755 "$STAGE/wordcraft-bin"
-install -m 755 "$ROOT/packaging/linux/nightly-launcher.sh" "$STAGE/wordcraft"
+install -m 755 "$ROOT/packaging/linux/nightly-tar-launch.sh" "$STAGE/wordcraft"
 NIGHTLY_ICON="$ROOT/assets/app-icon/wordcraft-nightly.png"
 [[ -f "$NIGHTLY_ICON" ]] || NIGHTLY_ICON="$ROOT/assets/app-icon/wordcraft-1024.png"
 cp "$NIGHTLY_ICON" "$STAGE/wordcraft-nightly.png"

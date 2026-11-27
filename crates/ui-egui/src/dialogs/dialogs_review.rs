@@ -245,10 +245,37 @@ impl WordForm for CompareForm {
     fn applied(&mut self, app: &mut WordApp, filed: Filed, outcome: Result<&[Value], &str>) {
         if matches!(filed, Filed::Ok)
             && let Ok(results) = outcome
-            && let Some(changes) = results.first().and_then(|r| r.get("changes")).and_then(Value::as_u64)
+            && let Some(result) = results.first()
         {
-            app.status(format!("Compared: {changes} changes"));
+            app.status(compare_status_message(result));
         }
+    }
+}
+
+fn compare_status_message(v: &Value) -> String {
+    let n = v.get("changes").and_then(Value::as_u64).unwrap_or(0).to_string();
+    let base = crate::i18n::fmt(tl!("Compared: {changes} changes"), &[("changes", &n)]);
+    let unsupported: Vec<&str> = v
+        .get("notHonoured")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|k| matches!(*k, "tables" | "level"))
+                .map(|k| match k {
+                    "tables" => tl!("Tables"),
+                    "level" => tl!("Character level"),
+                    _ => k,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if unsupported.is_empty() {
+        base
+    } else {
+        let list = unsupported.join(", ");
+        crate::i18n::fmt(tl!("{status} (not compared: {items})"), &[("status", &base), ("items", &list)])
     }
 }
 
@@ -401,7 +428,7 @@ fn list_table(ui: &mut Ui, name: &str, rows: &[(String, String)], second: bool, 
         });
     let mut picked = None;
     for event in out.events {
-        if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+        if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
             && let Some(key) = keys.into_iter().last()
         {
             picked = Some(key);
@@ -560,7 +587,7 @@ impl WordForm for AutoCorrectForm {
                 .natural_height(true)
                 .show_items(ui, &source, &mut |key, _| Tab::new(tab_name(*key)));
             for event in strip.response.events {
-                if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                     && let Some(key) = keys.into_iter().last()
                 {
                     self.tab = key.min(2);
@@ -745,5 +772,16 @@ mod tests {
         // The next column starts after the widest of them.
         let (left, right) = (h.get_by_label("Character level").rect(), h.get_by_label("Show changes in:").rect());
         assert!(right.left() >= left.right(), "the columns overlap: {left:?} {right:?}");
+    }
+
+    #[test]
+    fn compare_status_message_surfaces_not_honoured_limitations() {
+        assert_eq!(compare_status_message(&json!({"changes": 3, "notHonoured": []})), "Compared: 3 changes");
+        assert_eq!(compare_status_message(&json!({"changes": 1, "notHonoured": ["moves", "comments"]})), "Compared: 1 changes");
+        assert_eq!(compare_status_message(&json!({"changes": 0, "notHonoured": ["moves", "tables"]})), "Compared: 0 changes (not compared: Tables)");
+        assert_eq!(
+            compare_status_message(&json!({"changes": 2, "notHonoured": ["tables", "level"]})),
+            "Compared: 2 changes (not compared: Tables, Character level)"
+        );
     }
 }

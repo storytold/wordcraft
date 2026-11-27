@@ -162,6 +162,7 @@ impl WordApp {
                 let paths = paths.iter().map(|p| p.to_string_lossy().into_owned()).collect();
                 Some(self.finish_picks(d.after, paths))
             }
+            Picked::Saved { path, .. } => Some(self.finish_picks(d.after, vec![path.to_string_lossy().into_owned()])),
             Picked::Contents(files) => Some(self.finish_contents(d.after, files)),
             // The page handed the save over as a download: the save finishes under that name, which
             // the engine answers with `downloaded`, and the document keeps the file it had.
@@ -537,7 +538,7 @@ mod picture_dispatch_tests {
     use std::sync::Arc;
 
     use craft::host::{AppInfo, Host, Picked, ScriptedFiles};
-    use craft::platform::open::{DropTarget, DroppedFile, FileIntake};
+    use craft::platform::open::{DroppedFile, FileIntake};
 
     use super::*;
 
@@ -568,7 +569,7 @@ mod picture_dispatch_tests {
             let services = crate::Services { intake: Some(intake), ..Default::default() };
             let mut dropped = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
             let document = dropped.session.document_id();
-            sender.dropped(vec![DroppedFile { path: None, name, bytes: Some(bytes.into()) }], DropTarget::Elsewhere);
+            sender.dropped(vec![DroppedFile { path: None, name, bytes: Some(bytes.into()) }]);
             dropped.drain_inbox();
             assert_eq!(dropped.session.document_id(), document, "drop inserts into the current document: {ext}");
             let pictures = dropped.session.run("arrange.selectionPane", &json!({})).unwrap();

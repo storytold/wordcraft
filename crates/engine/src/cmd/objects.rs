@@ -32,11 +32,11 @@ pub(crate) use select::all_objects;
 pub(crate) use select::{edit_obj, has_shape_or_canvas};
 #[cfg(test)]
 use select::{has_group, holds_ink, obj_size, with_obj};
-pub use select::{min_size, object_selection, picked_objects, selected, selected_all};
+pub use select::{min_size, object_selection, picked_objects, selected, selected_all, selected_or_text_box, target_objects};
 #[cfg(test)]
 use shape::can_link;
 pub(crate) use shape::set_text_body;
-pub use shape::text_box_target;
+pub use shape::{text_box_target, text_box_targets};
 pub use specs::specs;
 
 #[cfg(test)]

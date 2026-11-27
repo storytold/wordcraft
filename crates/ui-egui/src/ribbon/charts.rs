@@ -6,6 +6,7 @@ use craft::ui::contract::{Gap, Props as _, Show as _, ShowContainer as _};
 use craft::ui::layout_components::Stack;
 use craft::ui::list::ThumbAspect;
 use craft::ui::menu::MenuItem;
+use craft::ui::primitives::FacePaint;
 use craft::ui::tile_grid::{CaptionPlace, Tile};
 
 use super::common::{menu_button, size_field};
@@ -77,18 +78,24 @@ pub(super) fn smart_art_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         let face = Button::new(tl!("Change\nColors").to_string()).icon(IconId::new("smartArtColors")).arrangement(Arrangement::Stacked);
         let _ = menu_button(ui, face, tl!("Change\nColors").to_string(), None, |ui, _| {
             let custom = g.has_custom_colors();
-            for colors in SmartArtColors::ALL {
+            for (idx, colors) in SmartArtColors::ALL.into_iter().enumerate() {
+                let theme = theme.clone();
                 MenuItem::command(CommandRef::with_params("smartArt.colors", json!({"variant": colors.id()})))
                     .label(crate::dialogs_smart_art::colors_label(colors))
                     .radio_mark(g.colors == colors && !custom)
-                    .sample(move |cx, r| crate::dialogs_smart_art::swatches(cx, r, colors, theme))
+                    .sample(
+                        ThumbAspect::new(2, 1),
+                        FacePaint::new(idx as u64, move |cx, r| crate::dialogs_smart_art::swatches(cx, r, colors, &theme)),
+                    )
                     .show(ui);
             }
             // Active while items carry their own colours; set in the Text Pane.
+            let theme = theme.clone();
+            let g = g.clone();
             let mut row = MenuItem::new(tl!("Custom").to_string())
                 .enabled(custom)
                 .radio_mark(custom)
-                .sample(move |cx, r| crate::dialogs_smart_art::custom_swatches(cx, r, g, theme));
+                .sample(ThumbAspect::new(2, 1), FacePaint::new(0x100, move |cx, r| crate::dialogs_smart_art::custom_swatches(cx, r, &g, &theme)));
             if !custom {
                 row = row.tooltip(tl!("Set the colors in the Text Pane to use custom colors.").to_string());
             }
