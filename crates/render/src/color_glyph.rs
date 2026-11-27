@@ -23,7 +23,7 @@ pub(crate) enum Drawable {
 impl Drawable {
     fn bytes(&self) -> usize {
         match self {
-            Drawable::Layers(ops) => ops.len().saturating_mul(64),
+            Drawable::Layers(ops) => wordcraft_fonts::color::ops_bytes(ops),
             Drawable::Bitmap { pixmap, .. } => pixmap.width() as usize * pixmap.height() as usize * 4,
         }
     }
@@ -102,18 +102,13 @@ fn decode_png(png: &[u8], w: u32, h: u32) -> Option<Pixmap> {
     if w == 0 || h == 0 || w > side || h > side {
         return None;
     }
-    let reader = || image::ImageReader::with_format(std::io::Cursor::new(png), image::ImageFormat::Png);
     let fits = |(iw, ih): (u32, u32)| iw > 0 && ih > 0 && iw <= w && ih <= h;
-    if !fits(reader().into_dimensions().ok()?) {
+    let p = wordcraft_geom::picture::probe(png).ok()?;
+    if p.format != image::ImageFormat::Png || !fits((p.width, p.height)) {
         return None;
     }
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(w);
-    limits.max_image_height = Some(h);
-    limits.max_alloc = Some(w as u64 * h as u64 * 4 * 2 + 64 * 1024);
-    let mut r = reader();
-    r.limits(limits);
-    let img = r.decode().ok()?.to_rgba8();
+    let budget = u64::from(w).saturating_mul(u64::from(h)).saturating_mul(8).saturating_add(64 * 1024);
+    let img = wordcraft_geom::picture::decode_for_drawing(png, budget, w.max(h)).ok()?.to_rgba8();
     let (iw, ih) = img.dimensions();
     if !fits((iw, ih)) {
         return None;
@@ -416,11 +411,8 @@ mod tests {
     }
 
     fn png(w: u32, h: u32) -> Vec<u8> {
-        let mut out = vec![];
-        image::RgbaImage::from_pixel(w, h, image::Rgba([200, 0, 0, 255]))
-            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
-            .unwrap();
-        out
+        let img = image::RgbaImage::from_pixel(w, h, image::Rgba([200, 0, 0, 255]));
+        wordcraft_geom::picture::encode_png(&image::DynamicImage::ImageRgba8(img)).unwrap()
     }
 
     /// A bitmap glyph's PNG may not be bigger than its strike claims: a bigger one is refused before
@@ -435,5 +427,15 @@ mod tests {
         assert!(decode_png(&png(4, 8), 4, 4).is_none(), "taller than claimed");
         let side = wordcraft_fonts::color::MAX_BITMAP_SIDE;
         assert!(decode_png(&png(4, 4), side + 1, 4).is_none(), "past the cap");
+    }
+
+    /// A tiny bitmap glyph whose PNG header is probed before decoding: `picture::probe` reads IHDR
+    /// without inflating metadata chunks such as `iCCP`.
+    #[test]
+    fn bitmap_png_header_probe_keeps_the_glyph_budget() {
+        let bytes = png(4, 4);
+        let p = wordcraft_geom::picture::probe(&bytes).unwrap();
+        assert_eq!((p.width, p.height), (4, 4), "a plain glyph reads");
+        assert_eq!(decode_png(&png(1, 1), 1, 1).map(|p| (p.width(), p.height())), Some((1, 1)));
     }
 }
