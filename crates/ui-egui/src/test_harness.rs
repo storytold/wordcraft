@@ -137,7 +137,8 @@ pub(crate) fn logic(ctx: &egui::Context, app: &mut crate::WordApp) {
 /// calls the raw-input hook before every pass, so each pass has the app's input (the root env with the host, the
 /// command states, the fired commands), as in production.
 impl eframe::App for crate::WordApp {
-    fn raw_input_hook(&mut self, ctx: &egui::Context, _raw: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.modal_raw_input(ctx, raw);
         craft::ui::shell::embed::before_input(ctx, |out| self.frame_input(out));
     }
 

@@ -227,6 +227,8 @@ impl WordApp {
         let Prefs {
             // App-wide: preferences, recent lists, and the settings the session owns while
             // running.
+            modal_editing: _,
+            modal_config_directory: _,
             ribbon_collapsed: _,
             quick_access_toolbar: _,
             recent: _,

@@ -134,6 +134,7 @@ impl eframe::App for App {
     /// Hands the app what the runtime gathered since the last frame (fired commands) and the
     /// runtime the input the app gives back, before any pass of the frame runs.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.app.modal_raw_input(ctx, raw);
         // Once per frame, before any pass; the files stay in `raw` for the runtime's own reading.
         let files = dropped_files(raw);
         if !files.is_empty() {

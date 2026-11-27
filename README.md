@@ -96,6 +96,7 @@ Every screenshot below is WordCraft itself, rendered offscreen by its own UI tes
 - **Familiar.** Ribbon tabs, groups, shortcuts and behaviour: Enter continues a list,
   Tab demotes it, Ctrl/⌘+B bolds the word under the caret, the Styles gallery previews styles live,
   F4 repeats, F7 checks spelling, F8 extends the selection.
+- **Modal text editing.** Opt in to [Neovim-powered editing with your configuration](docs/modal-editing.md) on Unix desktops; document formatting stays in WordCraft.
 - **Your files.** Opens and saves .docx (OOXML), and also .odt, .rtf, .html, .md, .tex (LaTeX), .txt; opens legacy 97-2003 .doc; exports PDF
   with real, selectable text, links and bookmarks.
 - **Fast.** Paragraph layout is cached, so typing in a 188-page document re-lays it out in about

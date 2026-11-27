@@ -95,6 +95,7 @@ impl Default for ShownPages {
 }
 
 pub struct CanvasState {
+    pub(crate) modal: crate::modal::State,
     /// The page view's state: zoom, fit, offset and current page. The session's view settings are copied in at the
     /// start of each pass and the zoom the framework changed is written back after it.
     pub(crate) view: PageViewState,
@@ -385,6 +386,7 @@ impl Default for CanvasState {
     /// state.
     fn default() -> Self {
         CanvasState {
+            modal: Default::default(),
             view: PageViewState::default(),
             reading: ReadingState::default(),
             shown: ShownPages::default(),

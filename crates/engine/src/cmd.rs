@@ -25,6 +25,7 @@ pub mod inspector;
 pub mod lists;
 pub mod mailings;
 pub mod md_source;
+pub mod modal_text;
 pub mod moves;
 pub mod objects;
 pub mod options;
@@ -64,6 +65,7 @@ use crate::{CmdError, CmdResult, Registry, Session};
 pub fn registry() -> Registry {
     let mut v = Vec::new();
     v.extend(text::specs());
+    v.extend(modal_text::specs());
     v.extend(caret::specs());
     v.extend(column::specs());
     v.extend(edit::specs());

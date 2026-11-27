@@ -34,6 +34,9 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if self.modal_defer(id, &params, true)? {
+            return Ok(json!({"pending":true}));
+        }
         // Undo and Redo act on whole steps: a SmartArt typing run still open is folded into its one step first,
         // or Undo would take back only the last keystroke of it.
         if matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo") {
@@ -112,6 +115,9 @@ impl WordApp {
     /// Run a command for a script or an agent (control channel, MCP bridge): never asks first.
     /// UI-level commands (`ui.*`) are handled here, the rest by the engine.
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if self.modal_defer(id, &params, false)? {
+            return Ok(json!({"pending":true}));
+        }
         self.clear_command_targets(id);
         if let Some(error) = self.document_required_error(id) {
             return Err(error);
@@ -555,6 +561,9 @@ impl WordApp {
     /// Commands that live in the UI layer.
     pub(crate) fn ui_command(&mut self, id: &str, p: &Value) -> Option<Result<Value, String>> {
         let s = |k: &str| p.get(k).and_then(Value::as_str);
+        if id == "ui.modalEditing" {
+            return Some(self.modal_command(p));
+        }
         Some(Ok(match id {
             "ui.checkForUpdates" | "help.checkForUpdates" => {
                 crate::updates_ui::check(self);

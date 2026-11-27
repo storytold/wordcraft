@@ -27,6 +27,9 @@ impl PartialEq for Shortcuts {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Prefs {
+    /// Opt-in external modal text editing. The external editor executes the chosen configuration.
+    pub modal_editing: bool,
+    pub modal_config_directory: String,
     /// The ribbon tab showing. It is saved but not restored at startup: Word opens on Home every
     /// launch, and only going File and back to the editor keeps the tab ([`crate::WordApp::apply_prefs`]).
     pub tab: String,
@@ -173,6 +176,8 @@ impl Default for Prefs {
     /// Default user interface preferences matching Word defaults.
     fn default() -> Self {
         Prefs {
+            modal_editing: false,
+            modal_config_directory: String::new(),
             tab: DEFAULT_TAB.into(),
             backstage: false,
             backstage_page: "home".into(),

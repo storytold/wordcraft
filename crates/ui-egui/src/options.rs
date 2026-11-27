@@ -240,6 +240,8 @@ impl<'a> OptionsModel<'a> {
         let size = ui.interface_size.percent().map_or_else(|| "auto".to_string(), |p| p.to_string());
         match page {
             "general" => vec![
+                ("general.modalEditing", Bool(ui.modal_editing)),
+                ("general.modalConfigDirectory", Text(ui.modal_config_directory.clone())),
                 ("general.theme", Choice(ui.theme.code().to_string())),
                 ("general.interfaceSize", Choice(size)),
                 ("general.paperColor", Choice(id_of(&prefs.paper_color))),
@@ -335,6 +337,11 @@ impl PreferencesModel for OptionsModel<'_> {
                         RowSpec::new("general.paperColor", tl!("Screen paper color:"), RowKind::choice(&s.paper_id, owned(&s.paper))).help(tl!(
                             "Screen only. Document backgrounds, printing and exports keep their colours. Dark page and explicit Read Mode colours take precedence."
                         )),
+                        b("general.modalEditing", tl!("Modal text editing (external editor)"), app.ui.modal_editing)
+                            .enabled(cfg!(unix))
+                            .help(tl!("Uses an installed Neovim and its configuration for document text. Ctrl+Alt+Shift+M turns it off. Your editor configuration runs with your account permissions.")),
+                        RowSpec::new("general.modalConfigDirectory", tl!("Editor configuration folder:"), RowKind::Text(&app.ui.modal_config_directory))
+                            .help(tl!("Leave empty to use the installed editor’s normal configuration. Changes apply when modal editing is next enabled.")),
                         b("general.miniToolbar", tl!("Show the mini toolbar when text is selected"), app.ui.mini_toolbar),
                         b("general.darkPage", tl!("Dark page (white text on black)"), app.session.view.dark_mode)
                             .help(tl!("Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.")),
@@ -630,6 +637,8 @@ impl PreferencesModel for OptionsModel<'_> {
     fn set(&mut self, key: &str, value: PrefValue) {
         use PrefValue::{Bool, Choice, Float, Int, Text};
         match (key, value) {
+            ("general.modalConfigDirectory", Text(directory)) => self.run("ui.modalEditing", json!({"configDirectory":directory,"value":false})),
+            ("general.modalEditing", Bool(value)) => self.run("ui.modalEditing", json!({"value":value})),
             ("general.theme", Choice(c)) => self.run("ui.theme", json!({"value": c})),
             ("general.interfaceSize", Choice(c)) => match c.parse::<u16>() {
                 Ok(percent) => self.run("ui.interfaceSize", json!({"percent": percent})),
