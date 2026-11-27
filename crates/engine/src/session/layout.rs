@@ -204,6 +204,43 @@ impl Session {
         Arc::new(wordcraft_layout::layout(doc, &mut LayoutCache::new(), &opts))
     }
 
+    /// How wide a picture put in at `pos` may be, as Word fits an inserted or pasted picture
+    /// (#5428): the room its paragraph's lines have (the width available to its widest laid-out line,
+    /// so the paragraph's indents are already taken out; inside a table cell, the innermost cell's
+    /// text area, nested tables included; a turned cell isn't measured and falls back to the
+    /// column width), never wider than the column it is in, of its own section. The narrowest
+    /// section's text width ([`crate::io::text_width`]) when `pos` isn't laid out. It is measured on the pages, whatever the view: Web Layout and Read Mode reflow the
+    /// text to the window, and a picture put in there keeps the size it gets in the document.
+    pub(crate) fn room_at(&mut self, pos: &wordcraft_doc::Pos) -> f32 {
+        let first = crate::io::text_width(&self.doc);
+        let l =
+            if !self.view.read_mode && self.view.mode == ViewMode::Print { self.layout() } else { self.output_layout_of(&self.doc, false, false) };
+        let Some((caret, page)) = l.caret_on(pos, self.page_hint).and_then(|c| Some((c, l.pages.get(c.page)?))) else { return first };
+        // A page can hold several continuous sections: the body's own comes from the position.
+        let at = match (pos.story, pos.path.0.first()) {
+            (StoryRef::Body, Some(b)) => self.doc.section_index_of(*b as usize),
+            _ => page.section,
+        };
+        let section = self.doc.sections().get(at).map(|(_, sp)| (*sp).clone());
+        let column = match (&section, pos.story) {
+            (Some(sp), StoryRef::Body) => {
+                let boxes = sp.column_boxes();
+                let x = caret.x - page.body.x;
+                boxes.iter().find(|(cx, w)| x >= cx - 0.5 && x <= cx + w + 0.5).map_or_else(|| sp.text_width(), |(_, w)| *w)
+            }
+            (Some(sp), StoryRef::Part(_)) => sp.text_width(),
+            (None, _) => first,
+        };
+        let lines = wordcraft_layout::hit::page_lines(page, pos.story)
+            .iter()
+            .filter(|h| *h.path == pos.path)
+            .map(|h| h.right - h.left)
+            .filter(|w| w.is_finite())
+            .fold(0.0f32, f32::max);
+        let room = if lines >= 1.0 { lines.min(column) } else { column };
+        if room.is_finite() && room >= 1.0 { room } else { first }
+    }
+
     /// Invalidate the cached layout (fonts changed etc.).
     pub fn relayout(&mut self) {
         self.layout = Default::default();

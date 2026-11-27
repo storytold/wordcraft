@@ -499,10 +499,23 @@ pub(crate) fn unlink_sections(blocks: &mut [Block]) {
 /// lists and styles it refers to (renumbered so they can't collide with ours).
 fn adopt(s: &mut Session, src: Document) -> Fragment {
     let mut frag = s.doc.adopt(src);
-    // Pasted pictures fit our text width, like Insert › Pictures (layout keeps their size).
-    let max_w = crate::io::text_width(&s.doc);
+    // Pasted pictures fit the room where they go, like Insert › Pictures: the table cell, the
+    // column, its own section (#5428; layout keeps their size). Measured (a layout) only when
+    // the fragment holds an inline picture.
+    let mut has_picture = false;
     for b in &mut frag.blocks {
-        crate::io::fit_block_pictures(b, max_w);
+        each_para(b, 0, &mut |p| {
+            has_picture |= p
+                .objects
+                .iter()
+                .any(|o| matches!(o, wordcraft_doc::InlineObject::Image { float, .. } if float.wrap == wordcraft_doc::para::Wrap::Inline));
+        });
+    }
+    if has_picture {
+        let max_w = s.room_at(&s.sel.ordered().0);
+        for b in &mut frag.blocks {
+            crate::io::fit_block_pictures(b, max_w);
+        }
     }
     unlink_sections(&mut frag.blocks);
     frag
