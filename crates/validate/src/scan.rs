@@ -1142,7 +1142,13 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                 push_unknown_prefix(&mut out, &state.declared, &[], id.unknown.as_deref());
                 check_prefixes(&state.declared, &attrs, reader.resolver(), (&[], complete_entities.as_ref().map(|_| &entity_decls)), &mut out);
                 let parent = state.frames.last().map_or_else(Scope::default, |frame| frame.usage_scope);
-                let usage_scope = out.usage.open(parent, (id.ns, &id.local, state.frames.is_empty()), &attrs, reader.resolver(), acc.limits.facts);
+                let usage_scope = out.usage.open(
+                    parent,
+                    (id.ns, &id.local, state.frames.is_empty(), id.unresolved || id.unknown.is_some()),
+                    &attrs,
+                    reader.resolver(),
+                    acc.limits.facts,
+                );
                 collect_ink_content_part(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts);
                 if !was_suppressed {
                     collect_refs(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts, &mut state.refs_capped);
@@ -1186,7 +1192,13 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                 push_unknown_prefix(&mut out, &state.declared, &decls, id.unknown.as_deref());
                 check_prefixes(&state.declared, &attrs, reader.resolver(), (&decls, complete_entities.as_ref().map(|_| &entity_decls)), &mut out);
                 let parent = state.frames.last().map_or_else(Scope::default, |frame| frame.usage_scope);
-                out.usage.open(parent, (id.ns, &id.local, state.frames.is_empty()), &attrs, reader.resolver(), acc.limits.facts);
+                out.usage.open(
+                    parent,
+                    (id.ns, &id.local, state.frames.is_empty(), id.unresolved || id.unknown.is_some()),
+                    &attrs,
+                    reader.resolver(),
+                    acc.limits.facts,
+                );
                 collect_ink_content_part(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts);
                 if !was_suppressed {
                     collect_refs(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts, &mut state.refs_capped);

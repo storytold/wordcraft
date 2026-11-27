@@ -1422,7 +1422,7 @@ fn xml_source_complete(xml: &XmlScan, entry: &package::Entry) -> bool {
 fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     observation_contract! {
         rules: "HEADERSOURCE-PRESENT,MATH-PLACEMENT,PROTECTION-PASSWORD,STRUCT-END-P,XML-INVALID-CHAR,XML-MALFORMED,XML-UNDECLARED-PREFIX";
-        collections: "access.prefix*1,access.retain_budget*1,field.comment_para_ids*1,field.content_part_exemptions*2,field.content_parts*2,field.entries*1,field.ink_content_parts*2,field.note_listings*1,field.refs*5,field.special_notes*1,field.unknown_prefixes*1,type.BTreeMap*1,type.HashMap*2,type.HashSet*2,type.Vec*14";
+        collections: "access.prefix*1,access.retain_budget*1,field.comment_para_ids*1,field.content_part_exemptions*2,field.content_parts*2,field.entries*1,field.ink_content_parts*2,field.note_listings*1,field.refs*5,field.special_notes*1,field.unknown_prefixes*1,type.BTreeMap*1,type.HashMap*2,type.HashSet*2,type.Vec*16";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -1463,6 +1463,7 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     let mut facts_pooled_part: Option<String> = None;
     let mut usage_budget = acc.limits.facts;
     let mut empty_xml = Vec::new();
+    let mut held: Vec<PendingMalformed> = Vec::new();
     let mut pooled_refs = 0usize;
     let mut refs_pooled_capped = false;
     let mut refs_pooled_part: Option<String> = None;
@@ -1482,7 +1483,7 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
         if let Some(err) = &e.decode_error {
             match err {
                 DecodeError::Malformed(msg) => {
-                    report_malformed(pkg, &e.name, msg, acc);
+                    report_malformed(pkg, &e.name, msg, &mut held);
                 }
                 DecodeError::Unsupported(enc) => {
                     acc.note(format!("{} declares the unsupported encoding {enc}; its checks were skipped", e.name));
@@ -1513,7 +1514,7 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
                 compat_on = true;
             }
         }
-        record_xml_malformed(pkg, e, scanned.malformed, &mut empty_xml, acc);
+        record_xml_malformed(pkg, e, scanned.malformed, &mut empty_xml, &mut held);
         scanned.usage.charge_package_budget(&mut usage_budget);
         for prefix in &scanned.unknown_prefixes {
             acc.add("XML-UNDECLARED-PREFIX", Some(e.name.clone()), format!("the namespace prefix `{prefix}` used in {} is not declared", e.name));
@@ -1621,15 +1622,22 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     let xml = XmlScan { graph, parts, compat };
     if !empty_xml.is_empty() {
         let stores = StoreConsumption::from_document(pkg, &xml, &roles);
-        report_empty_xml(pkg, &stores, empty_xml, acc);
+        report_empty_xml(pkg, &stores, empty_xml, &mut held);
     }
+    flush_malformed(held, acc);
     xml
 }
 
-fn record_xml_malformed<'a>(pkg: &Package, entry: &'a package::Entry, error: Option<String>, empty: &mut Vec<(&'a str, String)>, acc: &mut Acc) {
+fn record_xml_malformed<'a>(
+    pkg: &Package,
+    entry: &'a package::Entry,
+    error: Option<String>,
+    empty: &mut Vec<(&'a str, String)>,
+    held: &mut Vec<PendingMalformed>,
+) {
     observation_contract! {
         rules: "XML-MALFORMED";
-        collections: "field.bytes*1,type.Vec*2";
+        collections: "field.bytes*1,type.Vec*3";
         scope: "XML parse defect from one ZIP entry";
         loss: "Payload unavailable or XML scan stopped at a resource limit";
         fallback: "Only an observed zero-byte payload can defer to the custom XML binding check";
@@ -1640,14 +1648,14 @@ fn record_xml_malformed<'a>(pkg: &Package, entry: &'a package::Entry, error: Opt
     if entry.bytes.as_ref().is_some_and(Vec::is_empty) {
         empty.push((&entry.name, error));
     } else {
-        report_malformed(pkg, &entry.name, &error, acc);
+        report_malformed(pkg, &entry.name, &error, held);
     }
 }
 
-fn report_empty_xml(pkg: &Package, stores: &StoreConsumption, empty: Vec<(&str, String)>, acc: &mut Acc) {
+fn report_empty_xml(pkg: &Package, stores: &StoreConsumption, empty: Vec<(&str, String)>, held: &mut Vec<PendingMalformed>) {
     observation_contract! {
         rules: "XML-MALFORMED";
-        collections: "type.Vec*1";
+        collections: "type.Vec*2";
         scope: "Zero-byte entries with a parse defect and package-wide custom XML binding facts";
         loss: "Binding or store consumption unavailable";
         fallback: "Retain the syntax diagnostic unless the item is established as unused";
@@ -1656,7 +1664,7 @@ fn report_empty_xml(pkg: &Package, stores: &StoreConsumption, empty: Vec<(&str, 
 
     for (name, error) in empty {
         if !stores.unused_item(name) {
-            report_malformed(pkg, name, &error, acc);
+            report_malformed(pkg, name, &error, held);
         }
     }
 }
@@ -2123,10 +2131,10 @@ fn check_content_part_types(pkg: &Package, content_parts: &[(String, Vec<RelId>)
 }
 
 /// Report an `XML-MALFORMED` finding with severity graded by whether the malformed part is main, reachable, or unused.
-fn report_malformed(pkg: &Package, name: &str, err: &str, acc: &mut Acc) {
+fn report_malformed(pkg: &Package, name: &str, err: &str, pending: &mut Vec<PendingMalformed>) {
     observation_contract! {
         rules: "XML-MALFORMED";
-        collections: "field.reachable*1,type.Observed*1";
+        collections: "field.reachable*1,type.Observed*1,type.Vec*1";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -2146,7 +2154,39 @@ fn report_malformed(pkg: &Package, name: &str, err: &str, acc: &mut Acc) {
     } else {
         (Severity::Warning, Evidence::Observed)
     };
-    acc.add_graded("XML-MALFORMED", severity, evidence, Some(name.to_string()), format!("{name} is not well-formed XML: {err}"));
+    pending.push(PendingMalformed { severity, evidence, name: name.to_string(), message: format!("{name} is not well-formed XML: {err}") });
+}
+
+/// An `XML-MALFORMED` finding held back so the per-rule budget can be spent in severity order.
+struct PendingMalformed {
+    severity: Severity,
+    evidence: Evidence,
+    name: String,
+    message: String,
+}
+
+/// Record the held `XML-MALFORMED` findings, Corrupt first, then Error, then Warning, so a main or
+/// reachable part's finding is never displaced by a Warning from an unused part, whatever the part
+/// order or the budget.
+fn flush_malformed(mut pending: Vec<PendingMalformed>, acc: &mut Acc) {
+    observation_contract! {
+        rules: "XML-MALFORMED";
+        collections: "type.Vec*1";
+        scope: "Held XML parse defects from every part, graded main, reachable or unused";
+        loss: "Per-rule finding budget";
+        fallback: "Record Corrupt and Error findings before Warnings so the budget never displaces them";
+        package_loss: "independent";
+    }
+
+    let rank = |s: Severity| match s {
+        Severity::Corrupt => 0,
+        Severity::Error => 1,
+        Severity::Warning => 2,
+    };
+    pending.sort_by_key(|p| rank(p.severity));
+    for p in pending {
+        acc.add_graded("XML-MALFORMED", p.severity, p.evidence, Some(p.name), p.message);
+    }
 }
 
 /// Classify the story parts from their effective content type and the relationships that reach
@@ -2311,7 +2351,7 @@ fn dangling_relationship_severity(pkg: &Package, rp: &RelsPart, rel: &package::R
         Severity::Error
     } else {
         match use_of {
-            Consumption::Substituted | Consumption::Unused => return None,
+            Consumption::Substituted | Consumption::Unused | Consumption::Undecided => return None,
             Consumption::Picture if matches!(rel.role.kind(), Some("image" | "hdphoto")) => Severity::Warning,
             _ => Severity::Error,
         }
@@ -2546,15 +2586,20 @@ fn check_typed_targets(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
                 Resolution::Absent => true,
                 Resolution::One(_) | Resolution::Unknown(_) | Resolution::Ambiguous(_) => false,
             } {
-                if source.is_some_and(|source| source.usage.capped)
-                    && !implicit_relationship(pkg, rp, rel)
-                    && !matches!(kind, Some("numbering"))
-                    && !(kind == Some("hyperlink") && rel.fragment_only)
-                {
+                let consumption = use_of();
+                let assessed =
+                    !implicit_relationship(pkg, rp, rel) && !matches!(kind, Some("numbering")) && !(kind == Some("hyperlink") && rel.fragment_only);
+                if assessed && source.is_some_and(|source| source.usage.capped) {
                     acc.note(format!("{} exceeded the relationship consumption fact budget; some missing targets were not assessed", rp.name));
                     acc.set_incomplete();
+                } else if assessed && consumption == Consumption::Undecided {
+                    acc.note(format!(
+                        "{} was not scanned to its end, so whether relationship {} (missing target {target}) is used was not decided; its dangling target was not assessed",
+                        rp.name, rel.id
+                    ));
+                    acc.set_incomplete();
                 }
-                match dangling_relationship_severity(pkg, rp, rel, use_of()) {
+                match dangling_relationship_severity(pkg, rp, rel, consumption) {
                     Some(Severity::Warning) => {
                         // Keep one extra Warning to trigger the existing truncation note.
                         if warnings.len() <= acc.limits.findings_per_rule {
@@ -8353,6 +8398,79 @@ mod round5_completeness_tests {
         format!(
             r#"<Relationship Id="{target}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{kind}" Target="{target}"/>"#
         )
+    }
+
+    /// Stored archive of `entries` in the given order.
+    fn ordered_zip(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (name, bytes) in entries {
+            zip.start_file(name.as_str(), options).unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn xml_malformed_budget_keeps_the_main_part_ahead_of_unused_part_warnings() {
+        let types = format!(
+            r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="{}"/></Types>"#,
+            package::MAIN_CONTENT_TYPE
+        );
+        let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rM" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+        for main in ["", "<"] {
+            for position in [0, 1, 3] {
+                for budget in [1, 2] {
+                    let mut entries =
+                        vec![("[Content_Types].xml".to_string(), types.clone().into_bytes()), ("_rels/.rels".to_string(), root.as_bytes().to_vec())];
+                    for index in 0..3 {
+                        entries.push((format!("word/orphan{index}.xml"), b"<".to_vec()));
+                    }
+                    entries.insert(2 + position, ("word/document.xml".to_string(), main.as_bytes().to_vec()));
+                    let limits = Limits { findings_per_rule: budget, ..Limits::default() };
+                    let report = validate_bytes_limited(&ordered_zip(&entries), limits);
+                    let malformed: Vec<_> = report.findings.iter().filter(|f| f.rule == "XML-MALFORMED").collect();
+                    let case = format!("main {main:?} at {position} with budget {budget}: {report:?}");
+                    assert_eq!(report.verdict, Verdict::Fail, "{case}");
+                    assert!(malformed.iter().any(|f| f.part.as_deref() == Some("word/document.xml") && f.severity == Severity::Corrupt), "{case}");
+                    assert!(malformed.len() <= budget, "{case}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unobserved_relationship_on_an_incomplete_source_is_undecided_not_unused() {
+        let reference = r#"<w:p><w:hyperlink r:id="missing.docx"/></w:p>"#;
+        let rels = rel("hyperlink", "missing.docx");
+        let build = |body: &str| {
+            let document = format!(r#"<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}"><w:body>{body}</w:body></w:document>"#);
+            replace_part(&package(vec![], &rels), "word/document.xml", &document)
+        };
+        let padding = "<w:p/>".repeat(100);
+        let nesting = format!("{}{}", "<w:sdt>".repeat(20), "</w:sdt>".repeat(20));
+        let undecided = |report: &Report| report.coverage_notes.iter().any(|note| note.contains("missing.docx") && note.contains("not decided"));
+
+        // A complete source with no reference keeps the relationship unused.
+        let report = validate_bytes(&build(&padding));
+        assert!(!report.findings.iter().any(|f| f.rule == "REL-DANGLING") && !undecided(&report), "{report:?}");
+        // A reference seen before the stop is still reported.
+        let events = Limits { events: 60, ..Limits::default() };
+        let report = validate_bytes_limited(&build(&format!("{reference}{padding}")), events);
+        assert!(report.findings.iter().any(|f| f.rule == "REL-DANGLING"), "{report:?}");
+        // A reference after an event or depth stop leaves the check undecided, and the run incomplete.
+        let depth = Limits { depth: 8, ..Limits::default() };
+        for (body, limits) in [(format!("{padding}{reference}"), events), (format!("{nesting}{reference}"), depth)] {
+            let report = validate_bytes_limited(&build(&body), limits);
+            assert!(undecided(&report), "{report:?}");
+            assert_eq!(report.verdict, Verdict::Incomplete, "{report:?}");
+        }
+        // So does a reference after a syntax error, which leaves only the Corrupt finding otherwise.
+        for broken in ["<w:p></w:q>", "<w:p a=b/>", "<w:p>&</w:p>"] {
+            let report = validate_bytes(&build(&format!("{broken}{reference}")));
+            assert!(undecided(&report), "{broken}: {report:?}");
+            assert!(report.findings.iter().any(|f| f.rule == "XML-MALFORMED"), "{broken}: {report:?}");
+        }
     }
 
     #[test]
