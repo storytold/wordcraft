@@ -83,14 +83,14 @@ impl Uses {
     pub(crate) fn open(
         &mut self,
         parent: Scope,
-        element: (Option<&[u8]>, &str, bool),
+        element: (Option<&[u8]>, &str, bool, bool),
         attrs: &[Attribute],
         resolver: &NamespaceResolver,
         cap: usize,
     ) -> Scope {
         observation_contract! {
             rules: "-";
-            collections: "field.blocks*1,field.branches*1,field.pictures*4,field.sites*1";
+            collections: "field.blocks*1,field.branches*2,field.pictures*4,field.sites*1";
             scope: "Namespace-qualified references and picture slots in one XML event";
             loss: "Unresolved attribute or source-local allocation cap";
             fallback: "Retain the observed prefix; incomplete sources do not prove substitution";
@@ -98,8 +98,11 @@ impl Uses {
         }
 
         let mut scope = Scope { direct_block_child: false, ..parent };
-        let (ns, local, root) = element;
-        if ns == Some(NS_MC.as_bytes()) {
+        let (ns, local, root, unresolved) = element;
+        // An element whose namespace is undeclared or cannot be expanded may be a compatibility block
+        // or a picture slot; it is treated as one rather than ignored.
+        let unresolved_block = unresolved && local == "AlternateContent";
+        if ns == Some(NS_MC.as_bytes()) || unresolved_block {
             scope = self.compatibility_scope(parent, local, attrs, resolver, cap);
         }
         if parent.direct_block_child
@@ -110,6 +113,13 @@ impl Uses {
         }
         self.observe_binding((ns, local, root), attrs, resolver, cap);
         let element = (ns, local);
+        if unresolved
+            && matches!(local, "blip" | "imagedata" | "imgLayer" | "svgBlip")
+            && let Some(branch) = scope.branch
+        {
+            // A picture slot of unresolved nature makes the slot count of its branch undecided.
+            self.branches[branch].eligible = false;
+        }
         let drawing = matches!(element, (Some(DRAWING), "blip"));
         let vml = matches!(element, (Some(VML), "imagedata"));
         let primary = drawing || vml;
@@ -252,6 +262,8 @@ pub(crate) enum Consumption {
     Substituted,
     Picture,
     Other,
+    /// The source is incomplete and has no observed site for the id: a later one may exist.
+    Undecided,
 }
 
 /// A package-wide decoder budget and cache for proving that replacement pictures render.
@@ -328,7 +340,9 @@ impl<'a> Consumers<'a> {
             package_loss: "independent";
         }
 
-        let Some(sites) = self.facts.sites.get(id) else { return Consumption::Unused };
+        let Some(sites) = self.facts.sites.get(id) else {
+            return if self.complete { Consumption::Unused } else { Consumption::Undecided };
+        };
         let mut result = Consumption::Substituted;
         for site in sites {
             let Some(index) = site.picture else { return Consumption::Other };

@@ -956,7 +956,7 @@ fn choice_after_fallback_prevents_picture_substitution_in_the_block() {
 }
 
 #[test]
-fn unresolved_namespace_in_fallback_preserves_picture_substitution() {
+fn unresolved_namespace_in_fallback_withholds_picture_substitution() {
     let mut d = picture_substitution_fixture();
     let body = concat!(
         r#"<w:p><mc:AlternateContent xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">"#,
@@ -965,10 +965,50 @@ fn unresolved_namespace_in_fallback_preserves_picture_substitution() {
         r#"</mc:AlternateContent></w:p>"#,
     );
     let doctype = r#"<!DOCTYPE w:document [<!ENTITY drawing "http://schemas.openxmlformats.org/drawingml/2006/main">]>"#;
+    // The fallback holds an element whose picture-slot nature is unresolved: substitution is not approved,
+    // exactly as when the namespace is written out and the fallback has an extra slot.
     d.set("word/document.xml", with_doctype(document_xml(body), doctype));
-    assert!(!has(&validate(&d), "REL-TYPED"));
+    assert!(has(&validate(&d), "REL-TYPED"));
 
     d.set_document(&body.replace("&drawing;", "http://schemas.openxmlformats.org/drawingml/2006/main"));
+    assert!(has(&validate(&d), "REL-TYPED"));
+
+    // The same holds when the unresolved element sits in the Choice, where it hides a slot from the count.
+    let in_choice = body
+        .replace(r#"<a:blip r:embed="choice"/>"#, r#"<a:blip r:embed="choice"/><x:blip xmlns:x="&drawing;"/>"#)
+        .replace(r#"<x:blip xmlns:x="&drawing;"/></mc:Fallback>"#, "</mc:Fallback>");
+    d.set("word/document.xml", with_doctype(document_xml(&in_choice), doctype));
+    assert!(has(&validate(&d), "REL-TYPED"));
+
+    // Control: a fully resolved single-slot fallback still substitutes.
+    d.set_document(&body.replace(r#"<x:blip xmlns:x="&drawing;"/>"#, ""));
+    assert!(!has(&validate(&d), "REL-TYPED"));
+}
+
+#[test]
+fn unresolved_alternate_content_in_fallback_is_a_nested_block() {
+    let mut d = picture_substitution_fixture();
+    let wrap = |fallback: &str| {
+        format!(
+            r#"<w:p><mc:AlternateContent xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><mc:Choice Requires="a"><a:blip r:embed="choice"/></mc:Choice><mc:Fallback>{fallback}</mc:Fallback></mc:AlternateContent></w:p>"#
+        )
+    };
+    let nested_blip = r#"<a:blip r:embed="fallback"/>"#;
+    // Control: the fallback holding the picture directly substitutes.
+    d.set_document(&wrap(nested_blip));
+    assert!(!has(&validate(&d), "REL-TYPED"));
+    for inner in [
+        format!(r#"<mc:AlternateContent><mc:Choice Requires="a">{nested_blip}</mc:Choice></mc:AlternateContent>"#),
+        format!(r#"<q:AlternateContent><mc:Choice Requires="a">{nested_blip}</mc:Choice></q:AlternateContent>"#),
+        format!(r#"<q:AlternateContent><q:Choice Requires="a">{nested_blip}</q:Choice></q:AlternateContent>"#),
+    ] {
+        d.set_document(&wrap(&inner));
+        assert!(has(&validate(&d), "REL-TYPED"), "{inner}");
+    }
+    // An alternate whose namespace is a DOCTYPE entity that cannot be expanded is the same nested block.
+    let doctype = r#"<!DOCTYPE w:document [<!ENTITY compat "http://schemas.openxmlformats.org/markup-compatibility/2006">]>"#;
+    let inner = format!(r#"<x:AlternateContent xmlns:x="&compat;"><x:Choice Requires="a">{nested_blip}</x:Choice></x:AlternateContent>"#);
+    d.set("word/document.xml", with_doctype(document_xml(&wrap(&inner)), doctype));
     assert!(has(&validate(&d), "REL-TYPED"));
 }
 

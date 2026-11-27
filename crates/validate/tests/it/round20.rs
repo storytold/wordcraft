@@ -1,7 +1,7 @@
 //! Round 20 binding H6 probes; raw metadata is patched only in synthetic ZIP headers.
 #![allow(dead_code)]
 #[path = "../common/raw_zip.rs"]
-mod raw_zip;
+pub(crate) mod raw_zip;
 use crate::common::*;
 use raw_zip::Record;
 use std::io::{Cursor, Write};
