@@ -205,21 +205,26 @@ pub fn format_date_at_in(fmt: &str, lang: Option<&str>, unix: u64, offset_secs: 
     format_date_parts_in(fmt, lang, y, m as usize, d, hms, days)
 }
 
-/// Month and weekday names of a language, as Word writes them in date fields: full names, the
-/// three-letter forms (`MMM`, `ddd`) being their first three letters, without a full stop.
-/// Weekdays start on Thursday (1970-01-01).
+/// Month and weekday names of a language, as Word writes them in date fields: full names and the
+/// abbreviations used by `MMM` and `ddd`. Weekdays start on Thursday (1970-01-01).
 struct DateNames {
     /// Full month names (January through December).
     months: [&'static str; 12],
+    /// Abbreviated month names for `MMM` (January through December).
+    months_short: [&'static str; 12],
     /// Weekday names starting on Thursday (1970-01-01).
     days: [&'static str; 7],
+    /// Abbreviated weekday names for `ddd`, starting on Thursday (1970-01-01).
+    days_short: [&'static str; 7],
     /// The picture of a `DATE` field without `\@`.
     default: &'static str,
 }
 
 const ENGLISH: DateNames = DateNames {
     months: ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
+    months_short: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
     days: ["Thursday", "Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday"],
+    days_short: ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"],
     default: "M/d/yyyy",
 };
 
@@ -227,14 +232,32 @@ const ENGLISH: DateNames = DateNames {
 /// `ddd` = `qui`, and `dd/MM/yyyy` for a field without a picture.
 const PORTUGUESE: DateNames = DateNames {
     months: ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"],
+    months_short: ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"],
     days: ["quinta-feira", "sexta-feira", "sábado", "domingo", "segunda-feira", "terça-feira", "quarta-feira"],
+    days_short: ["qui", "sex", "sáb", "dom", "seg", "ter", "qua"],
     default: "dd/MM/yyyy",
+};
+
+/// German (Word's Windows NLS forms): `MMMM` = `März`, `MMM` = `Mrz`, `ddd` = `Fr` (two
+/// letters), and `dd.MM.yyyy` for a field without a picture. Covers de-DE, de-AT, de-CH.
+const GERMAN: DateNames = DateNames {
+    months: ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"],
+    months_short: ["Jan", "Feb", "Mrz", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"],
+    days: ["Donnerstag", "Freitag", "Samstag", "Sonntag", "Montag", "Dienstag", "Mittwoch"],
+    days_short: ["Do", "Fr", "Sa", "So", "Mo", "Di", "Mi"],
+    default: "dd.MM.yyyy",
 };
 
 /// Choose month and weekday names according to the primary language subtag.
 fn date_names(lang: Option<&str>) -> &'static DateNames {
     let primary = lang.and_then(|l| l.trim().split(['-', '_']).next()).unwrap_or("");
-    if primary.eq_ignore_ascii_case("pt") { &PORTUGUESE } else { &ENGLISH }
+    if primary.eq_ignore_ascii_case("pt") {
+        &PORTUGUESE
+    } else if primary.eq_ignore_ascii_case("de") {
+        &GERMAN
+    } else {
+        &ENGLISH
+    }
 }
 
 /// The picture Word gives a `DATE` field that has no `\@` switch, in the field's language.
@@ -252,9 +275,12 @@ pub fn format_date_parts(fmt: &str, y: i64, m: usize, d: u32, hms: (u32, u32, u3
 #[allow(clippy::too_many_arguments)]
 pub fn format_date_parts_in(fmt: &str, lang: Option<&str>, y: i64, m: usize, d: u32, (hh, mm, ss): (u32, u32, u32), days_since: i64) -> String {
     let names = date_names(lang);
-    let month = names.months.get(m.saturating_sub(1)).copied().unwrap_or(names.months[0]);
-    let day = names.days.get(days_since.rem_euclid(7) as usize).copied().unwrap_or(names.days[0]);
-    let three = |s: &str| -> String { s.chars().take(3).collect() };
+    let mi = m.saturating_sub(1);
+    let di = days_since.rem_euclid(7) as usize;
+    let month = names.months.get(mi).copied().unwrap_or(names.months[0]);
+    let month_short = names.months_short.get(mi).copied().unwrap_or(names.months_short[0]);
+    let day = names.days.get(di).copied().unwrap_or(names.days[0]);
+    let day_short = names.days_short.get(di).copied().unwrap_or(names.days_short[0]);
     let mut out = String::new();
     let chars: Vec<char> = fmt.chars().collect();
     let mut i = 0;
@@ -296,11 +322,11 @@ pub fn format_date_parts_in(fmt: &str, lang: Option<&str>, y: i64, m: usize, d: 
             ('y' | 'Y', 4..) => out.push_str(&format!("{y:04}")),
             ('y' | 'Y', _) => out.push_str(&format!("{:02}", y % 100)),
             ('M', 4..) => out.push_str(month),
-            ('M', 3) => out.push_str(&three(month)),
+            ('M', 3) => out.push_str(month_short),
             ('M', 2) => out.push_str(&format!("{m:02}")),
             ('M', 1) => out.push_str(&m.to_string()),
             ('d' | 'D', 4..) => out.push_str(day),
-            ('d' | 'D', 3) => out.push_str(&three(day)),
+            ('d' | 'D', 3) => out.push_str(day_short),
             ('d' | 'D', 2) => out.push_str(&format!("{d:02}")),
             ('d' | 'D', 1) => out.push_str(&d.to_string()),
             ('H', 2..) => out.push_str(&format!("{hh:02}")),
@@ -572,6 +598,14 @@ mod date_time_locale_tests {
         assert_eq!(format("ddd", 20), "sáb");
         assert_eq!(format("MMM", 20), "out");
         assert_eq!(format("MMMM", 20), "outubro");
+    }
+
+    /// German month and weekday names, and the default picture, are chosen by the primary
+    /// language subtag (de-DE, de-AT, de-CH), as in Word (#7146).
+    #[test]
+    fn german_date_names_render_for_de() {
+        assert_eq!(format_date_parts_in("dddd, d. MMMM yyyy", Some("de-DE"), 2026, 11, 21, (12, 0, 0), 2), "Samstag, 21. November 2026");
+        assert_eq!(default_date_picture(Some("de-CH")), "dd.MM.yyyy");
     }
 
     /// A pt-BR dynamic field keeps its result after DOCX round-trip and refresh.
