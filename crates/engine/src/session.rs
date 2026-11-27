@@ -41,6 +41,23 @@ pub use snapshot_types::EditSnapshot;
 use snapshot_types::{LayoutSlots, RunSnapshot};
 pub use view::{StylesPaneDock, ViewState};
 
+/// A layout being made on another thread: where its result and the layout cache come back, and
+/// what turns the result into the entry that is kept ([`LayoutSlots`]). Each open document has its
+/// own, so a switch neither waits for another document's layout nor starts it again.
+struct BgLayout {
+    rx: std::sync::mpsc::Receiver<(LayoutCache, Arc<DocLayout>)>,
+    entry: LayoutEntryFn,
+}
+
+/// What turns a finished layout into the entry kept for it ([`LayoutSlots`]).
+type LayoutEntryFn = Box<dyn FnOnce(Arc<DocLayout>) -> snapshot_types::LayoutEntry>;
+
+/// A layout still to be made: what it is made with, and the entry it is kept as.
+struct LayoutJob {
+    opts: LayoutOptions,
+    entry: LayoutEntryFn,
+}
+
 /// An editing session: the app-wide state (clipboard, preferences, macros, the command registry…)
 /// and the open documents. The active document's state is in the session's own fields, which
 /// every command works on; the other open documents wait in [`DocState`] values and are swapped
@@ -176,6 +193,8 @@ pub struct Session {
     ime_origin: bool,
     cache: LayoutCache,
     layout: LayoutSlots,
+    /// A layout being made on another thread ([`Session::begin_background_layout`]).
+    bg_layout: Option<BgLayout>,
     /// The word being typed, left without a spelling squiggle ([`TypedWord`]).
     typing: Option<TypedWord>,
     /// Picture edits: edited media key → original media key (Reset Picture).

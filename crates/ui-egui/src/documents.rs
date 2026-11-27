@@ -161,6 +161,7 @@ impl WordApp {
     pub(crate) fn show_document(&mut self, id: u64) -> Result<(), String> {
         self.session.activate(id).map_err(|e| e.to_string())?;
         self.sync_document();
+        self.paginate_in_background();
         Ok(())
     }
 

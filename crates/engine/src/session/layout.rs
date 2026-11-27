@@ -2,17 +2,99 @@ use super::doc_state::{Selection, TypedWord, typed_range};
 use super::locale::SYSTEM_LOCALE;
 use super::snapshot_types::LayoutEntry;
 use super::view::DRAFT_WIDTH;
-use super::{Arc, DocLayout, Document, LayoutCache, LayoutOptions, Session, StoryRef, Value, ViewMode};
+use super::{Arc, BgLayout, DocLayout, Document, LayoutCache, LayoutJob, LayoutOptions, Session, StoryRef, Value, ViewMode};
 
 impl Session {
     /// The current layout (recomputed when the document or view changed).
     pub fn layout(&mut self) -> Arc<DocLayout> {
+        // A layout still being made in the background is waited for, not started again.
+        self.finish_background_layout(true);
         let typing = self.typing_word();
         self.layout_with(typing)
     }
 
+    /// Start laying the document out on another thread, so a large file doesn't freeze the window
+    /// while it is paginated. [`Session::layout_pending`] says when it's done; [`Session::layout`]
+    /// waits for it if asked first. Does nothing when the current layout is already up to date or
+    /// one is already being made.
+    pub fn begin_background_layout(&mut self) {
+        if self.bg_layout.is_some() {
+            return;
+        }
+        let typing = self.typing_word();
+        if let Err(job) = self.layout_job(typing) {
+            self.spawn_layout(*job);
+        }
+    }
+
+    /// Whether a layout started by [`Session::begin_background_layout`] is still being made.
+    /// Takes its result in when it has finished.
+    pub fn layout_pending(&mut self) -> bool {
+        !self.finish_background_layout(false)
+    }
+
+    /// Whether the active document has a background layout not yet taken in, finished or not.
+    #[cfg(test)]
+    pub(crate) fn has_background_layout(&self) -> bool {
+        self.bg_layout.is_some()
+    }
+
+    /// Take in the background layout: wait for it (`wait`) or only if it has finished. Returns
+    /// whether none is pending any more. A layout for a revision since edited is simply not found
+    /// by [`Session::layout`]'s check of what a layout was made for.
+    fn finish_background_layout(&mut self, wait: bool) -> bool {
+        let Some(bg) = self.bg_layout.take() else { return true };
+        let got = if wait {
+            bg.rx.recv().ok()
+        } else {
+            match bg.rx.try_recv() {
+                Ok(done) => Some(done),
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.bg_layout = Some(bg);
+                    return false;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
+            }
+        };
+        if let Some((cache, laid)) = got {
+            self.cache = cache;
+            let [newest, _] = std::mem::take(&mut self.layout);
+            self.layout = [Some((bg.entry)(laid)), newest];
+        }
+        true
+    }
+
     /// [`Session::layout`] with `typing` as the word being typed.
     fn layout_with(&mut self, typing: Option<wordcraft_layout::TypingWord>) -> Arc<DocLayout> {
+        match self.layout_job(typing) {
+            Ok(l) => l,
+            Err(job) => {
+                let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &job.opts));
+                let [newest, _] = std::mem::take(&mut self.layout);
+                self.layout = [Some((job.entry)(l.clone())), newest];
+                l
+            }
+        }
+    }
+
+    /// Lay the document out on another thread, to be taken in by [`Session::finish_background_layout`].
+    fn spawn_layout(&mut self, job: LayoutJob) {
+        let LayoutJob { opts, entry } = job;
+        let doc = self.doc.clone();
+        let mut cache = std::mem::take(&mut self.cache);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let started = std::thread::Builder::new().name("wordcraft-layout".into()).spawn(move || {
+            let laid = Arc::new(wordcraft_layout::layout(&doc, &mut cache, &opts));
+            let _ = tx.send((cache, laid));
+        });
+        // No thread to be had: the next `layout()` makes it in place (with a cold cache).
+        if started.is_ok() {
+            self.bg_layout = Some(BgLayout { rx, entry });
+        }
+    }
+
+    /// The current layout when it is up to date, else the job that makes it.
+    fn layout_job(&mut self, typing: Option<wordcraft_layout::TypingWord>) -> Result<Arc<DocLayout>, Box<LayoutJob>> {
         let mode = if self.view.read_mode { ViewMode::Read } else { self.view.mode };
         let width = match mode {
             ViewMode::Read => self.view.read_width,
@@ -52,7 +134,7 @@ impl Session {
         if fits(&self.layout[0])
             && let Some(e) = &self.layout[0]
         {
-            return e.5.clone();
+            return Ok(e.5.clone());
         }
         let (fn_name, fn_path) = self.resolved_filenames();
         let (filename, filepath): (Option<Arc<str>>, Option<Arc<str>>) = (Some(Arc::from(fn_name.as_str())), Some(Arc::from(fn_path.as_str())));
@@ -78,11 +160,11 @@ impl Session {
             output_page_refs: false,
             bookmark_error: None,
         };
-        let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));
-        let [newest, _] = std::mem::take(&mut self.layout);
-        self.layout =
-            [Some((rev, width, height, mode, spacing, l.clone(), self.view.proofing, outline, deleted, self.view.numeral, typing, shown)), newest];
-        l
+        let (proofing_now, numeral_now) = (self.view.proofing, self.view.numeral);
+        let entry = move |l: Arc<DocLayout>| -> LayoutEntry {
+            (rev, width, height, mode, spacing, l, proofing_now, outline, deleted, numeral_now, typing, shown)
+        };
+        Err(Box::new(LayoutJob { opts, entry: Box::new(entry) }))
     }
 
     /// The recorded word while the caret and the word are as typing left them; else drops it.
@@ -245,6 +327,8 @@ impl Session {
     pub fn relayout(&mut self) {
         self.layout = Default::default();
         self.cache.clear();
+        // One still being made is of the old state: its result is not wanted.
+        self.bg_layout = None;
     }
 
     /// Set the language new documents are written in ([`Session::editing_lang`]; `None` or a
