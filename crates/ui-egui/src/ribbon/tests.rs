@@ -901,6 +901,43 @@ fn home_font_and_paragraph_buttons_stay_icon_only_and_styles_shows_six_tiles() {
     }
 }
 
+/// #4017: Home › Font and Home › Paragraph spread their two rows over the height Clipboard's three small rows take, with
+/// as much room above the first row, between the rows and under the second, instead of packing both rows at the top
+/// and leaving an empty band over their titles.
+#[test]
+fn home_two_row_groups_spread_their_rows_over_the_three_row_height() {
+    use egui::accesskit::Role;
+
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    let h = tab_harness(app, "Home");
+    let rect = |name: &str| h.get_by_role_and_label(Role::Button, name).rect();
+    // Clipboard's column of Cut, Copy and Format Painter is the three rows' height.
+    let (top, foot) = (rect("Cut").top(), rect("Format").bottom());
+    for (group, first, second) in [("Font", "Increase Font Size", "Bold"), ("Paragraph", "Decrease Indent", "Align Left")] {
+        let (first, second) = (rect(first), rect(second));
+        let (above, between, under) = (first.top() - top, second.top() - first.bottom(), foot - second.bottom());
+        assert!(above > 1.0, "{group}'s first row should stand clear of the rows' top: {above} pt");
+        assert!(
+            (above - under).abs() <= 1.0 && (between - above).abs() <= 1.0,
+            "{group}'s rows should be spread evenly: {above} pt above, {between} pt between, {under} pt under"
+        );
+    }
+}
+
+/// #4017: Home's small buttons, icon-only or labelled, are at least 24 points square: the least target size the
+/// accessibility standard asks for (WCAG 2.5.8).
+#[test]
+fn home_small_buttons_are_at_least_24_points_square() {
+    use egui::accesskit::Role;
+
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    let h = tab_harness(app, "Home");
+    for name in ["Cut", "Copy", "Format", "Increase Font Size", "Bold", "Italic", "Decrease Indent", "Align Left", "Justify", "Find", "Replace"] {
+        let size = h.get_by_role_and_label(Role::Button, name).rect().size();
+        assert!(size.x >= 23.5 && size.y >= 23.5, "{name} is {size:?}, under the 24-point least target");
+    }
+}
+
 /// #7323: the Home › Bullets dropdown renders the Bullet Library grid as compact
 /// square preview tiles (~22×22 pt), rather than expanding to full card dimensions (~132 pt).
 #[test]

@@ -73,11 +73,12 @@ pub(crate) fn no_ribbon() -> RibbonOutput<String> {
     RibbonOutput { shown: None, picked: None, controls: None, tabs: None, tab_ids: Default::default() }
 }
 
-/// How the ribbon buttons look, in points: the old ribbon drew its large icons 32
-/// points square and the rest 17, its menu arrows as filled triangles in 10 points, and its small
-/// rows 22 points apart (20-point buttons a tight gap apart); its tabs rest in the text colour
-/// over a 3-point underline; its body stands on its own lighter fill, ruled above and below.
-const RIBBON_LOOK: RibbonLook = RibbonLook::new(32, 17).arrow(10).row(20).tabs(3).body();
+/// How the ribbon buttons look, in points: large icons 32 points square and the rest 17, as the
+/// old ribbon drew them; menu arrows as filled triangles in 10 points; small rows 24 points high,
+/// the least target size the accessibility standard asks for (and the old ribbon's 24-point-wide
+/// icon buttons), a tight gap apart; tabs in the text colour over a 3-point underline; the body on
+/// its own lighter fill, ruled above and below.
+pub(crate) const RIBBON_LOOK: RibbonLook = RibbonLook::new(32, 17).arrow(10).row(24).tabs(3).body();
 
 /// Draws the Read toolbar or the full ribbon, switching to and from the contextual Equation and
 /// Outlining tabs and showing the available tab strip. The output carries the record of the ribbon's

@@ -20,6 +20,7 @@ use serde_json::json;
 use wordcraft_doc::props::CharProps;
 use wordcraft_doc::{Block, Document, Paragraph, Table, para_block};
 
+use super::common::gallery_rows;
 use crate::WordApp;
 use crate::previews::{SnippetOptions, dim, picture_key, preview_revision, snippet_blocks, style_revision, style_snippet};
 
@@ -156,14 +157,16 @@ pub(crate) fn styles(ui: &mut Ui, app: &mut WordApp, current: Option<&str>) {
         let items = image_items("style", &entries, &makers, ppp, revision);
         // Each tile shows the sample's first letters at their size: a large thumbnail as wide as `STYLE_TILE_W` crops
         // them (68 by 48 points), so the sample is not scaled down, with the style's name under it.
-        Gallery::new(tl!("Styles"), &items, Some(&current))
-            .tiles(6, 3)
-            .thumb(ThumbSize::Large)
-            .aspect(ThumbAspect::new(17, 12))
-            .caption(CaptionPlace::Below)
-            .framed()
-            .more(GalleryMore::Command(CommandRef::with_params("view.stylesPane", json!({"value": true}))))
-            .show(ui)
+        gallery_rows(ui, |ui| {
+            Gallery::new(tl!("Styles"), &items, Some(&current))
+                .tiles(6, 3)
+                .thumb(ThumbSize::Large)
+                .aspect(ThumbAspect::new(17, 12))
+                .caption(CaptionPlace::Below)
+                .framed()
+                .more(GalleryMore::Command(CommandRef::with_params("view.stylesPane", json!({"value": true}))))
+                .show(ui)
+        })
     };
     if let Some(id) = out.picked {
         let _ = app.run("para.style", json!({"style": id}));
@@ -201,8 +204,9 @@ pub(crate) fn style_sets(ui: &mut Ui, app: &mut WordApp) {
     // Each tile is a small page (title, heading, paragraph) at the large thumbnail size, about as wide as high as the
     // image `style_set_image` renders, so the title and heading read as they did in the old ribbon. All seven show at
     // full width, so no buttons stand beside them, as in the old ribbon.
-    let out =
-        Gallery::new(tl!("Style Sets"), &items, None).tiles(7, 4).thumb(ThumbSize::Large).aspect(ThumbAspect::new(12, 11)).spare_buttons().show(ui);
+    let out = gallery_rows(ui, |ui| {
+        Gallery::new(tl!("Style Sets"), &items, None).tiles(7, 4).thumb(ThumbSize::Large).aspect(ThumbAspect::new(12, 11)).spare_buttons().show(ui)
+    });
     if let Some(name) = out.picked {
         let _ = app.run("design.styleSet", json!({"name": name}));
     }
@@ -232,7 +236,9 @@ pub(crate) fn table_styles(ui: &mut Ui, app: &mut WordApp) {
         // Each tile shows a 5×4 table sample at the large thumbnail size in the 3:2 landscape
         // ratio `table_style_image` renders (112×74 pt including margins), matching the sibling
         // `Styles` and `Style Sets` galleries and v0.18.1's ribbon previews.
-        Gallery::new(tl!("Table Styles"), &items, None).tiles(7, 4).thumb(ThumbSize::Large).aspect(ThumbAspect::new(3, 2)).show(ui)
+        gallery_rows(ui, |ui| {
+            Gallery::new(tl!("Table Styles"), &items, None).tiles(7, 4).thumb(ThumbSize::Large).aspect(ThumbAspect::new(3, 2)).show(ui)
+        })
     };
     if let Some(style) = out.picked {
         let _ = app.run("table.style", json!({"style": style}));
