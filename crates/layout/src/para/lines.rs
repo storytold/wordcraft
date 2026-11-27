@@ -47,6 +47,7 @@ struct Breaker<'e> {
     grid: Option<Grid>,
     bidi: bool,
     est_h: f32,
+    row_h: f32,
     table_h: f32,
     first_x0: Option<f32>,
     hcache: Vec<(u32, u32, f32)>,
@@ -159,12 +160,7 @@ pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, l
     let exclusions = mirrored.as_deref().unwrap_or(env.exclusions);
     let mut bk = Breaker::new(pl, (env, exclusions), mark_style, level);
     loop {
-        let mut sc = bk.begin_line(pl);
-        sc.scan(&mut bk, pl);
-        if sc.skip {
-            bk.skip_row(&sc);
-            continue;
-        }
+        let sc = bk.scan_line(pl);
         let end = bk.close_line(pl, sc);
         if bk.next_line(pl, end) {
             break;
@@ -179,20 +175,30 @@ impl<'e> Breaker<'e> {
         let width = env.width.max(MIN_LINE_WIDTH);
         let settings = &env.doc.settings;
         let grid = Some(env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid);
-        // The estimate matches what `measure` lays out, so a float is met by the line that is drawn.
-        let est_h = pl
+        // Multiple spacing accounts for the tallest run; `close_line` checks any taller measured
+        // content against exclusions before storing the line.
+        let mark_natural = pl
             .styles
             .get(mark_style as usize)
-            .map(|st| {
-                let natural = st.ascent + st.descent;
-                match (rp.line_spacing, grid) {
-                    (LineSpacing::Multiple(m), Some(g)) => g.multiple_height(natural, m),
-                    (LineSpacing::Multiple(m), None) => natural * m,
-                    _ => natural,
-                }
-            })
-            .unwrap_or(14.0)
-            .max(1.0);
+            .map(|st| st.ascent + st.descent)
+            .unwrap_or(14.0);
+        let natural = if matches!(rp.line_spacing, LineSpacing::Multiple(_)) {
+            pl.styles
+                .iter()
+                .map(|st| {
+                    let (a, d) = st.line_extent();
+                    a + d
+                })
+                .fold(mark_natural, f32::max)
+        } else {
+            mark_natural
+        };
+        let est_h = match (rp.line_spacing, grid) {
+            (LineSpacing::Multiple(m), Some(g)) => g.multiple_height(natural, m),
+            (LineSpacing::Multiple(m), None) => natural * m,
+            _ => natural,
+        }
+        .max(1.0);
         Breaker {
             level,
             mark_style,
@@ -222,8 +228,8 @@ impl<'e> Breaker<'e> {
             grid,
             bidi: rp.bidi || !pl.bidi_levels.is_empty(),
             est_h,
+            row_h: est_h,
             // Exact spacing fixes the table-contact boundary even when the mark has other metrics.
-            // Keep the existing estimate for shapes and for non-exact spacing.
             table_h: if let LineSpacing::Exactly(h) = rp.line_spacing { h } else { est_h },
             rp,
             first_x0: None,
@@ -267,7 +273,7 @@ impl<'e> Breaker<'e> {
         let mut guard = 0;
         loop {
             let lo = self.row_left(pl);
-            let row = (self.top, self.est_h, self.table_h);
+            let row = (self.top, self.row_h, self.table_h_for_row());
             match row_spans(self.exclusions, row, (lo, self.base_right), self.tight_indent).map(|mut spans| (spans.pop_front(), spans)) {
                 Ok((Some((a, b)), rest)) => {
                     // Under Word 2003's indent rules a row can start left of the indent too.
@@ -286,6 +292,28 @@ impl<'e> Breaker<'e> {
                     return (lo, self.base_right.max(lo + MIN_LINE_WIDTH), narrowed);
                 }
             }
+        }
+    }
+
+    /// A measured line can be taller than the row's initial estimate (for example, an inline
+    /// picture). Use its actual height for exclusion checks until the row ends.
+    fn table_h_for_row(&self) -> f32 {
+        if matches!(self.rp.line_spacing, LineSpacing::Exactly(_)) { self.table_h } else { self.row_h }
+    }
+
+    fn reset_row_height(&mut self) {
+        self.row_h = self.est_h;
+    }
+
+    /// Scan a line, skipping spans too narrow for its first word.
+    fn scan_line(&mut self, pl: &mut ParaLayout) -> Scan {
+        loop {
+            let mut sc = self.begin_line(pl);
+            sc.scan(self, pl);
+            if !sc.skip {
+                return sc;
+            }
+            self.skip_row(&sc);
         }
     }
 
@@ -361,60 +389,102 @@ impl<'e> Breaker<'e> {
             // Nothing on this row: go below the first object that ends, as when no span is wide enough.
             self.exclusions
                 .iter()
-                .filter(|e| e.intersects_row(self.top, self.est_h, self.table_h, sc.row_lo, self.base_right))
+                .filter(|e| e.intersects_row(self.top, self.row_h, self.table_h_for_row(), sc.row_lo, self.base_right))
                 .map(|e| e.bottom)
                 .reduce(f32::min)
-                .unwrap_or(self.top + self.est_h)
+                .unwrap_or(self.top + self.row_h)
         };
+        self.reset_row_height();
     }
 
     /// Finish the line scanned: lay out its clusters, measure and align it, and add it.
     /// Returns how it ends.
     fn close_line(&mut self, pl: &mut ParaLayout, mut sc: Scan) -> LineEnd {
-        if sc.end == LineEnd::Para || sc.end == LineEnd::Wrap {
-            let xc = sc.x;
-            resolve_tab(pl, &mut sc.pending_tab, &mut sc.xs, sc.c0, xc, &mut sc.x);
+        loop {
+            if sc.end == LineEnd::Para || sc.end == LineEnd::Wrap {
+                let xc = sc.x;
+                resolve_tab(pl, &mut sc.pending_tab, &mut sc.xs, sc.c0, xc, &mut sc.x);
+            }
+            if sc.j >= self.n && sc.end != LineEnd::Wrap && !matches!(sc.end, LineEnd::LineBreak | LineEnd::PageBreak | LineEnd::ColumnBreak) {
+                sc.end = LineEnd::Para;
+            }
+            let (c1, j, hyphen) = self.settle_clusters(pl, &mut sc);
+            let v = self.measure(pl, (sc.c0, c1));
+            if v.height > self.row_h {
+                // If earlier spans already contain lines, keep them at their measured row height.
+                // A taller line starts a new row so `even_row` cannot enlarge those lines into a
+                // float missed by the original estimate.
+                if self.lines.len() > self.row_first {
+                    self.top += even_row(self.lines.get_mut(self.row_first..).unwrap_or_default());
+                    self.row_rest.clear();
+                    self.reset_row_height();
+                    sc = self.scan_line(pl);
+                    continue;
+                }
+                let table_h = if matches!(self.rp.line_spacing, LineSpacing::Exactly(_)) { self.table_h } else { v.height };
+                let row = (self.top, v.height, table_h);
+                let spans = row_spans(self.exclusions, row, (sc.row_lo, self.base_right), self.tight_indent);
+                let fits = spans.as_ref().is_ok_and(|spans| {
+                    spans.iter().any(|(left, right)| *left <= sc.left + 0.01 && *right >= sc.right_edge - 0.01)
+                });
+                if !fits {
+                    self.top = match spans {
+                        Err(below) => below,
+                        Ok(_) => {
+                            let lo = if self.tight_indent { tight_row_start(self.exclusions, row, sc.row_lo) } else { sc.row_lo };
+                            self.exclusions
+                                .iter()
+                                .filter(|e| e.intersects_row(self.top, v.height, table_h, lo, self.base_right))
+                                .map(|e| e.bottom)
+                                .reduce(f32::max)
+                                .unwrap_or(self.top + v.height)
+                        }
+                    };
+                    self.row_rest.clear();
+                    self.reset_row_height();
+                    sc = self.scan_line(pl);
+                    continue;
+                }
+                // The current span is still clear, but later spans were computed with a shorter row.
+                self.row_h = v.height;
+                self.row_rest.clear();
+            }
+            self.align(pl, &mut sc, c1);
+            let start = pl.clusters.get(sc.c0).map(|c| c.start).unwrap_or(pl.text_len);
+            let stop = if c1 > sc.c0 { pl.clusters.get(c1 - 1).map(|c| c.end).unwrap_or(pl.text_len) } else { start };
+            if self.first_x0.is_none() {
+                self.first_x0 = sc.xs.first().copied();
+            }
+            let end = sc.end;
+            let mut line = Line {
+                top: self.top,
+                height: v.height,
+                baseline: v.baseline,
+                text_asc: v.text_asc,
+                text_desc: v.text_desc,
+                c0: sc.c0,
+                c1,
+                xs: sc.xs,
+                leaders: sc.leaders,
+                end,
+                start,
+                stop,
+                left: sc.left,
+                right: sc.right_edge,
+                hyphen,
+                beside: sc.beside,
+                vis: Vec::new(),
+                rtl: self.rtl_para,
+            };
+            if self.bidi {
+                reorder_line(pl, &mut line, self.width);
+            }
+            self.lines.push(line);
+            self.first = false;
+            self.skipped = 0;
+            self.i = j;
+            break end;
         }
-        if sc.j >= self.n && sc.end != LineEnd::Wrap && !matches!(sc.end, LineEnd::LineBreak | LineEnd::PageBreak | LineEnd::ColumnBreak) {
-            sc.end = LineEnd::Para;
-        }
-        let (c1, j, hyphen) = self.settle_clusters(pl, &mut sc);
-        let v = self.measure(pl, (sc.c0, c1));
-        self.align(pl, &mut sc, c1);
-        let start = pl.clusters.get(sc.c0).map(|c| c.start).unwrap_or(pl.text_len);
-        let stop = if c1 > sc.c0 { pl.clusters.get(c1 - 1).map(|c| c.end).unwrap_or(pl.text_len) } else { start };
-        if self.first_x0.is_none() {
-            self.first_x0 = sc.xs.first().copied();
-        }
-        let end = sc.end;
-        let mut line = Line {
-            top: self.top,
-            height: v.height,
-            baseline: v.baseline,
-            text_asc: v.text_asc,
-            text_desc: v.text_desc,
-            c0: sc.c0,
-            c1,
-            xs: sc.xs,
-            leaders: sc.leaders,
-            end,
-            start,
-            stop,
-            left: sc.left,
-            right: sc.right_edge,
-            hyphen,
-            beside: sc.beside,
-            vis: Vec::new(),
-            rtl: self.rtl_para,
-        };
-        if self.bidi {
-            reorder_line(pl, &mut line, self.width);
-        }
-        self.lines.push(line);
-        self.first = false;
-        self.skipped = 0;
-        self.i = j;
-        end
     }
 
     /// The line's clusters up to `c1` (at least one, so the paragraph progresses) with an x each
@@ -630,6 +700,7 @@ impl<'e> Breaker<'e> {
         }
         if self.row_rest.is_empty() {
             self.top += even_row(self.lines.get_mut(self.row_first..).unwrap_or_default());
+            self.reset_row_height();
         }
         if self.i >= self.n {
             // A paragraph ending with a line break gets an empty last line.

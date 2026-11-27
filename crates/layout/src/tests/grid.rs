@@ -184,3 +184,69 @@ fn grid_multiple_spacing_does_not_underestimate_float_overlap() {
     assert!((height - 54.0).abs() < 0.01, "a 3× line on an 18 pt grid is 3 pitches: {height}");
     assert!(y >= 137.0, "line must start below the shape at 137 pt: {y}");
 }
+
+#[test]
+fn multiple_spacing_rechecks_tall_run_and_inline_content_against_floats() {
+    use wordcraft_doc::para::{Anchor, Float, InlineObject, ShapeKind, Wrap};
+    use wordcraft_doc::section::{DocGrid, DocGridType};
+    use wordcraft_doc::{CharProps, Paragraph, Pos};
+
+    crate::test_fonts();
+    let mut d = Document::new();
+    d.last_section.doc_grid = Some(DocGrid { kind: DocGridType::Lines, line_pitch: 18.0, char_space: 0 });
+    let small = CharProps { font: Some("Source Sans 3".into()), size: Some(11.0), ..Default::default() };
+    d.body = (1..=3)
+        .map(|n| {
+            let mut p = Paragraph::with_text(&format!("P{n}"), small.clone());
+            p.format(0, 2, &|c| c.size = Some(50.0)).unwrap();
+            p.mark = small.clone();
+            if n == 1 {
+                let image = InlineObject::Image {
+                    media: "inline".into(),
+                    w: 20.0,
+                    h: 80.0,
+                    alt: "inline image".into(),
+                    float: Float { wrap: Wrap::Inline, ..Default::default() },
+                    crop: [0.0; 4],
+                    fx: Default::default(),
+                    ole: None,
+                };
+                p.insert_object(2, image, &Default::default()).unwrap();
+            }
+            p.props = wordcraft_doc::props::ParaProps {
+                space_before: Some(0.0),
+                space_after: Some(0.0),
+                line_spacing: Some(LineSpacing::Multiple(3.0)),
+                widow_control: Some(false),
+                ..Default::default()
+            };
+            wordcraft_doc::para_block(p)
+        })
+        .collect();
+    let shape = InlineObject::Shape {
+        kind: ShapeKind::Rectangle,
+        w: 468.0,
+        h: 20.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { wrap: Wrap::TopAndBottom, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 72.0, y: 145.0, ..Default::default() },
+        story: None,
+        effects: Default::default(),
+        freeform: None,
+        extra: Default::default(),
+    };
+    d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+
+    let l = lay(&d);
+    let (y, height) = l.pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Lines { path, y, para, story: StoryRef::Body, .. } if path.0.len() == 1 => Some((*y, para.lines[0].height)),
+            _ => None,
+        })
+        .unwrap();
+    assert!(height > 72.0, "inline content must make the line taller than the run-based estimate: {height}");
+    assert!(y >= 165.0, "the taller line must start below the shape at 165 pt: {y}");
+}
