@@ -598,6 +598,210 @@ fn forms_mode_greys_out_the_control_commands() {
     assert_eq!(s.why_disabled("developer.removeControl"), None);
 }
 
+/// #3603: an older Word form built from legacy form fields (no content controls) can be
+/// filled in under forms protection — text, check boxes and drop-downs — and nothing else in
+/// it can change: not the text around the fields, a field's definition or formatting, or the
+/// field itself.
+#[test]
+fn forms_mode_fills_legacy_form_fields_only() {
+    use crate::cmd::form_fields::tests::form_session;
+    let mut s = form_session();
+    s.run("review.restrict", &json!({"mode": "forms"})).unwrap();
+    assert_eq!(state(&s)["formFields"], 3);
+    // The ribbon agrees: filling in is on, everything else greyed out.
+    assert_eq!(s.why_disabled("developer.fillFormField"), None);
+    assert!(s.why_disabled("design.pageColor").is_some());
+    assert!(s.why_disabled("text.insert").is_some());
+    s.run("developer.fillFormField", &json!({"field": "Name", "text": "Ada"})).unwrap();
+    s.run("developer.fillFormField", &json!({"field": "Agree"})).unwrap();
+    s.run("developer.fillFormField", &json!({"field": "Court", "entry": "Adelaide"})).unwrap();
+    let filled = s.doc.clone();
+    assert!(filled.shown_text(StoryRef::Body).contains("Name: Ada\nAgree: "));
+    // Typing outside a field, formatting a field, deleting one: refused, nothing changed.
+    select(&mut s, "Locked");
+    assert!(s.run("text.insert", &json!({"text": "x"})).is_err());
+    let at = crate::cmd::form_fields::fillable_spans(&s.doc).remove(0);
+    s.sel = Selection { anchor: at.0.clone(), focus: at.1.clone() };
+    assert!(s.run("format.bold", &json!({})).is_err(), "the field's formatting is protected");
+    assert!(s.run("text.delete", &json!({})).is_err(), "the field itself is protected");
+    // What the after-check doesn't compare stays locked too: only filling in runs.
+    assert!(s.run("design.pageColor", &json!({"color": "FF0000"})).is_err());
+    assert!(s.run("review.trackChanges", &json!({})).is_err());
+    // Changing a field's definition (here its name, by any route) is a change to protected content.
+    let mut renamed = filled.clone();
+    let para = renamed.para_mut(at.0.story, &at.0.path).unwrap();
+    if let Some(InlineObject::Field { form, .. }) = para.object_at_mut(at.0.off) {
+        *form = form.replace("Name", "Other");
+    }
+    assert!(!outside_unchanged(&filled, &renamed, ""));
+    assert_eq!(s.doc, filled);
+    // Undo takes the value back and leaves protection on.
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.run("developer.formFields", &json!({})).unwrap()[2]["value"], "Sydney");
+    assert_eq!(s.doc.settings.protection.as_deref(), Some("forms"));
+}
+
+/// A legacy field inside a content control that locks its contents stays as it is: it can't
+/// be filled in, isn't counted or visited, and a change to it is rolled back.
+#[test]
+fn forms_mode_keeps_a_legacy_field_in_a_locked_control() {
+    use crate::cmd::form_fields::tests::form_session;
+    let mut s = form_session();
+    let boxed = crate::cmd::form_fields::fillable_spans(&s.doc).remove(1);
+    s.sel = Selection { anchor: Pos::new(StoryRef::Body, boxed.0.path.clone(), 0), focus: boxed.1.clone() };
+    s.run("developer.richText", &json!({"tag": "frozen"})).unwrap();
+    s.run("developer.properties", &json!({"control": "frozen", "lockEdit": true})).unwrap();
+    s.run("review.restrict", &json!({"mode": "forms"})).unwrap();
+    assert_eq!(state(&s)["formFields"], 2, "the text field and the drop-down");
+    let e = s.run("developer.fillFormField", &json!({"field": "Agree"})).unwrap_err().to_string();
+    assert!(e.contains("locked"), "{e}");
+    s.run("developer.fillFormField", &json!({"field": "Name", "text": "Ada"})).unwrap();
+    // Ticked behind the command's back: protection still sees the change.
+    let before = s.doc.clone();
+    let mut after = before.clone();
+    let at = after.control_ranges(StoryRef::Body).remove(0).start;
+    let para = after.para_mut(StoryRef::Body, &at.path).unwrap();
+    let off = para.object_offsets().into_iter().find(|o| matches!(para.object_at(*o), Some(InlineObject::Field { .. }))).unwrap();
+    if let Some(InlineObject::Field { form, .. }) = para.object_at_mut(off) {
+        *form = wordcraft_doc::legacy_form::with_checked(form, true).unwrap();
+    }
+    assert!(!outside_unchanged(&before, &after, ""));
+}
+
+/// A content control can be kept on a table, a row or a cell instead of as markers in the text
+/// (`w:sdt` around `w:tbl`, `w:tr` or `w:tc`). Locked, it keeps a legacy field inside it as it
+/// is, like one around the paragraph: it can't be filled in, isn't counted, and a change to it
+/// is rolled back. The nearest control decides, so an open cell inside a locked table can be.
+#[test]
+fn forms_mode_keeps_a_legacy_field_in_a_locked_table_row_or_cell() {
+    use crate::cmd::form_fields::tests::TEXT;
+    use wordcraft_doc::ControlWrap;
+    use wordcraft_doc::control::{ContentControl, ControlKind, ControlLock};
+    let locked = || ContentControl { lock: ControlLock::ContentLocked, ..Default::default() };
+    // "Intro.⌂" with a field "Other", then a 2×2 table with the field "Name" in its second row's
+    // second cell.
+    let form = |wrap: &dyn Fn(&mut wordcraft_doc::Table), around: bool| {
+        let mut s = Session::new(Document::from_text("Intro."));
+        s.sel = Selection::caret(s.doc.end_of(StoryRef::Body));
+        s.run("insert.table", &json!({"rows": 2, "cols": 2})).unwrap();
+        let i = s.doc.body.iter().position(|b| matches!(&**b, Block::Table(_))).unwrap();
+        let at = Pos::new(StoryRef::Body, Path(vec![u32::try_from(i).unwrap(), 1, 1, 0]), 0);
+        let field = |form: String| InlineObject::Field {
+            instr: "FORMTEXT".into(),
+            result: "\u{2002}".repeat(5),
+            locked: false,
+            dirty: false,
+            code: false,
+            form,
+        };
+        s.doc.insert_object(&at, field(TEXT.into()), &CharProps::default()).unwrap();
+        s.doc.insert_object(&Pos::body(0, "Intro.".len()), field(TEXT.replace("Name", "Other")), &CharProps::default()).unwrap();
+        if let Block::Table(t) = Arc::make_mut(&mut s.doc.body[i]) {
+            wrap(t);
+        }
+        if around {
+            // An editable control around the whole table: its markers start "Intro." and end the
+            // paragraph after the table.
+            let after = Path(vec![u32::try_from(i + 1).unwrap()]);
+            let end = s.doc.para(StoryRef::Body, &after).unwrap().text.len();
+            s.doc.insert_object(&Pos::new(StoryRef::Body, after, end), InlineObject::ControlEnd, &CharProps::default()).unwrap();
+            let start = InlineObject::ControlStart { control: Box::new(ContentControl::new(ControlKind::RichText)) };
+            s.doc.insert_object(&Pos::body(0, 0), start, &CharProps::default()).unwrap();
+        }
+        s.run("review.restrict", &json!({"mode": "forms"})).unwrap();
+        (s, at)
+    };
+    let cases: [(&str, &dyn Fn(&mut wordcraft_doc::Table)); 4] = [
+        ("the table", &|t| t.controls = ControlWrap { open: vec![locked()], close: 1 }),
+        ("both rows", &|t| {
+            t.rows[0].controls.open.push(locked());
+            t.rows[1].controls.close = 1;
+        }),
+        ("the row", &|t| t.rows[1].controls = ControlWrap { open: vec![locked()], close: 1 }),
+        ("the cell", &|t| t.rows[1].cells[1].controls = ControlWrap { open: vec![locked()], close: 1 }),
+    ];
+    for (what, wrap) in cases {
+        let (mut s, at) = form(wrap, false);
+        assert_eq!(state(&s)["formFields"], 1, "{what}: only the field outside the table");
+        let e = s.run("developer.fillFormField", &json!({"field": "Name", "text": "Ada"})).unwrap_err().to_string();
+        assert!(e.contains("locked"), "{what}: {e}");
+        // Filled behind the command's back: protection still sees the change.
+        let mut after = s.doc.clone();
+        if let Some(InlineObject::Field { result, .. }) = after.para_mut(at.story, &at.path).unwrap().object_at_mut(at.off) {
+            *result = "Ada".into();
+        }
+        assert!(!outside_unchanged(&s.doc, &after, ""), "{what}");
+    }
+    // A locked control on the other row, or one that never closes, locks nothing here.
+    for wrap in [
+        &(|t: &mut wordcraft_doc::Table| t.rows[0].controls = ControlWrap { open: vec![locked()], close: 1 }) as &dyn Fn(&mut wordcraft_doc::Table),
+        &|t| t.controls.open.push(locked()),
+    ] {
+        let (mut s, _) = form(wrap, false);
+        assert_eq!(state(&s)["formFields"], 2);
+        s.run("developer.fillFormField", &json!({"field": "Name", "text": "Ada"})).unwrap();
+    }
+    // The nearest control decides: an unlocked cell inside a locked table can be filled in.
+    let (mut s, _) = form(
+        &|t| {
+            t.controls = ControlWrap { open: vec![locked()], close: 1 };
+            t.rows[1].cells[1].controls = ControlWrap { open: vec![ContentControl::default()], close: 1 };
+        },
+        false,
+    );
+    assert_eq!(state(&s)["formFields"], 2);
+    s.run("developer.fillFormField", &json!({"field": "Name", "text": "Ada"})).unwrap();
+    // So a locked cell inside an editable control around the table keeps its field, and its text,
+    // as they are, though the control around it is open to typing.
+    let (mut s, at) = form(&|t| t.rows[1].cells[1].controls = ControlWrap { open: vec![locked()], close: 1 }, true);
+    assert!(s.run("developer.fillFormField", &json!({"field": "Name", "text": "Ada"})).is_err());
+    let mut filled = s.doc.clone();
+    if let Some(InlineObject::Field { result, .. }) = filled.para_mut(at.story, &at.path).unwrap().object_at_mut(at.off) {
+        *result = "Ada".into();
+    }
+    assert!(!outside_unchanged(&s.doc, &filled, ""), "the locked cell's field");
+    let mut typed = s.doc.clone();
+    typed.insert_text(&Pos::new(at.story, at.path.clone(), 0), "x", &CharProps::default()).unwrap();
+    assert!(!outside_unchanged(&s.doc, &typed, ""), "the locked cell's text");
+    // The text in the editable control outside the table is still open.
+    let mut typed = s.doc.clone();
+    let end = typed.para(StoryRef::Body, &Path(vec![0])).unwrap().text.len();
+    typed.insert_text(&Pos::body(0, end), "x", &CharProps::default()).unwrap();
+    assert!(outside_unchanged(&s.doc, &typed, ""));
+}
+
+/// Find Next Region I Can Edit (and Tab, later) walks legacy form fields with content
+/// controls, in document order; a disabled legacy field is skipped, and alone it unlocks nothing.
+#[test]
+fn forms_mode_regions_include_legacy_fields_and_skip_disabled_ones() {
+    use crate::cmd::form_fields::tests::form_session;
+    let mut s = form_session();
+    select(&mut s, "Locked end.");
+    s.run("developer.richText", &json!({"tag": "end"})).unwrap();
+    s.run("review.restrict", &json!({"mode": "forms"})).unwrap();
+    let spans = crate::cmd::form_fields::fillable_spans(&s.doc);
+    let control = s.doc.control_ranges(StoryRef::Body).remove(0);
+    let mut at = s.doc.start_of(StoryRef::Body);
+    let mut seen = Vec::new();
+    for _ in 0..5 {
+        let (a, _) = next_region(&s, &at).unwrap();
+        seen.push(a.clone());
+        at = a;
+    }
+    let expected = vec![spans[0].0.clone(), spans[1].0.clone(), spans[2].0.clone(), control.content_start(), spans[0].0.clone()];
+    assert_eq!(seen, expected);
+
+    // A form whose only field is disabled stays read only.
+    let mut t = Session::new(Document::from_text("Name: "));
+    let off = t.doc.para(StoryRef::Body, &t.doc.para_paths(StoryRef::Body)[0]).unwrap().text.len();
+    let form = crate::cmd::form_fields::tests::TEXT.replace("<w:enabled/>", r#"<w:enabled w:val="0"/>"#);
+    let field = InlineObject::Field { instr: "FORMTEXT".into(), result: String::new(), locked: false, dirty: false, code: false, form };
+    t.doc.insert_object(&Pos::body(0, off), field, &CharProps::default()).unwrap();
+    t.run("review.restrict", &json!({"mode": "forms"})).unwrap();
+    assert_eq!(state(&t)["formFields"], 0);
+    assert!(t.run("developer.fillFormField", &json!({"field": "Name", "text": "x"})).is_err());
+}
+
 #[test]
 fn forms_mode_without_fillable_controls_stays_locked() {
     let mut s = Session::new(Document::from_text("No controls here."));

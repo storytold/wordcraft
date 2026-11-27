@@ -39,7 +39,7 @@ pub fn state(s: &Session) -> Value {
         "lockedStyles": s.doc.styles.styles.iter().filter(|x| x.locked).map(|x| x.id.clone()).collect::<Vec<_>>(),
         "exceptions": regions.len(),
         "regions": regions,
-        "formFields": s.doc.fillable_controls(),
+        "formFields": s.doc.fillable_controls() + crate::cmd::form_fields::fillable_spans(&s.doc).len(),
     })
 }
 
@@ -308,7 +308,11 @@ pub(crate) fn greyed_out(s: &Session, id: &str, facts: impl FnOnce() -> Facts) -
     let tracked = matches!(id, "review.accept" | "review.reject" | "review.acceptAll" | "review.rejectAll" | "review.trackChanges");
     match mode {
         "readOnly" => (!facts().exceptions).then_some("the document is protected (read only)"),
-        "forms" => (facts().fillable == 0).then_some("the document is protected (read only)"),
+        // A form of legacy form fields alone (#3603) takes filling them in and nothing else, so
+        // what the after-check doesn't compare (page colour, settings, lists) stays locked too.
+        // The fields are walked only for that one command, so other commands cost no more.
+        "forms" => (facts().fillable == 0 && !(id == "developer.fillFormField" && crate::cmd::form_fields::any_fillable(&s.doc)))
+            .then_some("the document is protected (read only)"),
         "comments" if !comment_ok => (!facts().exceptions).then_some("only comments are allowed in this document"),
         "trackedChanges" if tracked => Some("changes to this document are tracked"),
         _ => None,
@@ -362,7 +366,8 @@ pub(crate) fn check_before(s: &Session, id: &str, params: &Value) -> Result<bool
         check_formatting(s, id, params)?;
     }
     // Not refused outright: read only and comments mode have an exception this author may edit,
-    // forms mode has fillable controls. Comments are always allowed in comments mode.
+    // forms mode has fillable controls or legacy form fields. Comments are always allowed in
+    // comments mode.
     let comment_ok = id.starts_with("review.") && (id.contains("Comment") || id == "review.reply");
     match mode {
         "comments" if comment_ok => Ok(false),
@@ -421,7 +426,7 @@ fn check_formatting(s: &Session, id: &str, params: &Value) -> Result<(), CmdErro
 
 /// Which parts of a protected document stay editable: the `w:permStart` ranges `author` may
 /// edit (readOnly, comments), or — filling in forms — the interiors of the content controls
-/// whose `w:lock` allows editing them.
+/// whose `w:lock` allows editing them, and the values of enabled legacy form fields.
 enum HoleMode {
     Perms(String),
     Controls,
@@ -482,7 +487,8 @@ fn sections(doc: &Document) -> Vec<&wordcraft_doc::SectionProps> {
 #[derive(PartialEq, Debug)]
 enum Piece {
     Text(String, CharProps),
-    Object(Option<InlineObject>),
+    /// An object with its run's formatting.
+    Object(Box<(Option<InlineObject>, CharProps)>),
     Mark(Box<wordcraft_doc::ParaProps>, CharProps),
     /// Tables nested deeper than the paragraph walk reaches, compared as a whole.
     Deep(String),
@@ -514,6 +520,9 @@ fn outside(doc: &Document, mode: &HoleMode) -> Vec<Piece> {
         let mut fillable: Vec<bool> = Vec::new();
         // In forms mode, only markers that pair open and close holes (orphans stay content).
         let paired = if matches!(mode, HoleMode::Controls) { paired_control_markers(doc, story) } else { HashSet::new() };
+        // Controls kept on a table, row or cell aren't markers in the text, so the walk asks where
+        // they are, but only in a story that has them (#3603).
+        let wraps = matches!(mode, HoleMode::Controls) && doc.story_has_wraps(story);
         // The perm range or fillable control the walk is inside, innermost last.
         let in_hole = |open: &[u32], fillable: &[bool]| match mode {
             HoleMode::Perms(_) => !open.is_empty(),
@@ -525,6 +534,13 @@ fn outside(doc: &Document, mode: &HoleMode) -> Vec<Piece> {
         for path in doc.para_paths(story) {
             let Some(p) = doc.para(story, &path) else { continue };
             let pieces = out.len();
+            // A paragraph whose nearest control is a locked one kept on its table, row or cell is
+            // protected like one in a locked control's markers, up to any control opening in it.
+            let base = fillable.len();
+            let wrapped = wraps && doc.controls_around(&Pos::new(story, path.clone(), 0)).last().is_some_and(|(c, kept)| *kept && !c.lock.can_edit());
+            if wrapped {
+                fillable.push(false);
+            }
             let mut k = 0;
             for (r, props) in p.run_ranges() {
                 let Some(text) = p.text.get(r.clone()) else { continue };
@@ -567,7 +583,17 @@ fn outside(doc: &Document, mode: &HoleMode) -> Vec<Piece> {
                         }
                         if !boundary && !in_hole(&open, &fillable) {
                             flush(&mut out, &mut piece, props, false);
-                            out.push(Piece::Object(obj.cloned()));
+                            // A legacy form field outside any control, or whose nearest control allows
+                            // editing, may have its value filled in (#3603). The nearest may be kept on
+                            // a table, row or cell around it, which this walk's markers don't show.
+                            let fill = matches!(mode, HoleMode::Controls)
+                                && obj.is_some_and(crate::cmd::form_fields::fillable_field)
+                                && if wraps {
+                                    crate::cmd::form_fields::open_to_filling(doc, &Pos::new(story, path.clone(), r.start + i))
+                                } else {
+                                    fillable.last() != Some(&false)
+                                };
+                            out.push(Piece::Object(Box::new((obj.map(|o| fixed_part(o, fill)), props.clone()))));
                         }
                         continue;
                     }
@@ -579,6 +605,11 @@ fn outside(doc: &Document, mode: &HoleMode) -> Vec<Piece> {
             }
             if !in_hole(&open, &fillable) {
                 out.push(Piece::Mark(Box::new(p.props.clone()), p.mark.clone()));
+            }
+            // No marker in the paragraph closes a control opened outside the wrap (pairs nest), so
+            // the entry is still where it was pushed.
+            if wrapped && fillable.get(base) == Some(&false) {
+                fillable.remove(base);
             }
             let ancestors = (1..path.0.len()).filter_map(|n| path.0.get(..n));
             if out.len() > pieces {
@@ -627,6 +658,25 @@ fn structure(blocks: &Blocks, prefix: &mut Vec<u32>, protected: &HashSet<Vec<u32
             prefix.pop();
         }
         prefix.pop();
+    }
+}
+
+/// What filling in forms may not change about an object: all of it, except, where `fill`, a
+/// fillable legacy form field's value (a text field's result, a check box's state, a drop-down's
+/// choice). Its kind, name, definition and formatting stay protected, and deleting it is still a
+/// change.
+fn fixed_part(o: &InlineObject, fill: bool) -> InlineObject {
+    match o {
+        InlineObject::Field { form, .. } if fill && crate::cmd::form_fields::fillable_field(o) => {
+            let mut fixed = o.clone();
+            if let InlineObject::Field { result, form: f, dirty, .. } = &mut fixed {
+                result.clear();
+                *f = wordcraft_doc::legacy_form::definition(form);
+                *dirty = false;
+            }
+            fixed
+        }
+        _ => o.clone(),
     }
 }
 
@@ -687,12 +737,14 @@ pub(crate) fn typing_pos(s: &Session, p: &Pos) -> Pos {
 }
 
 /// The first position in an editable range after `from` (wrapping round), for Find Next Region
-/// I Can Edit; with it, the range's end. Filling in forms: the next fillable control's content.
+/// I Can Edit; with it, the range's end. Filling in forms: the next fillable control's content
+/// or enabled legacy form field.
 pub fn next_region(s: &Session, from: &Pos) -> Option<(Pos, Pos)> {
     if s.doc.settings.protection.as_deref() == Some("forms") {
         let stories = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k)));
         let mut ranges: Vec<(Pos, Pos)> =
             stories.flat_map(|story| s.doc.control_ranges(story)).filter(|r| r.control.lock.can_edit()).map(|r| (r.content_start(), r.end)).collect();
+        ranges.extend(crate::cmd::form_fields::fillable_spans(&s.doc));
         ranges.sort_by(|a, b| a.0.cmp(&b.0));
         let next = ranges.iter().find(|r| r.0 > *from).or_else(|| ranges.first())?;
         return Some((next.0.clone(), next.1.clone()));
