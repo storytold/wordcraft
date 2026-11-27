@@ -184,6 +184,8 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 
 Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. Accepted long margin values also stay inside the field after focus leaves; their accepted range, units and parsing are unchanged.
 
+Up/Down caret navigation across a table page boundary (#3591) skips repeated header copies, retains the column when destination text is shorter, and reaches split-cell continuation lines. Shift+Down extends the selection without changing the document, revision or dirty state. The existing fallback outside table navigation is preserved.
+
 ## Revision history
 
 > 2026-11-05 · Gap 16: Arabic letters join across a change of formatting and past hidden or deleted text (#4093); readiness unchanged.
@@ -202,6 +204,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | trivial | Table page navigation (#3591): repeated headings, short destination cells and split-cell lines; readiness unchanged. |
 | 2026-11-21 | trivial | Pagination gap #4: strict column balancing measures kept paragraphs again after moving them to account for wrap areas in the new column (#6821). Readiness estimates unchanged |
 | 2026-11-19 | trivial | Pagination gap #4: strict widow/orphan control releases the wrap area of a float whose anchor moves to another column during balancing (#6821). Readiness estimates unchanged |
 | 2026-11-19 | trivial | #4 narrowed: a narrow Square, Tight or Through logo leaves legacy header lines in place at mode 14. The same lines flow beside the logo at mode 15. Measured in Word for Windows with a synthetic document (#6805). |

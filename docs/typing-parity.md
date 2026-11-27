@@ -618,10 +618,13 @@ DOCX and Undo/Redo (Leaf #152). No new Word or native UI comparison was run.
 |---|---|---|
 | Enter after the first letters of a paragraph with a drop cap | the new paragraph is a normal paragraph without a drop cap; the cap stays on the first paragraph (#6788). Enter at offset 0 is left unchanged (not compared with Word). A drop cap that comes from a paragraph style is not cleared. | `enter_in_a_drop_cap_paragraph_makes_a_normal_paragraph`, `split_paragraph_keeps_the_drop_cap_on_the_first_paragraph_only` |
 
+Up/Down caret navigation across a table page boundary (#3591) skips repeated header copies, retains the column when destination text is shorter, and reaches split-cell continuation lines. Shift+Down extends the selection without changing the document, revision or dirty state. The existing fallback outside table navigation is preserved.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | trivial | Table page navigation (#3591): repeated headings, short destination cells and split-cell lines; readiness unchanged. |
 | 2026-11-17 | trivial | Backspace, then type: the carried formatting is dropped by a paste (whose text never takes it), Find, Go To or a click elsewhere (also one back to the same place), not only by the caret keys; an empty paste or a refused command keeps it; it follows typing and comes back with Undo; with Track Changes on it carries too, as in Word for Windows, and the typed text is a tracked insertion (#6518) |
 | 2026-11-15 | trivial | Enter in a paragraph with a drop cap: the new paragraph gets no drop cap (#6788); synthetic coverage, offset 0 unchanged and not compared with Word |
 | 2026-11-15 | trivial | Paste Formatting row: Ctrl/Cmd+Shift+V pastes the picked-up formatting, else text only; Ctrl/Cmd+Shift+C no longer arms the Format Painter (#1537, #4943); the chord's V release never pastes again (Shift up first); web text paste relies on the browser sending its paired Paste event, and the formatting paste drops that event only within about a second |
