@@ -26,11 +26,12 @@ use craft::ui::primitives::{ContentPainterCx, DataWidth, Draw, PaintShape};
 use craft::ui::runtime::edit::next_gesture_id;
 use craft::ui::runtime::env::{Env, Label};
 use craft::ui::runtime::focus::{self, FocusTarget};
+use craft::ui::value_drag::Slider;
 // PLAN: assumed `RuleKind` re-exported from `craft::ui::style`
 use craft::ui::style::{DataColor, RuleKind};
 use craft::ui::text::TextField;
 use craft::ui::tile_grid::{GridZoom, Tile, TileGrid};
-use egui::{Color32, CornerRadius, Pos2, Rect, Ui, pos2, vec2};
+use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use wordcraft_doc::props::Rgb;
@@ -380,7 +381,7 @@ pub fn items_with(g: &SmartArtSpec, i: usize, text: &str) -> Value {
         .items
         .iter()
         .enumerate()
-        .map(|(j, it)| json!({"text": if j == i { text } else { it.text.as_str() }, "level": it.level, "color": it.color.map(|c| c.hex())}))
+        .map(|(j, it)| json!({"text": if j == i { text } else { it.text.as_str() }, "level": it.level, "color": it.color.map(|c| c.hex()), "opacity": it.opacity}))
         .collect();
     json!({"items": items})
 }
@@ -394,7 +395,7 @@ pub fn items_without(g: &SmartArtSpec, i: usize) -> Value {
         .enumerate()
         .filter(|(j, _)| *j != i)
         .map(|(j, it)| {
-            json!({"text": it.text, "level": if under.contains(&j) { it.level.saturating_sub(1) } else { it.level }, "color": it.color.map(|c| c.hex())})
+            json!({"text": it.text, "level": if under.contains(&j) { it.level.saturating_sub(1) } else { it.level }, "color": it.color.map(|c| c.hex()), "opacity": it.opacity})
         })
         .collect();
     json!({"items": items})
@@ -558,11 +559,31 @@ struct RowReport {
     color: Option<ColorPick>,
 }
 
-/// A pick on an item's colour field.
+/// A pick on an item's colour field. `Set` carries the opacity to keep with the colour.
 enum ColorPick {
-    Set(String),
+    Set(String, Option<u8>),
     Style,
     More,
+}
+
+/// Only a changed frame after a drag has started joins the previous opacity undo step.
+fn should_join_opacity_undo(changed: bool, was_dragging: bool) -> bool {
+    changed && was_dragging
+}
+
+/// Update opacity undo grouping from the slider's changed/dragged state on every frame.
+fn update_opacity_undo(ui: &mut Ui, session: &mut wordcraft_engine::Session, index: usize, changed: bool, dragged: bool) {
+    let gesture = egui::Id::unique(("smart_art_opacity_gesture", index));
+    let was_dragging = ui.data(|d| d.get_temp::<bool>(gesture)).unwrap_or(false);
+    if should_join_opacity_undo(changed, was_dragging) {
+        session.join_next_undo();
+    }
+    if changed {
+        ui.data_mut(|d| d.insert_temp(gesture, dragged));
+    }
+    if !dragged {
+        ui.data_mut(|d| d.remove_temp::<bool>(gesture));
+    }
 }
 
 /// The id of item `i`'s text row, stable across passes so a focus request can name a row before it exists.
@@ -578,6 +599,58 @@ fn color_name(g: &SmartArtSpec, i: usize) -> String {
         .map_or_else(|| format!("{} ({})", tl!("Shape color"), i + 1), |it| format!("{}: {}", tl!("Shape color"), it.text))
 }
 
+/// Indent per level in the Text Pane, points.
+const LEVEL_INDENT: f32 = 16.0;
+
+/// Where dropping item `src` lands: its slot among the other items, the slot among all rows (for
+/// the drop line) and its new level. `rows` are the row rectangles, `y` the pointer's height and
+/// `dx` how far the pointer moved sideways since the drag began.
+fn drop_target(g: &SmartArtSpec, rows: &[Rect], src: usize, y: f32, dx: f32) -> (usize, usize, u8) {
+    let block = src..g.descendants(src).end;
+    let mut row_slot = rows.iter().position(|r| y < r.center().y).unwrap_or(rows.len());
+    let slot = if (block.start..=block.end).contains(&row_slot) {
+        row_slot = block.start;
+        block.start
+    } else {
+        if row_slot < block.start { row_slot } else { row_slot.saturating_sub(block.len()) }
+    };
+    let before = g.items.iter().enumerate().filter(|(j, _)| !block.contains(j)).map(|(_, it)| it.level).nth(slot.wrapping_sub(1));
+    let most = before.map_or(0, |l| l.saturating_add(1)).min(wordcraft_doc::smart_art::MAX_LEVEL);
+    let want = (g.items.get(src).map_or(0.0, |it| f32::from(it.level)) + (dx / LEVEL_INDENT).round()).max(0.0);
+    let level = u8::try_from(want as u32).unwrap_or(u8::MAX).min(most);
+    (slot, row_slot, level)
+}
+
+/// The focused row index after moving the block `src..end` to `slot`.
+fn moved_focus_index(focused: Option<usize>, src: usize, end: usize, slot: usize) -> Option<usize> {
+    let len = end.saturating_sub(src);
+    focused.map(|i| {
+        if (src..end).contains(&i) {
+            slot + (i - src)
+        } else if i < src {
+            if slot <= i { i + len } else { i }
+        } else {
+            let after_remove = i - len;
+            if slot <= after_remove { i } else { after_remove }
+        }
+    })
+}
+
+/// The grip at the left of an item's row: drag it to move the item (with the items under it) up or
+/// down, and sideways to change its level.
+fn grip(ui: &mut Ui, i: usize) -> egui::Response {
+    let (rect, _) = ui.allocate_exact_size(vec2(12.0, 18.0), Sense::hover());
+    let r = ui.interact(rect, egui::Id::unique(("smart_art_grip", i)), Sense::drag());
+    let v = ui.visuals();
+    let c = if r.hovered() || r.dragged() { v.text_color() } else { v.weak_text_color() };
+    for dy in [-5.0, 0.0, 5.0] {
+        for dx in [-2.5, 2.5] {
+            ui.painter().circle_filled(rect.center() + vec2(dx, dy), 1.2, c);
+        }
+    }
+    r.on_hover_cursor(egui::CursorIcon::Grab).on_hover_text(tl!("Drag to move the item or change its level"))
+}
+
 /// The Text Pane: a row per item, indented by level. Typing changes the graphic as you go (one
 /// undo step per item typed in); Enter adds an item after the current one; Tab demotes the
 /// focused item and Shift+Tab promotes it, as Word's Text Pane does.
@@ -587,19 +660,33 @@ pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
     // PLAN: assumed Palette::of (ribbon-w11, S-L284)
     let palette = Palette::of(app);
     let reports = RefCell::new(Vec::<RowReport>::new());
+    let rows = RefCell::new(Vec::<Rect>::new());
+    let dropped = Cell::new(false);
+    let pending_drop = Cell::new(None::<(usize, usize, u8)>);
+    let drag_id = egui::Id::unique("smart_art_drag");
     Text::new(tl!("One line per item. Enter adds an item.").to_string()).show(ui);
     Stack::new().scroll(Scroll::vertical()).show(ui, |ui, _| {
         // The body may run twice in a pass; the last run's reports are the pass's.
         reports.borrow_mut().clear();
+        rows.borrow_mut().clear();
         for (i, it) in g.items.iter().enumerate() {
-            Row::new().indent(it.level).show(ui, |ui, _| {
+            let row = Row::new().indent(it.level).show(ui, |ui, _| {
+                let handle = grip(ui, i);
+                if handle.drag_started() {
+                    let x = ui.input(|inp| inp.pointer.interact_pos()).map_or(0.0, |p| p.x);
+                    ui.data_mut(|d| d.insert_temp(drag_id, (i, x)));
+                }
+                if handle.drag_stopped() {
+                    dropped.set(true);
+                }
                 let field = TextField::new(format!("{} {}", tl!("Text Pane"), i + 1), Bind::given(it.text.clone()))
                     .id(row_id(i))
                     .tab_reports()
                     .submits()
                     .show(ui);
+                let style_opacity = if g.layout == SmartArtLayout::Venn { 60 } else { 100 };
+                let own = it.color.map(|c| c.hex()).unwrap_or_default();
                 let color = g.style_accent(i).and_then(|n| {
-                    let own = it.color.map(|c| c.hex()).unwrap_or_default();
                     let mut value = own.clone();
                     let empty = ColorFieldEmpty::Automatic {
                         label: Label::from(tl!("Style Color").to_string()),
@@ -612,7 +699,9 @@ pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
                     } else if picked.changed && value.is_empty() {
                         Some(ColorPick::Style)
                     } else if picked.changed && value != own {
-                        Some(ColorPick::Set(value))
+                        // An item with no opacity of its own gets the layout's, so a Venn circle stays translucent.
+                        let keep = it.opacity.or((style_opacity < 100).then_some(style_opacity));
+                        Some(ColorPick::Set(value, keep))
                     } else {
                         None
                     }
@@ -630,8 +719,36 @@ pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
                     color,
                 });
             });
+            rows.borrow_mut().push(row.output.rect);
+        }
+        let rows = rows.borrow();
+        let dragging: Option<(usize, f32)> = ui.data(|d| d.get_temp(drag_id));
+        let pointer = ui.input(|inp| inp.pointer.interact_pos());
+        let target = dragging.and_then(|(src, x0)| pointer.map(|p| (src, drop_target(&g, &rows, src, p.y, p.x - x0))));
+        if let Some((_, (_, row_slot, level))) = target {
+            let y = if row_slot == 0 { rows.first().map(|r| r.top()) } else { rows.get(row_slot - 1).map(|r| r.bottom()) };
+            if let (Some(y), Some(first)) = (y, rows.first()) {
+                let x = first.left() + f32::from(level) * LEVEL_INDENT;
+                ui.painter().line_segment([pos2(x, y), pos2(first.right(), y)], Stroke::new(2.0, ui.visuals().selection.stroke.color));
+            }
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        }
+        if dropped.get() {
+            // Clear the temporary drag even if the pointer left the window before release.
+            ui.data_mut(|d| d.remove_temp::<(usize, f32)>(drag_id));
+            pending_drop.set(target.map(|(src, (slot, _, level))| (src, slot, level)));
         }
     });
+
+    if let Some((src, slot, level)) = pending_drop.get() {
+        let end = g.descendants(src).end;
+        let len = end.saturating_sub(src);
+        let destination = slot.min(g.items.len().saturating_sub(len));
+        let focused = app.smart_art_item;
+        if app.run("smartArt.moveItem", json!({"index": src, "slot": destination, "level": level})).is_ok() {
+            app.smart_art_item = moved_focus_index(focused, src, end, destination);
+        }
+    }
 
     let mut add_after = None;
     for report in reports.into_inner() {
@@ -655,8 +772,8 @@ pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
             add_after = Some(i);
         }
         match report.color {
-            Some(ColorPick::Set(hex)) => {
-                let _ = app.run("smartArt.itemColor", json!({"index": i, "color": hex}));
+            Some(ColorPick::Set(hex, opacity)) => {
+                let _ = app.run("smartArt.itemColor", json!({"index": i, "color": hex, "opacity": opacity}));
             }
             Some(ColorPick::Style) => {
                 let _ = app.run("smartArt.itemColor", json!({"index": i}));
@@ -675,6 +792,22 @@ pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
     }
 
     let current = app.smart_art_item.filter(|i| *i < g.items.len());
+    if let Some(i) = current
+        && let (Some(it), Some(n)) = (g.items.get(i), g.style_accent(i))
+    {
+        let style_opacity = if g.layout == SmartArtLayout::Venn { 60 } else { 100 };
+        let mut value = f64::from(it.opacity.unwrap_or(style_opacity));
+        let (changed, dragged) = {
+            let slider = Slider::new(Bind::bound(&mut value), 0.0..=100.0).label(tl!("Opacity").to_string()).show(ui);
+            (slider.value().is_some(), slider.response.dragged())
+        };
+        update_opacity_undo(ui, &mut app.session, i, changed, dragged);
+        if changed {
+            let pct = value.round().clamp(0.0, 100.0) as u8;
+            let hex = it.color.unwrap_or_else(|| accent_rgb(&theme, n));
+            let _ = app.run("smartArt.itemColor", json!({"index": i, "color": hex.hex(), "opacity": pct}));
+        }
+    }
     let (mut add, mut promote, mut demote, mut remove) = (false, false, false, false);
     Row::new().show(ui, |ui, _| {
         add = Button::new(tl!("Add").to_string()).enabled(g.items.len() < MAX_ITEMS).show(ui).clicked();
@@ -733,5 +866,98 @@ mod tests {
         let levels: Vec<u64> = v["items"].as_array().unwrap().iter().map(|i| i["level"].as_u64().unwrap()).collect();
         assert_eq!(levels, [0, 1, 1, 2, 2]);
         assert_eq!(items_with(&g, 0, "Boss")["items"][0]["text"], "Boss");
+    }
+
+    #[test]
+    fn opacity_needs_a_colour_and_is_kept_in_the_model() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("insert.smartArt", json!({"layout": "venn"})).unwrap();
+        assert!(a.run("smartArt.itemColor", json!({"index": 0, "opacity": 40})).is_err());
+        a.run("smartArt.itemColor", json!({"index": 0, "color": "FF0000", "opacity": 40})).unwrap();
+        let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).unwrap();
+        assert_eq!(g.items[0].opacity, Some(40));
+        a.run("smartArt.moveItem", json!({"index": 0, "slot": 2, "level": 0})).unwrap();
+        let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).unwrap();
+        assert_eq!(g.items[2].opacity, Some(40));
+    }
+
+    /// Drives the production undo grouping (`update_opacity_undo`) through an egui frame, as the
+    /// Text Pane's opacity slider does, for a colour pick, typed or key opacity, a drag, and a release.
+    #[test]
+    fn opacity_gestures_make_expected_undo_steps() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("insert.smartArt", json!({"layout": "venn"})).unwrap();
+        a.run("smartArt.itemColor", json!({"index": 0, "color": "FF0000"})).unwrap();
+        let ctx = egui::Context::default();
+        let frame = |a: &mut WordApp, changed: bool, dragged: bool| {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                update_opacity_undo(ui, &mut a.session, 0, changed, dragged);
+            })
+            .drop_without_applying_deltas();
+        };
+        let opacity_of = |a: &WordApp| wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).unwrap().items[0].opacity;
+
+        // A typed value is its own step, so one undo removes it and keeps the colour.
+        frame(&mut a, true, false);
+        a.run("smartArt.itemColor", json!({"index": 0, "color": "FF0000", "opacity": 40})).unwrap();
+        a.run("edit.undo", json!({})).unwrap();
+        assert_eq!(opacity_of(&a), None);
+
+        // A drag: the first changed frame starts a step, later frames join it, and the release ends it.
+        frame(&mut a, true, true);
+        a.run("smartArt.itemColor", json!({"index": 0, "color": "FF0000", "opacity": 20})).unwrap();
+        frame(&mut a, true, true);
+        a.run("smartArt.itemColor", json!({"index": 0, "color": "FF0000", "opacity": 60})).unwrap();
+        frame(&mut a, false, false);
+        a.run("edit.undo", json!({})).unwrap();
+        assert_eq!(opacity_of(&a), None);
+        assert_eq!(wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).unwrap().items[0].color.unwrap().hex(), "FF0000");
+
+        // A new drag after the release starts its own step, not a join of the earlier one.
+        frame(&mut a, true, true);
+        a.run("smartArt.itemColor", json!({"index": 0, "color": "FF0000", "opacity": 30})).unwrap();
+        frame(&mut a, false, false);
+        a.run("edit.undo", json!({})).unwrap();
+        assert_eq!(opacity_of(&a), None);
+    }
+}
+
+#[cfg(test)]
+mod drag_tests {
+    use super::*;
+
+    fn rows(n: usize) -> Vec<Rect> {
+        (0..n).map(|i| Rect::from_min_size(pos2(0.0, i as f32 * 20.0), vec2(100.0, 20.0))).collect()
+    }
+
+    #[test]
+    fn moving_a_block_remaps_the_focused_item() {
+        assert_eq!(moved_focus_index(Some(4), 3, 6, 1), Some(2));
+        assert_eq!(moved_focus_index(Some(1), 3, 6, 1), Some(4));
+        assert_eq!(moved_focus_index(Some(1), 3, 6, 2), Some(1));
+        assert_eq!(moved_focus_index(Some(7), 3, 6, 4), Some(7));
+        assert_eq!(moved_focus_index(Some(7), 3, 6, 5), Some(4));
+        assert_eq!(moved_focus_index(None, 3, 6, 1), None);
+    }
+
+    #[test]
+    fn dropping_below_the_last_row_moves_the_block_to_the_end() {
+        let g = SmartArtSpec::sample(SmartArtLayout::Hierarchy);
+        let (slot, row_slot, level) = drop_target(&g, &rows(6), 1, 500.0, -16.0);
+        assert_eq!((slot, row_slot, level), (4, 6, 0));
+    }
+
+    #[test]
+    fn dropping_above_a_block_keeps_the_row_slot() {
+        let g = SmartArtSpec::sample(SmartArtLayout::Hierarchy);
+        let (slot, row_slot, level) = drop_target(&g, &rows(6), 3, 35.0, 0.0);
+        assert_eq!((slot, row_slot, level), (2, 2, 1));
+    }
+
+    #[test]
+    fn dropping_on_itself_keeps_the_place_and_sideways_changes_the_level() {
+        let g = SmartArtSpec::sample(SmartArtLayout::Hierarchy);
+        let (slot, _, level) = drop_target(&g, &rows(6), 3, 70.0, 16.0);
+        assert_eq!((slot, level), (3, 2));
     }
 }
