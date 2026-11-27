@@ -873,4 +873,39 @@ mod tests {
             assert!(!black_text_samples.is_empty(), "{theme}: preview text samples must override text color with black");
         }
     }
+
+    /// The By author colour choice's swatch shows the first three author colours side by side, as it did before the
+    /// port, not the first author's colour alone.
+    #[test]
+    fn track_changes_options_by_author_swatch_shows_three_author_colours() {
+        use egui_kittest::kittest::Queryable as _;
+        fn fills_in(shape: &egui::Shape, area: egui::Rect, out: &mut Vec<egui::Color32>) {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| fills_in(shape, area, out)),
+                egui::Shape::Rect(rect) if area.contains_rect(rect.rect) => out.push(rect.fill),
+                _ => {}
+            }
+        }
+        let mut h = harness(app());
+        h.state_mut().run("review.trackingOptions", json!({})).unwrap();
+        h.run_steps(3);
+        // The Insertions row's colour field, at By author.
+        // The first node named "Color: By author" is the field's body, or its arrow once the row's `Field` names the body
+        // "Color:" (#7525); the field is every part of either name in that row.
+        let first = h.query_all_by_label("Color: By author").next().expect("a By author colour field").rect();
+        let field = h
+            .query_all_by_label("Color: By author")
+            .chain(h.query_all_by_label("Color:"))
+            .map(|node| node.rect())
+            .filter(|rect| (rect.center().y - first.center().y).abs() < 1.0)
+            .fold(first, |all, rect| all.union(rect));
+        let mut fills = Vec::new();
+        for clipped in &h.output().shapes {
+            fills_in(&clipped.shape, field, &mut fills);
+        }
+        for k in 0..3 {
+            let c = wordcraft_layout::display::revision_color(k);
+            assert!(fills.contains(&egui::Color32::from_rgb(c.0, c.1, c.2)), "author {k}'s colour is in the swatch: {fills:?}");
+        }
+    }
 }

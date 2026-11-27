@@ -17,10 +17,10 @@ use craft::ui::choice::{CellMarks, SwatchTable};
 use craft::ui::contract::{BodyCx, Hover, NoValue, Props as _, Show as _, clicked};
 use craft::ui::dialog::{DialogId, DialogResult};
 use craft::ui::menu::{MenuItem, MenuItemOutput};
-use craft::ui::primitives::{IconMark, IconSpec};
+use craft::ui::primitives::{Glyph, IconMark, IconSpec, StrokeWidth};
 use craft::ui::runtime::env::Label;
-use craft::ui::style::DataColor;
-use egui::{Color32, Ui};
+use craft::ui::style::{DataColor, UiTokens};
+use egui::{Color32, Painter, Rect, Stroke, StrokeKind, Ui, vec2};
 use serde_json::{Value, json};
 use wordcraft_doc::Rgb;
 
@@ -613,6 +613,23 @@ pub enum AutoFace {
     Several(Vec<Srgba>),
 }
 
+/// The swatch of a choice of several colours (By author): the colours side by side in equal shares, framed as a one-colour
+/// swatch is.
+#[derive(craft::ui::contract::MemoProps)]
+struct SwatchShares(Vec<Srgba>);
+
+impl Glyph for SwatchShares {
+    fn paint(&self, painter: &Painter, tokens: &UiTokens, rect: Rect, color: Color32, _mirrored: bool) {
+        let width = rect.width() / self.0.len().max(1) as f32;
+        for (at, share) in self.0.iter().enumerate() {
+            let part = Rect::from_min_size(rect.min + vec2(width * at as f32, 0.0), vec2(width, rect.height()));
+            painter.rect_filled(part, 0.0, color32(rgb_of(*share)));
+        }
+        let stroke = Stroke::new(StrokeWidth::Thin.points(tokens, painter.pixels_per_point()), color);
+        painter.rect_stroke(rect, 0.0, stroke, StrokeKind::Inside);
+    }
+}
+
 /// What a colour field did in a pass.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ColorFieldResponse {
@@ -630,7 +647,7 @@ pub fn color_field(ui: &mut Ui, label: &Label, value: &mut String, empty: &Color
     let (shown, text) = match (current, empty) {
         (Some(c), _) => (Some(srgba(c)), Label::from(c.hex())),
         (None, ColorFieldEmpty::NoColor) => (None, Label::from(tl!("No Color").to_string())),
-        // PLAN: framework gap: `IconSpec` has no multi-share swatch face, so `AutoFace::Several` shows its first colour until `IconSource` can paint `SwatchFace` shares (ribbon-w2).
+        // Two or more `AutoFace::Several` colours paint as `SwatchShares` (below); a single one paints as itself.
         (None, ColorFieldEmpty::Automatic { label, face, .. }) => (
             match face {
                 AutoFace::One(c) => Some(*c),
@@ -639,7 +656,14 @@ pub fn color_field(ui: &mut Ui, label: &Label, value: &mut String, empty: &Color
             label.clone(),
         ),
     };
-    let icon = shown.map_or_else(IconSpec::empty_swatch, IconSpec::swatch);
+    let shares = match (current, empty) {
+        (None, ColorFieldEmpty::Automatic { face: AutoFace::Several(colors), .. }) if colors.len() > 1 => Some(SwatchShares(colors.clone())),
+        _ => None,
+    };
+    let icon = match &shares {
+        Some(shares) => IconSpec::glyph(shares),
+        None => shown.map_or_else(IconSpec::empty_swatch, IconSpec::swatch),
+    };
     let spoken_value = current.map_or_else(|| text.as_str().to_string(), |c| format!("#{}", c.hex()));
     let spoken = format!("{} {spoken_value}", label.as_str());
     let field = SplitButton::<NoValue>::body(text, |ui: &mut Ui, cx: &mut BodyCx<'_>| {
