@@ -107,6 +107,7 @@ impl WordApp {
             command_states: Default::default(),
             command_states_cache: None,
             keytip_cache: None,
+            search_cache: None,
             fonts_frames: 0,
             clipboard_published: false,
             printing: Default::default(),

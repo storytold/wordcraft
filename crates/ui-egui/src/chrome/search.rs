@@ -1,17 +1,44 @@
 //! Command search: a `CommandPalette` in its in-place face, over the registry's commands.
 
+use std::sync::Arc;
+
 use craft::behavior::IconId;
 use craft::keymap::CommandRef;
 use craft::ui::buttons::IconButton;
 use craft::ui::contract::{Bind, Props as _, Show as _, TooltipSpec};
 use craft::ui::menu::search::{HelpEntry, SearchIndex, SearchWords, Synonyms};
 use craft::ui::patterns::panels::{CommandPalette, PaletteFace};
-use craft::ui::runtime::env::{Env, Label, WordTemplate};
+use craft::ui::runtime::env::{Env, EnvView, Label, WordTemplate};
 use craft::ui::runtime::inspect;
 use egui::Ui;
 use serde_json::json;
 
 use crate::WordApp;
+
+/// The search's entries and their index, kept between passes. Building the index folds every command's labels, so it
+/// is built again only when the commands or the interface language change, not in every pass the field shows.
+pub(crate) struct SearchCache {
+    registry: Arc<wordcraft_engine::Registry>,
+    lang: &'static str,
+    entries: Vec<HelpEntry>,
+    pub(crate) index: Arc<SearchIndex>,
+}
+
+impl SearchCache {
+    /// `kept` while it was built from `app`'s registry in the current language, else the entries and index built
+    /// again, their labels resolved and folded as `view` reads them.
+    fn for_pass(kept: Option<SearchCache>, app: &WordApp, view: &EnvView<'_>) -> SearchCache {
+        let lang = crate::i18n::current().code();
+        match kept {
+            Some(cache) if cache.lang == lang && Arc::ptr_eq(&cache.registry, &app.session.registry) => cache,
+            _ => {
+                let entries = help_entries(app);
+                let index = Arc::new(SearchIndex::new(view, &entries, &Synonyms::of(&view.words::<SearchWords>())));
+                SearchCache { registry: Arc::clone(&app.session.registry), lang, entries, index }
+            }
+        }
+    }
+}
 
 /// One help entry for each registry command Search offers: its label, with the English label so a search in
 /// English finds it in any language. Paper Color opens the selector in Options instead of running with no
@@ -49,13 +76,14 @@ pub(crate) fn is_open(app: &WordApp) -> bool {
 /// rect it took. `compact` (a narrow window, #5886) shows the magnifier alone, and the search opens as a box over
 /// the window, since the bar has no room for the field.
 pub(super) fn show(app: &mut WordApp, ui: &mut Ui, compact: bool) -> egui::Rect {
-    // Built in every pass the field runs: the palette opens inside its own `show`, so the entries are there before
-    // it knows. The list lives for the pass only.
-    let entries = help_entries(app);
+    // There in every pass the field runs: the palette opens inside its own `show`, so the entries are there before
+    // it knows. They and their index are kept between passes ([`SearchCache`]).
+    let kept = app.search_cache.take();
     let suggested: Vec<CommandRef> = crate::dialogs::SEARCH_SUGGESTIONS.iter().map(|id| CommandRef::new(*id)).collect();
     let mut open = app.chrome.search;
     let name = tl!("Search commands and help").to_string();
-    let ((rect, out), _) = inspect::record(ui, crate::keytips::search_region(), |ui| {
+    let commands: &WordApp = app;
+    let ((rect, out, cache), _) = inspect::record(ui, crate::keytips::search_region(), |ui| {
         let mut rect = None;
         if compact {
             let button = IconButton::new(IconId::new("wordcraft.search")).label(name.clone()).tooltip(TooltipSpec::new(name.clone())).show(ui);
@@ -66,15 +94,16 @@ pub(super) fn show(app: &mut WordApp, ui: &mut Ui, compact: bool) -> egui::Rect 
         }
         let env = Env::of(ui);
         let view = env.view();
-        let index = SearchIndex::new(&view, &entries, &Synonyms::of(&view.words::<SearchWords>()));
-        let out = CommandPalette::new(name.clone(), &entries, &index, Bind::bound(&mut open))
+        let cache = SearchCache::for_pass(kept, commands, &view);
+        let out = CommandPalette::new(name.clone(), &cache.entries, &cache.index, Bind::bound(&mut open))
             .face(if compact { PaletteFace::Dialog } else { PaletteFace::InPlace })
             .placeholder(Label::from(name.clone()))
             .suggested((Label::from(tl!("Suggested").to_string()), suggested))
             .fallback(WordTemplate::new(tl!("Find “{text}” in the document")))
             .show(ui);
-        (rect.unwrap_or(out.response.rect), out)
+        (rect.unwrap_or(out.response.rect), out, cache)
     });
+    app.search_cache = Some(cache);
     app.chrome.search = open;
     if let Some(text) = out.fallback {
         crate::dialogs::find_in_navigation_pane(app, ui.ctx(), &text);

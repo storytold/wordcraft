@@ -16,6 +16,9 @@ use crate::WordApp;
 /// The Search Commands dialog; its answer is the query of the fallback row, when that was picked.
 pub(super) struct SearchCommandsDialog {
     entries: Vec<HelpEntry>,
+    /// The entries' index and the interface language it was built in: built when the dialog first shows, and again
+    /// only in another language, since building it folds every entry's labels.
+    index: Option<(&'static str, SearchIndex)>,
     open: bool,
     suggested: Vec<CommandRef>,
     fallback: WordTemplate,
@@ -27,6 +30,7 @@ impl SearchCommandsDialog {
     fn new(entries: Vec<HelpEntry>) -> Self {
         Self {
             entries,
+            index: None,
             open: true,
             suggested: SEARCH_SUGGESTIONS.iter().map(|id| CommandRef::new(*id)).collect(),
             fallback: WordTemplate::new(tl!("Find “{text}” in the document")),
@@ -48,11 +52,16 @@ impl StackDialog for SearchCommandsDialog {
     fn show(&mut self, ui: &mut egui::Ui, _: &DialogStack) -> Option<DialogResult<Option<String>>> {
         let env = Env::of(ui);
         let view = env.view();
-        let index = SearchIndex::new(&view, &self.entries, &Synonyms::of(&view.words::<SearchWords>()));
+        let lang = crate::i18n::current().code();
+        let index = match self.index.take() {
+            Some((built, index)) if built == lang => index,
+            _ => SearchIndex::new(&view, &self.entries, &Synonyms::of(&view.words::<SearchWords>())),
+        };
         let out = CommandPalette::new(tl!("Search Commands"), &self.entries, &index, Bind::bound(&mut self.open))
             .suggested((Label::from(tl!("Suggested")), self.suggested.clone()))
             .fallback(self.fallback.clone())
             .show(ui);
+        self.index = Some((lang, index));
         if let Some(text) = out.fallback {
             return Some(DialogResult::Ok(Some(text)));
         }

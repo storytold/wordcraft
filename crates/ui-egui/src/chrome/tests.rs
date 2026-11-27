@@ -1126,3 +1126,38 @@ fn status_bar_view_mode_toggles_and_zoom_slider_proportions() {
     });
     assert!(has_14pt_knob, "Zoom slider should paint a {glyph_md} pt thumb (ControlSize::Md) matching 14 pt IconButton icons inside {slider:?}");
 }
+
+/// The title bar's command search keeps its entries and their index between passes: building the index folds every
+/// command's labels, and an idle window repaints for its caret (#7674). New commands, or another interface language,
+/// build it again.
+#[test]
+fn the_title_bar_search_keeps_its_index_until_the_commands_or_the_language_change() {
+    struct ResetLang;
+    impl Drop for ResetLang {
+        fn drop(&mut self) {
+            crate::i18n::apply_language(crate::i18n::Lang::EN);
+        }
+    }
+    let _reset = ResetLang;
+    let index = |h: &egui_kittest::Harness<'static, WordApp>| {
+        h.state().search_cache.as_ref().map(|cache| std::sync::Arc::clone(&cache.index)).expect("the title bar's search has its index")
+    };
+
+    let mut h = harness(new_app());
+    let built = index(&h);
+    crate::test_harness::frames(&mut h, 4);
+    assert!(std::sync::Arc::ptr_eq(&built, &index(&h)), "idle passes keep the index");
+
+    let same_commands = wordcraft_engine::Registry::new(h.state().session.registry.all().to_vec());
+    h.state_mut().session.registry = std::sync::Arc::new(same_commands);
+    crate::test_harness::frames(&mut h, 1);
+    let rebuilt = index(&h);
+    assert!(!std::sync::Arc::ptr_eq(&built, &rebuilt), "a new command registry builds it again");
+
+    if crate::i18n::catalogs_embedded() {
+        h.state_mut().run("ui.language", json!({"value": "de"})).unwrap();
+        crate::test_harness::frames(&mut h, 2);
+        assert_eq!(crate::i18n::current().code(), "de");
+        assert!(!std::sync::Arc::ptr_eq(&rebuilt, &index(&h)), "another interface language builds it again");
+    }
+}

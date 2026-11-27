@@ -407,6 +407,8 @@ pub struct WordApp {
     pub(crate) command_states_cache: Option<app::command_board::CommandStatesCache>,
     /// Cached keytip control lists and reserved shortcut letters per registry and active ribbon tab.
     pub(crate) keytip_cache: Option<keytips::KeytipCache>,
+    /// The command search's entries and index, per registry and interface language ([`chrome::search::SearchCache`]).
+    pub(crate) search_cache: Option<chrome::search::SearchCache>,
     /// Frames drawn so far, counted to 2: the control channel's queued requests wait until the
     /// fonts are warm.
     pub(crate) fonts_frames: u8,

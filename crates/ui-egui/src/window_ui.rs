@@ -150,6 +150,7 @@ impl WordApp {
             command_states: _,
             command_states_cache: _,
             keytip_cache: _,
+            search_cache: _,
             fonts_frames: _,
             printing: _,
             print_feedback_seen: _,
