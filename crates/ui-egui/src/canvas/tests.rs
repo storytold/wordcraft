@@ -360,6 +360,281 @@ fn multi_click_drag_extends_by_units() {
 
 /// #3880: the status bar names the page being looked at. With the caret scrolled out of view, that
 /// is the page at the top of the window; while the caret is on screen, its page.
+/// #5680: 400 one-line paragraphs, pages full of lines, in a 1440×900 window with the caret at
+/// the start, after the view command `view` has run.
+fn paging_window(view: &str) -> H {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let text = (1..=400).map(|i| format!("Line {i}")).collect::<Vec<_>>().join("\n");
+    a.run("document.setText", json!({"text": text})).unwrap();
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    a.run(view, json!({})).unwrap();
+    a.run("caret.docStart", json!({})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h, 8);
+    let pages = h.state_mut().session.layout().pages.len();
+    assert!(pages >= 8, "several rows of pages: {pages}");
+    let ctx = h.ctx.clone();
+    assert!(h.state().canvas.focused(&ctx), "the canvas has the keyboard");
+    assert_eq!(h.state().canvas.view.offset.1, 0.0, "starts at the top");
+    h
+}
+
+/// Press `key` on the canvas and let the view settle.
+fn press_paging_key(h: &mut H, key: egui::Key, modifiers: egui::Modifiers) {
+    h.event(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
+    steps(h, 4);
+}
+
+/// The caret's page, how far it is below the window's top, and its height, on screen.
+fn caret_in_window(h: &mut H) -> (usize, f32, f32) {
+    let a = h.state_mut();
+    let page = a.session.layout().caret_on(&a.session.sel.focus, a.session.page_hint).expect("a caret").page;
+    let (at, height) = crate::canvas::caret_screen(a).expect("the caret on screen");
+    let top = a.canvas.view_rect().expect("viewport").top();
+    (page, at.y - top, height)
+}
+
+/// Number of columns on the first row of laid-out pages.
+fn page_cols(h: &H) -> usize {
+    let laid = h.state().canvas.laid_page_rects();
+    let Some(first) = laid.first() else { return 1 };
+    laid.iter().take_while(|r| (r.min.y - first.min.y).abs() < 1.0).count().max(1)
+}
+
+/// #5680: in One Page, Page Down advances by the exact page pitch so repeated presses keep each
+/// page's top and the caret at the same y position in the window with no cumulative drift; Page Up
+/// returns to the top.
+#[test]
+fn page_down_in_one_page_moves_one_screen() {
+    let mut h = paging_window("view.onePage");
+    let laid = h.state().canvas.laid_page_rects();
+    let pitch = f64::from(laid[1].min.y - laid[0].min.y);
+    let initial_page_top = laid[0].min.y - h.state().canvas.view_rect().expect("viewport").top();
+    let (page, y, line) = caret_in_window(&mut h);
+    assert_eq!(page, 0);
+    for k in 1..=4usize {
+        press_paging_key(&mut h, egui::Key::PageDown, egui::Modifiers::NONE);
+        let offset = h.state().canvas.view.offset.1;
+        let expected = pitch * k as f64;
+        assert!((offset - expected).abs() < 2.0, "press {k}: expected offset ~{expected}, got {offset}");
+        let (page, after, _) = caret_in_window(&mut h);
+        assert_eq!(page, k, "press {k}: caret is on page {k}");
+        assert!((after - y).abs() <= line, "press {k}: caret keeps its place in the window: {y} then {after}");
+        let page_top = h.state().canvas.laid_page_rects()[k].min.y - h.state().canvas.view_rect().expect("viewport").top();
+        assert!((page_top - initial_page_top).abs() < 2.0, "press {k}: page top must not drift ({initial_page_top} vs {page_top})");
+    }
+    for _ in 0..4 {
+        press_paging_key(&mut h, egui::Key::PageUp, egui::Modifiers::NONE);
+    }
+    let offset = h.state().canvas.view.offset.1;
+    assert!(offset.abs() < 2.0, "Page Up scrolls back to the top: {offset}");
+    assert_eq!(caret_in_window(&mut h).0, 0, "and the caret is back on the first page");
+}
+
+/// #5680: in Multiple Pages a screen is a row of pages, so Page Down goes to the page below the
+/// caret's, not to the one beside it, and scrolls by the exact row pitch.
+#[test]
+fn page_down_in_multiple_pages_goes_to_the_next_row() {
+    let mut h = paging_window("view.multiplePages");
+    let cols = page_cols(&h);
+    assert!(cols >= 2, "the pages are side by side: {cols} columns");
+    let laid = h.state().canvas.laid_page_rects();
+    let pitch = f64::from(laid[cols].min.y - laid[0].min.y);
+    press_paging_key(&mut h, egui::Key::PageDown, egui::Modifiers::NONE);
+    let offset = h.state().canvas.view.offset.1;
+    assert!((offset - pitch).abs() < 2.0, "Page Down scrolls one row pitch: expected ~{pitch}, got {offset}");
+    assert_eq!(caret_in_window(&mut h).0, cols, "the caret is on the page below, in the next row");
+}
+
+/// #5680: when two rows of pages fit in the window (zoomed out Multiple Pages, like Word's 3×2),
+/// Page Down advances by two rows (one full screen) and keeps the row top aligned.
+#[test]
+fn page_down_in_multi_row_multiple_pages_moves_all_visible_rows() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let text = (1..=1200).map(|i| format!("Line {i}")).collect::<Vec<_>>().join("\n");
+    a.run("document.setText", json!({"text": text})).unwrap();
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    a.run("view.multiplePages", json!({})).unwrap();
+    a.run("view.zoom", json!({"value": 25})).unwrap();
+    a.run("caret.docStart", json!({})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h, 8);
+    let cols = page_cols(&h);
+    let view_h = h.state().canvas.view_rect().expect("viewport").height();
+    let laid = h.state().canvas.laid_page_rects().to_vec();
+    let mut visible_rows = 1usize;
+    while let Some(r) = laid.get(visible_rows * cols) {
+        if r.max.y - laid[0].min.y <= view_h {
+            visible_rows += 1;
+        } else {
+            break;
+        }
+    }
+    assert!(visible_rows >= 2, "expected at least 2 visible rows, got {visible_rows}");
+    let target_page = visible_rows * cols;
+    assert!(laid.len() > 2 * target_page, "enough rows below so scrolling does not hit the bottom: {}", laid.len());
+    let expected = f64::from(laid[target_page].min.y - laid[0].min.y);
+    press_paging_key(&mut h, egui::Key::PageDown, egui::Modifiers::NONE);
+    assert_eq!(caret_in_window(&mut h).0, target_page, "Page Down advances by all visible rows");
+    let offset = h.state().canvas.view.offset.1;
+    assert!((offset - expected).abs() < 2.0, "scrolls by exact multi-row pitch: expected ~{expected}, got {offset}");
+}
+
+/// #5680: two Page Down commands issued before the next canvas pass advance two full screens and
+/// keep the caret at its screen position (queued `screen_scroll` must not pull the second target
+/// backward).
+#[test]
+fn rapid_page_down_before_next_pass_advances_two_screens() {
+    let mut h = paging_window("view.zoom100");
+    let screen = f64::from(h.state().canvas.view_rect().expect("viewport").height());
+    let (_, y, line) = caret_in_window(&mut h);
+    h.state_mut().run("caret.pageDown", json!({})).unwrap();
+    h.state_mut().run("caret.pageDown", json!({})).unwrap();
+    steps(&mut h, 6);
+    let offset = h.state().canvas.view.offset.1;
+    assert!((offset - 2.0 * screen).abs() < 2.0, "two rapid PageDowns scroll two screens: expected ~{}, got {offset}", 2.0 * screen);
+    let (_, after, _) = caret_in_window(&mut h);
+    assert!((after - y).abs() <= line * 2.0, "caret keeps its screen position after two rapid presses: {y} then {after}");
+    // A press on the very next pass (after the scroll was applied to `state.offset`, before the
+    // repainted layout arrives) must still see the caret on screen and advance a full third screen.
+    h.state_mut().run("caret.pageDown", json!({})).unwrap();
+    h.step();
+    h.state_mut().run("caret.pageDown", json!({})).unwrap();
+    steps(&mut h, 6);
+    let offset = h.state().canvas.view.offset.1;
+    assert!((offset - 4.0 * screen).abs() < 2.0, "next-frame PageDown still scrolls a full screen: expected ~{}, got {offset}", 4.0 * screen);
+}
+
+/// #5680: in Multiple Pages, a Page Down that lands below a short page's text goes on down its
+/// column to the page under it, as Word keeps the caret's column (2×1: page 1, 3, 5). It used to
+/// go to the page beside the short one.
+#[test]
+fn page_down_in_multiple_pages_past_a_short_page_keeps_the_column() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    // Pages 2 to 5 have one line each; the others have 20 paragraphs.
+    for page in 0..10 {
+        let lines = if (2..6).contains(&page) { 1 } else { 20 };
+        for line in 0..lines {
+            if line > 0 {
+                a.run("text.newParagraph", json!({})).unwrap();
+            }
+            a.run("text.insert", json!({"text": format!("Page {page} line {line}")})).unwrap();
+        }
+        if page < 9 {
+            a.run("layout.break", json!({"kind": "page"})).unwrap();
+        }
+    }
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    a.run("view.multiplePages", json!({})).unwrap();
+    // The caret low on the first page, so a screen down is below the text of the page under it.
+    a.run("select.text", json!({"text": "Page 0 line 19"})).unwrap();
+    a.run("caret.left", json!({})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h, 8);
+    let cols = page_cols(&h);
+    assert!(cols >= 2, "the pages are side by side: {cols} columns");
+    assert_eq!(caret_in_window(&mut h).0, 0);
+    press_paging_key(&mut h, egui::Key::PageDown, egui::Modifiers::NONE);
+    assert_eq!(caret_in_window(&mut h).0, 2 * cols, "past the short page under it, the caret goes on down its column");
+}
+
+/// #5680: at a zoom where the page is wider than the window, with the view scrolled sideways
+/// past the caret, Page Down shows the caret, as any caret move does. It used to keep the view's
+/// sideways scroll, so the caret stayed out of sight.
+#[test]
+fn page_down_shows_a_caret_scrolled_out_sideways() {
+    let mut h = paging_window("view.zoom100");
+    h.state_mut().run("view.zoom", json!({"value": 300})).unwrap();
+    steps(&mut h, 4);
+    h.state_mut().canvas.view.offset.0 = 900.0;
+    steps(&mut h, 4);
+    let caret_x = |h: &mut H| crate::canvas::caret_screen(h.state_mut()).expect("the caret on screen").0.x;
+    let window = h.state().canvas.view_rect().expect("viewport");
+    let before = caret_x(&mut h);
+    assert!(before < window.left(), "the caret starts left of the window: {before} < {}", window.left());
+    press_paging_key(&mut h, egui::Key::PageDown, egui::Modifiers::NONE);
+    // The view glides to the caret over a few frames.
+    steps(&mut h, 30);
+    let window = h.state().canvas.view_rect().expect("viewport");
+    let after = caret_x(&mut h);
+    assert!((window.left()..=window.right()).contains(&after), "the caret is in the window after Page Down: {after} in {window:?}");
+}
+
+/// #5680: Shift+Page Down at 100% selects one screen down, not a whole page: the anchor stays at
+/// the start, and the view scrolls one screen with the selection's end, which keeps its place in
+/// the window.
+#[test]
+fn shift_page_down_selects_one_screen() {
+    let mut h = paging_window("view.zoom100");
+    let start = h.state().session.sel.anchor.clone();
+    let screen = f64::from(h.state().canvas.view_rect().expect("viewport").height());
+    let (_, y, line) = caret_in_window(&mut h);
+    press_paging_key(&mut h, egui::Key::PageDown, egui::Modifiers::SHIFT);
+    let sel = h.state().session.sel.clone();
+    assert_eq!(sel.anchor, start, "the anchor stays at the start");
+    assert_ne!(sel.focus, start, "the selection grows");
+    let offset = h.state().canvas.view.offset.1;
+    assert!((offset - screen).abs() < 2.0, "Shift+Page Down scrolls one screen: expected ~{screen}, got {offset}");
+    let (page, after, _) = caret_in_window(&mut h);
+    assert_eq!(page, 0, "a screen is less than a page at 100%: the selection ends on the first page");
+    assert!((after - y).abs() <= line, "the selection's end keeps its place in the window: {y} then {after}");
+}
+
+/// #5680: in Full Screen at 100% the pages fill the window, nearly a page tall. Page Down scrolls
+/// one screen, and the caret is in the window afterwards.
+#[test]
+fn page_down_in_full_screen_moves_one_screen() {
+    let mut h = paging_window("view.fullScreenView");
+    let screen = h.state().canvas.view_rect().expect("viewport").height();
+    press_paging_key(&mut h, egui::Key::PageDown, egui::Modifiers::NONE);
+    let offset = h.state().canvas.view.offset.1;
+    assert!((offset - f64::from(screen)).abs() < 2.0, "Page Down scrolls one screen: expected ~{screen}, got {offset}");
+    let (_, after, line) = caret_in_window(&mut h);
+    assert!(after >= 0.0 && after + line <= screen, "the caret is in the window: {after} of {screen}");
+}
+
+/// #5680: recording Page Down in a Print Layout macro stores the relative `caret.pageDown` step
+/// instead of an absolute `caret.set`, so replaying the macro moves relative to its starting page.
+#[test]
+fn page_down_in_a_recorded_macro_replays_relative_to_its_starting_page() {
+    let mut h = paging_window("view.onePage");
+    h.state_mut().run("tools.recordMacro", json!({"name": "pgdn"})).unwrap();
+    press_paging_key(&mut h, egui::Key::PageDown, egui::Modifiers::NONE);
+    h.state_mut().run("tools.recordMacro", json!({})).unwrap();
+    let recorded = h.state().session.macros.get("pgdn").expect("recorded macro").clone();
+    assert_eq!(recorded, vec![("caret.pageDown".to_string(), json!({"extend": false}))]);
+    h.state_mut().run("caret.docStart", json!({})).unwrap();
+    for _ in 0..3 {
+        h.state_mut().session.run("caret.pageDown", &json!({})).unwrap();
+    }
+    steps(&mut h, 4);
+    assert_eq!(caret_in_window(&mut h).0, 3);
+    h.state_mut().run("tools.macros", json!({"run": "pgdn"})).unwrap();
+    steps(&mut h, 4);
+    assert_eq!(caret_in_window(&mut h).0, 4, "macro replays Page Down relative to its starting page");
+}
+
 #[test]
 fn the_status_bar_names_the_page_in_view_not_only_the_caret_page() {
     use egui_kittest::kittest::Queryable;

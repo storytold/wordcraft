@@ -60,6 +60,7 @@ pub(crate) use input::{hold_document_selection, release_document_selection};
 pub(crate) use links::follow_link;
 #[cfg(test)]
 use links::{field_link, is_followable_link, is_generated_bookmark_link};
+pub(crate) use navigation::page_by_screen;
 pub use navigation::page_to_screen;
 use navigation::viewed_page;
 pub(crate) use pages::{PageKeys, dark_page, page_doc, page_screen_scale, preview_sel, screen_render_options};
@@ -153,6 +154,8 @@ pub struct CanvasState {
     pub keep_view: bool,
     /// A heading navigation click aligns its page against the navigation pane, not just visible.
     pub(crate) nav_to_caret: bool,
+    /// Vertical screen scroll (screen points) queued by Page Up / Page Down (`page_by_screen`).
+    pub(crate) screen_scroll: f64,
     /// Reading controls (as opposed to window resizes) must reflow at once.
     pub(crate) read_force_reflow: bool,
     /// Web Layout's width follows the window once a drag has settled, not on every frame of it.
@@ -407,6 +410,7 @@ impl Default for CanvasState {
             markup_facts: Cell::new(None),
             scroll_to_caret: true,
             keep_view: false,
+            screen_scroll: 0.0,
             nav_to_caret: false,
             read_force_reflow: false,
             web_viewport: Default::default(),
@@ -773,7 +777,7 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     // Scrolling the partner window did (Synchronous Scrolling, #322), in screen points at this zoom.
     let scale = state.zoom * f64::from(PX_PER_PT);
     let synced = f64::from(std::mem::take(&mut app.canvas.sync_in)) * scale;
-    state.offset.1 += synced;
+    state.offset.1 += synced + std::mem::take(&mut app.canvas.screen_scroll);
     let held = hold_scroll_for_preview(app, &mut state.offset);
     let started_at = state.offset.1;
 
@@ -933,6 +937,28 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
         app.canvas.scroll_to_caret = false;
     }
 
+    let screen_scroll = std::mem::take(&mut app.canvas.screen_scroll);
+    let mut applied_screen_scroll = 0.0f32;
+    if screen_scroll != 0.0 {
+        let before_y = state.offset.1;
+        state.offset.1 = (state.offset.1 + screen_scroll).max(0.0);
+        applied_screen_scroll = (state.offset.1 - before_y) as f32;
+        if let Some(c) = &caret_after
+            && let Some(rect) = laid_rects(&out).get(c.page).copied()
+            && let Some(page) = layout.pages.get(c.page)
+        {
+            let s = page_screen_scale(rect, page, scale as f32);
+            let shifted = rect.translate(vec2(0.0, -applied_screen_scroll));
+            let top_left = shifted.min + vec2(c.x * s, c.top * s);
+            let r = Rect::from_min_size(top_left, vec2((c.width * s).max(2.0), c.height * s));
+            let view_area = body_view.map_or(body_rect, |v| v.rect);
+            if !view_area.contains_rect(r) {
+                app.canvas.scroll_to_caret = true;
+            }
+        }
+        ui.ctx().request_repaint();
+    }
+
     // The scroll position the body asked for takes effect on the state the pass stored.
     let moved_by_user = state.offset.1 - started_at;
     if fix.delta != (0.0, 0.0) {
@@ -987,8 +1013,13 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     // A window's page has the keyboard from its first pass (production's `want_focus` started on), so typing lands
     // without a click; a modal dialog keeps the keyboard until it closes.
     let view_rect = body_view.map_or(body_rect, |v| v.rect);
-    app.canvas.shown =
-        ShownPages { rect: body_rect, pages: out.pages.clone(), laid: laid_rects(&out), view: view_rect, canvas: Some(out.canvas.response.id) };
+    let mut laid = laid_rects(&out);
+    if applied_screen_scroll != 0.0 {
+        for r in &mut laid {
+            *r = r.translate(vec2(0.0, -applied_screen_scroll));
+        }
+    }
+    app.canvas.shown = ShownPages { rect: body_rect, pages: out.pages.clone(), laid, view: view_rect, canvas: Some(out.canvas.response.id) };
     if app.canvas.focus_pending && !app.modal_open() {
         let ctx = ui.ctx().clone();
         app.canvas.focus_page(&ctx);
