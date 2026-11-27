@@ -167,6 +167,35 @@ fn programmatic_close_guard_covers_every_form() {
     }
 }
 
+/// #6101: a control request is automation, so it can't attach a template on another machine,
+/// on the active document or on one in the background (`doc`); the person at the keyboard can.
+#[test]
+fn the_control_channel_cannot_attach_a_template_on_another_machine() {
+    let ctx = crate::test_harness::context();
+    let remote = r"\\?\UNC\attacker\share\t.dotm";
+    let mut a = app();
+    let background = a.session.document_id();
+    a.run("file.new", json!({})).unwrap();
+    for doc in [None, Some(background)] {
+        let mut params = json!({"command": "tools.attachTemplate", "params": {"path": remote}});
+        if let Some(id) = doc {
+            params["doc"] = json!(id);
+        }
+        let r = call(&mut a, &ctx, "engine.execute", params);
+        assert_eq!(r["ok"], json!(false), "{doc:?}: {r}");
+        assert!(r["error"].as_str().unwrap_or("").contains("automation path rejected"), "{doc:?}: {r}");
+    }
+    let r = call(&mut a, &ctx, "engine.execute", json!({"command": "file.newFromTemplate", "params": {"path": remote, "data": ""}}));
+    assert_eq!(r["ok"], json!(false), "{r}");
+    assert_eq!(a.session.documents().len(), 2, "no document from the template");
+    assert_eq!(a.session.doc.settings.attached_template, None);
+    a.run("view.switchWindows", json!({"id": background})).unwrap();
+    assert_eq!(a.session.doc.settings.attached_template, None, "the background document");
+
+    a.run("tools.attachTemplate", json!({"path": remote})).unwrap();
+    assert_eq!(a.session.doc.settings.attached_template.as_deref(), Some(remote), "the person may");
+}
+
 /// #1315: a save the browser's picker hasn't finished marks the document saved, yet closing or
 /// quitting over the control channel still keeps it.
 #[test]

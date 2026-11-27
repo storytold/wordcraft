@@ -258,6 +258,10 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     let password = p::str(v, "password");
     // An empty file opens as a new blank document that saves back to it (#1384).
     let (doc, encrypted) = read_document(s, path, v)?;
+    // Bytes automation gives can't bring in a template on another machine (#6101).
+    if p::str(v, "data").is_some() {
+        super::templates::check_opened_from_automation(&doc)?;
+    }
     match s.used_because() {
         None => s.set_document(doc),
         Some(why) => {
@@ -340,6 +344,8 @@ fn read_document(s: &Session, path: &str, v: &Value) -> Result<(Document, bool),
 /// saving it asks where to write, and a protected template's password doesn't come along.
 pub(crate) fn new_from_template(s: &mut Session, v: &Value) -> CmdResult {
     let path = p::req_str(v, "path")?;
+    // Before anything is read: the path becomes the attached template (#6101).
+    super::templates::check_from_automation(path)?;
     let (mut doc, _) = read_document(s, path, v)?;
     doc.settings.attached_template = Some(path.to_string());
     if p::bool(v, "replaceBlank") == Some(true) && s.used_because().is_none() {

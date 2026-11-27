@@ -219,9 +219,10 @@ fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Reply {
 /// Dispatches one control request: commands and inspection, parity, the library's input and
 /// dialog methods, screenshots and renders, resize, focus, clipboard and quit, and unknown ids as
 /// commands. It refuses closing unsaved work and document operations without a document.
+/// A control request is automation's ([`wordcraft_engine::automation`], #6101).
 pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Reply {
     let before = app.session.document_id();
-    let outcome = handle_request(app, ctx, req);
+    let outcome = wordcraft_engine::automation::from_automation(|| handle_request(app, ctx, req));
     // A document a script opened doesn't bring up the missing-fonts box.
     let after = app.session.document_id();
     if after != before {
