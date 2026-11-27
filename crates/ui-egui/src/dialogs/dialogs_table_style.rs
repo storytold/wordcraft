@@ -27,7 +27,7 @@ use egui::{Color32, Painter, Rect, Shape, Stroke, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, TableLook, Underline, VAlign};
-use wordcraft_doc::styles::{PartFormat, PartSet, TablePart, TableStyleProps};
+use wordcraft_doc::styles::{PartFormat, PartSet, TableBands, TablePart, TableStyleProps};
 use wordcraft_doc::{CharProps, Rgb, TextColor};
 use wordcraft_engine::cmd::table_style::{self, CELL_ALIGNS};
 
@@ -380,7 +380,7 @@ fn paint_preview(cx: &ContentPainterCx<'_>, rect: Rect, style: Option<&TableStyl
     let (cw, rh) = (table.width() / COLS as f32, table.height() / ROWS as f32);
     let rgb = |c: Rgb| Color32::from_rgb(c.0, c.1, c.2);
     let tb = st.parts.borders.unwrap_or_default();
-    let band = (st.parts.band_size.unwrap_or(0), st.parts.col_band_size.unwrap_or(0));
+    let bands = TableBands::new(look, Some(&st.parts), std::iter::empty());
     for (ri, row) in TEXT.iter().enumerate() {
         for (ci, txt) in row.iter().enumerate() {
             // Sample words in the interface language; numbers as they are.
@@ -398,7 +398,7 @@ fn paint_preview(cx: &ContentPainterCx<'_>, rect: Rect, style: Option<&TableStyl
                 inside_v: None,
             };
             // Parts from lowest to highest precedence, as layout applies them.
-            for part in PartSet::of_cell(look, band, (ri, ROWS), (ci, 1, COLS)).iter() {
+            for part in PartSet::of_cell(&bands, (ri, ROWS), (ci, 1, COLS)).iter() {
                 let Some(f) = TablePart::ALL.iter().position(|p| *p == part).and_then(|i| formats.get(i)) else { continue };
                 fill = f.fill.or(fill);
                 chr.overlay(&f.chr);
