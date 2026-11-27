@@ -1373,3 +1373,29 @@ fn symbol_tip_names_known_characters_and_falls_back_to_the_code_point() {
     assert!(unnamed.contains("2602") && unnamed.contains("Miscellaneous Symbols"), "unnamed character: {unnamed}");
     assert_eq!(symbol_tip("", ""), "");
 }
+
+#[test]
+fn picture_and_shape_size_fields_show_unit_hints() {
+    use egui::accesskit::Role;
+
+    let cases = [
+        (false, "Shape Format", "Type a size in any unit, such as 3 cm or 300 px."),
+        (true, "Picture Format", "Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions."),
+    ];
+    for (picture, tab, expected) in cases {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        if picture {
+            a.run("insert.picture", json!({"data": png_data()})).unwrap();
+        } else {
+            a.run("insert.shape", json!({"kind": "rectangle"})).unwrap();
+        }
+        let mut h = tab_harness(a, tab);
+        for side in ["W:", "H:"] {
+            let desc = h.get_by_role_and_label(Role::SpinButton, side).accesskit_node().description().unwrap_or_default();
+            assert_eq!(desc, expected, "{tab} {side} description");
+        }
+        h.get_by_role_and_label(Role::SpinButton, "W:").hover();
+        crate::test_harness::frames(&mut h, 40);
+        assert!(h.query_by_label_contains(expected).is_some(), "{tab} W: hover tooltip shows unit hint");
+    }
+}

@@ -89,8 +89,14 @@ pub(super) fn custom_groups(row: &mut RibbonRow<'_>, app: &mut WordApp, groups: 
 /// Esc cancels. A value outside `range` (points) is shown and writes nothing. `lock_aspect` false
 /// resizes the one side only.
 pub(super) fn size_field(ui: &mut Ui, app: &mut WordApp, label: &str, key: &str, pt: f32, lock_aspect: bool, range: RangeInclusive<f32>) {
+    let hint = if lock_aspect {
+        tl!("Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.")
+    } else {
+        tl!("Type a size in any unit, such as 3 cm or 300 px.")
+    };
     let field = NumberField::length(tl!(label).to_string(), Bind::given(Some(f64::from(pt))), crate::options::lengths(app.session.units()))
         .range(f64::from(*range.start())..=f64::from(*range.end()))
+        .tooltip(TooltipSpec::new(hint.to_string()))
         .id_salt(("size_field", key));
     let events = field.show(ui).edit.events;
     let key = key.to_string();
