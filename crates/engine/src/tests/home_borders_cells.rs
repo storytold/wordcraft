@@ -79,11 +79,46 @@ fn outside_and_inside_borders_follow_the_selected_block() {
     assert_eq!(shown(&s, 1, 0), [false, true, true, false]);
     assert_eq!(shown(&s, 1, 1), [false, false, true, true]);
     assert_eq!(table(&s).rows[2].cells[2].props.borders, None, "a cell outside the selection is left alone");
+    // The cells beyond the block share its edge lines: their facing sides get the same line.
+    assert_eq!(shown(&s, 0, 2), [false, true, false, false]);
+    assert_eq!(shown(&s, 2, 0), [true, false, false, false]);
     borders(&mut s, "inside");
     assert_eq!(shown(&s, 0, 0), [true; 4]);
     assert_eq!(shown(&s, 1, 1), [true; 4]);
-    assert_eq!(table(&s).rows[0].cells[2].props.borders, None);
+    assert_eq!(shown(&s, 0, 2), [false, true, false, false], "Inside leaves the cells beyond the block alone");
     assert!(!para_borders(&s));
+}
+
+#[test]
+fn no_border_on_a_row_clears_the_lines_it_shares_with_the_rows_around_it() {
+    let mut s = doc();
+    s.run("table.selectTable", &json!({})).unwrap();
+    borders(&mut s, "all");
+    select(&mut s, (1, 1), (0, 2));
+    borders(&mut s, "none");
+    for c in 0..3 {
+        // Each cell draws its own sides, so the rows above and below must not keep the lines.
+        assert_eq!(shown(&s, 0, c), [true, true, false, true], "the row above keeps its other lines, cell (0, {c})");
+        assert_eq!(shown(&s, 1, c), [false; 4], "cell (1, {c})");
+        assert_eq!(shown(&s, 2, c), [false, true, true, true], "the row below keeps its other lines, cell (2, {c})");
+    }
+}
+
+#[test]
+fn a_row_that_skips_grid_columns_has_its_first_cell_on_the_outside() {
+    let mut s = doc();
+    // The middle row starts at grid column 1 (`w:gridBefore`): two cells.
+    let tb = s.doc.table_mut(StoryRef::Body, &Path(vec![0])).unwrap();
+    tb.rows[1].cells.remove(0);
+    tb.rows[1].props.grid_before = 1;
+    s.run("table.selectTable", &json!({})).unwrap();
+    borders(&mut s, "none");
+    borders(&mut s, "outside");
+    assert_eq!(shown(&s, 1, 0), [false, true, false, false], "the row's first cell is on the table's left edge");
+    assert_eq!(shown(&s, 1, 1), [false, false, false, true]);
+    borders(&mut s, "none");
+    borders(&mut s, "inside");
+    assert_eq!(shown(&s, 1, 0), [true, false, true, true], "Inside leaves the row's outer edge without a line");
 }
 
 #[test]

@@ -295,12 +295,15 @@ pub(crate) fn cell_block_borders(s: &mut Session, range: &crate::CellRange, kind
     let t = s.doc.table_mut(range.story, &range.table)?;
     let ((r0, r1), (g0, g1)) = (range.rows, range.cols);
     // Each selected cell, and which of its sides (top, left, bottom, right) are on the block's edge.
+    // A row's first and last cells are on it too when the row skips grid columns (`w:gridBefore`,
+    // `w:gridAfter`): the layout draws those as the table's outer edge.
     let cells: Vec<(usize, usize, [bool; 4])> = range
         .cells(t)
         .into_iter()
         .map(|(r, c)| {
             let (a, z) = super::grid_cols(t, r, c);
-            (r, c, [r <= r0, a <= g0, r >= r1, z >= g1])
+            let last = t.rows.get(r).map_or(0, |row| row.cells.len().saturating_sub(1));
+            (r, c, [r <= r0, a <= g0 || c == 0, r >= r1, z >= g1 || c >= last])
         })
         .collect();
     // One side is taken off when every cell along that edge already shows it, as the button toggles.
@@ -310,9 +313,9 @@ pub(crate) fn cell_block_borders(s: &mut Session, range: &crate::CellRange, kind
             own.as_ref().and_then(|x| side(x, i)).is_some_and(|x| x.is_visible())
         })
     });
+    // The sides to set: (row, cell, side, border).
+    let mut writes: Vec<(usize, usize, usize, Border)> = Vec::new();
     for (r, c, edge) in cells {
-        let Some(cl) = t.rows.get_mut(r).and_then(|row| row.cells.get_mut(c)) else { continue };
-        let mut cur = cl.props.borders.unwrap_or_default();
         for (i, on_edge) in edge.into_iter().enumerate() {
             let new = match kind {
                 "all" => Some(b),
@@ -322,14 +325,53 @@ pub(crate) fn cell_block_borders(s: &mut Session, range: &crate::CellRange, kind
                 _ if one_side == Some(i) && on_edge => Some(if shown { nil } else { b }),
                 _ => None,
             };
-            if let Some(new) = new {
-                *side_mut(&mut cur, i) = Some(new);
+            let Some(new) = new else { continue };
+            writes.push((r, c, i, new));
+            // Each cell draws its own sides, so a line on the block's edge is also the facing
+            // side of the cell beyond it: that gets the same border, or No Border would leave
+            // the neighbour's line showing.
+            if on_edge {
+                writes.extend(beside(t, r, c, i, (g0, g1)).into_iter().map(|(nr, nc)| (nr, nc, (i + 2) % 4, new)));
             }
         }
+    }
+    for (r, c, i, new) in writes {
+        let Some(cl) = t.rows.get_mut(r).and_then(|row| row.cells.get_mut(c)) else { continue };
+        let mut cur = cl.props.borders.unwrap_or_default();
+        *side_mut(&mut cur, i) = Some(new);
         cl.props.borders = Some(cur);
     }
     touch_cells(s, &range.table)?;
     sel_result(s)
+}
+
+/// The cells across side `i` (top, left, bottom, right) of cell (`r`, `c`) whose facing edge lies
+/// wholly on that line. Above and below, only cells within grid columns `cols` (the selected
+/// block's), so a wider cell's edge beyond the block keeps its line.
+fn beside(t: &Table, r: usize, c: usize, i: usize, (g0, g1): (usize, usize)) -> Vec<(usize, usize)> {
+    let Some(row) = t.rows.get(r) else { return Vec::new() };
+    match i {
+        1 => c.checked_sub(1).map(|p| vec![(r, p)]).unwrap_or_default(),
+        3 => {
+            if c + 1 < row.cells.len() {
+                vec![(r, c + 1)]
+            } else {
+                Vec::new()
+            }
+        }
+        _ => {
+            let nr = if i == 0 { r.checked_sub(1) } else { Some(r + 1) };
+            let Some((nr, next)) = nr.and_then(|nr| t.rows.get(nr).map(|x| (nr, x))) else { return Vec::new() };
+            let (a, z) = super::grid_cols(t, r, c);
+            (0..next.cells.len())
+                .filter(|&nc| {
+                    let (na, nz) = super::grid_cols(t, nr, nc);
+                    na <= z && nz >= a && na >= g0 && nz <= g1
+                })
+                .map(|nc| (nr, nc))
+                .collect()
+        }
+    }
 }
 
 /// Side `i` of `b`: top, left, bottom, right.
