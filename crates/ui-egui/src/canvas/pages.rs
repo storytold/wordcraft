@@ -1,12 +1,11 @@
-use super::{DocLayout, Hash, Hasher, Page, Placed, Pos, Rect, WordApp, json};
+use super::{DocLayout, Hash, Hasher, Page, Placed, Rect, WordApp, json};
 
 /// Fingerprint of everything outside the layout that changes how pages render: the view's
-/// marks and markup, dark mode, the page colour and watermark, header/body dimming, the media,
-/// and (while a drag lasts) the object left out of the page.
+/// marks and markup, dark mode, the page colour and watermark, header/body dimming, and media.
 /// Taken once per pass.
 // lean: a hash of the view inputs stands in for the page-raster revision; the upgrade is an engine render-inputs
 // revision that the pages' pictures key on directly.
-pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>) -> u64 {
+pub(super) fn view_key(app: &WordApp, dim_body: bool) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     let v = &app.session.view;
     (v.marks, app.session.prefs.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER, v.hide_ink, v.draw.replay).hash(&mut h);
@@ -16,9 +15,6 @@ pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>) -> u
     format!("{:?}{:?}{:?}", app.session.doc.settings.page_color, app.session.doc.settings.page_picture, app.session.doc.settings.watermark)
         .hash(&mut h);
     app.session.doc.media.len().hash(&mut h);
-    // A page drawn without a dragged object must not pass for the page with it: the drag starts
-    // and ends change the key once each, so the page is rendered again then and only then.
-    hidden.hash(&mut h);
     h.finish()
 }
 

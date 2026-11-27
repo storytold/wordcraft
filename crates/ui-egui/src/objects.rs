@@ -245,11 +245,12 @@ impl Component for TurnPreview {
 }
 
 /// Keeps the pixels of the object `o` the frame is turning, turned to `live`, and shows them. A box that is not a
-/// pure turn (a resize) has no pixel preview; the frame's outline alone shows it.
+/// pure turn (a resize) or a text box (its text does not turn yet) has no pixel preview; the frame's outline alone
+/// shows it.
 fn show_turning(app: &mut WordApp, _ui: &mut Ui, layout: &DocLayout, body: &PageBody, pp: &PlacedPage, o: &ObjectHit, live: &BoxState) {
     let c = live.quad.map(|q| pp.from_doc(&body.view, q));
     let (w, h) = ((c[1] - c[0]).hypot() as f32, (c[3] - c[0]).hypot() as f32);
-    if (w - o.rect.w).abs() > 0.5 || (h - o.rect.h).abs() > 0.5 {
+    if o.text_box.is_some() || (w - o.rect.w).abs() > 0.5 || (h - o.rect.h).abs() > 0.5 {
         app.canvas.turning = None;
         return;
     }
@@ -775,6 +776,42 @@ pub(crate) fn dragged_off_page(drag: Option<&ObjectGesture>) -> Option<(usize, P
     Some((object.page, object.pos()))
 }
 
+/// The object a motion eases ([`crate::object_motion`]): the selected shape (with text or
+/// without) or picture, or a text box being edited; not a connector or a fixed object.
+pub(crate) fn motion_subject(app: &WordApp, layout: &DocLayout) -> Option<ObjectHit> {
+    let (o, editing) = active(app, layout)?;
+    let ok = match selected(app) {
+        Some((_, InlineObject::Shape { kind, .. })) => !kind.is_connector(),
+        Some((_, InlineObject::Image { .. })) => true,
+        Some(_) => false,
+        None => editing,
+    };
+    (ok && !fixed(app, &o)).then_some(o)
+}
+
+/// A move or a frame drag in progress, for [`crate::object_motion`].
+#[derive(Clone)]
+pub(crate) struct MotionDrag {
+    /// A handle resizes it (not a turn, not a move).
+    pub resize: bool,
+    pub page: usize,
+    pub key: Pos,
+    /// The drag already shows the object's pixels.
+    pub pixels: bool,
+    pub to: crate::object_motion::Pose,
+}
+
+/// The move the page tool holds, or the frame drag, where it would land.
+pub(crate) fn motion_drag(app: &WordApp) -> Option<MotionDrag> {
+    if let Some(d) = app.canvas.object_gesture().filter(|d| d.moved)
+        && let Some(object) = d.object.as_ref()
+    {
+        let to = crate::object_motion::Pose { page: d.to_page, rect: d.rect, deg: object.spin.deg };
+        return Some(MotionDrag { resize: false, page: object.page, key: object.pos(), pixels: true, to });
+    }
+    app.canvas.frame_motion.clone()
+}
+
 /// Where an In Line with Text object dragged to `at` (screen) lands: the nearest position of its
 /// own story's text there, with the insertion cursor's colour (the same contrast as the caret's).
 fn drop_point(app: &WordApp, layout: &DocLayout, body: &PageBody, at: Pos2, g: &ObjectGesture, object: &ObjectHit) -> Option<Drop> {
@@ -1026,6 +1063,18 @@ fn preview_bounds(o: &ObjectHit) -> wordcraft_geom::Rect {
 
 /// `o` drawn alone over its rotated bounds, at `scale` screen points per page point.
 fn preview(app: &WordApp, layout: &DocLayout, o: &ObjectHit, scale: f32, body: &PageBody) -> Option<Preview> {
+    let ppp = body.pass.and_then(|p| p.space.as_ref()).map_or(1.0, |s| s.pixels_per_point);
+    render_preview(app, layout, o, scale, ppp)
+}
+
+/// The picture of `o` for a motion ([`crate::object_motion`]), as a texture.
+pub(crate) fn motion_preview(app: &WordApp, ctx: &egui::Context, layout: &DocLayout, o: &ObjectHit, scale: f32) -> Option<egui::TextureHandle> {
+    let p = render_preview(app, layout, o, scale, ctx.pixels_per_point())?;
+    Some(ctx.load_texture("object-motion", (*p.image).clone(), egui::TextureOptions::LINEAR))
+}
+
+/// [`preview`] at `ppp` screen pixels per point.
+fn render_preview(app: &WordApp, layout: &DocLayout, o: &ObjectHit, scale: f32, ppp: f32) -> Option<Preview> {
     let obj = hit_object(app, o)?;
     let page = layout.pages.get(o.page)?;
     let mut opts = crate::canvas::screen_render_options();
@@ -1033,7 +1082,6 @@ fn preview(app: &WordApp, layout: &DocLayout, o: &ObjectHit, scale: f32, body: &
     let items = wordcraft_layout::display::object_display(&app.session.doc, page, obj, o.rect, o.text_box, &opts.display);
     let b = preview_bounds(o);
     let max_side = app.ctx.as_ref().map_or(2048, |c| c.input(|i| i.max_texture_side));
-    let ppp = body.pass.and_then(|p| p.space.as_ref()).map_or(1.0, |s| s.pixels_per_point);
     let px = preview_scale(scale * ppp, b.w, b.h, max_side);
     let img = wordcraft_render::render_items(&app.session.doc, &items, wordcraft_geom::Rect::new(b.x, b.y, b.w, b.h), px, &opts);
     // A texture over the device limit panics wgpu outside `Session::run`; fall back to no preview.
@@ -1106,6 +1154,7 @@ fn outline_path(pp: &PlacedPage, view: &CanvasView, o: &ObjectHit) -> BezPath {
 pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, layout: &DocLayout, body: &PageBody) {
     // Set again below while the frame's box has a press open.
     app.canvas.frame_held = false;
+    app.canvas.frame_motion = None;
     let active = active(app, layout);
     let others: Vec<BezPath> = wordcraft_engine::cmd::objects::picked_objects(&app.session)
         .iter()
@@ -1117,7 +1166,8 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, layout: &DocLayout, body: &Pa
         SelectionOutline::solid(tl!("Picked objects").to_string(), &others).show_at(ui, body.rect);
     }
     let Some((o, editing)) = active else { return };
-    if !selectable_story(app, o.story) {
+    // The frame is not drawn while the object's motion is drawn over the page.
+    if crate::object_motion::in_flight(ui.ctx()) || !selectable_story(app, o.story) {
         return;
     }
     let Some(pp) = placed(body, o.page) else { return };
@@ -1171,6 +1221,15 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, layout: &DocLayout, body: &Pa
         }
         paint_turning(app, ui, body, pp, &o);
     }
+    if let Some(live) = out.edit.events.value().filter(|_| out.held.is_some() && !ended) {
+        let (to, deg) = box_frame(pp, view, live);
+        // A turn is not a resize: a box turned with no pixel preview keeps its original in place.
+        let turns = (deg - o.spin.deg + 540.0).rem_euclid(360.0) - 180.0;
+        let turns = turns.abs() > 0.05;
+        let pose = crate::object_motion::Pose { page: o.page, rect: to, deg };
+        app.canvas.frame_motion =
+            Some(MotionDrag { resize: !turns, page: o.page, key: o.pos(), pixels: turns && app.canvas.turning.is_some(), to: pose });
+    }
     if let Some(after) = out.edit.events.committed() {
         commit_box(app, &o, pp, view, after);
     }
@@ -1193,20 +1252,25 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, layout: &DocLayout, body: &Pa
     }
 }
 
+/// The page rect and angle a box shows: its size, its centre and its turn, in page points.
+fn box_frame(pp: &PlacedPage, view: &CanvasView, state: &BoxState) -> (wordcraft_geom::Rect, f32) {
+    let c = state.quad.map(|q| pp.from_doc(view, q));
+    let (w, h) = ((c[1] - c[0]).hypot() as f32, (c[3] - c[0]).hypot() as f32);
+    let centre = ((c[0].x + c[2].x) / 2.0, (c[0].y + c[2].y) / 2.0);
+    let deg = wordcraft_geom::normalize_degrees((c[1].y - c[0].y).atan2(c[1].x - c[0].x).to_degrees() as f32);
+    (wordcraft_geom::Rect::new((centre.0 - f64::from(w) / 2.0) as f32, (centre.1 - f64::from(h) / 2.0) as f32, w, h), deg)
+}
+
 /// Apply a committed box to object `o`: a turn is `arrange.rotation`, a new size (and place, for a
 /// floating one that can move: its far edges stay put) is `arrange.bounds`, or `picture.size` for a
 /// chart or SmartArt. A box that ended where it began changes nothing.
 fn commit_box(app: &mut WordApp, o: &ObjectHit, pp: &PlacedPage, view: &CanvasView, after: &BoxState) {
-    let c = after.quad.map(|q| pp.from_doc(view, q));
-    let (w, h) = ((c[1] - c[0]).hypot() as f32, (c[3] - c[0]).hypot() as f32);
-    let centre = ((c[0].x + c[2].x) / 2.0, (c[0].y + c[2].y) / 2.0);
-    let deg = wordcraft_geom::normalize_degrees((c[1].y - c[0].y).atan2(c[1].x - c[0].x).to_degrees() as f32);
+    let (r, deg) = box_frame(pp, view, after);
     let turned = (deg - o.spin.deg + 540.0).rem_euclid(360.0) - 180.0;
     if turned.abs() > 0.05 {
         let _ = app.run("arrange.rotation", json!({"degrees": deg}));
         return;
     }
-    let r = wordcraft_geom::Rect::new((centre.0 - f64::from(w) / 2.0) as f32, (centre.1 - f64::from(h) / 2.0) as f32, w, h);
     let same = |a: f32, b: f32| (a - b).abs() < 0.01;
     if same(r.x, o.rect.x) && same(r.y, o.rect.y) && same(r.w, o.rect.w) && same(r.h, o.rect.h) {
         return;

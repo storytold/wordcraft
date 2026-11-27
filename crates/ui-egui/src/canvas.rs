@@ -137,6 +137,8 @@ pub struct CanvasState {
     /// frame is the framework's `TransformBox`, not the page tool's [`ObjectGesture`], so it is recorded here, each
     /// pass, from the box's output.
     pub(crate) frame_held: bool,
+    /// The frame drag's live pose, for the motion of the object ([`crate::object_motion`]).
+    pub(crate) frame_motion: Option<crate::objects::MotionDrag>,
     /// The picture pixels of the object the frame's turn handle is turning, drawn once for the turn.
     pub(crate) turning: Option<crate::objects::Turning>,
     /// Page content fingerprints of the current layout, for the page revision.
@@ -401,6 +403,7 @@ impl Default for CanvasState {
             smart_art_run: None,
             object_gesture: None,
             frame_held: false,
+            frame_motion: None,
             turning: None,
             page_keys: PageKeys::default(),
             caret_bg: None,
@@ -784,7 +787,8 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
         app.session.page_hint = c.page;
     }
     let dim_body = dims_body(app, layout);
-    let hidden = crate::objects::dragged_off_page(app.canvas.object_gesture.as_ref());
+    crate::object_motion::begin(app, ui.ctx(), layout, scale as f32);
+    let hidden = crate::objects::dragged_off_page(app.canvas.object_gesture.as_ref()).or_else(|| crate::object_motion::hidden(ui.ctx()));
     let selected = selection_page_rects(app, layout);
     let areas = mark_areas(app, layout, &selected);
     let bodies: Vec<(f64, f64)> = layout.pages.iter().map(|p| (f64::from(p.body.y), f64::from(p.body.bottom()))).collect();
@@ -835,6 +839,7 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
             crate::content_controls::show(app, ui, layout, body);
             strip_click = equation_frame::show(app, ui, layout, body);
             crate::crop::show(app, ui, layout, body);
+            crate::object_motion::paint(app, ui.painter(), body.pages);
             crate::objects::show(app, ui, layout, body);
             // Shown after the selection areas: across controls the later one is on top of a press, and a border
             // beats the area it lies in (the engine's `target_at` answers none where a border is).

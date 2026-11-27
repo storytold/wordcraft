@@ -9,7 +9,7 @@ use std::sync::Arc;
 use craft::behavior::kurbo::Size;
 use craft::pages::ui::PageSource;
 use craft::ui::primitives::textures::{LoadedPicture, Revision, ThumbRender, ThumbRequest, ThumbSource};
-use wordcraft_doc::{Document, Pos};
+use wordcraft_doc::{Document, InlineObject, Pos};
 use wordcraft_layout::DocLayout;
 
 use super::WordApp;
@@ -36,7 +36,7 @@ impl WordPages {
     /// The source of `layout` for this pass. The page fingerprints move out of the app for the pass; give them back
     /// with [`WordPages::into_keys`].
     pub(super) fn new(app: &mut WordApp, layout: &Arc<DocLayout>, dim_body: bool, hidden: Option<(usize, Pos)>) -> Self {
-        let view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p));
+        let view = view_key(app, dim_body);
         let options = page_render_options(app, dim_body);
         let doc = Arc::new(page_doc(app).clone());
         WordPages { doc, layout: layout.clone(), keys: RefCell::new(std::mem::take(&mut app.canvas.page_keys)), view, options, hidden }
@@ -54,9 +54,11 @@ impl WordPages {
 }
 
 impl ThumbSource<usize> for WordPages {
-    fn revision(&self, page: &usize, _request: &ThumbRequest) -> Revision {
+    fn revision(&self, page: &usize, request: &ThumbRequest) -> Revision {
         let mut h = DefaultHasher::new();
         page_shows(&mut self.keys.borrow_mut(), &self.layout, *page, self.view).hash(&mut h);
+        let tile = request.region.map_or([0.0, 0.0, 1.0, 1.0], |r| [r.min.x, r.min.y, r.max.x, r.max.y]);
+        hidden_for_tile(&self.doc, &self.layout, *page, self.hidden.as_ref(), tile).hash(&mut h);
         Revision::new(h.finish())
     }
 
@@ -100,5 +102,50 @@ impl PageSource for WordPages {
             Some(p) => Size::new(dim(p.w, 1e5), dim(p.h, 1e6)),
             None => Size::new(72.0, 72.0),
         }
+    }
+}
+
+/// Include the hidden object in only the page tiles whose pixels it can affect. Unrelated page
+/// tiles keep their cache revisions through the hide/restore handoff.
+fn hidden_for_tile<'a>(doc: &Document, layout: &DocLayout, page: usize, hidden: Option<&'a (usize, Pos)>, tile: [f32; 4]) -> Option<&'a Pos> {
+    let (hidden_page, pos) = hidden?;
+    if *hidden_page != page {
+        return None;
+    }
+    let object = layout.object(pos, page)?;
+    let page_layout = layout.pages.get(page)?;
+    let source = doc.para_at(pos)?.object_at(pos.off)?;
+    let effects = source.frame()?.2.effect_extent();
+    let stroke = match source {
+        InlineObject::Shape { stroke: Some(_), stroke_width, .. } => stroke_width.max(0.0) / 2.0,
+        InlineObject::Group { canvas: Some(style), .. } if style.stroke.is_some() => style.stroke_width.max(0.0) / 2.0,
+        _ => 0.0,
+    };
+    tile_intersects(object.bounds(), page_layout.w, page_layout.h, tile, effects, stroke).then_some(pos)
+}
+
+fn tile_intersects(bounds: wordcraft_geom::Rect, page_w: f32, page_h: f32, tile: [f32; 4], effects: [f32; 4], stroke: f32) -> bool {
+    let tile = [tile[0] * page_w, tile[1] * page_h, tile[2] * page_w, tile[3] * page_h];
+    let left = effects[0] + stroke;
+    let top = effects[1] + stroke;
+    let right = effects[2] + stroke;
+    let bottom = effects[3] + stroke;
+    bounds.x - left < tile[2] && bounds.x + bounds.w + right > tile[0] && bounds.y - top < tile[3] && bounds.y + bounds.h + bottom > tile[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tile_intersects;
+    use wordcraft_geom::Rect;
+
+    #[test]
+    fn only_tiles_overlapping_the_object_are_invalidated() {
+        let object = Rect::new(120.0, 240.0, 80.0, 60.0);
+        assert!(tile_intersects(object, 600.0, 800.0, [0.1, 0.2, 0.4, 0.5], [0.0; 4], 0.0));
+        assert!(!tile_intersects(object, 600.0, 800.0, [0.0, 0.0, 0.1, 0.2], [0.0; 4], 0.0));
+        assert!(!tile_intersects(object, 600.0, 800.0, [0.5, 0.2, 0.9, 0.5], [0.0; 4], 0.0));
+        assert!(!tile_intersects(object, 600.0, 800.0, [0.34, 0.30, 0.4, 0.4], [0.0; 4], 0.0));
+        assert!(tile_intersects(object, 600.0, 800.0, [0.34, 0.30, 0.4, 0.4], [0.0, 0.0, 16.0, 0.0], 0.0));
+        assert!(tile_intersects(object, 600.0, 800.0, [0.34, 0.30, 0.4, 0.4], [0.0; 4], 8.0));
     }
 }

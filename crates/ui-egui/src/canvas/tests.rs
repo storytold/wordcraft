@@ -165,7 +165,7 @@ fn caret_contrasts_with_what_lies_under_it() {
     let at = |a: &mut WordApp, off: usize| {
         let layout = a.session.layout();
         let c = layout.caret_on(&Pos::body(0, off), 0).unwrap();
-        let view = view_key(a, false, None);
+        let view = view_key(a, false);
         caret_color_at(a, &layout, c.page, c.x, c.top + c.height / 2.0, view, false)
     };
     assert_eq!(at(&mut a, 2), Color32::BLACK, "white paper");
@@ -192,19 +192,19 @@ fn read_mode_page_color_sets_the_reading_paper() {
     a.run("design.pageColor", json!({"color": "#102040"})).unwrap();
     let paper = |a: &WordApp| page_render_options(a, false).paper_of(&a.session.doc);
     assert_eq!(paper(&a), Rgb(0x10, 0x20, 0x40), "Print Layout shows the page color");
-    let print_key = view_key(&a, false, None);
+    let print_key = view_key(&a, false);
     a.run("view.readMode", json!({})).unwrap();
     assert_eq!(paper(&a), Rgb::WHITE, "None: white, the page color ignored");
-    let none_key = view_key(&a, false, None);
+    let none_key = view_key(&a, false);
     a.run("view.readPageColor", json!({"value": "sepia"})).unwrap();
     assert_eq!(paper(&a), wordcraft_render::SEPIA_PAPER);
     assert!(!page_render_options(&a, false).dark, "Sepia keeps the text's colors");
-    let sepia_key = view_key(&a, false, None);
+    let sepia_key = view_key(&a, false);
     a.run("view.readPageColor", json!({"value": "inverse"})).unwrap();
     assert!(page_render_options(&a, false).dark);
     let d = wordcraft_render::DARK_PAPER;
     assert_eq!(paper(&a), Rgb(d, d, d));
-    let inverse_key = view_key(&a, false, None);
+    let inverse_key = view_key(&a, false);
     let keys = [print_key, none_key, sepia_key, inverse_key];
     for (i, k) in keys.iter().enumerate() {
         assert!(!keys[..i].contains(k), "each paper has its own view key");
@@ -2098,20 +2098,6 @@ fn ime_equation_replacement_starts_a_new_context() {
     assert!(h.state().session.math.is_some(), "the new equation is being edited");
 }
 
-/// A page drawn without a dragged object must not pass for the page with it: the drag's start
-/// and end change the page's texture key once each, so the page is rendered again then and
-/// only then. Without this, the old raster — the object still on it where it was — stays while
-/// the preview follows the pointer, and the object shows twice.
-#[test]
-fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
-    let doc = wordcraft_doc::Document::from_text("Hello WordCraft");
-    let app = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
-    let object = Pos::body(0, 5);
-    let hidden = view_key(&app, false, Some(&object));
-    assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
-    assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
-}
-
 #[test]
 fn screen_paper_color_changes_raster_and_cache_without_changing_export_paper() {
     use wordcraft_doc::props::Rgb;
@@ -2119,10 +2105,10 @@ fn screen_paper_color_changes_raster_and_cache_without_changing_export_paper() {
     let layout = app.session.layout();
     let page = &layout.pages[0];
     let print_before = wordcraft_render::render_page(&app.session.doc, page, 0.1, &Default::default());
-    let mut keys = vec![view_key(&app, false, None)];
+    let mut keys = vec![view_key(&app, false)];
     for (value, expected) in [("green", Rgb(0xCC, 0xE8, 0xCF)), ("cream", Rgb(0xFA, 0xF0, 0xDC)), ("gray", Rgb(0xE8, 0xEA, 0xED))] {
         app.run("view.paperColor", json!({"value":value})).unwrap();
-        let key = view_key(&app, false, None);
+        let key = view_key(&app, false);
         assert!(!keys.contains(&key), "each preset invalidates page and tile caches");
         keys.push(key);
         let opts = page_render_options(&app, false);
