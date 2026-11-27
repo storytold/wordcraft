@@ -372,6 +372,7 @@ fn format_revision(doc: &mut Document, author: &str, date: &str) -> u32 {
 
 /// Rewrites media keys in an inline object and all nested group children via `map`, returning
 /// whether any media key changed.
+#[cfg(test)]
 pub(super) fn remap_object_media(root: &mut InlineObject, map: &mut dyn FnMut(&str) -> Option<String>) -> bool {
     let mut changed = false;
     let mut todo = vec![root];
