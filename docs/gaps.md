@@ -305,6 +305,8 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | 2026-10-31 | trivial | Preserve recipient columns after an unquoted whitespace-only prefix in a headered CSV (#4249); keep quoted headers, headerless whitespace records and shared CSV parsing. |
 | 2026-10-31 | trivial | Integrate complete-record recipient CSV delimiter detection (#4249) with current main; preserve leading blank-line detection (#5042), original regressions and readiness estimates. |
 | 2026-10-31 | trivial | Percentage cell widths size their columns whichever rows give them, as measured in Word, rows that disagree giving each column its largest and merged cells sharing theirs; mixed absolute and percentage widths still need the shared-grid algorithm; no ranked gap changed; readiness estimates unchanged |
+| 2026-11-01 | trivial | Right and centre tabs past the right margin end at the right indent in Word 2013 documents, as measured in Word; no ranked gap changed; readiness estimates unchanged |
+
 | 2026-10-31 | trivial | Synchronize the existing Proofing pane with main `eecbb8f`; preserve explicit-position lookup, implicit selection, navigation, undo and per-window state; fresh exact-SHA hosted validation pending, readiness unchanged |
 | 2026-10-30 | trivial | the Paste button is named "Paste" for screen readers, without macOS's key on other platforms; the status bar's Go To hint shows the platform's key |
 | 2026-10-30 | trivial | #5: a list item deleted whole under Track Changes shows its number as deleted text, in the deletion's colour and mark, and hides it where deletions are hidden (#4828); estimate unchanged |
