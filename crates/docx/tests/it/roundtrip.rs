@@ -3010,13 +3010,13 @@ fn style_definition_property_changes_roundtrip() {
     let back_st = read_back.styles.get("CustomCallout").expect("CustomCallout style kept");
     assert_eq!(back_st.para.space_after, Some(18.0));
     assert_eq!(back_st.para.align, Some(Align::Center));
-    let pch = back_st.para.fmt_change.as_deref().expect("pPrChange preserved");
+    let pch = back_st.para_change.as_deref().expect("pPrChange preserved");
     assert_eq!(pch.old.space_after, Some(6.0));
     assert_eq!(pch.old.align, Some(Align::Left));
 
     assert_eq!(back_st.chr.size, Some(18.0));
     assert_eq!(back_st.chr.bold, Some(true));
-    let rch = back_st.chr.fmt_change.as_deref().expect("rPrChange preserved");
+    let rch = back_st.chr_change.as_deref().expect("rPrChange preserved");
     assert_eq!(rch.old.size, Some(14.0));
     assert_eq!(rch.old.bold, Some(false));
 }
@@ -3077,7 +3077,7 @@ fn style_definition_level_only_numbering_resolves_from_based_on_chain() {
 
     let child = doc.styles.get("CustomChild").expect("CustomChild style exists");
     assert_eq!(child.para.numbering, Some(wordcraft_doc::props::NumRef { num: 99, level: 1 }));
-    let pch = child.para.fmt_change.as_deref().expect("pPrChange preserved");
+    let pch = child.para_change.as_deref().expect("pPrChange preserved");
     // Resolved list from CustomBase (num: 42), not from revised style's list (num: 99):
     assert_eq!(pch.old.numbering, Some(wordcraft_doc::props::NumRef { num: 42, level: 2 }));
 }
@@ -3145,7 +3145,7 @@ fn style_definition_child_old_list_uses_base_old_numbering() {
 
     let base = doc.styles.get("CustomBase").expect("CustomBase style exists");
     assert_eq!(base.para.numbering, Some(wordcraft_doc::props::NumRef { num: 99, level: 0 }));
-    let bch = base.para.fmt_change.as_deref().expect("base pPrChange preserved");
+    let bch = base.para_change.as_deref().expect("base pPrChange preserved");
     assert_eq!(bch.old.numbering, Some(wordcraft_doc::props::NumRef { num: 42, level: 0 }));
 
     // The unchanged middle style's level-only numbering is normalized to the base's current
@@ -3158,7 +3158,7 @@ fn style_definition_child_old_list_uses_base_old_numbering() {
 
     let child = doc.styles.get("CustomChild").expect("CustomChild style exists");
     assert_eq!(child.para.numbering, Some(wordcraft_doc::props::NumRef { num: 99, level: 1 }));
-    let cch = child.para.fmt_change.as_deref().expect("child pPrChange preserved");
+    let cch = child.para_change.as_deref().expect("child pPrChange preserved");
     assert_eq!(
         cch.old.numbering,
         Some(wordcraft_doc::props::NumRef { num: 42, level: 2 }),
@@ -3169,7 +3169,7 @@ fn style_definition_child_old_list_uses_base_old_numbering() {
     let explicit = doc.styles.get("CustomExplicit").expect("CustomExplicit style exists");
     assert_eq!(explicit.para.numbering, Some(wordcraft_doc::props::NumRef { num: 99, level: 2 }));
     assert!(explicit.numbering_from_base);
-    let ech = explicit.para.fmt_change.as_deref().expect("explicit pPrChange preserved");
+    let ech = explicit.para_change.as_deref().expect("explicit pPrChange preserved");
     assert_eq!(ech.old.numbering, Some(wordcraft_doc::props::NumRef { num: 42, level: 2 }));
     assert!(!explicit.old_numbering_from_base, "an explicit old list stays explicit on reject");
 

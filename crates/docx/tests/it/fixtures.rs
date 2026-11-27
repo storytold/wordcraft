@@ -786,10 +786,10 @@ fn table_style_whole_table_formatting_survives_rejecting_a_style_change() {
     let d = wordcraft_docx::read(&docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
     let st = d.styles.get("Whole").expect("Whole style");
     assert_eq!(st.para.align, Some(Align::Center), "wholeTable wins in the live properties");
-    let pch = st.para.fmt_change.as_ref().expect("pPrChange read");
+    let pch = st.para_change.as_ref().expect("pPrChange read");
     assert_eq!(pch.old.align, Some(Align::Center), "rejecting keeps wholeTable alignment");
     assert_eq!(st.chr.color, Some(TextColor::Rgb(wordcraft_doc::Rgb(0x1F, 0x4E, 0x79))));
-    let rch = st.chr.fmt_change.as_ref().expect("rPrChange read");
+    let rch = st.chr_change.as_ref().expect("rPrChange read");
     assert_eq!(rch.old.color, Some(TextColor::Rgb(wordcraft_doc::Rgb(0x1F, 0x4E, 0x79))), "rejecting keeps wholeTable colour");
     assert_eq!(rch.old.bold, Some(true), "old values keep their own formatting");
 }
@@ -813,7 +813,7 @@ fn builtin_heading_change_old_snapshot_keeps_its_outline_level() {
     let d = wordcraft_docx::read(&docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
     let st = d.styles.get("Heading1").expect("Heading1 style");
     assert_eq!(st.para.outline_level, Some(0), "the built-in heading gets its level");
-    let ch = st.para.fmt_change.as_deref().expect("pPrChange read");
+    let ch = st.para_change.as_deref().expect("pPrChange read");
     assert_eq!(ch.old.outline_level, Some(0), "the old snapshot keeps the built-in level");
 }
 
