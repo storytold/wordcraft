@@ -306,6 +306,11 @@ mod tests {
                 assert_eq!(s.sel, sel);
                 assert_eq!(packs::document_languages(s), ["en-US"], "the text keeps its language");
                 assert_eq!(s.rev(), rev);
+                let cleared = s.run("review.language.preferred", &json!({"lang": "auto"})).unwrap();
+                assert_eq!(cleared["preferred"], Value::Null);
+                assert_eq!(s.prefs.default_language, None);
+                assert_eq!((s.undo_depth(), s.can_redo(), s.dirty), (depth, redo, dirty), "clearing leaves history and modified flag untouched");
+                assert_eq!(packs::document_languages(s), ["en-US"], "the text still keeps its language");
                 assert!(s.run("review.language.preferred", &json!({})).is_err());
                 assert!(s.run("review.language.preferred", &json!({"lang": "not a tag!!"})).is_err());
             });
