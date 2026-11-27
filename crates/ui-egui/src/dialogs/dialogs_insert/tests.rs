@@ -319,18 +319,60 @@ fn date_time_dialog_uses_saved_pt_br_language() {
     assert_eq!(f.params()["update"], false);
 }
 
-/// Language tags with primary subtag `pt` (such as `pt_BR` or `pt-PT`) are normalized to `pt-BR`.
+/// A saved Portuguese language keeps its country: a `pt` tag naming Portugal (`pt-PT`, `pt_PT.UTF-8`,
+/// `pt-Latn-PT`) or a region that writes like it (`pt-AO`, `pt_MZ`) opens as `pt-PT`, `pt` alone or
+/// Brazil as `pt-BR`, also when an extension names Portugal (`pt-BR-t-pt-PT`). Portugal used to be
+/// turned into Brazil.
 #[test]
 fn date_time_dialog_normalizes_portuguese_language_tags() {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
-    a.ui.date_time_language = "pt_BR".into();
-    let f = DateTimeForm::new(&a);
-    assert_eq!(f.language, "pt-BR");
-    assert_eq!(f.format, "dd/MM/yyyy");
+    for (saved, language) in [
+        ("pt_BR", "pt-BR"),
+        ("pt", "pt-BR"),
+        ("pt-x-pt", "pt-BR"),
+        ("pt-BR-t-pt-PT", "pt-BR"),
+        ("pt-BR-u-rg-ptzzzz", "pt-BR"),
+        ("pt-US", "pt-BR"),
+        ("pt-AO", "pt-PT"),
+        ("pt_MZ.UTF-8", "pt-PT"),
+        ("pt-PT", "pt-PT"),
+        ("pt_PT.UTF-8", "pt-PT"),
+        ("pt_PT@euro", "pt-PT"),
+        ("pt-Latn-PT", "pt-PT"),
+        ("PT-pt", "pt-PT"),
+        ("en-GB", "en-US"),
+    ] {
+        a.ui.date_time_language = saved.into();
+        let f = DateTimeForm::new(&a);
+        assert_eq!(f.language, language, "{saved}");
+        let picture = if language == "en-US" { "M/d/yyyy" } else { "dd/MM/yyyy" };
+        assert_eq!(f.format, picture, "{saved}");
+    }
+}
 
-    a.ui.date_time_language = "pt-PT".into();
-    let f = DateTimeForm::new(&a);
-    assert_eq!(f.language, "pt-BR");
+/// Choosing Portuguese (Portugal) in the dialog's own Language list inserts the date tagged `pt-PT`,
+/// and a Portuguese picture chosen first stays chosen.
+#[test]
+fn date_time_dialog_inserts_european_portuguese() {
+    let picture = "d 'de' MMMM 'de' yyyy";
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.ui.language = "en".into();
+    a.ui.date_time_language = "pt-BR".into();
+    let form = DateTimeForm { format: picture.into(), ..DateTimeForm::new(&a) };
+    let mut h = testing::harness(a);
+    let id = open_form(h.state_mut(), None, form);
+    h.run_steps(3);
+    h.get_by_label("Language").click();
+    h.run_steps(3);
+    h.get_by_label("Portuguese (Portugal)").click();
+    h.run_steps(3);
+    let f = h.state().dialog_host.get_by_id::<FormHost<DateTimeForm>>(id).map(|h| h.form().clone()).expect("the dialog");
+    assert_eq!((f.language.as_str(), f.format.as_str()), ("pt-PT", picture));
+    testing::confirm(&mut h, id);
+    let doc = &h.state().session.doc;
+    assert_eq!(doc.plain_text(wordcraft_doc::StoryRef::Body), wordcraft_engine::cmd::insert::format_date_in(picture, Some("pt-PT")));
+    let para = doc.para_at(&doc.start_of(wordcraft_doc::StoryRef::Body)).expect("inserted paragraph");
+    assert_eq!(para.props_of_char(0).lang.as_deref(), Some("pt-PT"));
 }
 
 /// One table form to `insert.dateTime`: pt-BR fixed text carries its language on the run; `update`

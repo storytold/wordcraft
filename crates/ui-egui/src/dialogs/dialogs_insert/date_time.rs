@@ -18,7 +18,7 @@ use super::{list_index, word};
 use crate::WordApp;
 use crate::dialogs::host::{Asks, Filed, WordForm};
 
-/// Predefined Portuguese (Brazil) date and time format pictures.
+/// Predefined Portuguese date and time format pictures, for Brazil and Portugal alike.
 const PT_DATE_FORMATS: &[&str] = &[
     "dd/MM/yyyy",
     "dddd, d 'de' MMMM 'de' yyyy",
@@ -61,25 +61,45 @@ pub struct DateTimeForm {
 impl DateTimeForm {
     /// Restore a saved format/language or choose a sensible default for the UI language.
     pub fn new(app: &WordApp) -> Self {
-        let language = if app.ui.date_time_language.is_empty() {
-            if crate::i18n::current().code().to_ascii_lowercase().starts_with("pt") { "pt-BR" } else { "en-US" }.to_string()
-        } else if app.ui.date_time_language.to_ascii_lowercase().starts_with("pt") {
-            "pt-BR".to_string()
-        } else {
-            "en-US".to_string()
-        };
-        let list = if language == "pt-BR" { PT_DATE_FORMATS } else { DATE_FORMATS };
+        let saved = app.ui.date_time_language.as_str();
+        let language = date_language(if saved.is_empty() { crate::i18n::current().code() } else { saved }).to_string();
+        let list = formats_of(&language);
         let format = if list.contains(&app.ui.date_time_format.as_str()) { app.ui.date_time_format.clone() } else { list[0].to_string() };
         Self { format, language, update: app.ui.date_time_update }
     }
     /// Pictures available in the chosen language.
     fn formats(&self) -> &'static [&'static str] {
-        if self.language == "pt-BR" { PT_DATE_FORMATS } else { DATE_FORMATS }
+        formats_of(&self.language)
     }
     /// Engine command parameters corresponding to the current controls.
     pub fn params(&self) -> Value {
         json!({"format": self.format, "language": self.language, "update": self.update})
     }
+}
+
+/// The regions that write Portuguese like Portugal: Portugal and the regions CLDR gives `pt_PT` as
+/// their parent locale (Angola, Switzerland, Cabo Verde, France, Equatorial Guinea, Guinea-Bissau,
+/// Luxembourg, Macao, Mozambique, São Tomé and Príncipe, Timor-Leste).
+const EUROPEAN_PORTUGUESE: [&str; 12] = ["PT", "AO", "CH", "CV", "FR", "GQ", "GW", "LU", "MO", "MZ", "ST", "TL"];
+
+/// The dialog's language for a saved or interface language tag (`pt-PT`, `pt_PT.UTF-8`, `pt-pt`…):
+/// Portuguese (Portugal) when a `pt` tag names one of [`EUROPEAN_PORTUGUESE`], Portuguese (Brazil)
+/// for any other `pt` tag (`pt` alone, `pt-BR`), English (United States) otherwise. The subtags after
+/// a singleton (an extension such as `pt-BR-t-pt-PT`, or private use such as `pt-x-pt`) name no
+/// region of the text, and a POSIX encoding or modifier (`.UTF-8`, `@euro`) is not part of the tag.
+fn date_language(tag: &str) -> &'static str {
+    let tag = tag.trim().split(['.', '@']).next().unwrap_or("");
+    let mut parts = tag.split(['-', '_']);
+    if !parts.next().is_some_and(|p| p.eq_ignore_ascii_case("pt")) {
+        return "en-US";
+    }
+    let european = parts.take_while(|p| p.len() > 1).any(|p| EUROPEAN_PORTUGUESE.iter().any(|r| r.eq_ignore_ascii_case(p)));
+    if european { "pt-PT" } else { "pt-BR" }
+}
+
+/// The pictures offered for a dialog language.
+fn formats_of(language: &str) -> &'static [&'static str] {
+    if language.starts_with("pt-") { PT_DATE_FORMATS } else { DATE_FORMATS }
 }
 
 impl WordForm for DateTimeForm {
@@ -105,23 +125,26 @@ impl WordForm for DateTimeForm {
                 }
             });
             Stack::new().show(ui, |ui, _| {
-                let entries = [Entry::new(0u8, word("Portuguese (Brazil)")), Entry::new(1u8, word("English (United States)"))];
-                let current = Mixed::Same(if self.language == "pt-BR" { 0u8 } else { 1u8 });
+                const LANGUAGES: [&str; 3] = ["pt-BR", "pt-PT", "en-US"];
+                let entries = [
+                    Entry::new(0u8, word("Portuguese (Brazil)")),
+                    Entry::new(1u8, word("Portuguese (Portugal)")),
+                    Entry::new(2u8, word("English (United States)")),
+                ];
+                let current = Mixed::Same(LANGUAGES.iter().position(|l| *l == self.language).and_then(|i| u8::try_from(i).ok()).unwrap_or(2));
                 let picked = Field::new(word("Language"))
                     .show(ui, |ui, _| Select::new(word("Language"), Bind::given(current), &entries).show(ui).value().copied())
                     .inner
                     .flatten();
-                // A language change starts the format over from that language's first picture.
-                match picked {
-                    Some(0) if self.language != "pt-BR" => {
-                        self.language = "pt-BR".into();
-                        self.format = PT_DATE_FORMATS[0].into();
+                // A language change starts the format over from that language's first picture, but
+                // Brazil and Portugal share their pictures, so one chosen there stays chosen.
+                if let Some(language) = picked.and_then(|i| LANGUAGES.get(usize::from(i)))
+                    && *language != self.language
+                {
+                    if formats_of(language) != self.formats() {
+                        self.format = formats_of(language)[0].into();
                     }
-                    Some(1) if self.language != "en-US" => {
-                        self.language = "en-US".into();
-                        self.format = DATE_FORMATS[0].into();
-                    }
-                    _ => {}
+                    self.language = (*language).into();
                 }
                 Checkbox::new(Bind::bound(&mut self.update)).label(word("Update automatically")).show(ui);
             });
