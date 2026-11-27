@@ -1179,18 +1179,27 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
 
 /// The space before body paragraph `block + 1` (resolved as `rp`; `listed` when it gets a list
 /// label) that is really left above it after paragraph `block`. Same tests as
-/// [`Flow::merge_gap`]: contextual spacing drops it after a paragraph of its style, and
-/// automatic spacing drops it between two list items.
+/// [`Flow::merge_gap`]: contextual spacing drops it after a paragraph of its style (and the
+/// space after such a paragraph that drops its own comes off it), and automatic spacing drops it
+/// between two list items.
 fn space_before_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::ResolvedPara, listed: bool) -> f32 {
+    let mut before = rp.space_before;
     if let Some(Block::Para(prev)) = ctx.doc.body.get(block).map(|b| &**b) {
-        if rp.contextual_spacing && ctx.doc.styles.resolve_para(&prev.props).style == rp.style {
-            return 0.0;
+        let prp = ctx.doc.styles.resolve_para(&prev.props);
+        if prp.style == rp.style {
+            if rp.contextual_spacing {
+                return 0.0;
+            }
+            // The paragraph before drops its space after, and it comes off this one's too.
+            if prp.contextual_spacing {
+                before = (before - prp.space_after).max(0.0);
+            }
         }
         if listed && rp.before_auto && ctx.has_label(prev) {
             return 0.0;
         }
     }
-    rp.space_before
+    before
 }
 
 /// The room the paragraphs after `block` need on the page for keep with next: enough of the

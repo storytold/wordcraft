@@ -17031,6 +17031,32 @@ fn keep_lines_counts_the_top_border_a_group_member_takes_on_the_next_page() {
     assert_eq!(line_tops(&l).len(), 2, "the kept paragraph starts on the first page");
 }
 
+/// Keep with next counts the gap the line loop leaves between the paragraphs: after a paragraph
+/// with contextual spacing, its space after comes off the next one's space before (40pt after,
+/// 60pt before, same style: 20pt apart), so the next one's first line still fits here.
+#[test]
+fn keep_with_next_counts_the_gap_after_contextual_spacing() {
+    use wordcraft_doc::para_block;
+    let doc = |before: f32| {
+        let mut filler = ruled_para("Filler", None);
+        filler.props.space_before = Some(before);
+        let mut kept = ruled_para("Kept", None);
+        (kept.props.keep_next, kept.props.contextual_spacing, kept.props.space_after) = (Some(true), Some(true), Some(40.0));
+        let mut next = ruled_para("Next", None);
+        next.props.space_before = Some(60.0);
+        let mut d = Document::from_text("");
+        d.body = vec![para_block(filler), para_block(kept), para_block(next)];
+        d
+    };
+    let tops = line_tops(&lay(&doc(0.0)));
+    let h = tops[1] - tops[0];
+    assert!((tops[2] - tops[1] - h - 20.0).abs() < 0.01, "20pt apart: {tops:?}");
+    // Room for the three lines and the 20pt gap, with 20pt to spare.
+    let l = lay(&doc(648.0 - 3.0 * h - 40.0));
+    assert_eq!(l.pages.len(), 1);
+    assert_eq!(line_tops(&l).len(), 3, "the kept paragraph stays with the next one on the page");
+}
+
 /// A section break ends a border group: each side of it gets its own top and bottom rule.
 #[test]
 fn a_section_break_ends_a_border_group() {
