@@ -128,6 +128,20 @@ pub(super) fn suggestions(s: &mut Session, v: &Value) -> CmdResult {
     }
 }
 
+/// The word at the caret that the thesaurus looks up and a chosen synonym replaces: the word unit
+/// without the spaces after it or the quotes around it, so `‘good’` is `good` and its quotes stay
+/// when it is replaced; an apostrophe inside a word (`don’t`) is kept (#6517).
+pub fn thesaurus_word(s: &Session) -> Option<(Pos, Pos)> {
+    let f = &s.sel.focus;
+    let p = s.doc.para_at(f)?;
+    let (a, b) = p.word_at(f.off);
+    let w = p.text.get(a..b)?;
+    let edge = |c: char| c.is_whitespace() || matches!(c, '’' | '‘' | '\'');
+    let start = a + (w.len() - w.trim_start_matches(edge).len());
+    let end = (a + w.trim_end_matches(edge).len()).max(start);
+    Some((Pos { off: start, ..f.clone() }, Pos { off: end, ..f.clone() }))
+}
+
 /// A tiny built-in thesaurus of common words (our own list).
 pub(super) fn thesaurus(s: &mut Session, v: &Value) -> CmdResult {
     const T: &[(&str, &[&str])] = &[
@@ -164,10 +178,8 @@ pub(super) fn thesaurus(s: &mut Session, v: &Value) -> CmdResult {
     let word = match p::str(v, "word") {
         Some(w) => w.to_lowercase(),
         None => {
-            let f = s.sel.focus.clone();
-            let p = s.doc.para_at(&f).ok_or_else(|| CmdError::Failed("no word".into()))?;
-            let (a, b) = p.word_at(f.off);
-            p.text.get(a..b).unwrap_or("").trim().to_lowercase()
+            let (a, b) = thesaurus_word(s).ok_or_else(|| CmdError::Failed("no word".into()))?;
+            s.doc.para_at(&a).and_then(|p| p.text.get(a.off..b.off)).unwrap_or("").to_lowercase()
         }
     };
     let syn = T.iter().find(|(w, _)| *w == word).map(|(_, l)| l.to_vec()).unwrap_or_default();
