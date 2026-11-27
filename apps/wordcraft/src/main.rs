@@ -87,7 +87,7 @@ impl App {
         self.panels.pump_with(self.app.dialog_host_mut(), frame);
         #[cfg(target_os = "macos")]
         {
-            let open = self.files.pick_pending();
+            let open = self.files.pending_pick().is_some();
             self.panel_menu.sync(open);
             if open {
                 // The panel's menu bar follows the key window (the panel or another document's
