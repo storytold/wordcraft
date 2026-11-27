@@ -89,7 +89,7 @@ pub(crate) fn page_by_screen(app: &mut WordApp, id: &str, params: &Value) -> Opt
             steps.push((id.to_string(), json!({"extend": extend})));
         }
         if step.shown {
-            app.canvas.screen_scroll += f64::from(dir * step.window.height());
+            app.canvas.screen_scroll += f64::from(step.scroll);
         }
     }
     Some(r)
@@ -100,37 +100,89 @@ struct ScreenStep {
     page: usize,
     x: f32,
     y: f32,
-    /// The canvas's visible rect last frame; its height is the step.
-    window: Rect,
+    /// Vertical scroll to apply (screen points): the row-to-row pitch when whole pages fit in the
+    /// window so repeated presses do not drift past page tops, else one viewport height.
+    scroll: f32,
     /// Whether the caret was in the window, across and down.
     shown: bool,
+}
+
+/// How many complete rows of laid-out pages fit inside `window_h` (at least 1).
+fn rows_per_screen(laid: &[Rect], from_page: usize, cols: usize, window_h: f32, dir: f32) -> usize {
+    let row_start = (from_page / cols) * cols;
+    let mut rows = 1usize;
+    if dir > 0.0
+        && let Some(first) = laid.get(row_start)
+    {
+        while let Some(next) = laid.get(row_start + rows * cols) {
+            if next.max.y - first.min.y <= window_h {
+                rows += 1;
+            } else {
+                break;
+            }
+        }
+        return rows;
+    }
+    if dir < 0.0
+        && let Some(last) = laid.get(row_start)
+    {
+        while let Some(prev_idx) = row_start.checked_sub(rows * cols)
+            && let Some(prev) = laid.get(prev_idx)
+        {
+            if last.max.y - prev.min.y <= window_h {
+                rows += 1;
+            } else {
+                break;
+            }
+        }
+    }
+    rows
 }
 
 fn screen_step(app: &mut WordApp, dir: f32) -> Option<ScreenStep> {
     let window = app.canvas.view_rect().filter(|r| r.is_finite() && r.height() > 0.0)?;
     let layout = app.session.layout();
     let fallback_scale = app.canvas.zoom() as f32 * PX_PER_PT;
-    let at = caret_middle(app, &layout, fallback_scale)?;
+    let c = layout.caret_on(&app.session.sel.focus, app.session.page_hint)?;
+    let laid = &app.canvas.shown.laid;
+    let from = laid.get(c.page).copied()?;
+    let from_page = layout.pages.get(c.page)?;
+    let scale = page_screen_scale(from, from_page, fallback_scale);
+    let at = pos2(from.min.x + c.x * scale, from.min.y + (c.top + c.height / 2.0) * scale);
+    if !at.is_finite() {
+        return None;
+    }
     let pending_y = app.canvas.screen_scroll as f32;
-    let target = pos2(at.x, at.y + dir * window.height() - pending_y);
-    let (page, x, y) = page_at(&app.canvas.shown.laid, &layout, fallback_scale, target)?;
-    let cols = page_cols(&app.canvas.shown.laid);
+    // A caret beside the window (scrolled sideways past it) is out of view too.
+    let shown = window.contains(pos2(at.x, at.y - pending_y));
+    let cols = page_cols(laid);
+
+    // When a whole page fits in the window (One Page, Full Screen fit, Multiple Pages), advance
+    // by whole page rows and scroll by the exact row-to-row pitch so repeated presses do not
+    // accumulate (window.height() - pitch) drift past page tops.
+    if from.height() <= window.height() {
+        let step_pages = rows_per_screen(laid, c.page, cols, window.height(), dir).saturating_mul(cols);
+        let to = if dir > 0.0 { c.page.checked_add(step_pages) } else { c.page.checked_sub(step_pages) }?;
+        let target_rect = laid.get(to)?;
+        let y = c.top + c.height / 2.0;
+        let (page, x, y) = past_the_text(&layout, to, c.x, y, dir, cols);
+        if !x.is_finite() || !y.is_finite() || layout.hit(page, x, y, StoryRef::Body).is_none() {
+            return None;
+        }
+        let dest_rect = laid.get(page).unwrap_or(target_rect);
+        let scroll = dest_rect.min.y - from.min.y;
+        return Some(ScreenStep { page, x, y, scroll, shown });
+    }
+
+    // `at` is already in `laid` coordinates (not shifted by `pending_y`), so advance directly by
+    // one viewport height; `pending_y` applies only to the visibility check above.
+    let target = pos2(at.x, at.y + dir * window.height());
+    let (page, x, y) = page_at(laid, &layout, fallback_scale, target)?;
     let (page, x, y) = past_the_text(&layout, page, x, y, dir, cols);
     if !x.is_finite() || !y.is_finite() || layout.hit(page, x, y, StoryRef::Body).is_none() {
         return None;
     }
-    // A caret beside the window (scrolled sideways past it) is out of view too.
-    let shown = window.contains(pos2(at.x, at.y - pending_y));
-    Some(ScreenStep { page, x, y, window, shown })
-}
-
-/// The middle of the caret's line on screen, where last frame laid out the pages.
-fn caret_middle(app: &WordApp, layout: &DocLayout, fallback_scale: f32) -> Option<Pos2> {
-    let c = layout.caret_on(&app.session.sel.focus, app.session.page_hint)?;
-    let r = app.canvas.shown.laid.get(c.page)?;
-    let page = layout.pages.get(c.page)?;
-    let scale = page_screen_scale(*r, page, fallback_scale);
-    Some(pos2(r.min.x + c.x * scale, r.min.y + (c.top + c.height / 2.0) * scale)).filter(|p| p.is_finite())
+    Some(ScreenStep { page, x, y, scroll: dir * window.height(), shown })
 }
 
 /// A screen step that lands past the last line of a page's text (Page Down) or before its first

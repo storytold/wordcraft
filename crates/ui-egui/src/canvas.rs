@@ -905,14 +905,17 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     }
 
     let screen_scroll = std::mem::take(&mut app.canvas.screen_scroll);
+    let mut applied_screen_scroll = 0.0f32;
     if screen_scroll != 0.0 {
+        let before_y = state.offset.1;
         state.offset.1 = (state.offset.1 + screen_scroll).max(0.0);
+        applied_screen_scroll = (state.offset.1 - before_y) as f32;
         if let Some(c) = &caret_after
             && let Some(rect) = laid_rects(&out).get(c.page).copied()
             && let Some(page) = layout.pages.get(c.page)
         {
             let s = page_screen_scale(rect, page, scale as f32);
-            let shifted = rect.translate(vec2(0.0, -(screen_scroll as f32)));
+            let shifted = rect.translate(vec2(0.0, -applied_screen_scroll));
             let top_left = shifted.min + vec2(c.x * s, c.top * s);
             let r = Rect::from_min_size(top_left, vec2((c.width * s).max(2.0), c.height * s));
             let view_area = body_view.map_or(body_rect, |v| v.rect);
@@ -975,8 +978,13 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     // A window's page has the keyboard from its first pass (production's `want_focus` started on), so typing lands
     // without a click; a modal dialog keeps the keyboard until it closes.
     let view_rect = body_view.map_or(body_rect, |v| v.rect);
-    app.canvas.shown =
-        ShownPages { rect: body_rect, pages: out.pages.clone(), laid: laid_rects(&out), view: view_rect, canvas: Some(out.canvas.response.id) };
+    let mut laid = laid_rects(&out);
+    if applied_screen_scroll != 0.0 {
+        for r in &mut laid {
+            *r = r.translate(vec2(0.0, -applied_screen_scroll));
+        }
+    }
+    app.canvas.shown = ShownPages { rect: body_rect, pages: out.pages.clone(), laid, view: view_rect, canvas: Some(out.canvas.response.id) };
     if app.canvas.focus_pending && !app.modal_open() {
         let ctx = ui.ctx().clone();
         app.canvas.focus_page(&ctx);
