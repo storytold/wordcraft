@@ -485,7 +485,7 @@ pub(super) fn spreadsheet_rows(v: &Value) -> Result<Vec<Vec<String>>, CmdError> 
                 Value::Number(x) => x.to_string(),
                 Value::Bool(x) => x.to_string(),
                 Value::Null => String::new(),
-                _ => return Err(CmdError::Params(format!("`values` row {} holds a cell that is not text, a number or a boolean", r + 1))),
+                _ => return Err(CmdError::Params(format!("`values` row {} holds a cell that is not text, a number, a boolean or null", r + 1))),
             });
         }
         rows.push(out);
