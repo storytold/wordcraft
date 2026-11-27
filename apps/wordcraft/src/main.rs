@@ -19,6 +19,7 @@ mod build_channel;
 mod build_flavor;
 mod control_server;
 mod default_apps;
+mod gpu_memory;
 mod launch_profile;
 #[cfg(target_os = "macos")]
 mod native_menu;
@@ -626,6 +627,8 @@ fn main() -> eframe::Result {
     // the GPU that drives the screen (#603, #2652, #5199).
     if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup {
         craft::gpu::configure(setup);
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        gpu_memory::configure_memory_hints(setup);
     }
     prefs::load_user_fonts();
     // Where the root window was last, kept beside the settings; in memory when preferences are off.
