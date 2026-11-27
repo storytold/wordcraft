@@ -80,8 +80,8 @@ fn vertical_table_page_break_keeps_short_destination_column() {
     for dir in [-1, 1] {
         for col in 0..3 {
             let mut doc = navigation_table_doc(1);
-            doc.styles.default_chr.font = Some(WRAP_TEST_FONT.into());
-            doc.styles.default_chr.size = Some(12.0);
+            Arc::make_mut(&mut doc.styles).default_chr.font = Some(WRAP_TEST_FONT.into());
+            Arc::make_mut(&mut doc.styles).default_chr.size = Some(12.0);
             for row in &mut doc.table_mut(StoryRef::Body, &Path::top(1)).unwrap().rows {
                 for cell in &mut row.cells {
                     cell.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("MMMMMMMMMMMM", Default::default()))];
