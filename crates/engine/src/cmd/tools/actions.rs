@@ -1,4 +1,5 @@
 use super::{Arc, CmdError, CmdResult, Document, Pos, Selection, Session, StoryRef, Value, delete_selection, json, p, sel_result};
+use wordcraft_doc::CharProps;
 
 /// Options › Language › Set as default: only the saved default proofing language (what future
 /// blank documents are written in), as Word's Set as Preferred. A setting, like `file.options`: the
@@ -14,8 +15,19 @@ pub(super) fn preferred_language(s: &mut Session, v: &Value) -> CmdResult {
 /// Set Proofing Language: the selection's language and "do not check spelling or grammar",
 /// or (`default`) the document's default and the saved language for future blank documents;
 /// `detect` is the per-user detection preference.
-/// Nothing at all sets US English, as before.
+/// Nothing at all sets US English, as before. `scope: "document"` sets it for every story.
 pub(super) fn language(s: &mut Session, v: &Value) -> CmdResult {
+    // Checked first, so a bad scope changes nothing (not even the detect preference).
+    let whole_document = match v.get("scope") {
+        None | Some(Value::Null) => false,
+        Some(Value::String(t)) if t == "selection" => false,
+        Some(Value::String(t)) if t == "document" => true,
+        Some(other) => return Err(CmdError::Params(format!("`scope` must be \"selection\" or \"document\", not {other}"))),
+    };
+    // Protection leaves only its exceptions editable, so the whole document can't be one.
+    if whole_document && let Some(mode) = s.doc.settings.protection.as_deref() {
+        return Err(CmdError::Disabled(format!("review.language: stop protection ({mode}) before changing the whole document's proofing language")));
+    }
     let lang = match p::str(v, "lang") {
         Some(t) => Some(
             wordcraft_proof::lang::normalize_tag(t)
@@ -45,18 +57,89 @@ pub(super) fn language(s: &mut Session, v: &Value) -> CmdResult {
     if lang.is_none() && no_proof.is_none() {
         return Ok(json!({"detect": s.prefs.detect_language}));
     }
-    let result = crate::cmd::format::apply(s, &|c| {
+    let change = |c: &mut CharProps| {
         if let Some(l) = &lang {
             c.lang = Some(l.clone());
         }
         if let Some(np) = no_proof {
             c.no_proof = Some(np);
         }
-    })?;
+    };
+    let result = if whole_document {
+        let glossary_skipped = set_document_props(s, &change)?;
+        // The same caret/selection result as the selection path (the selection is untouched).
+        let mut r = sel_result(s)?;
+        if let Some(m) = r.as_object_mut() {
+            m.insert("scope".into(), json!("document"));
+            if glossary_skipped {
+                m.insert("glossarySkipped".into(), json!(true));
+            }
+        }
+        r
+    } else {
+        crate::cmd::format::apply(s, &change)?
+    };
     if p::bool(v, "default") == Some(true) {
         s.prefs.default_language = lang;
     }
     Ok(result)
+}
+
+/// Apply `f` to the character formatting of every story of the document (Language dialog, "Apply
+/// to the whole document"): text and paragraph marks of the body, headers, footers, notes,
+/// comments, text boxes (all `Document::parts`), table cells, and the glossary's building blocks.
+/// The selection is untouched; formatting waiting for typing follows.
+///
+/// Glossary blocks are left alone while Track Changes and Track Formatting are both on: tracked
+/// formatting (`fmt_revisions::record`) compares only the body and the parts, so a glossary change
+/// would be an untracked edit. So those blocks keep their old language while tracking; the caller
+/// reports it (`glossarySkipped`). Returns whether the glossary was skipped.
+fn set_document_props(s: &mut Session, f: &dyn Fn(&mut CharProps)) -> Result<bool, CmdError> {
+    let stories: Vec<StoryRef> = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).collect();
+    for story in stories {
+        for path in s.doc.para_paths(story) {
+            let para = s.doc.para_mut(story, &path)?;
+            let len = para.len();
+            para.format(0, len, f)?;
+            f(&mut para.mark);
+            para.touch();
+        }
+    }
+    let skipped = s.doc.settings.track_changes && s.prefs.markup.track_formatting;
+    if !skipped {
+        for block in &mut s.doc.glossary {
+            format_blocks(&mut block.blocks, f, 0);
+        }
+    }
+    if let Some(pend) = s.pending.as_mut() {
+        f(pend);
+    }
+    Ok(skipped)
+}
+
+/// [`set_document_props`] for a block list outside any story (depth-limited like `para_paths`).
+fn format_blocks(blocks: &mut wordcraft_doc::Blocks, f: &dyn Fn(&mut CharProps), depth: usize) {
+    if depth > wordcraft_doc::PARA_WALK_DEPTH {
+        return;
+    }
+    for blk in blocks.iter_mut() {
+        match Arc::make_mut(blk) {
+            wordcraft_doc::Block::Para(p) => {
+                let len = p.len();
+                // A range inside the paragraph can't fail; the mark is formatted regardless.
+                let _ = p.format(0, len, f);
+                f(&mut p.mark);
+                p.touch();
+            }
+            wordcraft_doc::Block::Table(t) => {
+                for row in &mut t.rows {
+                    for cell in &mut row.cells {
+                        format_blocks(&mut cell.blocks, f, depth + 1);
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub(super) fn macros(s: &mut Session, v: &Value) -> CmdResult {
@@ -131,7 +214,9 @@ pub(super) fn quick_parts(s: &mut Session, v: &Value, gallery: &str) -> CmdResul
             None => {
                 let e = document_entry(&s.doc, name, gallery).and_then(|i| s.doc.glossary.get(i));
                 let e = e.ok_or_else(|| CmdError::Params(format!("no Quick Part `{name}`")))?;
-                wordcraft_doc::edit::Fragment { blocks: e.blocks.iter().map(|b| (**b).clone()).collect(), parts: Default::default() }
+                let blocks: Vec<_> = e.blocks.iter().map(|b| (**b).clone()).collect();
+                let media = s.doc.media_of_blocks(&blocks);
+                wordcraft_doc::edit::Fragment { blocks, parts: Default::default(), media }
             }
         };
         let at = delete_selection(s)?;
@@ -195,46 +280,73 @@ pub(super) fn select_similar(s: &mut Session, _: &Value) -> CmdResult {
     Ok(json!({"runs": count}))
 }
 
-/// Tools › Customize Keyboard: read and change the custom keyboard shortcuts ([`crate::KeyMap`]).
-/// Without params it opens the dialog; with any, it only does what they ask (no dialog).
+/// Tools › Customize Keyboard: read and change the custom keyboard shortcuts (the session's
+/// [`craft_keymap::Overrides`] over the registry's keys). Without params it opens the dialog; with
+/// any, it only does what they ask (no dialog).
 pub(super) fn customize_keyboard(s: &mut Session, v: &Value) -> CmdResult {
     let reg = s.registry.clone();
-    let pair = |x: &Value| -> Result<(String, String), CmdError> { Ok((p::req_str(x, "command")?.to_string(), p::req_str(x, "key")?.to_string())) };
+    let mut keymap = crate::keymap::registry_keymap(&reg, s.keymap());
     let mut out = serde_json::Map::new();
+    let asked = keyboard_changes(&mut keymap, &reg, v, &mut out);
+    // Each part is a request of its own: what the parts before a failing one changed stays.
+    *s.keymap_mut() = keymap.overrides().clone();
+    let asked = asked?;
+    out.insert("custom".into(), serde_json::to_value(s.keymap()).unwrap_or(Value::Null));
+    if !asked {
+        s.push_ui_request(json!({"open": "customizeKeyboard"}));
+    }
+    Ok(Value::Object(out))
+}
+
+/// The parts of a `tools.customizeKeyboard` call, applied to `keymap` in order, with their results
+/// in `out`. Returns whether any part was asked for.
+fn keyboard_changes(
+    keymap: &mut craft_keymap::Keymap,
+    reg: &crate::Registry,
+    v: &Value,
+    out: &mut serde_json::Map<String, Value>,
+) -> Result<bool, CmdError> {
+    use craft_keymap::{AssignError, Binding, Chord, CommandRef, Policy, Scope};
+    let not_a_key = |key: &str| CmdError::Params(format!("`{key}` isn't a key (e.g. Mod+Shift+K, Alt+F7, F2)"));
+    let pair = |x: &Value| -> Result<(CommandRef, Binding), CmdError> {
+        let key = p::req_str(x, "key")?;
+        let binding = Binding::parse(key).map_err(|_| not_a_key(key))?;
+        Ok((CommandRef::new(p::req_str(x, "command")?), binding))
+    };
     let mut asked = false;
     if p::bool(v, "reset") == Some(true) {
         asked = true;
-        s.keymap.reset();
+        keymap.reset_all();
     }
     if let Some(a) = v.get("assign") {
         asked = true;
-        let (id, key) = pair(a)?;
-        let previous = s.keymap.assign(&reg, &id, &key).map_err(CmdError::Params)?;
-        out.insert("replaced".into(), json!(previous));
+        let (command, binding) = pair(a)?;
+        let assigned = keymap.assign(&command, binding, Policy::Steal).map_err(|e| match e {
+            AssignError::UnknownCommand => CmdError::Params(format!("unknown command `{}`", command.id)),
+            e => CmdError::Params(e.to_string()),
+        })?;
+        out.insert("replaced".into(), json!(assigned.taken_from.first().map(|h| h.command.id.as_str())));
     }
     if let Some(r) = v.get("remove") {
         asked = true;
-        let (id, key) = pair(r)?;
-        out.insert("removed".into(), json!(s.keymap.remove(&reg, &id, &key).map_err(CmdError::Params)?));
+        let (command, binding) = pair(r)?;
+        out.insert("removed".into(), json!(keymap.remove(&command, &binding)));
     }
     if let Some(id) = p::str(v, "command") {
         asked = true;
         if reg.get(id).is_none() {
             return Err(CmdError::Params(format!("unknown command `{id}`")));
         }
-        out.insert("keys".into(), json!(s.keymap.keys_for(&reg, id)));
+        let keys: Vec<String> = keymap.bindings(&CommandRef::new(id)).iter().map(|b| b.text(&Scope::app())).collect();
+        out.insert("keys".into(), json!(keys));
     }
     if let Some(key) = p::str(v, "key") {
         asked = true;
-        let key = crate::keymap::normalize(key).ok_or_else(|| CmdError::Params(format!("`{key}` isn't a key (e.g. Mod+Shift+K, Alt+F7, F2)")))?;
-        out.insert("assignedTo".into(), json!(s.keymap.resolve(&reg, &key).map(|c| c.id)));
-        out.insert("key".into(), json!(key));
+        let chord = Chord::parse(key).map_err(|_| not_a_key(key))?;
+        out.insert("assignedTo".into(), json!(keymap.holder(&chord).map(|c| c.id)));
+        out.insert("key".into(), json!(chord.portable()));
     }
-    out.insert("custom".into(), serde_json::to_value(&s.keymap).unwrap_or(Value::Null));
-    if !asked {
-        s.push_ui_request(json!({"open": "customizeKeyboard"}));
-    }
-    Ok(Value::Object(out))
+    Ok(asked)
 }
 
 /// `tools.search`: the commands whose label, location or id hold every word of `query`, or,
@@ -340,4 +452,43 @@ pub(super) fn customize_ribbon(s: &mut Session, v: &Value) -> CmdResult {
         s.push_ui_request(json!({"open": "customizeRibbon"}));
     }
     Ok(Value::Object(out))
+}
+
+/// The rows of an `insert.spreadsheet` call: `values` (a rectangular array of cells) or `csv`.
+pub(super) fn spreadsheet_rows(v: &Value) -> Result<Vec<Vec<String>>, CmdError> {
+    // The CSV fallback is for an absent `values`; an explicit null is a malformed argument.
+    let Some(values) = v.get("values") else {
+        return Ok(crate::cmd::mailings::parse_csv(p::str(v, "csv").unwrap_or("A,B,C\n1,2,3\n4,5,6")));
+    };
+    let list = values.as_array().ok_or_else(|| CmdError::Params("`values` must be an array of rows".into()))?;
+    if list.is_empty() || list.len() > 1000 {
+        return Err(CmdError::Params("`values` needs 1 to 1000 rows".into()));
+    }
+    let mut rows: Vec<Vec<String>> = Vec::with_capacity(list.len());
+    for (r, row) in list.iter().enumerate() {
+        let cells = row.as_array().ok_or_else(|| CmdError::Params(format!("`values` row {} is not an array", r + 1)))?;
+        if cells.is_empty() || cells.len() > 63 {
+            return Err(CmdError::Params(format!("`values` row {} needs 1 to 63 cells", r + 1)));
+        }
+        if rows.first().is_some_and(|f| f.len() != cells.len()) {
+            return Err(CmdError::Params(format!(
+                "`values` row {} has {} cells, row 1 has {}",
+                r + 1,
+                cells.len(),
+                rows.first().map_or(0, Vec::len)
+            )));
+        }
+        let mut out = Vec::with_capacity(cells.len());
+        for cell in cells {
+            out.push(match cell {
+                Value::String(x) => x.clone(),
+                Value::Number(x) => x.to_string(),
+                Value::Bool(x) => x.to_string(),
+                Value::Null => String::new(),
+                _ => return Err(CmdError::Params(format!("`values` row {} holds a cell that is not text, a number or a boolean", r + 1))),
+            });
+        }
+        rows.push(out);
+    }
+    Ok(rows)
 }

@@ -1,4 +1,4 @@
-use super::boxes::{BoxInput, layout_box};
+use super::boxes::{BoxInput, Joint, box_rules, layout_box};
 use super::ctx::{Ctx, with_pin};
 use super::floats::{EarlyFloats, WrapArea};
 use super::notes::{NOTE_SEP, NOTE_SEP_W, NoteBox, NoteSeps, v_span};
@@ -38,6 +38,8 @@ pub(crate) struct PageBuilder<'a> {
     /// A continuous section started on this page right under the paragraph above (`prev`): not
     /// under a taller column of the section before.
     pub(crate) prev_at_top: bool,
+    /// Where the last paragraph, whose mark is hidden, ended: the next one goes on from there.
+    pub(crate) joint: Option<Joint>,
     /// The next section starts on a new page: this section's closing mark, when empty, needs no
     /// room (Word leaves it on a full page rather than starting a page for it).
     pub(crate) next_starts_page: bool,
@@ -74,6 +76,9 @@ pub(crate) struct PageBuilder<'a> {
     /// Balancing columns: (page index, column height) — that page's columns end `height` below
     /// the top of the section on it.
     pub(crate) balance: Option<(usize, f32)>,
+    /// Balancing without the strict widow/orphan and keep rules of Word 2013's layout (#6821): the
+    /// last try when even the full column height does not hold the text with them.
+    pub(crate) relaxed: bool,
     /// The page with the last explicit column break.
     pub(crate) col_break_page: Option<usize>,
     /// The section's footnotes go right below its text, not at the page bottom ...
@@ -115,11 +120,7 @@ pub(crate) fn page_border_rules(s: &SectionProps) -> Vec<Placed> {
     if let Some(b) = &s.page_borders {
         let sp = |e: &Option<Border>| e.map(|x| x.space).unwrap_or(24.0);
         let (x0, x1, y0, y1) = (sp(&b.left), s.page_w - sp(&b.right), sp(&b.top), s.page_h - sp(&b.bottom));
-        for (e, a, bb) in [(b.top, (x0, y0), (x1, y0)), (b.bottom, (x0, y1), (x1, y1)), (b.left, (x0, y0), (x0, y1)), (b.right, (x1, y0), (x1, y1))] {
-            if let Some(e) = e.filter(Border::is_visible) {
-                v.push(Placed::Rule { x0: a.0, y0: a.1, x1: bb.0, y1: bb.1, border: e });
-            }
-        }
+        box_rules(&mut v, (x0, y0, x1, y1), [b.top, b.bottom, b.left, b.right], [false; 2]);
     }
     v
 }
@@ -230,6 +231,16 @@ impl PageBuilder<'_> {
         if let Some(pg) = self.pages.last() {
             let behind = self.behind.last().copied().unwrap_or(0);
             self.block_marks.push(pg.items.len().saturating_sub(behind));
+        }
+    }
+    /// Takes back the mark of a block that has placed nothing yet: it goes on from the line of
+    /// the block before (#3986), and justified vertical alignment keeps the two together.
+    pub(crate) fn unmark_block(&mut self) {
+        if let Some(pg) = self.pages.last() {
+            let behind = self.behind.last().copied().unwrap_or(0);
+            if self.block_marks.last() == Some(&pg.items.len().saturating_sub(behind)) {
+                self.block_marks.pop();
+            }
         }
     }
     /// Justified vertical alignment: share the room left below the page's text out equally

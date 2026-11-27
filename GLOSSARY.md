@@ -48,3 +48,34 @@ _Avoid_: User dictionary (in the interface)
 A folder of Hunspell dictionaries you supply, used before the system's (an installed Language pack
 comes after it).
 _Avoid_: Custom dictionaries
+
+## Export
+
+**Strict export**:
+An export that writes nothing, and reports why, when a character or picture the output is meant
+to show would be missing from it. Text the output doesn't show (hidden text, deletions without
+markup) isn't checked.
+_Avoid_: Safe mode, validated export
+
+**Missing glyph**:
+A character the output draws that no face in the font fallback chain can draw, so it would appear
+as an empty box.
+_Avoid_: Tofu, box, notdef character
+
+**Missing picture**:
+A picture the document refers to that the output cannot include: its part is absent, its data
+cannot be decoded, its format is unsupported, or it is linked from outside the file.
+_Avoid_: Broken image, dropped image
+
+## Windows
+
+**Document window**:
+A top-level window showing one open document. A document can be shown in several document windows
+at once (View › New Window); each window shows exactly one.
+_Avoid_: Viewport (that is the framework's surface), root window, tab
+
+**Save prompt**:
+The question "Save changes?" asked when the last document window showing a document with unsaved
+changes is about to close. It belongs to that window and appears there; while it is up, the other
+windows wait.
+_Avoid_: Close guard, save dialog, unsaved-changes dialog

@@ -1,0 +1,2022 @@
+{
+  "variants": 141,
+  "all_passed": true,
+  "positive_controls": 22,
+  "gate_negative_variants": 119,
+  "cases": [
+    {
+      "probe": 1,
+      "variant": "escape/remove-entry-truncation-absence-guard",
+      "file": "lib.rs",
+      "fixture_sha256": "e6c836f5d9a860a9ea563b56ef75fc45ba52c8b89c17fc59b8a30e4282d0220b",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::check_rels: unsupported package Resolution operation; match One/Absent/Unknown/Ambiguous explicitly"
+      ]
+    },
+    {
+      "probe": 2,
+      "variant": "escape/raw-iterator-absence",
+      "file": "package.rs",
+      "fixture_sha256": "e51ccd855a664ad1c4b9de5f9c1a1649aee7f6f7d91983877d4f38f7c063988b",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::unregistered_absence: raw absence requires completeness-carrying input/result; an observation contract cannot establish raw membership completeness"
+      ]
+    },
+    {
+      "probe": 3,
+      "variant": "escape/helper-mediated-package-absence",
+      "file": "lib.rs",
+      "fixture_sha256": "8bb8d7338669f22bc239f0ccc7ac302c6d1c3b3bf532a4f94bb8e3b36092f00d",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_absence: unsupported package Resolution operation; match One/Absent/Unknown/Ambiguous explicitly",
+        "lib.rs::unregistered_absence: bounded consumption has no observation contract: ['lookup.entry_by_name*1']"
+      ]
+    },
+    {
+      "probe": 4,
+      "variant": "escape/existing-canonical-iterator-absence",
+      "file": "package.rs",
+      "fixture_sha256": "890810512259144736112614bf9a163e83d8f59fb8312101ad74314d4283cd66",
+      "expected": "accept",
+      "exit": 0,
+      "pass": true,
+      "diagnostics": [
+        "197 declared bounded consumers; register and access audit passed"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--lib",
+        "round5_archive_prefix_absence"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 5,
+      "variant": "escape/aliased-ufcs-observed-absence",
+      "file": "lib.rs",
+      "fixture_sha256": "b119a5a26378b53fdcf7f9892c6db0987568cc759a3d813de8621c46d39b5755",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_absence: negative retained-prefix membership requires CompleteSet, regardless of contract or local binding",
+        "lib.rs::unregistered_absence: negative retained-prefix membership requires CompleteSet, regardless of contract or local binding",
+        "lib.rs::unregistered_absence: bounded consumption has no observation contract: ['access.prefix*1']"
+      ]
+    },
+    {
+      "probe": 6,
+      "variant": "escape/self-ufcs-observed-absence",
+      "file": "lib.rs",
+      "fixture_sha256": "74b893783a7225da9a651314f5887426ffab7aadd4d0b87b38fba94acec1139b",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_absence: negative retained-prefix membership requires CompleteSet, regardless of contract or local binding",
+        "lib.rs::unregistered_absence: negative retained-prefix membership requires CompleteSet, regardless of contract or local binding",
+        "lib.rs::unregistered_absence: bounded consumption has no observation contract: ['access.prefix*1']"
+      ]
+    },
+    {
+      "probe": 7,
+      "variant": "escape/serde-content-types-consumer",
+      "file": "package.rs",
+      "fixture_sha256": "bb3d7135c9a7587cd8da44e9e1225880ac09f7ad676b98c60960faefb8844f87",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::ContentTypes: unauthorized reader derive serde::Serialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 8,
+      "variant": "false-rejection/ordinary-named-field-binding",
+      "file": "lib.rs",
+      "fixture_sha256": "cce246495eb67f5847dd30f440e3b84c626f9e90aece58690b209d9c86c84045",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs: unrecognized pattern: Limits { entries , .. }"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "check",
+        "--offline"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 9,
+      "variant": "false-rejection/qualified-format",
+      "file": "lib.rs",
+      "fixture_sha256": "79e2251a75511740c1744b4e20948708d3cac8bee9c721760e63c374c9ea9de2",
+      "expected": "accept",
+      "exit": 0,
+      "pass": true,
+      "diagnostics": [
+        "197 declared bounded consumers; register and access audit passed"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "check",
+        "--offline"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 10,
+      "variant": "false-rejection/inline-attribute",
+      "file": "lib.rs",
+      "fixture_sha256": "224592bb72d7a3b6d3a374da0d2b87e1190627f1df4ac67b222b607444b21d59",
+      "expected": "accept",
+      "exit": 0,
+      "pass": true,
+      "diagnostics": [
+        "197 declared bounded consumers; register and access audit passed"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "check",
+        "--offline"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 11,
+      "variant": "false-rejection/trait-default-nonconsumer",
+      "file": "lib.rs",
+      "fixture_sha256": "86835d8d98c6a00a5752c0e720a25aae1d0c772d9a61e2101f1c33d9434d7085",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs: unrecognized item: trait EntryLimit { fn configured_entry_limit (& self) -> usize { 20_000 } }"
+      ]
+    },
+    {
+      "probe": 12,
+      "variant": "history/closure-parameter-destructure",
+      "file": "lib.rs",
+      "fixture_sha256": "3f796a2e88d07d82e77673b96be19c3f3478ec6aa92ee052734a700cb6e894b1",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs: unrecognized pattern: Package { entries : items , .. }"
+      ]
+    },
+    {
+      "probe": 13,
+      "variant": "history/destructuring-assignment",
+      "file": "lib.rs",
+      "fixture_sha256": "c1ebcf27cafb8395fb31f164f40c9074e88118399c3435ca12f1677e0a65bd83",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs: unrecognized assignment target: Package { entries : items , .. }"
+      ]
+    },
+    {
+      "probe": 14,
+      "variant": "history/parenthesized-destructuring-assignment",
+      "file": "lib.rs",
+      "fixture_sha256": "5f923ca2f3dbda57c27442fff7ed073d15ffdadb1e57684f39345b95308e0f1b",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs: unrecognized assignment target: (Package { entries : items , .. })"
+      ]
+    },
+    {
+      "probe": 15,
+      "variant": "history/macro-produced-pattern",
+      "file": "lib.rs",
+      "fixture_sha256": "20371c9f9e5a4e467a6239db03ae83e7ddfe64d7bc3e481b42cb8e666a4d0d30",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs: unsupported item macro expansion: expected `!`"
+      ]
+    },
+    {
+      "probe": 16,
+      "variant": "history/raw-field",
+      "file": "lib.rs",
+      "fixture_sha256": "665f75279b2d4f083c419d6677c00ff7b473c0ebb0c7e3d532f15c8623932be4",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_read: bounded consumption has no observation contract: ['field.entries*1']"
+      ]
+    },
+    {
+      "probe": 17,
+      "variant": "history/raw-registry-method",
+      "file": "ownership.rs",
+      "fixture_sha256": "6cc076db2977a87c71d55f2af961ac7b9a4a348f906e499c39db80772433a1fa",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "ownership.rs::unregistered_registry: undeclared package-registry exception",
+        "ownership.rs::unregistered_registry: bounded consumption has no observation contract: ['field.contexts*1']"
+      ]
+    },
+    {
+      "probe": 18,
+      "variant": "history/module-callback",
+      "file": "lib.rs",
+      "fixture_sha256": "267d76c7f133828e47ef2aed0c4eba740b86fa64b60e58cb85716943079bf84f",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::<initializer UNREGISTERED_READ>: bounded consumption has no observation contract: ['field.entries*1']"
+      ]
+    },
+    {
+      "probe": 19,
+      "variant": "seam/type-alias-carrying-callback",
+      "file": "lib.rs",
+      "fixture_sha256": "547b28d949904448d44cd649fd0cd692275ada57ecf3a109d8ebdb2a1f4d77e4",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::<initializer UNREGISTERED_READ>: bounded consumption has no observation contract: ['field.entries*1']"
+      ]
+    },
+    {
+      "probe": 20,
+      "variant": "seam/trait-default-body",
+      "file": "lib.rs",
+      "fixture_sha256": "6713b9fac5a9137054118c52a44ab57bfc74a24a6fc025f0fc91ba1cc3b7fd85",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs: unrecognized item: trait HiddenRead { fn read (pkg : & Package) -> usize { pkg . entries . len () } }"
+      ]
+    },
+    {
+      "probe": 21,
+      "variant": "seam/associated-const-callback",
+      "file": "lib.rs",
+      "fixture_sha256": "1ff247b8079fa45c4ab1c792933122531771d72ac5b277f00d4c74b72a3d34cd",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::<initializer UNREGISTERED_READ>: bounded consumption has no observation contract: ['field.entries*1']"
+      ]
+    },
+    {
+      "probe": 22,
+      "variant": "seam/include-item",
+      "file": "lib.rs",
+      "fixture_sha256": "9c293e65ba9cb84572d7817a861643994562d9183448d1e51c654a4d9af91399",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs: unrecognized item macro: include ! (\"/tmp/opencode/delta17-review/hidden-consumer.rs\") ;"
+      ]
+    },
+    {
+      "probe": 23,
+      "variant": "seam/cfg-gated-consumer",
+      "file": "lib.rs",
+      "fixture_sha256": "d82553ff8ca9ec6bbd54018051ec841cdd7e02d25c8753eb33081c60670be4de",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_read: bounded consumption has no observation contract: ['field.entries*1']"
+      ]
+    },
+    {
+      "probe": 24,
+      "variant": "seam/other-macro-path",
+      "file": "lib.rs",
+      "fixture_sha256": "4b8159fe2ffe55972e39ed0d8aecc2daf2409c699f8ace973a14320374723941",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_read: bounded consumption has no observation contract: ['field.entries*2']"
+      ]
+    },
+    {
+      "probe": 25,
+      "variant": "seam/supported-macro-arguments-audited",
+      "file": "lib.rs",
+      "fixture_sha256": "b60f9415b38026850cb19eafbba0a647f4a936a29ae1752951edb433d5e6343d",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_read: bounded consumption has no observation contract: ['field.entries*1']"
+      ]
+    },
+    {
+      "probe": 20,
+      "variant": "seam/trait-impl-body",
+      "file": "lib.rs",
+      "fixture_sha256": "79756a2581fd74804fc8a1e5e6386707b8e6db4a6009fdab8917829ef2f55eb2",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs: unrecognized item: trait HiddenRead { fn read (pkg : & Package) -> usize ; }"
+      ]
+    },
+    {
+      "probe": 26,
+      "variant": "or-pattern",
+      "file": "lib.rs",
+      "fixture_sha256": "04b3caa48bd5813ce39e39220ac111c775f684aa6ddb54abed8653ca8092e99c",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::check_rels: absence polarity: package lookup Unknown must have an explicit separate unguarded arm; catch-all/Absent collapse is forbidden"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--lib",
+        "round5_archive_prefix_absence"
+      ],
+      "compile_or_test_exit": 101,
+      "sensitivity_evidence": [
+        "archive prefix: Report { verdict: Fail, findings: [Finding { rule: \"REL-DANGLING\", severity: Error, evidence: Observed, part: Some(\"word/_rels/document.xml.rels\"), message: \"relationship header.xml in word/_rels/document.xml.rels targets word/header.xml, which is missing from the package; the referenced content is lost\" }], coverage_notes: [\"the archive declares 5 entries; only the first 4 were examined\", \"the zip central directory holds 5 records, more than the 4 examined; duplicate entry checking stopped early and later names were not checked\", \"unknown comments selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown footnotes selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown endnotes selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown styles selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown fontTable selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"custom-properties selection is unknown (source discovery was not fully examined); PROP-DUP-NAME was not checked\", \"unknown numbering selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"comment-threading paragraphs for word/document.xml could not be fully checked (comments ownership or source facts were not fully examined)\", \"unknown commentsExtended selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown commentsIds selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown settings selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"the footnotePr/endnotePr listings for word/document.xml could not be fully joined (ownership, declarations, or source facts were not fully examined)\"], checks_run: [\"PKG-NOT-ZIP\", \"PKG-DUP-ENTRY\", \"PKG-CASE-COLLISION\", \"PKG-NO-CONTENT-TYPES\", \"PKG-NO-MAIN\", \"CT-UNDECLARED\", \"CT-MAIN-TYPE\", \"CT-DUP-MAIN\", \"CT-DUP-DEFAULT\", \"CT-DUP-OVERRIDE\", \"XML-MALFORMED\", \"XML-UNDECLARED-PREFIX\", \"XML-INVALID-CHAR\", \"STRUCT-END-P\", \"MATH-PLACEMENT\", \"PROTECTION-PASSWORD\", \"HEADERSOURCE-PRESENT\", \"REL-DUP-ID\", \"REL-DANGLING\", \"REL-TYPED\", \"REL-REF-MISSING\", \"CT-MISMATCH\", \"CONTENTPART-TYPE\", \"COMMENT-RANGE-COUNT\", \"BOOKMARK-COUNT\", \"PERM-COUNT\", \"MOVE-RANGE-COUNT\", \"ID-COMMENT-DUP\", \"ID-COMMENT-REF\", \"ID-DOCPR-DUP\", \"ID-BOOKMARK-DUP\", \"BOOKMARK-UNPAIRED\", \"COMMENT-RANGE-UNPAIRED\", \"PARAID-DUP\", \"PARAID-VALUE\", \"ID-REVISION-DUP\", \"NOTE-DUP\", \"REF-NOTE\", \"REF-HEADER\", \"REF-STYLE\", \"STYLE-DUP-ID\", \"STYLE-DUP-NAME\", \"STYLE-RESERVED-NAME\", \"STYLE-RESERVED-ID\", \"STYLE-COUNT\", \"STYLE-ID-LENGTH\", \"FONT-DUP-NAME\", \"NUM-DANGLING\", \"COMMENTEX-LINK\", \"FLD-UNBALANCED\", \"STRUCT-TC-NO-P\", \"STRUCT-DELTEXT\", \"STRUCT-MOVE-UNPAIRED\", \"CUSTOMXML-SCHEMA\", \"NOTE-PR-LISTING\", \"NOTE-PR-DANGLING\", \"MEDIA-MAGIC\"] }",
+        "Report { verdict: Fail, findings: [Finding { rule: \"REL-DANGLING\", severity: Error, evidence: Observed, part: Some(\"word/_rels/document.xml.rels\"), message: \"relationship header.xml in word/_rels/document.xml.rels targets word/header.xml, which is missing from the package; the referenced content is lost\" }], coverage_notes: [\"the archive declares 5 entries; only the first 4 were examined\", \"the zip central directory holds 5 records, more than the 4 examined; duplicate entry checking stopped early and later names were not checked\", \"unknown comments selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown footnotes selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown endnotes selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown styles selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown fontTable selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"custom-properties selection is unknown (source discovery was not fully examined); PROP-DUP-NAME was not checked\", \"unknown numbering selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"comment-threading paragraphs for word/document.xml could not be fully checked (comments ownership or source facts were not fully examined)\", \"unknown commentsExtended selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown commentsIds selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown settings selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"the footnotePr/endnotePr listings for word/document.xml could not be fully joined (ownership, declarations, or source facts were not fully examined)\"], checks_run: [\"PKG-NOT-ZIP\", \"PKG-DUP-ENTRY\", \"PKG-CASE-COLLISION\", \"PKG-NO-CONTENT-TYPES\", \"PKG-NO-MAIN\", \"CT-UNDECLARED\", \"CT-MAIN-TYPE\", \"CT-DUP-MAIN\", \"CT-DUP-DEFAULT\", \"CT-DUP-OVERRIDE\", \"XML-MALFORMED\", \"XML-UNDECLARED-PREFIX\", \"XML-INVALID-CHAR\", \"STRUCT-END-P\", \"MATH-PLACEMENT\", \"PROTECTION-PASSWORD\", \"HEADERSOURCE-PRESENT\", \"REL-DUP-ID\", \"REL-DANGLING\", \"REL-TYPED\", \"REL-REF-MISSING\", \"CT-MISMATCH\", \"CONTENTPART-TYPE\", \"COMMENT-RANGE-COUNT\", \"BOOKMARK-COUNT\", \"PERM-COUNT\", \"MOVE-RANGE-COUNT\", \"ID-COMMENT-DUP\", \"ID-COMMENT-REF\", \"ID-DOCPR-DUP\", \"ID-BOOKMARK-DUP\", \"BOOKMARK-UNPAIRED\", \"COMMENT-RANGE-UNPAIRED\", \"PARAID-DUP\", \"PARAID-VALUE\", \"ID-REVISION-DUP\", \"NOTE-DUP\", \"REF-NOTE\", \"REF-HEADER\", \"REF-STYLE\", \"STYLE-DUP-ID\", \"STYLE-DUP-NAME\", \"STYLE-RESERVED-NAME\", \"STYLE-RESERVED-ID\", \"STYLE-COUNT\", \"STYLE-ID-LENGTH\", \"FONT-DUP-NAME\", \"NUM-DANGLING\", \"COMMENTEX-LINK\", \"FLD-UNBALANCED\", \"STRUCT-TC-NO-P\", \"STRUCT-DELTEXT\", \"STRUCT-MOVE-UNPAIRED\", \"CUSTOMXML-SCHEMA\", \"NOTE-PR-LISTING\", \"NOTE-PR-DANGLING\", \"MEDIA-MAGIC\"] }",
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 138 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "probe": 26,
+      "variant": "wildcard",
+      "file": "lib.rs",
+      "fixture_sha256": "9ee5f6f3e7066bd71b95e84d747443fa8bb5c1efede0f90670ff50edb93965ab",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::check_rels: package Resolution match must explicitly cover One, Absent, Unknown and Ambiguous",
+        "lib.rs::check_rels: absence polarity: package lookup Unknown must have an explicit separate unguarded arm; catch-all/Absent collapse is forbidden"
+      ]
+    },
+    {
+      "probe": 26,
+      "variant": "matches collapse",
+      "file": "lib.rs",
+      "fixture_sha256": "cbc22c7d7bdaf40d72f00de5b607c9b67c8ac5cbd6dadc1aa48c446a069ad308",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::check_rels: absence polarity: package lookup Unknown must have an explicit separate unguarded arm; catch-all/Absent collapse is forbidden"
+      ]
+    },
+    {
+      "probe": 26,
+      "variant": "if-let collapse",
+      "file": "lib.rs",
+      "fixture_sha256": "7fb708b941764b8c8f45654cf5fe09ed75530514320f8a643eb6845f63b784a0",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::check_rels: absence polarity: only positive One extraction is supported in package if-let/let-else; absence decisions require an exhaustive match"
+      ]
+    },
+    {
+      "probe": 26,
+      "variant": "block-bound result collapse",
+      "file": "lib.rs",
+      "fixture_sha256": "013b96155409b2039abe1dd3d0329810c2a5654981e240ca082e63db952dfca6",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::check_rels: absence polarity: package lookup Unknown must have an explicit separate unguarded arm; catch-all/Absent collapse is forbidden"
+      ]
+    },
+    {
+      "probe": 26,
+      "variant": "local matches else collapse",
+      "file": "lib.rs",
+      "fixture_sha256": "2ec5487e20aee783d26bae88c348be5eb2775c9d448a532553c413cdc7ab44ba",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::check_rels: absence polarity: package lookup if-let/matches else collapse is unsupported; use explicit Resolution arms"
+      ]
+    },
+    {
+      "probe": 26,
+      "variant": "guard collapse",
+      "file": "lib.rs",
+      "fixture_sha256": "20cef47f60e187c838548fc5b48be9f20ff15fe41947062f09619bac3ed53f73",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::check_rels: package Resolution match must explicitly cover One, Absent, Unknown and Ambiguous",
+        "lib.rs::check_rels: absence polarity: package lookup Unknown must have an explicit separate unguarded arm; catch-all/Absent collapse is forbidden",
+        "lib.rs::check_rels: absence polarity: package lookup Unknown must have an explicit separate unguarded arm; catch-all/Absent collapse is forbidden"
+      ]
+    },
+    {
+      "probe": 27,
+      "variant": "missing Unknown",
+      "file": "lib.rs",
+      "fixture_sha256": "fc513fd520ccadc3eb6b7269585a11b720a17f4124ebe71f199de79b0daebb26",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::check_rels: package Resolution match must explicitly cover One, Absent, Unknown and Ambiguous"
+      ]
+    },
+    {
+      "probe": 28,
+      "variant": "fabricated Absent",
+      "file": "package.rs",
+      "fixture_sha256": "fc120b9f706ea055234cacf316ae4c8cb9563008d2a07b3393a79acbcc1e121e",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::canonical_entry: unauthorized literal Resolution::Absent construction; use discovered with package loss evidence",
+        "package.rs::canonical_entry: entry-loss predicate differs from its named conservative/lookup contract",
+        "package.rs::canonical_entry: declared collections differ from bounded accesses: declared=['field.entries*1'], used=[]",
+        "entry-loss producer/conservative-reader contracts missing"
+      ]
+    },
+    {
+      "probe": 28,
+      "variant": "literal true completeness",
+      "file": "package.rs",
+      "fixture_sha256": "149cc31b6c1695bc3d552ed86ebfc4a950d928546e17e6de85577e47340b52d3",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::canonical_entry: literal true is not package completeness evidence",
+        "package.rs::canonical_entry: lookup discovered completeness must consult both package entry-loss states",
+        "package.rs::canonical_entry: entry-loss predicate differs from its named conservative/lookup contract",
+        "entry-loss producer/conservative-reader contracts missing"
+      ]
+    },
+    {
+      "probe": 29,
+      "variant": "contracted raw absence",
+      "file": "package.rs",
+      "fixture_sha256": "3a766ea93858cec3d8d98a3ee1151933f5783cc69c65f48587c6b7668f3fde0f",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::unregistered_absence: raw absence requires completeness-carrying input/result; an observation contract cannot establish raw membership completeness",
+        "package.rs::unregistered_absence: declared collections differ from bounded accesses: declared=['field.entries*1'], used=[]"
+      ]
+    },
+    {
+      "probe": 29,
+      "variant": "contracted raw absence wired to REL-DANGLING",
+      "file": "package.rs",
+      "fixture_sha256": "8c9b19d3f2a1d341e59d6edc3eeece3ab27ed5e0552338bbaa8ded9b9fa7260e",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::check_rels: declared collections differ from bounded accesses: declared=['field.references*1', 'field.rels*3', 'lookup.canonical_entry*1'], used=['field.entries*1', 'field.references*1', 'field.rels*3']",
+        "package.rs::unregistered_absence: raw absence requires completeness-carrying input/result; an observation contract cannot establish raw membership completeness",
+        "package.rs::unregistered_absence: declared collections differ from bounded accesses: declared=['field.entries*1'], used=[]"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--lib",
+        "round5_archive_prefix_absence"
+      ],
+      "compile_or_test_exit": 101,
+      "sensitivity_evidence": [
+        "archive prefix: Report { verdict: Fail, findings: [Finding { rule: \"REL-DANGLING\", severity: Error, evidence: Observed, part: Some(\"word/_rels/document.xml.rels\"), message: \"relationship header.xml in word/_rels/document.xml.rels targets word/header.xml, which is missing from the package; the referenced content is lost\" }], coverage_notes: [\"the archive declares 5 entries; only the first 4 were examined\", \"the zip central directory holds 5 records, more than the 4 examined; duplicate entry checking stopped early and later names were not checked\", \"unknown comments selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown footnotes selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown endnotes selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown styles selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown fontTable selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"custom-properties selection is unknown (source discovery was not fully examined); PROP-DUP-NAME was not checked\", \"unknown numbering selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"comment-threading paragraphs for word/document.xml could not be fully checked (comments ownership or source facts were not fully examined)\", \"unknown commentsExtended selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown commentsIds selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown settings selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"the footnotePr/endnotePr listings for word/document.xml could not be fully joined (ownership, declarations, or source facts were not fully examined)\"], checks_run: [\"PKG-NOT-ZIP\", \"PKG-DUP-ENTRY\", \"PKG-CASE-COLLISION\", \"PKG-NO-CONTENT-TYPES\", \"PKG-NO-MAIN\", \"CT-UNDECLARED\", \"CT-MAIN-TYPE\", \"CT-DUP-MAIN\", \"CT-DUP-DEFAULT\", \"CT-DUP-OVERRIDE\", \"XML-MALFORMED\", \"XML-UNDECLARED-PREFIX\", \"XML-INVALID-CHAR\", \"STRUCT-END-P\", \"MATH-PLACEMENT\", \"PROTECTION-PASSWORD\", \"HEADERSOURCE-PRESENT\", \"REL-DUP-ID\", \"REL-DANGLING\", \"REL-TYPED\", \"REL-REF-MISSING\", \"CT-MISMATCH\", \"CONTENTPART-TYPE\", \"COMMENT-RANGE-COUNT\", \"BOOKMARK-COUNT\", \"PERM-COUNT\", \"MOVE-RANGE-COUNT\", \"ID-COMMENT-DUP\", \"ID-COMMENT-REF\", \"ID-DOCPR-DUP\", \"ID-BOOKMARK-DUP\", \"BOOKMARK-UNPAIRED\", \"COMMENT-RANGE-UNPAIRED\", \"PARAID-DUP\", \"PARAID-VALUE\", \"ID-REVISION-DUP\", \"NOTE-DUP\", \"REF-NOTE\", \"REF-HEADER\", \"REF-STYLE\", \"STYLE-DUP-ID\", \"STYLE-DUP-NAME\", \"STYLE-RESERVED-NAME\", \"STYLE-RESERVED-ID\", \"STYLE-COUNT\", \"STYLE-ID-LENGTH\", \"FONT-DUP-NAME\", \"NUM-DANGLING\", \"COMMENTEX-LINK\", \"FLD-UNBALANCED\", \"STRUCT-TC-NO-P\", \"STRUCT-DELTEXT\", \"STRUCT-MOVE-UNPAIRED\", \"CUSTOMXML-SCHEMA\", \"NOTE-PR-LISTING\", \"NOTE-PR-DANGLING\", \"MEDIA-MAGIC\"] }",
+        "Report { verdict: Fail, findings: [Finding { rule: \"REL-DANGLING\", severity: Error, evidence: Observed, part: Some(\"word/_rels/document.xml.rels\"), message: \"relationship header.xml in word/_rels/document.xml.rels targets word/header.xml, which is missing from the package; the referenced content is lost\" }], coverage_notes: [\"the archive declares 5 entries; only the first 4 were examined\", \"the zip central directory holds 5 records, more than the 4 examined; duplicate entry checking stopped early and later names were not checked\", \"unknown comments selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown footnotes selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown endnotes selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown styles selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown fontTable selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"custom-properties selection is unknown (source discovery was not fully examined); PROP-DUP-NAME was not checked\", \"unknown numbering selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"comment-threading paragraphs for word/document.xml could not be fully checked (comments ownership or source facts were not fully examined)\", \"unknown commentsExtended selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown commentsIds selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"unknown settings selection for word/document.xml: source discovery was not fully examined; dependent checks were skipped\", \"the footnotePr/endnotePr listings for word/document.xml could not be fully joined (ownership, declarations, or source facts were not fully examined)\"], checks_run: [\"PKG-NOT-ZIP\", \"PKG-DUP-ENTRY\", \"PKG-CASE-COLLISION\", \"PKG-NO-CONTENT-TYPES\", \"PKG-NO-MAIN\", \"CT-UNDECLARED\", \"CT-MAIN-TYPE\", \"CT-DUP-MAIN\", \"CT-DUP-DEFAULT\", \"CT-DUP-OVERRIDE\", \"XML-MALFORMED\", \"XML-UNDECLARED-PREFIX\", \"XML-INVALID-CHAR\", \"STRUCT-END-P\", \"MATH-PLACEMENT\", \"PROTECTION-PASSWORD\", \"HEADERSOURCE-PRESENT\", \"REL-DUP-ID\", \"REL-DANGLING\", \"REL-TYPED\", \"REL-REF-MISSING\", \"CT-MISMATCH\", \"CONTENTPART-TYPE\", \"COMMENT-RANGE-COUNT\", \"BOOKMARK-COUNT\", \"PERM-COUNT\", \"MOVE-RANGE-COUNT\", \"ID-COMMENT-DUP\", \"ID-COMMENT-REF\", \"ID-DOCPR-DUP\", \"ID-BOOKMARK-DUP\", \"BOOKMARK-UNPAIRED\", \"COMMENT-RANGE-UNPAIRED\", \"PARAID-DUP\", \"PARAID-VALUE\", \"ID-REVISION-DUP\", \"NOTE-DUP\", \"REF-NOTE\", \"REF-HEADER\", \"REF-STYLE\", \"STYLE-DUP-ID\", \"STYLE-DUP-NAME\", \"STYLE-RESERVED-NAME\", \"STYLE-RESERVED-ID\", \"STYLE-COUNT\", \"STYLE-ID-LENGTH\", \"FONT-DUP-NAME\", \"NUM-DANGLING\", \"COMMENTEX-LINK\", \"FLD-UNBALANCED\", \"STRUCT-TC-NO-P\", \"STRUCT-DELTEXT\", \"STRUCT-MOVE-UNPAIRED\", \"CUSTOMXML-SCHEMA\", \"NOTE-PR-LISTING\", \"NOTE-PR-DANGLING\", \"MEDIA-MAGIC\"] }",
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 138 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "probe": 30,
+      "variant": "type HiddenEntries = [Entry];",
+      "file": "package.rs",
+      "fixture_sha256": "51a857aa1e48ee020b924d50d7cba41cda1afe66b6a3453aa3f04c198693d11a",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::unregistered_absence: raw absence requires completeness-carrying input/result; an observation contract cannot establish raw membership completeness"
+      ]
+    },
+    {
+      "probe": 30,
+      "variant": "type HiddenMap = HashMap<String, String>;",
+      "file": "package.rs",
+      "fixture_sha256": "5a08bbcd663e7a0038685bba8427246e7b177134b669e536cd063ccdd6869594",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::unregistered_absence: raw absence requires completeness-carrying input/result; an observation contract cannot establish raw membership completeness"
+      ]
+    },
+    {
+      "probe": 30,
+      "variant": "type HiddenPackage = Package;",
+      "file": "package.rs",
+      "fixture_sha256": "dbba2e82d6591a316709587015c53dd008a92d18b02b425750d0e970d23f8830",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::unregistered_absence: raw absence requires completeness-carrying input/result; an observation contract cannot establish raw membership completeness",
+        "package.rs::unregistered_absence: bounded consumption has no observation contract: ['field.entries*1']"
+      ]
+    },
+    {
+      "probe": 31,
+      "variant": "canonical_entry/hidden_lookup",
+      "file": "lib.rs",
+      "fixture_sha256": "2ad0e36c8bcbfad6e55a505f9e14f768c45ecf381e1429adfbfcaadd2ab0d1bd",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_absence: bounded consumption has no observation contract: ['lookup.canonical_entry*1']"
+      ]
+    },
+    {
+      "probe": 31,
+      "variant": "canonical_entry/package::canonical_entry",
+      "file": "lib.rs",
+      "fixture_sha256": "0b736b34d7cdf578ff08d6975bf753d2ef86b412efc335d0dfef7728b802d55d",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_absence: bounded consumption has no observation contract: ['lookup.canonical_entry*1']"
+      ]
+    },
+    {
+      "probe": 31,
+      "variant": "canonical_entry/hidden_package::canonical_entry",
+      "file": "lib.rs",
+      "fixture_sha256": "80a917d211dd5ad9437baec7020214288b6f7281f6ab62c7d7387fe8d1d1a420",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_absence: bounded consumption has no observation contract: ['lookup.canonical_entry*1']"
+      ]
+    },
+    {
+      "probe": 31,
+      "variant": "entry_by_name/hidden_lookup",
+      "file": "lib.rs",
+      "fixture_sha256": "db03d9c80631e89c9703ca3356f18f677b2f7d4ff478631c2177dea0e930505f",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_absence: bounded consumption has no observation contract: ['lookup.entry_by_name*1']"
+      ]
+    },
+    {
+      "probe": 31,
+      "variant": "entry_by_name/package::entry_by_name",
+      "file": "lib.rs",
+      "fixture_sha256": "5d6cdf3783e7dcfa63307ebe4f0a6df24469d2daefa9ffd67aa0aaff0fd0678e",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_absence: bounded consumption has no observation contract: ['lookup.entry_by_name*1']"
+      ]
+    },
+    {
+      "probe": 31,
+      "variant": "entry_by_name/hidden_package::entry_by_name",
+      "file": "lib.rs",
+      "fixture_sha256": "51e28db76ca0ff67fda2b7b3b287e6fd584d30056cf951eedd3f2e88e34716fa",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_absence: bounded consumption has no observation contract: ['lookup.entry_by_name*1']"
+      ]
+    },
+    {
+      "probe": 31,
+      "variant": "content_unavailable/hidden_lookup",
+      "file": "lib.rs",
+      "fixture_sha256": "3b957985915b75ffd5ebbf6373274a21dd3cf7fceff42006b80d0d011832733a",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_absence: bounded consumption has no observation contract: ['lookup.content_unavailable*1']"
+      ]
+    },
+    {
+      "probe": 31,
+      "variant": "content_unavailable/package::content_unavailable",
+      "file": "lib.rs",
+      "fixture_sha256": "d756c3199f4bb6a2f44f402984a4ec1c7074cc8963647a7cc8d4eb0226de1686",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_absence: bounded consumption has no observation contract: ['lookup.content_unavailable*1']"
+      ]
+    },
+    {
+      "probe": 31,
+      "variant": "content_unavailable/hidden_package::content_unavailable",
+      "file": "lib.rs",
+      "fixture_sha256": "78a764ac245da02a8a5f3fd429437883133b15ffa0b28b2910fe1b4ae8d97fb4",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_absence: bounded consumption has no observation contract: ['lookup.content_unavailable*1']"
+      ]
+    },
+    {
+      "probe": 32,
+      "variant": "2751 delete",
+      "file": "lib.rs",
+      "fixture_sha256": "fd1b312798ee57b465bdcdc47c290f1099255d6ed9f97c900bb13ca347677d26",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::discovery_unavailable: entry-loss predicate differs from its named conservative/lookup contract",
+        "entry-loss producer/conservative-reader contracts missing"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--lib",
+        "round18_discovery_loss_polarity"
+      ],
+      "compile_or_test_exit": 101,
+      "sensitivity_evidence": [
+        "test resolution_tests::round18_discovery_loss_polarity ... FAILED",
+        "---- resolution_tests::round18_discovery_loss_polarity stdout ----",
+        "thread 'resolution_tests::round18_discovery_loss_polarity' (15171775) panicked at crates/validate/src/resolution_tests.rs:96:9:",
+        "assertion `left == right` failed",
+        "    resolution_tests::round18_discovery_loss_polarity",
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 138 filtered out; finished in 0.01s"
+      ]
+    },
+    {
+      "probe": 32,
+      "variant": "2751 negate",
+      "file": "lib.rs",
+      "fixture_sha256": "c9bfcf7f6461d375ea8fabaea3d188d18becda9a6235fac4731f9ecdcf6fe8d3",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::discovery_unavailable: entry-loss predicate differs from its named conservative/lookup contract",
+        "entry-loss producer/conservative-reader contracts missing"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--lib",
+        "round18_discovery_loss_polarity"
+      ],
+      "compile_or_test_exit": 101,
+      "sensitivity_evidence": [
+        "test resolution_tests::round18_discovery_loss_polarity ... FAILED",
+        "---- resolution_tests::round18_discovery_loss_polarity stdout ----",
+        "thread 'resolution_tests::round18_discovery_loss_polarity' (15172233) panicked at crates/validate/src/resolution_tests.rs:96:9:",
+        "assertion `left == right` failed",
+        "    resolution_tests::round18_discovery_loss_polarity",
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 138 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "probe": 32,
+      "variant": "2777 delete",
+      "file": "lib.rs",
+      "fixture_sha256": "7411c2cbeee59a691f24899b8fc744d9b802500165ee00ead861eb0fe7e964b4",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::ownership_discovery_complete: entry-loss predicate differs from its named conservative/lookup contract",
+        "entry-loss producer/conservative-reader contracts missing"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--lib",
+        "round18_discovery_loss_polarity"
+      ],
+      "compile_or_test_exit": 101,
+      "sensitivity_evidence": [
+        "test resolution_tests::round18_discovery_loss_polarity ... FAILED",
+        "---- resolution_tests::round18_discovery_loss_polarity stdout ----",
+        "thread 'resolution_tests::round18_discovery_loss_polarity' (15172740) panicked at crates/validate/src/resolution_tests.rs:98:9:",
+        "assertion `left == right` failed",
+        "    resolution_tests::round18_discovery_loss_polarity",
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 138 filtered out; finished in 0.01s"
+      ]
+    },
+    {
+      "probe": 32,
+      "variant": "2777 negate",
+      "file": "lib.rs",
+      "fixture_sha256": "84cb718527b8415a0737ade2d75c7ef32762cda8f47c4b152ed0e4c052d2d247",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::ownership_discovery_complete: entry-loss predicate differs from its named conservative/lookup contract",
+        "entry-loss producer/conservative-reader contracts missing"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--lib",
+        "round18_discovery_loss_polarity"
+      ],
+      "compile_or_test_exit": 101,
+      "sensitivity_evidence": [
+        "test resolution_tests::round18_discovery_loss_polarity ... FAILED",
+        "---- resolution_tests::round18_discovery_loss_polarity stdout ----",
+        "thread 'resolution_tests::round18_discovery_loss_polarity' (15173201) panicked at crates/validate/src/resolution_tests.rs:98:9:",
+        "assertion `left == right` failed",
+        "    resolution_tests::round18_discovery_loss_polarity",
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 138 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "probe": 33,
+      "variant": "Self::prefix",
+      "file": "lib.rs",
+      "fixture_sha256": "74382bc3d64722128c280c7768de3e58ec1e3860bf869b22b77af4212b5a693e",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_absence: negative retained-prefix membership requires CompleteSet, regardless of contract or local binding",
+        "lib.rs::unregistered_absence: negative retained-prefix membership requires CompleteSet, regardless of contract or local binding",
+        "lib.rs::unregistered_absence: bounded consumption has no observation contract: ['access.prefix*1']"
+      ]
+    },
+    {
+      "probe": 33,
+      "variant": "HiddenDefinitions::prefix",
+      "file": "lib.rs",
+      "fixture_sha256": "acae825da7ac9e4a036770dd1c605acb0c591a12e11d96dcc64244a205a75b86",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_absence: negative retained-prefix membership requires CompleteSet, regardless of contract or local binding",
+        "lib.rs::unregistered_absence: negative retained-prefix membership requires CompleteSet, regardless of contract or local binding",
+        "lib.rs::unregistered_absence: bounded consumption has no observation contract: ['access.prefix*1']"
+      ]
+    },
+    {
+      "probe": 34,
+      "variant": "exact prefix-only contract, negative=True",
+      "file": "lib.rs",
+      "fixture_sha256": "009e3cab39721ca9ccac918ac8818f8e16f883a96a4a892c2ace12da50a6a90c",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::special_notes: negative retained-prefix membership requires CompleteSet, regardless of contract or local binding",
+        "lib.rs::special_notes: negative retained-prefix membership requires CompleteSet, regardless of contract or local binding",
+        "lib.rs::special_notes: raw membership retained bypasses CompleteSet or undeclared structural scope"
+      ]
+    },
+    {
+      "probe": 34,
+      "variant": "exact prefix-only contract, negative=False",
+      "file": "lib.rs",
+      "fixture_sha256": "d8eeb5f73c1899b3925540795c29d5d3121ed4bedf6dffc78f060d4eb8c3e926",
+      "expected": "accept",
+      "exit": 0,
+      "pass": true,
+      "diagnostics": [
+        "197 declared bounded consumers; register and access audit passed"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "check",
+        "--offline"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 35,
+      "variant": "Self::prefix(self).contains(key) == false",
+      "file": "lib.rs",
+      "fixture_sha256": "d602f55ea5ebbbc4032ba0d5f5df8061f61508ce2dfa93b513c6615f47fab2c6",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_absence: negative retained-prefix membership requires CompleteSet, regardless of contract or local binding",
+        "lib.rs::unregistered_absence: negative retained-prefix membership requires CompleteSet, regardless of contract or local binding",
+        "lib.rs::unregistered_absence: bounded consumption has no observation contract: ['access.prefix*1']"
+      ]
+    },
+    {
+      "probe": 35,
+      "variant": "match Self::prefix(self).contains(key) { false => true, true => false }",
+      "file": "lib.rs",
+      "fixture_sha256": "36aa739f85622e7fdcd0450797c767198d5d3cc42df39d8b163969cc7c543403",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_absence: boolean membership match on retained prefix requires CompleteSet",
+        "lib.rs::unregistered_absence: bounded consumption has no observation contract: ['access.prefix*1']"
+      ]
+    },
+    {
+      "probe": 35,
+      "variant": "matches!(Self::prefix(self).contains(key), false)",
+      "file": "lib.rs",
+      "fixture_sha256": "1ed1c14fb0a2b2339cb6755d899b77d57042e3888a1c0f773d45156faca35b41",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_absence: negative retained-prefix membership requires CompleteSet, regardless of contract or local binding",
+        "lib.rs::unregistered_absence: negative retained-prefix membership requires CompleteSet, regardless of contract or local binding",
+        "lib.rs::unregistered_absence: bounded consumption has no observation contract: ['access.prefix*1']"
+      ]
+    },
+    {
+      "probe": 36,
+      "variant": "!Self::prefix(self).iter().any(|candidate| candidate == key)",
+      "file": "lib.rs",
+      "fixture_sha256": "d1fcdb1627e1b72560030a94a06c3cd831b21678c8d0b47992dc842a148134a4",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_absence: negative retained-prefix membership requires CompleteSet, regardless of contract or local binding",
+        "lib.rs::unregistered_absence: negative retained-prefix membership requires CompleteSet, regardless of contract or local binding",
+        "lib.rs::unregistered_absence: bounded consumption has no observation contract: ['access.prefix*1']"
+      ]
+    },
+    {
+      "probe": 36,
+      "variant": "Self::prefix(self).get(key).is_none()",
+      "file": "lib.rs",
+      "fixture_sha256": "d910e9e04138a48d725f892a8c234b1c89c52795a3418913c7c55402a1eb8e66",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_absence: negative retained-prefix membership requires CompleteSet, regardless of contract or local binding",
+        "lib.rs::unregistered_absence: bounded consumption has no observation contract: ['access.prefix*1']"
+      ]
+    },
+    {
+      "probe": 37,
+      "variant": "negative/<Self>::prefix(self)",
+      "file": "lib.rs",
+      "fixture_sha256": "8b24f66b64b36a101f1de7a16155c8310797b0baf361229ce6a04ec22c5b0cdc",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_absence: negative retained-prefix membership requires CompleteSet, regardless of contract or local binding",
+        "lib.rs::unregistered_absence: negative retained-prefix membership requires CompleteSet, regardless of contract or local binding",
+        "lib.rs::unregistered_absence: bounded consumption has no observation contract: ['access.prefix*1']"
+      ]
+    },
+    {
+      "probe": 37,
+      "variant": "negative/<Observed<HashSet<String>>>::prefix(self)",
+      "file": "lib.rs",
+      "fixture_sha256": "3516bf13593c3170e841ec7b37b7c7f8f3f6807d959d3a204b5e7d1b65ccef93",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_absence: negative retained-prefix membership requires CompleteSet, regardless of contract or local binding",
+        "lib.rs::unregistered_absence: negative retained-prefix membership requires CompleteSet, regardless of contract or local binding",
+        "lib.rs::unregistered_absence: bounded consumption has no observation contract: ['access.prefix*1']"
+      ]
+    },
+    {
+      "probe": 37,
+      "variant": "CompleteSet provider/Observed::is_complete(&self)",
+      "file": "observed.rs",
+      "fixture_sha256": "3abb72974a04de99839d131acb021df3d4d309af485dd78e52f0ac0211fbe6c5",
+      "expected": "accept",
+      "exit": 0,
+      "pass": true,
+      "diagnostics": [
+        "197 declared bounded consumers; register and access audit passed"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--lib",
+        "observed::tests"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 37,
+      "variant": "CompleteSet provider/Self::is_complete(&self)",
+      "file": "observed.rs",
+      "fixture_sha256": "80e142c6e68f60e1c2989dc6df5868a5140b96648dfaeb36a7394b137fb7c1ea",
+      "expected": "accept",
+      "exit": 0,
+      "pass": true,
+      "diagnostics": [
+        "197 declared bounded consumers; register and access audit passed"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--lib",
+        "observed::tests"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 37,
+      "variant": "CompleteSet provider/HiddenObservation::is_complete(&self)",
+      "file": "observed.rs",
+      "fixture_sha256": "d439d6d7557cd668f37712d01301b12c2e17d5df1fd9636a117799b79acc33e1",
+      "expected": "accept",
+      "exit": 0,
+      "pass": true,
+      "diagnostics": [
+        "197 declared bounded consumers; register and access audit passed"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--lib",
+        "observed::tests"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 37,
+      "variant": "CompleteSet provider/<Self>::is_complete(&self)",
+      "file": "observed.rs",
+      "fixture_sha256": "ae55b5db516e4631cc323f5589804bb3f491e1cdcda1d7c5ce177c8603de7965",
+      "expected": "accept",
+      "exit": 0,
+      "pass": true,
+      "diagnostics": [
+        "197 declared bounded consumers; register and access audit passed"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--lib",
+        "observed::tests"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 37,
+      "variant": "CompleteSet provider/<Observed<HashSet<K>>>::is_complete(&self)",
+      "file": "observed.rs",
+      "fixture_sha256": "073bc8153d5fd73ba1334307a5ef9fcc1cd3fa54c3eed0bfc3ab3d5ec8b8756e",
+      "expected": "accept",
+      "exit": 0,
+      "pass": true,
+      "diagnostics": [
+        "197 declared bounded consumers; register and access audit passed"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--lib",
+        "observed::tests"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 37,
+      "variant": "CompleteSet provider/{ let test = Self::is_complete; test(&self) }",
+      "file": "observed.rs",
+      "fixture_sha256": "82b6b3b50b775d388494aa4194b90c94140331d8c1a3b707e9737b59d2eafdd0",
+      "expected": "accept",
+      "exit": 0,
+      "pass": true,
+      "diagnostics": [
+        "197 declared bounded consumers; register and access audit passed"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--lib",
+        "observed::tests"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 38,
+      "variant": "serde::Serialize",
+      "file": "package.rs",
+      "fixture_sha256": "5e77cc584606f3e6f7d0ab2b10363464a96864253b0bb3b1c3db9fa03bef04bf",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::ContentTypes: unauthorized reader derive serde::Serialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 39,
+      "variant": "RegistrySerialize",
+      "file": "package.rs",
+      "fixture_sha256": "3054c4613f256eeaa33bd0d79e5e37b288f8e2f69ec9a0b5357411d2103b9844",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::ContentTypes: unauthorized reader derive serde::Serialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 40,
+      "variant": "Debug",
+      "file": "package.rs",
+      "fixture_sha256": "1c59e7c013b23db35a5962625f94c891b66d019cc4e139202772395de4efd49f",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::ContentTypes: unauthorized reader derive Debug or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 40,
+      "variant": "serde::Deserialize",
+      "file": "package.rs",
+      "fixture_sha256": "392522407299cc4b5aef152881225edb446c2967ec8ccd7b8eadceebb8c34966",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::ContentTypes: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "all existing reader pairs in lib.rs",
+      "file": "lib.rs",
+      "fixture_sha256": "9022b477f404a33ab106175310063110027fa77177fa0331a2cf58f9fa66682d",
+      "expected": "accept",
+      "exit": 0,
+      "pass": true,
+      "diagnostics": [
+        "197 declared bounded consumers; register and access audit passed"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "check",
+        "--offline"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 41,
+      "variant": "all existing reader pairs in observed.rs",
+      "file": "observed.rs",
+      "fixture_sha256": "86e4c900ae173efecf52dda57857bf4917c9d45812bbe9cacdc51bcd889ace78",
+      "expected": "accept",
+      "exit": 0,
+      "pass": true,
+      "diagnostics": [
+        "197 declared bounded consumers; register and access audit passed"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "check",
+        "--offline"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 41,
+      "variant": "all existing reader pairs in ownership.rs",
+      "file": "ownership.rs",
+      "fixture_sha256": "77f848294cd8c507d1a6acff5f2ecaccd1f4438b24e275c41f5e7c22d6cbd3ff",
+      "expected": "accept",
+      "exit": 0,
+      "pass": true,
+      "diagnostics": [
+        "197 declared bounded consumers; register and access audit passed"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "check",
+        "--offline"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 41,
+      "variant": "all existing reader pairs in resolution.rs",
+      "file": "resolution.rs",
+      "fixture_sha256": "acf7c3a11f785ea54f1dd3c42ea04b809ae99d23d98150afad4541967bf29176",
+      "expected": "accept",
+      "exit": 0,
+      "pass": true,
+      "diagnostics": [
+        "197 declared bounded consumers; register and access audit passed"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "check",
+        "--offline"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 41,
+      "variant": "all existing reader pairs in scan.rs",
+      "file": "scan.rs",
+      "fixture_sha256": "4b34cda8edefbeb812d2f2bdc90dfc7685bae517d148f04f56502ab8c64016ae",
+      "expected": "accept",
+      "exit": 0,
+      "pass": true,
+      "diagnostics": [
+        "197 declared bounded consumers; register and access audit passed"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "check",
+        "--offline"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/lib.rs::Evidence",
+      "file": "lib.rs",
+      "fixture_sha256": "7bc67650744e53ed6cc53fb60b162c5684085fa6f6d27884cdb480ee5df03aab",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::Evidence: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/lib.rs::Finding",
+      "file": "lib.rs",
+      "fixture_sha256": "d8f7a51e5299160f1ac8960cb6643f16c2fe75b0904f767e460078ebd78a9f05",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::Finding: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/lib.rs::Limits",
+      "file": "lib.rs",
+      "fixture_sha256": "44d28a3831e88b4e16139b4f0dba44fe4d77bf2f091512d04b93464926929143",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::Limits: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/lib.rs::Report",
+      "file": "lib.rs",
+      "fixture_sha256": "d3c3556ba0594a0de511cfb58b45a5be36a9f821f5137cdee345515cb0e2cfaa",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::Report: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/lib.rs::RuleSpec",
+      "file": "lib.rs",
+      "fixture_sha256": "458a7bf772b0129753c7fe414fa3a8a5ad411d4932ef9032956cde3bb223edbe",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::RuleSpec: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/lib.rs::Severity",
+      "file": "lib.rs",
+      "fixture_sha256": "b19447dcf247857612190d854e33a8814021969b29550b931b8756513c844c14",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::Severity: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/lib.rs::Verdict",
+      "file": "lib.rs",
+      "fixture_sha256": "2b3a31bef97d9adcbf81e7fd05252b3b079edc87f65bba1fbd112b8a441d03e2",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::Verdict: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/observed.rs::CompleteSet",
+      "file": "observed.rs",
+      "fixture_sha256": "afb523ae27ef8eaf4a4c8972eb18107356276306853ff76f2af8a039dbe8c252",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "observed.rs::CompleteSet: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/observed.rs::Completeness",
+      "file": "observed.rs",
+      "fixture_sha256": "c50b0fa3df8ce27e7c718b0571c1dfb19a3cd041a5f56609e434496e9f9f95a7",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "observed.rs::Completeness: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/observed.rs::Observed",
+      "file": "observed.rs",
+      "fixture_sha256": "c17e7e80b10f41d41d86c161d6ce754ec63cc3680a95e952b6695b1bc785e025",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "observed.rs::Observed: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/ownership.rs::Membership",
+      "file": "ownership.rs",
+      "fixture_sha256": "f2b304cdda6fa79090b2ea3c1f378f331d9eb62f4191d0e9777863d719dfb35e",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "ownership.rs::Membership: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/ownership.rs::OwnerContext",
+      "file": "ownership.rs",
+      "fixture_sha256": "eed706878846797724e331e0d49e474cc8db8abc7d96e73b06e80e76387d535d",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "ownership.rs::OwnerContext: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/ownership.rs::OwnerId",
+      "file": "ownership.rs",
+      "fixture_sha256": "f9e752d1327cfef83985c55dbdb6b2e03065e4762842ec04866f24002440659b",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "ownership.rs::OwnerId: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/ownership.rs::PartGraph",
+      "file": "ownership.rs",
+      "fixture_sha256": "5b6111c64fce17f1ffee1ce8db81e3736caa929145c9f3ed3b27f36296ee8303",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "ownership.rs::PartGraph: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/ownership.rs::PartId",
+      "file": "ownership.rs",
+      "fixture_sha256": "0f473a8f17fdcb39897b3d62a37e2c92964b78bbe6c7c1651bc47f5984e1056b",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "ownership.rs::PartId: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/resolution.rs::Resolution",
+      "file": "resolution.rs",
+      "fixture_sha256": "620126c9dc72a95392a5e8a8dcdb6c63e4ea8357fbd8aed6cdb6089e80e36bf8",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "resolution.rs::Resolution: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/scan.rs::<template lexical_id>::AuditPlaceholder",
+      "file": "scan.rs",
+      "fixture_sha256": "bd8831e1a62729f338f7e6719fc0efc37cb4acd9f9789a03f4429f4611598676",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "scan.rs::<template numeric_id>::AuditPlaceholder: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape",
+        "scan.rs::DecimalId: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape",
+        "scan.rs::HexId: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/scan.rs::<template numeric_id>::AuditPlaceholder",
+      "file": "scan.rs",
+      "fixture_sha256": "bd8831e1a62729f338f7e6719fc0efc37cb4acd9f9789a03f4429f4611598676",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "scan.rs::<template numeric_id>::AuditPlaceholder: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape",
+        "scan.rs::DecimalId: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape",
+        "scan.rs::HexId: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/scan.rs::DecimalId",
+      "file": "scan.rs",
+      "fixture_sha256": "bd8831e1a62729f338f7e6719fc0efc37cb4acd9f9789a03f4429f4611598676",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "scan.rs::<template numeric_id>::AuditPlaceholder: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape",
+        "scan.rs::DecimalId: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape",
+        "scan.rs::HexId: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/scan.rs::DecodeError",
+      "file": "scan.rs",
+      "fixture_sha256": "99fd562ecb472115c98d56716a514c31e7e7818ddb4f146d424c2dcc6bafbb97",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "scan.rs::DecodeError: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/scan.rs::HexId",
+      "file": "scan.rs",
+      "fixture_sha256": "bd8831e1a62729f338f7e6719fc0efc37cb4acd9f9789a03f4429f4611598676",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "scan.rs::<template numeric_id>::AuditPlaceholder: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape",
+        "scan.rs::DecimalId: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape",
+        "scan.rs::HexId: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/scan.rs::NumericKey",
+      "file": "scan.rs",
+      "fixture_sha256": "ed08779f58df8a541c6a5fa17115fe9ec3e48b2977cf29078ddfd76fb412e986",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "scan.rs::NumericKey: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/scan.rs::PartRole",
+      "file": "scan.rs",
+      "fixture_sha256": "a238a2cd8887d0e152723aa22db3fd96d94d294272c53cef74c017bf5a3666b4",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "scan.rs::PartRole: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/scan.rs::RelId",
+      "file": "scan.rs",
+      "fixture_sha256": "bd8831e1a62729f338f7e6719fc0efc37cb4acd9f9789a03f4429f4611598676",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "scan.rs::<template numeric_id>::AuditPlaceholder: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape",
+        "scan.rs::DecimalId: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape",
+        "scan.rs::HexId: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "unauthorized pair/scan.rs::StyleId",
+      "file": "scan.rs",
+      "fixture_sha256": "bd8831e1a62729f338f7e6719fc0efc37cb4acd9f9789a03f4429f4611598676",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "scan.rs::<template numeric_id>::AuditPlaceholder: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape",
+        "scan.rs::DecimalId: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape",
+        "scan.rs::HexId: unauthorized reader derive serde::Deserialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "same exact DTO fields transferred into function scope",
+      "file": "lib.rs",
+      "fixture_sha256": "0384cf47b5a56e6462170870005eb5edc1efbb4bccd1994f5f076f56c42aaca4",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::<function unregistered_nested_reader>::Limits: unauthorized reader derive Debug or changed representation/DTO field shape"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "check",
+        "--offline"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 41,
+      "variant": "same named DTO in another module",
+      "file": "package.rs",
+      "fixture_sha256": "766ae122cc3f97df1f8b0f70211670ed57f05d4c68e65b90a3d4d1d100aae464",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::Finding: unauthorized reader derive Debug or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 41,
+      "variant": "registry field added to allowed DTO",
+      "file": "lib.rs",
+      "fixture_sha256": "43492f5e9816313b0cdddb91be736d8dd81516c00187eaa4d64d6e158770ba16",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::Finding: unauthorized reader derive Debug or changed representation/DTO field shape",
+        "lib.rs::Finding: unauthorized reader derive serde::Serialize or changed representation/DTO field shape"
+      ]
+    },
+    {
+      "probe": 42,
+      "variant": "qualified consuming format",
+      "file": "lib.rs",
+      "fixture_sha256": "95f553315ec436430ffa66e5894af85786170a59b176382bada845696f8afb7a",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_read: bounded consumption has no observation contract: ['field.entries*1']"
+      ]
+    },
+    {
+      "probe": 42,
+      "variant": "qualified nonconsuming grammar/{ let v = std::vec![1, 2]; v.len() }",
+      "file": "lib.rs",
+      "fixture_sha256": "3f7d6dd08d31ce6461c9c993ddbbb1fc075f4aa1dca7bf2f1c0780136cfd9020",
+      "expected": "accept",
+      "exit": 0,
+      "pass": true,
+      "diagnostics": [
+        "197 declared bounded consumers; register and access audit passed"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "check",
+        "--offline"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 42,
+      "variant": "qualified nonconsuming grammar/{ std::debug_assert!(true); 1 }",
+      "file": "lib.rs",
+      "fixture_sha256": "bc36afd0c9653b0dd5bd9e02a4bf6d641516d06fd8d3f4a737a563fc58f6f3bb",
+      "expected": "accept",
+      "exit": 0,
+      "pass": true,
+      "diagnostics": [
+        "197 declared bounded consumers; register and access audit passed"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "check",
+        "--offline"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 42,
+      "variant": "qualified nonconsuming grammar/{ if std::matches!(true, true) { 1 } else { 0 } }",
+      "file": "lib.rs",
+      "fixture_sha256": "a3e84085a82aa399f5fdd7d27ed3d2f778a275c5d0affd71efb2415a2b4df33d",
+      "expected": "accept",
+      "exit": 0,
+      "pass": true,
+      "diagnostics": [
+        "197 declared bounded consumers; register and access audit passed"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "check",
+        "--offline"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 43,
+      "variant": "macro name impostor",
+      "file": "lib.rs",
+      "fixture_sha256": "912e0a6f40f290c1a87a622129c5f24bd81a3560d30c63f43b5a645290dca552",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs: unsupported macro fragment kind"
+      ]
+    },
+    {
+      "probe": 43,
+      "variant": "std namespace impostor",
+      "file": "lib.rs",
+      "fixture_sha256": "b3e165efa441ed443c496aa4b76b026a31a10d3fb2771092993e352da0844dc5",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs: unrecognized macro-shadowing import: external as std"
+      ]
+    },
+    {
+      "probe": 44,
+      "variant": "inline",
+      "file": "lib.rs",
+      "fixture_sha256": "a76c1dd46e3dded7fb0a67768e4a6bf8e80bbe1f46f30b5e057bc14b3b90eaa3",
+      "expected": "accept",
+      "exit": 0,
+      "pass": true,
+      "diagnostics": [
+        "197 declared bounded consumers; register and access audit passed"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "check",
+        "--offline"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 44,
+      "variant": "inline(always)",
+      "file": "lib.rs",
+      "fixture_sha256": "a06b07ffb58b1a220ffdd3a41349c2d091dc10f098a8b8b6fb54482c82a6fdaf",
+      "expected": "accept",
+      "exit": 0,
+      "pass": true,
+      "diagnostics": [
+        "197 declared bounded consumers; register and access audit passed"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "check",
+        "--offline"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 44,
+      "variant": "inline(never)",
+      "file": "lib.rs",
+      "fixture_sha256": "4f71f1777b442b56328f888d40c60672e8bc815f58cd55828908c11fd1e8428a",
+      "expected": "accept",
+      "exit": 0,
+      "pass": true,
+      "diagnostics": [
+        "197 declared bounded consumers; register and access audit passed"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "check",
+        "--offline"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 44,
+      "variant": "cold",
+      "file": "lib.rs",
+      "fixture_sha256": "ddce9b455e47226a764ab1b48f34c8adfa86f38a5feb3e0dff0651fa7ff4c670",
+      "expected": "accept",
+      "exit": 0,
+      "pass": true,
+      "diagnostics": [
+        "197 declared bounded consumers; register and access audit passed"
+      ],
+      "compile_or_test_command": [
+        "cargo",
+        "check",
+        "--offline"
+      ],
+      "compile_or_test_exit": 0
+    },
+    {
+      "probe": 44,
+      "variant": "unauthorized cfg(all())",
+      "file": "lib.rs",
+      "fixture_sha256": "c03d31e75a43420ed8dfeb4b97e30939592ff689efc97b3f9882c50cb0334215",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_read: bounded consumption has no observation contract: ['field.entries*1']"
+      ]
+    },
+    {
+      "probe": 44,
+      "variant": "unauthorized derive(Debug)",
+      "file": "lib.rs",
+      "fixture_sha256": "5305359271608b0765086534e0844db22e32a4d093686bfb529adb856372b253",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs: derive is permitted only on a recorded struct/enum, never a function, field or other attribute context"
+      ]
+    },
+    {
+      "probe": 44,
+      "variant": "unauthorized serde(skip)",
+      "file": "lib.rs",
+      "fixture_sha256": "7bd1774b3e295d1593e7780ef8f2937d75baefa202b6614ceb25224ffab6ab22",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs: unrecognized attribute: # [serde (skip)]"
+      ]
+    },
+    {
+      "probe": 24,
+      "variant": "new unsupported std env seam",
+      "file": "lib.rs",
+      "fixture_sha256": "b13ec5f323cc3688157f747df9b4f551a664be3e0f1e3d4ca75a99e7b1a455d0",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs: unrecognized expression/pattern macro: std :: env ! (\"X\")"
+      ]
+    },
+    {
+      "probe": 32,
+      "variant": "package field read 0 -> true",
+      "file": "package.rs",
+      "fixture_sha256": "a2e66f833848767581712fa1e3bf827214c02800b8da4c4f0e891a5ac27001fe",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::canonical_entry: lookup discovered completeness must consult both package entry-loss states",
+        "package.rs::canonical_entry: entry-loss predicate differs from its named conservative/lookup contract",
+        "entry-loss producer/conservative-reader contracts missing"
+      ]
+    },
+    {
+      "probe": 32,
+      "variant": "package field read 0 -> pkg.entries_truncated",
+      "file": "package.rs",
+      "fixture_sha256": "904d4d34858688c0525a219e70af615d3b080a3bbe9d4b12a4d092feb3a58ff7",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::canonical_entry: lookup discovered completeness must consult both package entry-loss states",
+        "package.rs::canonical_entry: entry-loss predicate differs from its named conservative/lookup contract",
+        "entry-loss producer/conservative-reader contracts missing"
+      ]
+    },
+    {
+      "probe": 32,
+      "variant": "package field read 1 -> true",
+      "file": "package.rs",
+      "fixture_sha256": "bee30d49aaa4e7dc4ca2578e3d6b9ca5866363714fb8267a371e9030875182aa",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::entry_by_name: lookup discovered completeness must consult both package entry-loss states",
+        "package.rs::entry_by_name: entry-loss predicate differs from its named conservative/lookup contract",
+        "entry-loss producer/conservative-reader contracts missing"
+      ]
+    },
+    {
+      "probe": 32,
+      "variant": "package field read 1 -> pkg.entries_truncated",
+      "file": "package.rs",
+      "fixture_sha256": "eaab6f1b31672b9f0231ec3b500ef09b4af2daecb0e8e2d908fb132b440d33b0",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::entry_by_name: lookup discovered completeness must consult both package entry-loss states",
+        "package.rs::entry_by_name: entry-loss predicate differs from its named conservative/lookup contract",
+        "entry-loss producer/conservative-reader contracts missing"
+      ]
+    },
+    {
+      "probe": 32,
+      "variant": "package field read 2 -> true",
+      "file": "package.rs",
+      "fixture_sha256": "870b8d544883aae49081a4c5f6a015dfccb887a748ddd8d7635cec8aecda80dd",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::content_unavailable: lookup discovered completeness must consult both package entry-loss states",
+        "package.rs::content_unavailable: entry-loss predicate differs from its named conservative/lookup contract",
+        "entry-loss producer/conservative-reader contracts missing"
+      ]
+    },
+    {
+      "probe": 32,
+      "variant": "package field read 2 -> pkg.entries_truncated",
+      "file": "package.rs",
+      "fixture_sha256": "4ce91aa7ceffa84e29917ad2b34f5d5557724f8c36d18547fb0b46396c17eedc",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::content_unavailable: lookup discovered completeness must consult both package entry-loss states",
+        "package.rs::content_unavailable: entry-loss predicate differs from its named conservative/lookup contract",
+        "entry-loss producer/conservative-reader contracts missing"
+      ]
+    },
+    {
+      "probe": 32,
+      "variant": "package field read 3 -> true",
+      "file": "package.rs",
+      "fixture_sha256": "5713655502d6852316268a6bdcc0ad8a79d2f0897513fd8bcf09e293c79f43b5",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::entry_point_profile: entry-loss predicate differs from its named conservative/lookup contract",
+        "entry-loss producer/conservative-reader contracts missing"
+      ]
+    },
+    {
+      "probe": 32,
+      "variant": "package field read 3 -> pkg.entries_truncated",
+      "file": "package.rs",
+      "fixture_sha256": "99970ff191608098334103e8bb2d9c0c6b086f1869301c737ab91175e6b354b9",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::entry_point_profile: entry-loss predicate differs from its named conservative/lookup contract",
+        "entry-loss producer/conservative-reader contracts missing"
+      ]
+    },
+    {
+      "probe": 32,
+      "variant": "loader limit inversion",
+      "file": "package.rs",
+      "fixture_sha256": "95f2a22c1f25071592e4d1b35a0c0959f598932a523368cbb0e80505995abc7c",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::load: entry-loss predicate differs from its named conservative/lookup contract",
+        "entry-loss producer/conservative-reader contracts missing"
+      ]
+    },
+    {
+      "probe": 32,
+      "variant": "loader informational polarity",
+      "file": "package.rs",
+      "fixture_sha256": "39472a13a19034cfa2810dad91412ecc874e0545f6d0dd21ac97660a0cd53d15",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::load: entry-loss predicate differs from its named conservative/lookup contract",
+        "entry-loss producer/conservative-reader contracts missing"
+      ]
+    },
+    {
+      "probe": 32,
+      "variant": "loader manifest guard delete",
+      "file": "package.rs",
+      "fixture_sha256": "c98622560fe9cb3c9f89446309104c313c1b8c7c01b234886066523eb411b7df",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::load: entry-loss predicate differs from its named conservative/lookup contract",
+        "entry-loss producer/conservative-reader contracts missing"
+      ]
+    },
+    {
+      "probe": 32,
+      "variant": "loader manifest incomplete negate",
+      "file": "package.rs",
+      "fixture_sha256": "304b537fd2c019b74c9b318001a4adc0641efa79f73ea73d2358fc5d5a983ad9",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::load: entry-loss predicate differs from its named conservative/lookup contract",
+        "entry-loss producer/conservative-reader contracts missing"
+      ]
+    },
+    {
+      "probe": 32,
+      "variant": "loader main discovery delete",
+      "file": "package.rs",
+      "fixture_sha256": "2cd69f6fb2ec3e493ad6980375a4cd2c8087f2d70d290b273f57d9ec5331c5b5",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::load: entry-loss predicate differs from its named conservative/lookup contract",
+        "entry-loss producer/conservative-reader contracts missing"
+      ]
+    },
+    {
+      "probe": 32,
+      "variant": "loader main discovery negate",
+      "file": "package.rs",
+      "fixture_sha256": "b047dbbb90601fe1d7a902b342c0410e8e96a1d1687c492542af1fe2bfc07b3e",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::load: entry-loss predicate differs from its named conservative/lookup contract",
+        "entry-loss producer/conservative-reader contracts missing"
+      ]
+    },
+    {
+      "probe": 26,
+      "variant": "parameter collapse/Resolution<String>",
+      "file": "lib.rs",
+      "fixture_sha256": "e091cd38b76d0f420e32c563025ecba27c96c47a8764c36a2280e080a38a0a92",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_resolution_absence: absence polarity: package lookup Unknown must have an explicit separate unguarded arm; catch-all/Absent collapse is forbidden"
+      ]
+    },
+    {
+      "probe": 26,
+      "variant": "parameter collapse/HiddenResolution",
+      "file": "lib.rs",
+      "fixture_sha256": "92fd1eadf045861a2c8b98b97c925611d1929832de255b0c8e4f7532d9346b67",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::unregistered_resolution_absence: absence polarity: package lookup Unknown must have an explicit separate unguarded arm; catch-all/Absent collapse is forbidden"
+      ]
+    },
+    {
+      "probe": 26,
+      "variant": "Resolution Self receiver collapse",
+      "file": "resolution.rs",
+      "fixture_sha256": "47043f5f2a908684fec8f177ee33ceb75b3afe53ebc96bb36c3edf1084fbcabc",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "resolution.rs::unregistered_resolution_absence: absence polarity: package lookup Unknown must have an explicit separate unguarded arm; catch-all/Absent collapse is forbidden"
+      ]
+    },
+    {
+      "probe": 26,
+      "variant": "opaque result argument collapse",
+      "file": "lib.rs",
+      "fixture_sha256": "741d71e292fd45966d74fc8aac387ab037a5739fd64699f80175e860099fc3c9",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "lib.rs::check_rels: absence polarity: package Resolution must be matched or locally bound; unmodeled callable/argument flow is forbidden"
+      ]
+    },
+    {
+      "probe": 30,
+      "variant": "aliased bool return with exact raw contract",
+      "file": "package.rs",
+      "fixture_sha256": "1d5f534aa4fa6027b6aebf0ed397f2fd5d466f0662f045e07324df62594d49ab",
+      "expected": "reject",
+      "exit": 1,
+      "pass": true,
+      "diagnostics": [
+        "package.rs::unregistered_return_alias: raw absence requires completeness-carrying input/result; an observation contract cannot establish raw membership completeness"
+      ]
+    }
+  ]
+}
