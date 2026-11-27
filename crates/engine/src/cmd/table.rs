@@ -26,7 +26,7 @@ use clear::{cell_prefix, guard_delete, text_spans};
 use convert::{formula, from_text, quick_table, sort_table, to_text};
 pub use convert::{text_table_cells, text_table_lines};
 use layout::{autofit, borders, fix_caret, properties, set_column_widths};
-pub(crate) use layout::{sync_cell_widths, text_direction, touch_cells};
+pub(crate) use layout::{cell_block_borders, sync_cell_widths, text_direction, touch_cells};
 pub(crate) use select::{extend_selection, grow_select_all, select_cell_first, select_range};
 use select::{select_cells, select_column};
 pub use structure::split_targets;

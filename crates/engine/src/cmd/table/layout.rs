@@ -279,3 +279,75 @@ pub(super) fn borders(s: &mut Session, v: &Value) -> CmdResult {
         }
     })
 }
+
+/// Home › Paragraph › Borders with whole cells selected (the table, rows, columns or a block of
+/// cells): the border goes on the cells as one block, as in Word, not on the paragraphs in them
+/// (#7874). `all` borders every cell, `outside` the block's edges, `inside` the lines between its
+/// cells, `none` clears every side, and one side toggles along that edge of the block. Other kinds
+/// change nothing.
+pub(crate) fn cell_block_borders(s: &mut Session, range: &crate::CellRange, kind: &str, b: Border) -> CmdResult {
+    let nil = Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 };
+    let b = Border { space: 0.0, ..b };
+    let one_side = ["top", "left", "bottom", "right"].iter().position(|k| *k == kind);
+    if one_side.is_none() && !matches!(kind, "all" | "none" | "outside" | "inside") {
+        return sel_result(s);
+    }
+    let t = s.doc.table_mut(range.story, &range.table)?;
+    let ((r0, r1), (g0, g1)) = (range.rows, range.cols);
+    // Each selected cell, and which of its sides (top, left, bottom, right) are on the block's edge.
+    let cells: Vec<(usize, usize, [bool; 4])> = range
+        .cells(t)
+        .into_iter()
+        .map(|(r, c)| {
+            let (a, z) = super::grid_cols(t, r, c);
+            (r, c, [r <= r0, a <= g0, r >= r1, z >= g1])
+        })
+        .collect();
+    // One side is taken off when every cell along that edge already shows it, as the button toggles.
+    let shown = one_side.is_some_and(|i| {
+        cells.iter().filter(|(_, _, edge)| edge[i]).all(|(r, c, _)| {
+            let own = t.rows.get(*r).and_then(|row| row.cells.get(*c)).and_then(|cl| cl.props.borders);
+            own.as_ref().and_then(|x| side(x, i)).is_some_and(|x| x.is_visible())
+        })
+    });
+    for (r, c, edge) in cells {
+        let Some(cl) = t.rows.get_mut(r).and_then(|row| row.cells.get_mut(c)) else { continue };
+        let mut cur = cl.props.borders.unwrap_or_default();
+        for (i, on_edge) in edge.into_iter().enumerate() {
+            let new = match kind {
+                "all" => Some(b),
+                "none" => Some(nil),
+                "outside" if on_edge => Some(b),
+                "inside" if !on_edge => Some(b),
+                _ if one_side == Some(i) && on_edge => Some(if shown { nil } else { b }),
+                _ => None,
+            };
+            if let Some(new) = new {
+                *side_mut(&mut cur, i) = Some(new);
+            }
+        }
+        cl.props.borders = Some(cur);
+    }
+    touch_cells(s, &range.table)?;
+    sel_result(s)
+}
+
+/// Side `i` of `b`: top, left, bottom, right.
+fn side(b: &Borders, i: usize) -> Option<Border> {
+    match i {
+        0 => b.top,
+        1 => b.left,
+        2 => b.bottom,
+        _ => b.right,
+    }
+}
+
+/// Side `i` of `b` to set: top, left, bottom, right.
+fn side_mut(b: &mut Borders, i: usize) -> &mut Option<Border> {
+    match i {
+        0 => &mut b.top,
+        1 => &mut b.left,
+        2 => &mut b.bottom,
+        _ => &mut b.right,
+    }
+}

@@ -102,6 +102,10 @@ pub(super) fn borders(s: &mut Session, v: &Value) -> CmdResult {
         // A paragraph with a bottom border, like Word's Horizontal Line.
         return fmt(s, &|p| p.borders = Some(Borders { bottom: Some(Border { width: 1.5, ..b }), ..Default::default() }));
     }
+    // Whole table cells selected: the border goes on the cells, not their paragraphs (#7874).
+    if let Some(range) = s.cell_range().cloned() {
+        return crate::cmd::table::cell_block_borders(s, &range, kind, b);
+    }
     fmt(s, &|p| {
         let mut cur = p.borders.unwrap_or_default();
         match kind {

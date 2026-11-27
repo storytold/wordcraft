@@ -153,6 +153,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-27: Home › Paragraph › Borders with whole table cells selected (the table, rows, columns or a block of cells) borders the cells as one block, as Word does, instead of drawing a box around each paragraph in them: All Borders gives a continuous grid, Outside and Inside follow the block's edges, a single side toggles, and No Border clears the cells (#7874).
 - 2026-11-24: Pasting a plain table over selected cells overwrites from the selection's top-left, even when the copy is wider than the selection (#6742).
 - 2026-11-21: Layout: strict column balancing measures a kept paragraph again in each candidate column, so a float in one column does not make the paragraph skip another where it fits (#6821). Readiness estimates unchanged.
 
