@@ -2,6 +2,7 @@
 mod common;
 
 mod ambiguous_sources;
+mod cr7924;
 mod entry_point_profiles;
 mod owner_roles;
 mod partial_glossary_discovery;
