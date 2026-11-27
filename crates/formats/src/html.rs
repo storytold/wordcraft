@@ -1,6 +1,5 @@
 //! HTML import and export via `craft-html`.
 
-use craft_flow::{FBlock, Flow, Kind, Para, Spacing};
 use wordcraft_doc::{Document, SectionProps};
 
 pub use craft_html::doc::{ImageLoader, PAGE_FONT, css_len_pt, decode, decode_as, decode_entity, esc, export_flow, parse, parse_with, unescape};
@@ -34,109 +33,11 @@ pub fn export(doc: &Document) -> String {
     }
 }
 
-/// Format a point measurement without trailing decimal zeros.
-fn trim_num(v: f32) -> String {
-    let s = format!("{:.2}", v);
-    s.trim_end_matches('0').trim_end_matches('.').to_string()
-}
-
-/// CSS declaration for a paragraph's horizontal alignment, when not left-aligned.
-fn align_css(a: Option<craft_wordmodel::Align>) -> Option<&'static str> {
-    match a? {
-        craft_wordmodel::Align::Center => Some("text-align:center"),
-        craft_wordmodel::Align::Right => Some("text-align:right"),
-        craft_wordmodel::Align::Justify | craft_wordmodel::Align::Distribute => Some("text-align:justify"),
-        craft_wordmodel::Align::Left => None,
-    }
-}
-
-/// A paragraph's spacing and indents as CSS declarations in points: margins for the space before
-/// and after and the left and right indents, and `text-indent` for a first-line indent (negative:
-/// hanging).
-fn spacing_css(s: &Spacing) -> Vec<String> {
-    let mut css = Vec::new();
-    for (name, v) in [("margin-top", s.before), ("margin-right", s.right), ("margin-bottom", s.after), ("margin-left", s.left)] {
-        if let Some(v) = v.filter(|v| v.is_finite()) {
-            // `+ 0.0` turns -0.0 into 0.0, which would otherwise print as "-0".
-            css.push(format!("{name}:{}pt", trim_num(v + 0.0)));
-        }
-    }
-    if let Some(v) = s.first.filter(|v| v.is_finite() && *v != 0.0) {
-        css.push(format!("text-indent:{}pt", trim_num(v)));
-    }
-    css
-}
-
-/// A paragraph's ` style="…"` attribute (empty when it has nothing to say): its alignment, its
-/// spacing and indents, and a page break before it.
-fn spaced_para_attrs(p: &Para) -> String {
-    let mut css = Vec::new();
-    if let Some(a) = align_css(p.align) {
-        css.push(a.to_string());
-    }
-    css.extend(spacing_css(&p.spacing));
-    if p.page_break {
-        css.push("break-before:page;page-break-before:always".to_string());
-    }
-    if css.is_empty() { String::new() } else { format!(" style=\"{}\"", css.join(";")) }
-}
-
-/// Render a top-level plain paragraph, heading or rule for a clipboard fragment, keeping its
-/// spacing and indents.
-fn spaced_para_html(p: &Para) -> String {
-    if p.kind == Kind::Rule {
-        return "<hr>".to_string();
-    }
-    let body = craft_html::doc::inlines_html(&p.inlines);
-    let attrs = spaced_para_attrs(p);
-    match p.kind {
-        Kind::Heading(n) => format!("<h{n}{attrs}>{body}</h{n}>", n = n.clamp(1, 6)),
-        Kind::Title => format!("<h1{attrs}>{body}</h1>"),
-        _ if body.is_empty() => format!("<p{attrs}>&nbsp;</p>"),
-        _ => format!("<p{attrs}>{body}</p>"),
-    }
-}
-
-/// Append the rendered HTML body for contiguous non-spaced blocks (tables, lists, code, quotes)
-/// from `craft-html` so list nesting and table layout stay delegated upstream.
-fn push_craft_blocks(blocks: &[FBlock], out: &mut String) {
-    let html = export_flow(&Flow { blocks: blocks.to_vec(), ..Default::default() }, "en");
-    if let Some((_, body)) = html.split_once("<body>\n")
-        && let Some(content) = body.strip_suffix("</body>\n</html>\n")
-    {
-        out.push_str(content);
-    }
-}
-
-/// `doc`'s content as an HTML fragment (no head or style sheet): what a copy puts on the system
-/// clipboard beside its text, equations as MathML (#816). With no style sheet to give them, its
-/// top-level plain paragraphs and headings carry their own spacing and indents (#5537).
 pub fn export_fragment(doc: &Document) -> String {
-    let Ok(shared) = wordcraft_docx::to_shared_model(doc) else {
-        return String::new();
-    };
-    let flow = craft_flow::from_doc(&shared);
-    let mut out = String::from("<meta charset=\"utf-8\">");
-    let is_spaced = |b: &FBlock| matches!(b, FBlock::Para(p) if p.list.is_none() && !matches!(p.kind, Kind::Code | Kind::Quote));
-    let mut i = 0;
-    while let Some(b) = flow.blocks.get(i) {
-        if let FBlock::Para(p) = b
-            && is_spaced(b)
-        {
-            out.push_str(&spaced_para_html(p));
-            out.push('\n');
-            i += 1;
-        } else {
-            let start = i;
-            while flow.blocks.get(i).is_some_and(|blk| !is_spaced(blk)) {
-                i += 1;
-            }
-            if let Some(slice) = flow.blocks.get(start..i) {
-                push_craft_blocks(slice, &mut out);
-            }
-        }
+    match wordcraft_docx::to_shared_model(doc) {
+        Ok(shared) => craft_html::doc::export_fragment(&shared),
+        Err(_) => String::new(),
     }
-    out
 }
 
 #[cfg(test)]
