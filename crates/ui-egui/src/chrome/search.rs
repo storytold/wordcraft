@@ -4,9 +4,9 @@ use craft::behavior::IconId;
 use craft::keymap::CommandRef;
 use craft::ui::buttons::IconButton;
 use craft::ui::contract::{Bind, Props as _, Show as _, TooltipSpec};
-use craft::ui::menu::HelpEntry;
+use craft::ui::menu::search::{HelpEntry, SearchIndex, SearchWords, Synonyms};
 use craft::ui::patterns::panels::{CommandPalette, PaletteFace};
-use craft::ui::runtime::env::{Label, WordTemplate};
+use craft::ui::runtime::env::{Env, Label, WordTemplate};
 use craft::ui::runtime::inspect;
 use egui::Ui;
 use serde_json::json;
@@ -64,7 +64,10 @@ pub(super) fn show(app: &mut WordApp, ui: &mut Ui, compact: bool) -> egui::Rect 
             }
             rect = Some(button.response.rect);
         }
-        let out = CommandPalette::new(name.clone(), &entries, Bind::bound(&mut open))
+        let env = Env::of(ui);
+        let view = env.view();
+        let index = SearchIndex::new(&view, &entries, &Synonyms::of(&view.words::<SearchWords>()));
+        let out = CommandPalette::new(name.clone(), &entries, &index, Bind::bound(&mut open))
             .face(if compact { PaletteFace::Dialog } else { PaletteFace::InPlace })
             .placeholder(Label::from(name.clone()))
             .suggested((Label::from(tl!("Suggested").to_string()), suggested))

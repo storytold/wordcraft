@@ -558,6 +558,792 @@ fn compare_keeps_text_boxes_of_the_original() {
     }
 }
 
+struct TempTestDir(std::path::PathBuf);
+
+impl TempTestDir {
+    fn new(prefix: &str) -> Self {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("{prefix}-{}-{id}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp test dir");
+        Self(dir)
+    }
+
+    fn path(&self, name: &str) -> std::path::PathBuf {
+        self.0.join(name)
+    }
+}
+
+impl Drop for TempTestDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// #6086: When base and revised have an embedded image at identical size and extents,
+/// but the media bytes were replaced, Compare must emit a tracked deletion of the base
+/// image and tracked insertion of the revised image, and keep both media parts in the
+/// result package.
+#[test]
+fn compare_detects_replaced_image_bytes_with_unchanged_extents() {
+    let tmp = TempTestDir::new("wc-compare-img-replace");
+    let make_doc = |bytes: Vec<u8>| -> Document {
+        let mut d = Document::new();
+        let key = d.add_media(bytes, "png");
+        let mut p = Paragraph::new();
+        let img = InlineObject::Image {
+            media: key,
+            w: 120.0,
+            h: 80.0,
+            alt: "photo".into(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        };
+        p.insert_object(0, img, &CharProps::default()).unwrap();
+        d.body = vec![Arc::new(Block::Para(p))];
+        d
+    };
+    let base_png = vec![0x89, b'P', b'N', b'G', 1, 1, 1, 1];
+    let rev_png = vec![0x89, b'P', b'N', b'G', 2, 2, 2, 2];
+    let base_doc = make_doc(base_png.clone());
+    let rev_doc = make_doc(rev_png.clone());
+
+    let path = tmp.path("revised.docx");
+    crate::io::save_path(&path, &rev_doc).unwrap();
+
+    let mut s = Session::new(base_doc);
+    let r = s.run("review.compare", &json!({"path": path.to_string_lossy(), "showIn": "new"})).unwrap();
+
+    assert!(r["changes"].as_u64().unwrap() >= 1, "an image byte change must be detected as a change");
+    let p = s.doc.body[0].as_para().expect("body has paragraph");
+    assert_eq!(p.objects.len(), 2, "paragraph must have both deleted and inserted images");
+    let objs: Vec<(usize, &InlineObject)> = p.objects_with_offsets().collect();
+    assert_eq!(objs.len(), 2, "paragraph must have two objects with offsets");
+    let (off_del, del_img) = objs[0];
+    let (off_ins, ins_img) = objs[1];
+    let (InlineObject::Image { media: m_del, .. }, InlineObject::Image { media: m_ins, .. }) = (del_img, ins_img) else {
+        panic!("both objects must be images");
+    };
+    assert_ne!(m_del, m_ins, "deleted and inserted images must have distinct media keys");
+    assert!(p.props_of_char(off_del).del.is_some(), "base image must have del revision mark");
+    assert!(p.props_of_char(off_ins).ins.is_some(), "revised image must have ins revision mark");
+    assert_eq!(s.doc.media.get(m_del).map(|b| &**b), Some(&base_png));
+    assert_eq!(s.doc.media.get(m_ins).map(|b| &**b), Some(&rev_png));
+
+    // And saving to DOCX and reading back preserves both media files in the package.
+    let out_path = tmp.path("out.docx");
+    crate::io::save_path(&out_path, &s.doc).unwrap();
+    let back = crate::io::open_path(&out_path).unwrap();
+    assert!(back.media.values().any(|b| **b == base_png), "result package must contain base image bytes");
+    assert!(back.media.values().any(|b| **b == rev_png), "result package must contain revised image bytes");
+
+    // Identical image bytes at identical size: no changes emitted.
+    let base_doc_same = make_doc(base_png.clone());
+    let same_path = tmp.path("same.docx");
+    crate::io::save_path(&same_path, &make_doc(base_png.clone())).unwrap();
+    let mut s_same = Session::new(base_doc_same);
+    let r_same = s_same.run("review.compare", &json!({"path": same_path.to_string_lossy(), "showIn": "new"})).unwrap();
+    assert_eq!(r_same["changes"], 0, "comparing identical image bytes must emit no changes");
+
+    // Extensionless media in revised document adopts with .bin extension fallback and preserves payload.
+    let extless_bytes = vec![0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 4];
+    let mut rev_doc_extless = Document::new();
+    rev_doc_extless.media.insert("rawimage".into(), Arc::new(extless_bytes.clone()));
+    let mut p_extless = Paragraph::new();
+    p_extless
+        .insert_object(
+            0,
+            InlineObject::Image {
+                media: "rawimage".into(),
+                w: 120.0,
+                h: 80.0,
+                alt: "photo".into(),
+                float: Default::default(),
+                crop: [0.0; 4],
+                fx: Default::default(),
+                ole: None,
+            },
+            &CharProps::default(),
+        )
+        .unwrap();
+    rev_doc_extless.body = vec![Arc::new(Block::Para(p_extless))];
+    let extless_path = tmp.path("extless.json");
+    crate::io::save_path(&extless_path, &rev_doc_extless).unwrap();
+    let mut s_extless = Session::new(make_doc(base_png));
+    let _ = s_extless.run("review.compare", &json!({"path": extless_path.to_string_lossy(), "showIn": "new"})).unwrap();
+    let bin_entry = s_extless.doc.media.iter().find(|(k, _)| k.ends_with(".bin"));
+    assert!(bin_entry.is_some(), "extensionless media falls back to bin extension");
+    assert_eq!(bin_entry.map(|(_, b)| &***b), Some(&extless_bytes[..]));
+
+    // Media inside deeply nested groups is remapped iteratively without recursion limits.
+    let mut deep_obj = InlineObject::Image {
+        media: "deep_img.png".into(),
+        w: 50.0,
+        h: 50.0,
+        alt: "".into(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
+    for _ in 0..20 {
+        deep_obj = InlineObject::Group {
+            w: 50.0,
+            h: 50.0,
+            float: Default::default(),
+            ch_w: 50.0,
+            ch_h: 50.0,
+            children: vec![wordcraft_doc::para::GroupChild { x: 0.0, y: 0.0, obj: deep_obj }],
+            canvas: None,
+        };
+    }
+    let mut map: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    map.insert("deep_img.png".into(), "image99.png".into());
+    super::compare::remap_object_media(&mut deep_obj, &mut |k| map.get(k).cloned());
+    let mut cur = &deep_obj;
+    while let InlineObject::Group { children, .. } = cur {
+        cur = &children[0].obj;
+    }
+    if let InlineObject::Image { media, .. } = cur {
+        assert_eq!(media, "image99.png", "media inside 20-level group must be remapped");
+    } else {
+        panic!("innermost object must be Image");
+    }
+}
+
+/// #6086: When an image replacement in a same-text paragraph triggers `word_diff`, matched text,
+/// paragraph mark, and paragraph formatting changes must also record `fmt_change` revisions when
+/// `formatting` is enabled so Reject All restores both the original formatting and the original
+/// image, while Accept All keeps the revised formatting and revised image.
+#[test]
+fn compare_replaced_image_in_paragraph_tracks_matched_formatting_for_reject() {
+    let tmp = TempTestDir::new("wc-compare-img-para-fmt");
+    let base_png = vec![0x89, b'P', b'N', b'G', 7, 7, 7, 7];
+    let rev_png = vec![0x89, b'P', b'N', b'G', 8, 8, 8, 8];
+
+    let make_para_doc = |bytes: Vec<u8>, bold: Option<bool>, align: Option<wordcraft_doc::props::Align>, mark_italic: Option<bool>| -> Document {
+        let mut d = Document::new();
+        let key = d.add_media(bytes, "png");
+        let mut p = Paragraph::with_text("Logo", CharProps { bold, ..Default::default() });
+        p.props.align = align;
+        p.mark = CharProps { italic: mark_italic, ..Default::default() };
+        let at = p.len();
+        p.insert_object(
+            at,
+            InlineObject::Image {
+                media: key,
+                w: 120.0,
+                h: 80.0,
+                alt: "logo".into(),
+                float: Default::default(),
+                crop: [0.0; 4],
+                fx: Default::default(),
+                ole: None,
+            },
+            &CharProps::default(),
+        )
+        .unwrap();
+        d.body = vec![Arc::new(Block::Para(p))];
+        d
+    };
+
+    let base_doc = make_para_doc(base_png.clone(), None, None, None);
+    let rev_doc = make_para_doc(rev_png.clone(), Some(true), Some(wordcraft_doc::props::Align::Center), Some(true));
+    let rev_path = tmp.path("rev.docx");
+    crate::io::save_path(&rev_path, &rev_doc).unwrap();
+
+    let mut s = Session::new(base_doc.clone());
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy(), "showIn": "new"})).unwrap();
+    assert_eq!(r["changes"], 1);
+
+    let p = s.doc.body[0].as_para().expect("compared paragraph");
+    assert_eq!(p.props_of_char(0).bold, Some(true), "matched text carries revised bold");
+    assert!(p.props_of_char(0).fmt_change.is_some(), "matched text carries formatting revision");
+    assert_eq!(p.props.align, Some(wordcraft_doc::props::Align::Center));
+    assert!(p.props.fmt_change.is_some(), "paragraph properties carry formatting revision");
+    assert_eq!(p.mark.italic, Some(true));
+    assert!(p.mark.fmt_change.is_some(), "paragraph mark carries formatting revision");
+    let objs: Vec<(usize, &InlineObject)> = p.objects_with_offsets().collect();
+    assert_eq!(objs.len(), 2);
+    assert!(p.props_of_char(objs[0].0).del.is_some());
+    assert!(p.props_of_char(objs[1].0).ins.is_some());
+
+    // Round-trip through DOCX before resolving both ways.
+    let cmp_path = tmp.path("compared.docx");
+    crate::io::save_path(&cmp_path, &s.doc).unwrap();
+    let reopened = crate::io::open_path(&cmp_path).unwrap();
+
+    let mut accepted = Session::new(reopened.clone());
+    accepted.run("review.acceptAll", &json!({})).unwrap();
+    let p_acc = accepted.doc.body[0].as_para().unwrap();
+    assert_eq!(p_acc.props_of_char(0).bold, Some(true));
+    assert!(p_acc.props_of_char(0).fmt_change.is_none());
+    assert_eq!(p_acc.props.align, Some(wordcraft_doc::props::Align::Center));
+    assert_eq!(p_acc.mark.italic, Some(true));
+    let objs_acc: Vec<(usize, &InlineObject)> = p_acc.objects_with_offsets().collect();
+    assert_eq!(objs_acc.len(), 1);
+    let InlineObject::Image { media: m_acc, .. } = objs_acc[0].1 else { panic!("expected image") };
+    assert_eq!(accepted.doc.media.get(m_acc).map(|b| &**b), Some(&rev_png));
+
+    let mut rejected = Session::new(reopened);
+    rejected.run("review.rejectAll", &json!({})).unwrap();
+    let p_rej = rejected.doc.body[0].as_para().unwrap();
+    assert_ne!(p_rej.props_of_char(0).bold, Some(true), "Reject All must restore original non-bold text");
+    assert!(p_rej.props_of_char(0).fmt_change.is_none());
+    assert_eq!(p_rej.props.align, None, "Reject All must restore original paragraph alignment");
+    assert_ne!(p_rej.mark.italic, Some(true), "Reject All must restore original paragraph mark");
+    let objs_rej: Vec<(usize, &InlineObject)> = p_rej.objects_with_offsets().collect();
+    assert_eq!(objs_rej.len(), 1);
+    let InlineObject::Image { media: m_rej, .. } = objs_rej[0].1 else { panic!("expected image") };
+    assert_eq!(rejected.doc.media.get(m_rej).map(|b| &**b), Some(&base_png), "Reject All must restore original image");
+
+    // With formatting disabled, image del/ins marks remain while formatting revisions are omitted.
+    let mut s_no_fmt = Session::new(base_doc);
+    let r_no_fmt = s_no_fmt.run("review.compare", &json!({"path": rev_path.to_string_lossy(), "showIn": "new", "formatting": false})).unwrap();
+    assert_eq!(r_no_fmt["changes"], 1);
+    let p_nf = s_no_fmt.doc.body[0].as_para().unwrap();
+    assert!(p_nf.props_of_char(0).fmt_change.is_none());
+    assert!(p_nf.props.fmt_change.is_none());
+    assert!(p_nf.mark.fmt_change.is_none());
+    let objs_nf: Vec<(usize, &InlineObject)> = p_nf.objects_with_offsets().collect();
+    assert_eq!(objs_nf.len(), 2);
+    assert!(p_nf.props_of_char(objs_nf[0].0).del.is_some());
+    assert!(p_nf.props_of_char(objs_nf[1].0).ins.is_some());
+}
+
+/// #6086: Replaced image bytes inside a table whose text is unchanged must be tracked in the
+/// cell paragraph (not silently applied unmarked), survive DOCX save/reopen, and resolve to the
+/// revised or original image under Accept All and Reject All.
+#[test]
+fn compare_detects_replaced_image_bytes_inside_unchanged_text_table() {
+    let tmp = TempTestDir::new("wc-compare-tbl-img-replace");
+    let make_table_doc = |bytes: Vec<u8>| -> Document {
+        let mut d = Document::new();
+        let key = d.add_media(bytes, "png");
+        let mut p = Paragraph::with_text("Logo", CharProps::default());
+        let at = p.len();
+        p.insert_object(
+            at,
+            InlineObject::Image {
+                media: key,
+                w: 120.0,
+                h: 80.0,
+                alt: "logo".into(),
+                float: Default::default(),
+                crop: [0.0; 4],
+                fx: Default::default(),
+                ole: None,
+            },
+            &CharProps::default(),
+        )
+        .unwrap();
+        let mut t = wordcraft_doc::table::Table::new(1, 1, 200.0);
+        t.rows[0].cells[0].blocks = vec![Arc::new(Block::Para(p))];
+        d.body = vec![Arc::new(Block::Table(t)), Arc::new(Block::Para(Paragraph::new()))];
+        d
+    };
+
+    fn cell_para(doc: &Document) -> &Paragraph {
+        let t = doc.body[0].as_table().expect("body holds 1x1 table");
+        assert_eq!(doc.body.iter().filter(|b| b.as_table().is_some()).count(), 1, "body keeps one table");
+        assert_eq!(t.rows.len(), 1);
+        assert_eq!(t.rows[0].cells.len(), 1);
+        t.rows[0].cells[0].blocks[0].as_para().expect("cell holds paragraph")
+    }
+
+    let base_png = vec![0x89, b'P', b'N', b'G', 10, 20, 30, 40];
+    let rev_png = vec![0x89, b'P', b'N', b'G', 50, 60, 70, 80];
+    let orphan_hdr_png = vec![0x89, b'P', b'N', b'G', 99, 98, 97, 96];
+
+    let base_doc = make_table_doc(base_png.clone());
+    let mut rev_doc = make_table_doc(rev_png.clone());
+    // Attach an uncompared header part referencing media that nothing in the body uses.
+    let hdr_key = rev_doc.add_media(orphan_hdr_png.clone(), "png");
+    let mut hdr_para = Paragraph::new();
+    hdr_para
+        .insert_object(
+            0,
+            InlineObject::Image {
+                media: hdr_key,
+                w: 40.0,
+                h: 40.0,
+                alt: "hdr".into(),
+                float: Default::default(),
+                crop: [0.0; 4],
+                fx: Default::default(),
+                ole: None,
+            },
+            &CharProps::default(),
+        )
+        .unwrap();
+    let hdr_part = rev_doc.add_part(wordcraft_doc::PartKind::Header, vec![Arc::new(Block::Para(hdr_para))]);
+    rev_doc.last_section.headers.default = Some(hdr_part);
+
+    let rev_path = tmp.path("tbl-rev.docx");
+    crate::io::save_path(&rev_path, &rev_doc).unwrap();
+
+    let mut s = Session::new(base_doc);
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy(), "showIn": "new"})).unwrap();
+
+    assert_eq!(r["changes"], 1, "replaced image inside unchanged-text table must count as 1 change");
+    assert!(
+        !s.doc.media.values().any(|b| **b == orphan_hdr_png),
+        "unreferenced media from uncompared revised header parts must not stay in result media"
+    );
+
+    let check_tracked_cell = |doc: &Document| {
+        let p = cell_para(doc);
+        assert_eq!(p.plain_text(), "Logo");
+        let objs: Vec<(usize, &InlineObject)> = p.objects_with_offsets().collect();
+        assert_eq!(objs.len(), 2, "table cell must hold deleted base image and inserted revised image");
+        let (off_del, InlineObject::Image { media: m_del, .. }) = objs[0] else { panic!("expected base image") };
+        let (off_ins, InlineObject::Image { media: m_ins, .. }) = objs[1] else { panic!("expected revised image") };
+        assert_ne!(m_del, m_ins);
+        assert!(p.props_of_char(0).del.is_none() && p.props_of_char(0).ins.is_none(), "`Logo` text stays unmarked");
+        assert!(p.props_of_char(off_del).del.is_some(), "base table image must carry del mark");
+        assert!(p.props_of_char(off_ins).ins.is_some(), "revised table image must carry ins mark");
+        assert_eq!(doc.media.get(m_del).map(|b| &**b), Some(&base_png));
+        assert_eq!(doc.media.get(m_ins).map(|b| &**b), Some(&rev_png));
+    };
+    check_tracked_cell(&s.doc);
+
+    // Save compared result to DOCX and reopen: change marks and both payloads survive.
+    let cmp_path = tmp.path("tbl-cmp.docx");
+    crate::io::save_path(&cmp_path, &s.doc).unwrap();
+    let reopened = crate::io::open_path(&cmp_path).unwrap();
+    check_tracked_cell(&reopened);
+
+    // Accept All on reopened DOCX -> saves and reopens with only the revised image unmarked.
+    let mut accepted = Session::new(reopened.clone());
+    accepted.run("review.acceptAll", &json!({})).unwrap();
+    let acc_path = tmp.path("tbl-acc.docx");
+    crate::io::save_path(&acc_path, &accepted.doc).unwrap();
+    let acc_back = crate::io::open_path(&acc_path).unwrap();
+    let p_acc = cell_para(&acc_back);
+    assert_eq!(p_acc.plain_text(), "Logo");
+    let objs_acc: Vec<(usize, &InlineObject)> = p_acc.objects_with_offsets().collect();
+    assert_eq!(objs_acc.len(), 1, "Accept All must leave one image in the table cell");
+    let (off_acc, InlineObject::Image { media: m_acc, .. }) = objs_acc[0] else { panic!("expected image") };
+    assert!(p_acc.props_of_char(off_acc).ins.is_none() && p_acc.props_of_char(off_acc).del.is_none());
+    assert_eq!(acc_back.media.get(m_acc).map(|b| &**b), Some(&rev_png), "Accept All must keep revised image bytes");
+
+    // Reject All on reopened DOCX -> saves and reopens with only the original image unmarked.
+    let mut rejected = Session::new(reopened);
+    rejected.run("review.rejectAll", &json!({})).unwrap();
+    let rej_path = tmp.path("tbl-rej.docx");
+    crate::io::save_path(&rej_path, &rejected.doc).unwrap();
+    let rej_back = crate::io::open_path(&rej_path).unwrap();
+    let p_rej = cell_para(&rej_back);
+    assert_eq!(p_rej.plain_text(), "Logo");
+    let objs_rej: Vec<(usize, &InlineObject)> = p_rej.objects_with_offsets().collect();
+    assert_eq!(objs_rej.len(), 1, "Reject All must restore one image in the table cell");
+    let (off_rej, InlineObject::Image { media: m_rej, .. }) = objs_rej[0] else { panic!("expected image") };
+    assert!(p_rej.props_of_char(off_rej).ins.is_none() && p_rej.props_of_char(off_rej).del.is_none());
+    assert_eq!(rej_back.media.get(m_rej).map(|b| &**b), Some(&base_png), "Reject All must recover base image bytes");
+
+    // Identical image bytes inside an unchanged-text table: 0 changes and 1 unmarked image.
+    let same_tbl_path = tmp.path("tbl-same.docx");
+    crate::io::save_path(&same_tbl_path, &make_table_doc(base_png.clone())).unwrap();
+    let mut s_same = Session::new(make_table_doc(base_png));
+    let r_same = s_same.run("review.compare", &json!({"path": same_tbl_path.to_string_lossy(), "showIn": "new"})).unwrap();
+    assert_eq!(r_same["changes"], 0, "identical table image bytes must emit 0 changes");
+    assert_eq!(cell_para(&s_same.doc).objects.len(), 1);
+}
+
+/// #6086: Same-text tables up to `MAX_TABLE_DEPTH` recurse cell by cell for replaced media;
+/// layout-only matches keep a single table as on `main`, while incompatible layouts or nesting
+/// beyond `MAX_TABLE_DEPTH` with replaced media defer structural table changes and report `"tables"`
+/// in `notHonoured` without leaving duplicate table shells.
+#[test]
+fn compare_table_image_replacement_handles_layout_fallbacks_and_max_depth() {
+    let tmp = TempTestDir::new("wc-compare-tbl-depth");
+    let base_png = vec![0x89, b'P', b'N', b'G', 10, 20, 30, 40];
+    let rev_png = vec![0x89, b'P', b'N', b'G', 50, 60, 70, 80];
+
+    let assert_single_table = |doc: &Document, want_rows: usize, want_cols: usize, label: &str| {
+        let tables: Vec<&wordcraft_doc::table::Table> = doc.body.iter().filter_map(|b| b.as_table()).collect();
+        assert_eq!(tables.len(), 1, "{label}: must keep a single table");
+        assert_eq!(tables[0].rows.len(), want_rows, "{label}: row count");
+        assert_eq!(tables[0].rows[0].cells.len(), want_cols, "{label}: col count");
+    };
+
+    // Reshaped tables (1x2 vs 2x1) with identical joined cell text and replaced image bytes:
+    // cannot diff 1-to-1 by cell, so structural table replacement is deferred with a single table
+    // and `"tables"` is reported in `notHonoured`.
+    let mut base_1x2 = Document::new();
+    let k1 = base_1x2.add_media(base_png.clone(), "png");
+    let mut p_c0 = Paragraph::with_text("Logo", CharProps::default());
+    let at_c0 = p_c0.len();
+    p_c0.insert_object(
+        at_c0,
+        InlineObject::Image {
+            media: k1,
+            w: 120.0,
+            h: 80.0,
+            alt: "logo".into(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        },
+        &CharProps::default(),
+    )
+    .unwrap();
+    let mut t_1x2 = wordcraft_doc::table::Table::new(1, 2, 200.0);
+    t_1x2.rows[0].cells[0].blocks = vec![Arc::new(Block::Para(p_c0))];
+    t_1x2.rows[0].cells[1].blocks = vec![Arc::new(Block::Para(Paragraph::with_text("Caption", CharProps::default())))];
+    base_1x2.body = vec![Arc::new(Block::Table(t_1x2)), Arc::new(Block::Para(Paragraph::new()))];
+
+    let mut rev_2x1 = Document::new();
+    let k2 = rev_2x1.add_media(rev_png.clone(), "png");
+    let mut p_r0 = Paragraph::with_text("Logo", CharProps::default());
+    let at_r0 = p_r0.len();
+    p_r0.insert_object(
+        at_r0,
+        InlineObject::Image {
+            media: k2,
+            w: 120.0,
+            h: 80.0,
+            alt: "logo".into(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        },
+        &CharProps::default(),
+    )
+    .unwrap();
+    let mut t_2x1 = wordcraft_doc::table::Table::new(2, 1, 200.0);
+    t_2x1.rows[0].cells[0].blocks = vec![Arc::new(Block::Para(p_r0))];
+    t_2x1.rows[1].cells[0].blocks = vec![Arc::new(Block::Para(Paragraph::with_text("Caption", CharProps::default())))];
+    rev_2x1.body = vec![Arc::new(Block::Table(t_2x1)), Arc::new(Block::Para(Paragraph::new()))];
+
+    let reshaped_path = tmp.path("tbl-reshaped.docx");
+    crate::io::save_path(&reshaped_path, &rev_2x1).unwrap();
+    let mut s_reshaped = Session::new(base_1x2);
+    let r_reshaped = s_reshaped.run("review.compare", &json!({"path": reshaped_path.to_string_lossy(), "showIn": "new"})).unwrap();
+    assert_eq!(r_reshaped["changes"], 0);
+    assert!(
+        r_reshaped["notHonoured"].as_array().unwrap().iter().any(|v| v == "tables"),
+        "incompatible reshaped table with replaced media must report `tables` in notHonoured"
+    );
+    let assert_table_image = |doc: &Document, expected: &[u8], label: &str| {
+        let t = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+        let p = t.rows[0].cells[0].blocks[0].as_para().expect("cell para");
+        let objs: Vec<(usize, &InlineObject)> = p.objects_with_offsets().collect();
+        assert_eq!(objs.len(), 1, "{label}: expected single image");
+        let InlineObject::Image { media, .. } = objs[0].1 else { panic!("{label}: expected image") };
+        assert_eq!(doc.media.get(media).map(|b| b.as_slice()), Some(expected), "{label}: image payload");
+    };
+    assert_single_table(&s_reshaped.doc, 1, 2, "reshaped table compare");
+    assert_table_image(&s_reshaped.doc, &base_png, "reshaped table compare");
+    for cmd in ["review.acceptAll", "review.rejectAll"] {
+        let mut s_res = Session::new(s_reshaped.doc.clone());
+        s_res.run(cmd, &json!({})).unwrap();
+        assert_single_table(&s_res.doc, 1, 2, cmd);
+        assert_table_image(&s_res.doc, &base_png, cmd);
+    }
+
+    // Equal cell count but changed spans ([1, 2] vs [2, 1]):
+    // - with identical image (layout-only match): keeps single table with 0 changes and no fallback flag;
+    // - with replaced image: defers structural replacement and reports `tables` in notHonoured.
+    let make_span_doc = |spans: [u32; 2], bytes: Vec<u8>| -> Document {
+        let mut d = Document::new();
+        let k = d.add_media(bytes, "png");
+        let mut p = Paragraph::with_text("Logo", CharProps::default());
+        let at = p.len();
+        p.insert_object(
+            at,
+            InlineObject::Image {
+                media: k,
+                w: 120.0,
+                h: 80.0,
+                alt: "logo".into(),
+                float: Default::default(),
+                crop: [0.0; 4],
+                fx: Default::default(),
+                ole: None,
+            },
+            &CharProps::default(),
+        )
+        .unwrap();
+        let mut t = wordcraft_doc::table::Table::new(1, 3, 300.0);
+        t.rows[0].cells.truncate(2);
+        t.rows[0].cells[0].props.span = spans[0];
+        t.rows[0].cells[0].blocks = vec![Arc::new(Block::Para(p))];
+        t.rows[0].cells[1].props.span = spans[1];
+        t.rows[0].cells[1].blocks = vec![Arc::new(Block::Para(Paragraph::with_text("Caption", CharProps::default())))];
+        d.body = vec![Arc::new(Block::Table(t)), Arc::new(Block::Para(Paragraph::new()))];
+        d
+    };
+    let span_same_path = tmp.path("tbl-span-same.docx");
+    crate::io::save_path(&span_same_path, &make_span_doc([2, 1], base_png.clone())).unwrap();
+    let mut s_span_same = Session::new(make_span_doc([1, 2], base_png.clone()));
+    let r_span_same = s_span_same.run("review.compare", &json!({"path": span_same_path.to_string_lossy(), "showIn": "new"})).unwrap();
+    assert_eq!(r_span_same["changes"], 0, "layout-only span match keeps old single-table behavior");
+    assert!(!r_span_same["notHonoured"].as_array().unwrap().iter().any(|v| v == "tables"));
+    assert_single_table(&s_span_same.doc, 1, 2, "layout-only span match");
+
+    let span_diff_path = tmp.path("tbl-span-diff.docx");
+    crate::io::save_path(&span_diff_path, &make_span_doc([2, 1], rev_png.clone())).unwrap();
+    let mut s_span_diff = Session::new(make_span_doc([1, 2], base_png.clone()));
+    let r_span_diff = s_span_diff.run("review.compare", &json!({"path": span_diff_path.to_string_lossy(), "showIn": "new"})).unwrap();
+    assert_eq!(r_span_diff["changes"], 0);
+    assert!(r_span_diff["notHonoured"].as_array().unwrap().iter().any(|v| v == "tables"));
+    assert_single_table(&s_span_diff.doc, 1, 2, "incompatible span with replaced media");
+    assert_table_image(&s_span_diff.doc, &base_png, "incompatible span with replaced media");
+    let t_span = s_span_diff.doc.body[0].as_table().unwrap();
+    assert_eq!([t_span.rows[0].cells[0].span(), t_span.rows[0].cells[1].span()], [1, 2]);
+
+    // Nested tables up to MAX_TABLE_DEPTH (18 levels, leaf at depth 17) recursively retain one
+    // table per nesting level and track replaced image bytes at the leaf.
+    let make_nested_table_doc = |levels: usize, bytes: Vec<u8>| -> Document {
+        let mut d = Document::new();
+        let k = d.add_media(bytes, "png");
+        let mut p = Paragraph::with_text("Deep", CharProps::default());
+        let at = p.len();
+        p.insert_object(
+            at,
+            InlineObject::Image {
+                media: k,
+                w: 50.0,
+                h: 50.0,
+                alt: "deep".into(),
+                float: Default::default(),
+                crop: [0.0; 4],
+                fx: Default::default(),
+                ole: None,
+            },
+            &CharProps::default(),
+        )
+        .unwrap();
+        let mut blk = Block::Para(p);
+        for _ in 0..levels {
+            let mut t = wordcraft_doc::table::Table::new(1, 1, 200.0);
+            // Every OOXML table cell containing a nested table ends with a trailing paragraph.
+            t.rows[0].cells[0].blocks = vec![Arc::new(blk), Arc::new(Block::Para(Paragraph::new()))];
+            blk = Block::Table(t);
+        }
+        d.body = vec![Arc::new(blk), Arc::new(Block::Para(Paragraph::new()))];
+        d
+    };
+    let deep_path = tmp.path("tbl-deep.docx");
+    crate::io::save_path(&deep_path, &make_nested_table_doc(wordcraft_doc::table::MAX_TABLE_DEPTH, rev_png.clone())).unwrap();
+    let mut s_deep = Session::new(make_nested_table_doc(wordcraft_doc::table::MAX_TABLE_DEPTH, base_png.clone()));
+    let r_deep = s_deep.run("review.compare", &json!({"path": deep_path.to_string_lossy(), "showIn": "new"})).unwrap();
+    assert_eq!(r_deep["changes"], 1, "replaced image at MAX_TABLE_DEPTH must still be tracked");
+    assert!(!r_deep["notHonoured"].as_array().unwrap().iter().any(|v| v == "tables"));
+    let mut cur_blocks = &s_deep.doc.body;
+    for level in 0..wordcraft_doc::table::MAX_TABLE_DEPTH {
+        let lvl_tables: Vec<&wordcraft_doc::table::Table> = cur_blocks.iter().filter_map(|b| b.as_table()).collect();
+        assert_eq!(lvl_tables.len(), 1, "level {level} must retain one recursively diffed table");
+        cur_blocks = &lvl_tables[0].rows[0].cells[0].blocks;
+    }
+    let leaf_p = cur_blocks[0].as_para().expect("innermost cell holds leaf paragraph");
+    assert_eq!(leaf_p.plain_text(), "Deep");
+    let leaf_objs: Vec<(usize, &InlineObject)> = leaf_p.objects_with_offsets().collect();
+    assert_eq!(leaf_objs.len(), 2, "leaf at MAX_TABLE_DEPTH holds both deleted and inserted images");
+    let (off_d, InlineObject::Image { media: md, .. }) = leaf_objs[0] else { panic!("expected base leaf image") };
+    let (off_i, InlineObject::Image { media: mi, .. }) = leaf_objs[1] else { panic!("expected revised leaf image") };
+    assert!(leaf_p.props_of_char(off_d).del.is_some() && leaf_p.props_of_char(off_d).ins.is_none());
+    assert!(leaf_p.props_of_char(off_i).ins.is_some() && leaf_p.props_of_char(off_i).del.is_none());
+    assert_eq!(s_deep.doc.media.get(md).map(|b| &**b), Some(&base_png));
+    assert_eq!(s_deep.doc.media.get(mi).map(|b| &**b), Some(&rev_png));
+
+    // Beyond MAX_TABLE_DEPTH (19 nested tables, reaching depth == MAX_TABLE_DEPTH): defers structural
+    // replacement (single table, no duplicate empty shell) and reports `tables` in notHonoured.
+    let over_depth_path = tmp.path("tbl-over-depth.docx");
+    crate::io::save_path(&over_depth_path, &make_nested_table_doc(wordcraft_doc::table::MAX_TABLE_DEPTH + 1, rev_png.clone())).unwrap();
+    let mut s_over = Session::new(make_nested_table_doc(wordcraft_doc::table::MAX_TABLE_DEPTH + 1, base_png.clone()));
+    let r_over = s_over.run("review.compare", &json!({"path": over_depth_path.to_string_lossy(), "showIn": "new"})).unwrap();
+    assert_eq!(r_over["changes"], 0);
+    assert!(
+        r_over["notHonoured"].as_array().unwrap().iter().any(|v| v == "tables"),
+        "tables beyond MAX_TABLE_DEPTH with replaced media must report `tables` in notHonoured"
+    );
+    let mut over_blocks = &s_over.doc.body;
+    for _ in 0..wordcraft_doc::table::MAX_TABLE_DEPTH {
+        let lvl_tables: Vec<&wordcraft_doc::table::Table> = over_blocks.iter().filter_map(|b| b.as_table()).collect();
+        assert_eq!(lvl_tables.len(), 1);
+        over_blocks = &lvl_tables[0].rows[0].cells[0].blocks;
+    }
+    let cap_tables: Vec<&wordcraft_doc::table::Table> = over_blocks.iter().filter_map(|b| b.as_table()).collect();
+    assert_eq!(cap_tables.len(), 1, "at depth == MAX_TABLE_DEPTH, keeps single table without duplicate shell");
+    let over_leaf_p = cap_tables[0].rows[0].cells[0].blocks[0].as_para().expect("over-depth leaf para");
+    let over_leaf_objs: Vec<(usize, &InlineObject)> = over_leaf_p.objects_with_offsets().collect();
+    assert_eq!(over_leaf_objs.len(), 1, "over-depth table preserves single original image");
+    let InlineObject::Image { media: m_over, .. } = over_leaf_objs[0].1 else { panic!("expected over-depth image") };
+    assert_eq!(s_over.doc.media.get(m_over).map(|b| &**b), Some(&base_png));
+}
+
+/// #6086: Compatible tables with replaced media track table, row, and cell property differences
+/// via undoable `fmt_change` revisions; image-free layout-only grid differences keep the old
+/// single-table behavior without emitting two tables, and changed grid widths combined with
+/// replaced media defer structural replacement when `formatting` is enabled (reporting `"tables"`
+/// in `notHonoured`) while tracking the replaced media when `formatting` is false.
+#[test]
+fn compare_unchanged_text_table_tracks_table_row_cell_props_and_grid_widths() {
+    let tmp = TempTestDir::new("wc-compare-tbl-props");
+    let base_png = vec![0x89, b'P', b'N', b'G', 11, 22, 33, 44];
+    let rev_png = vec![0x89, b'P', b'N', b'G', 55, 66, 77, 88];
+
+    let make_styled_table_doc = |bytes: Vec<u8>, styled: bool, width: f32| -> Document {
+        let mut d = Document::new();
+        let k = d.add_media(bytes, "png");
+        let mut p = Paragraph::with_text("Logo", CharProps::default());
+        let at = p.len();
+        p.insert_object(
+            at,
+            InlineObject::Image {
+                media: k,
+                w: 100.0,
+                h: 60.0,
+                alt: "logo".into(),
+                float: Default::default(),
+                crop: [0.0; 4],
+                fx: Default::default(),
+                ole: None,
+            },
+            &CharProps::default(),
+        )
+        .unwrap();
+        let mut t = wordcraft_doc::table::Table::new(1, 1, width);
+        if styled {
+            t.props.align = Some(wordcraft_doc::props::Align::Center);
+            t.rows[0].props.cant_split = true;
+            t.rows[0].cells[0].props.shading = Some(wordcraft_doc::props::Rgb(0xEE, 0xFF, 0xDD));
+        }
+        t.rows[0].cells[0].blocks = vec![Arc::new(Block::Para(p))];
+        d.body = vec![Arc::new(Block::Table(t)), Arc::new(Block::Para(Paragraph::new()))];
+        d
+    };
+
+    let rev_styled_path = tmp.path("rev-styled.docx");
+    crate::io::save_path(&rev_styled_path, &make_styled_table_doc(rev_png.clone(), true, 200.0)).unwrap();
+
+    let mut s = Session::new(make_styled_table_doc(base_png.clone(), false, 200.0));
+    let r = s.run("review.compare", &json!({"path": rev_styled_path.to_string_lossy(), "showIn": "new"})).unwrap();
+    assert_eq!(r["changes"], 4, "table, row, cell property changes + replaced cell image count as 4 changes");
+    assert!(!r["notHonoured"].as_array().unwrap().iter().any(|v| v == "tables"));
+    let t = s.doc.body[0].as_table().unwrap();
+    assert!(t.props.fmt_change.is_some(), "table property change recorded");
+    assert!(t.rows[0].props.fmt_change.is_some(), "row property change recorded");
+    assert!(t.rows[0].cells[0].props.fmt_change.is_some(), "cell property change recorded");
+
+    let cmp_styled_path = tmp.path("cmp-styled.docx");
+    crate::io::save_path(&cmp_styled_path, &s.doc).unwrap();
+    let reopened = crate::io::open_path(&cmp_styled_path).unwrap();
+
+    let mut accepted = Session::new(reopened.clone());
+    accepted.run("review.acceptAll", &json!({})).unwrap();
+    let t_acc = accepted.doc.body[0].as_table().unwrap();
+    assert_eq!(t_acc.props.align, Some(wordcraft_doc::props::Align::Center));
+    assert!(t_acc.rows[0].props.cant_split);
+    assert_eq!(t_acc.rows[0].cells[0].props.shading, Some(wordcraft_doc::props::Rgb(0xEE, 0xFF, 0xDD)));
+
+    let mut rejected = Session::new(reopened);
+    rejected.run("review.rejectAll", &json!({})).unwrap();
+    let t_rej = rejected.doc.body[0].as_table().unwrap();
+    assert_eq!(t_rej.props.align, None, "Reject All restores original table alignment");
+    assert!(!t_rej.rows[0].props.cant_split, "Reject All restores original row cant_split");
+    assert_eq!(t_rej.rows[0].cells[0].props.shading, None, "Reject All restores original cell shading");
+    let p_rej = t_rej.rows[0].cells[0].blocks[0].as_para().unwrap();
+    let objs_rej: Vec<(usize, &InlineObject)> = p_rej.objects_with_offsets().collect();
+    assert_eq!(objs_rej.len(), 1);
+    let InlineObject::Image { media: m_rej, .. } = objs_rej[0].1 else { panic!("expected image") };
+    assert_eq!(rejected.doc.media.get(m_rej).map(|b| &**b), Some(&base_png));
+
+    // Layout/formatting-only differences with identical media keep single-table behavior.
+    let rev_fmt_only_path = tmp.path("rev-fmt-only.docx");
+    crate::io::save_path(&rev_fmt_only_path, &make_styled_table_doc(base_png.clone(), true, 200.0)).unwrap();
+    let mut s_no_fmt = Session::new(make_styled_table_doc(base_png.clone(), false, 200.0));
+    let r_no_fmt =
+        s_no_fmt.run("review.compare", &json!({"path": rev_fmt_only_path.to_string_lossy(), "showIn": "new", "formatting": false})).unwrap();
+    assert_eq!(r_no_fmt["changes"], 0);
+    assert_eq!(s_no_fmt.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 1);
+
+    // Image-free table with identical cell text and only a changed column width:
+    // keeps the old single-table behavior without emitting two tables or empty shells.
+    let make_grid_doc = |width: f32| -> Document {
+        let mut d = Document::new();
+        let mut t = wordcraft_doc::table::Table::new(1, 1, width);
+        t.rows[0].cells[0].blocks = vec![Arc::new(Block::Para(Paragraph::with_text("Cell", CharProps::default())))];
+        d.body = vec![Arc::new(Block::Table(t)), Arc::new(Block::Para(Paragraph::new()))];
+        d
+    };
+    let grid_path = tmp.path("rev-grid.docx");
+    crate::io::save_path(&grid_path, &make_grid_doc(260.0)).unwrap();
+    let mut s_grid = Session::new(make_grid_doc(200.0));
+    let r_grid = s_grid.run("review.compare", &json!({"path": grid_path.to_string_lossy(), "showIn": "new"})).unwrap();
+    assert_eq!(r_grid["changes"], 0, "image-free grid width match keeps old single-table behavior");
+    assert!(!r_grid["notHonoured"].as_array().unwrap().iter().any(|v| v == "tables"));
+
+    let assert_single_grid_table = |doc: &Document| {
+        let tables: Vec<&wordcraft_doc::table::Table> = doc.body.iter().filter_map(|b| b.as_table()).collect();
+        assert_eq!(tables.len(), 1, "must keep a single table with no duplicate empty shell");
+        assert_eq!(tables[0].grid, vec![260.0]);
+        let p = tables[0].rows[0].cells[0].blocks[0].as_para().unwrap();
+        assert_eq!(p.plain_text(), "Cell");
+        assert!(p.runs.iter().all(|r| r.props.ins.is_none() && r.props.del.is_none()));
+    };
+    assert_single_grid_table(&s_grid.doc);
+
+    for cmd in ["review.acceptAll", "review.rejectAll"] {
+        let mut s_res = Session::new(s_grid.doc.clone());
+        s_res.run(cmd, &json!({})).unwrap();
+        assert_single_grid_table(&s_res.doc);
+    }
+
+    let cmp_grid_path = tmp.path("cmp-grid.docx");
+    crate::io::save_path(&cmp_grid_path, &s_grid.doc).unwrap();
+    let reopened_grid = crate::io::open_path(&cmp_grid_path).unwrap();
+    for cmd in ["review.acceptAll", "review.rejectAll"] {
+        let mut s_res = Session::new(reopened_grid.clone());
+        s_res.run(cmd, &json!({})).unwrap();
+        assert_single_grid_table(&s_res.doc);
+    }
+
+    // Replaced image + changed column grid width:
+    // - with formatting enabled: incompatible grid width defers structural change and reports `tables`;
+    // - with formatting disabled: tracks the replaced image in the single table.
+    let grid_img_path = tmp.path("rev-grid-img.docx");
+    crate::io::save_path(&grid_img_path, &make_styled_table_doc(rev_png.clone(), false, 260.0)).unwrap();
+    let mut s_grid_img = Session::new(make_styled_table_doc(base_png.clone(), false, 200.0));
+    let r_grid_img = s_grid_img.run("review.compare", &json!({"path": grid_img_path.to_string_lossy(), "showIn": "new"})).unwrap();
+    assert_eq!(r_grid_img["changes"], 0);
+    assert!(r_grid_img["notHonoured"].as_array().unwrap().iter().any(|v| v == "tables"));
+    assert_eq!(s_grid_img.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 1);
+    let t_grid_img = s_grid_img.doc.body[0].as_table().unwrap();
+    assert_eq!(t_grid_img.grid, vec![200.0], "unsupported grid+media fallback preserves original table grid");
+    let assert_grid_base_img = |doc: &Document, label: &str| {
+        let p = doc.body[0].as_table().unwrap().rows[0].cells[0].blocks[0].as_para().unwrap();
+        let objs: Vec<(usize, &InlineObject)> = p.objects_with_offsets().collect();
+        assert_eq!(objs.len(), 1, "{label}");
+        let InlineObject::Image { media, .. } = objs[0].1 else { panic!("expected image") };
+        assert_eq!(doc.media.get(media).map(|b| &**b), Some(&base_png), "{label}");
+    };
+    assert_grid_base_img(&s_grid_img.doc, "unsupported grid+media fallback preserves original image");
+    let mut s_grid_img_kept = Session::new(s_grid_img.doc.clone());
+    s_grid_img_kept.run("review.rejectAll", &json!({})).unwrap();
+    assert_grid_base_img(&s_grid_img_kept.doc, "unsupported grid+media rejectAll keeps original image");
+
+    let mut s_grid_img_nf = Session::new(make_styled_table_doc(base_png.clone(), false, 200.0));
+    let r_grid_img_nf =
+        s_grid_img_nf.run("review.compare", &json!({"path": grid_img_path.to_string_lossy(), "showIn": "new", "formatting": false})).unwrap();
+    assert_eq!(r_grid_img_nf["changes"], 1, "with formatting false, replaced image inside grid-changed table is tracked");
+    assert!(!r_grid_img_nf["notHonoured"].as_array().unwrap().iter().any(|v| v == "tables"));
+    assert_eq!(s_grid_img_nf.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 1);
+    let mut s_grid_img_rej = Session::new(s_grid_img_nf.doc.clone());
+    s_grid_img_rej.run("review.rejectAll", &json!({})).unwrap();
+    let p_grid_rej = s_grid_img_rej.doc.body[0].as_table().unwrap().rows[0].cells[0].blocks[0].as_para().unwrap();
+    let objs_grid_rej: Vec<(usize, &InlineObject)> = p_grid_rej.objects_with_offsets().collect();
+    assert_eq!(objs_grid_rej.len(), 1);
+    let InlineObject::Image { media: m_grid_rej, .. } = objs_grid_rej[0].1 else { panic!("expected image") };
+    assert_eq!(s_grid_img_rej.doc.media.get(m_grid_rej).map(|b| &**b), Some(&base_png));
+}
+
 #[test]
 fn compare_with_a_revised_file_keeps_its_text_boxes_backed() {
     // Text boxes in both documents, the revised one from a file: every anchor in the result

@@ -17,6 +17,8 @@ mod commands;
 mod control;
 mod files;
 pub(crate) use files::Closing;
+#[cfg(test)]
+pub(crate) use files::suggested_stem;
 pub(crate) mod fonts;
 mod frame;
 mod input;
@@ -78,6 +80,7 @@ impl WordApp {
             dialog_hooks,
             dialog_answers,
             edits,
+            edits_gesture,
             keytips_active,
             options_state,
             print,
@@ -102,6 +105,8 @@ impl WordApp {
             command_catalog_lang: "",
             key_overrides: Default::default(),
             command_states: Default::default(),
+            command_states_cache: None,
+            keytip_cache: None,
             fonts_frames: 0,
             clipboard_published: false,
             printing: Default::default(),
@@ -163,6 +168,7 @@ impl WordApp {
             dialog_hooks,
             dialog_answers,
             edits,
+            edits_gesture,
             keytips_active,
             options_state,
             print,

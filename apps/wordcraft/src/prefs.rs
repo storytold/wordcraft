@@ -15,9 +15,11 @@ use wordcraft_ui_egui::prefs::{Prefs, import_legacy_window, legacy_ui_json};
 /// The most of an old `ui.json` read for its window entry; the file is a few kilobytes.
 const LEGACY_LIMIT: u64 = 8 << 20;
 
-/// Whether this run reads and writes preferences. `WORDCRAFT_NO_PREFS` turns them off.
+/// Whether this run reads and writes preferences. `WORDCRAFT_NO_PREFS` turns them off; a Nightly
+/// profile always keeps its own, so an inherited developer switch cannot leave the app with no
+/// preferences folder at all.
 pub fn enabled() -> bool {
-    std::env::var_os("WORDCRAFT_NO_PREFS").is_none()
+    crate::launch_profile::current().is_nightly() || std::env::var_os("WORDCRAFT_NO_PREFS").is_none()
 }
 
 /// `custom-dictionary.txt` in the settings folder: the words Add to Dictionary kept (#40).
