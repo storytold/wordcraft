@@ -128,6 +128,6 @@ modules:
       # the two equal).
       - type: git
         url: https://github.com/storytold/craft-i18n
-        commit: e56d26244bbac099bfd42e23fb12f78a4be418a7
+        commit: 9fa32aecf2759cd61bb216a958df68da619798f3
         dest: craft-i18n
       - cargo-sources.json
