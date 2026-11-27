@@ -32,7 +32,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use craft::automation::args::{ControlOptions, EnvNames, FlagNames, Source, control_port};
 use craft::automation::control::ControlChannel;
 use craft::dialogs::service::{FilePanels, FileService};
-use craft::host::target::{Backend, ShellInfo};
+use craft::host::target::{Backend, Os, Runtime, ShellInfo, WindowKind};
 use craft::host::{Host, Wake};
 use craft::platform::appearance::SystemReader;
 use craft::platform::clipboard::{Clipboard, ClipboardImage, SystemClipboard};
@@ -44,6 +44,7 @@ use craft::settings::SharedSettings;
 use craft::ui::InstallSpec;
 use craft::ui::runtime::windows::{WindowAction, WindowHost};
 use craft::ui::shell::embed;
+use craft::window::policy::{Decision, Desktop, DesktopKind, TitleBarPref, apply, decide};
 use craft::window::restore::{self, Store};
 use craft::window::system::SystemWindows;
 use wordcraft_engine::Session;
@@ -591,18 +592,8 @@ fn main() -> eframe::Result {
         Some(_) => wordcraft_ui_egui::os_window::app_id().to_string(),
         None => std::env::var("FLATPAK_ID").ok().filter(|id| !id.is_empty()).unwrap_or_else(|| wordcraft_ui_egui::os_window::APP_ID.to_string()),
     };
-    let mut options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title(wordcraft_ui_egui::os_window::name_for(wordcraft_ui_egui::os_window::identity()))
-            .with_app_id(app_id)
-            .with_inner_size([1440.0, 920.0])
-            .with_min_inner_size(wordcraft_ui_egui::window_geometry::MIN_SIZE)
-            .with_drag_and_drop(true)
-            .with_fullsize_content_view(true)
-            .with_titlebar_shown(false)
-            .with_title_shown(false),
-        ..Default::default()
-    };
+    let (viewport, frame) = root_viewport(Os::current(), app_id);
+    let mut options = eframe::NativeOptions { viewport, ..Default::default() };
     if let Some(icon) = app_icon() {
         options.viewport = options.viewport.with_icon(icon);
     }
@@ -702,11 +693,12 @@ fn main() -> eframe::Result {
                     .build(),
             );
             let shell = ShellInfo::current().backend(if x11 { Backend::X11 } else { Backend::from_env() });
-            let spec = InstallSpec::new(shell, Arc::new(SystemWindows))
+            let mut spec = InstallSpec::new(shell, Arc::new(SystemWindows))
                 .app_id(wordcraft_ui_egui::os_window::app_id())
                 .system(SystemReader::start(wake))
                 .clipboard(Clipboard::new(SystemClipboard::new().decoder(decode_png)))
                 .placement(placement);
+            spec.frame = frame;
             // PLAN: assumed `wordcraft_ui_egui::ui_fonts` re-exports sh.A10's `app::fonts::ui_fonts` (`mod app` is private; app-hub/shell-w11).
             embed::install(&ctx, spec, &wordcraft_ui_egui::ui_fonts(lang)).map_err(|e| format!("the runtime could not be installed: {e}"))?;
             // The system region picks the new document's paper, the units and the decimal
@@ -817,6 +809,59 @@ fn main() -> eframe::Result {
         log::warn!("preferences: {e}");
     }
     result
+}
+
+/// The root window's viewport, framed for `os`, and the frame decision the install spec passes to the shell.
+fn root_viewport(os: Os, app_id: String) -> (egui::ViewportBuilder, Option<Decision>) {
+    let viewport = egui::ViewportBuilder::default()
+        .with_title(wordcraft_ui_egui::os_window::name_for(wordcraft_ui_egui::os_window::identity()))
+        .with_app_id(app_id)
+        .with_inner_size([1440.0, 920.0])
+        .with_min_inner_size(wordcraft_ui_egui::window_geometry::MIN_SIZE)
+        .with_drag_and_drop(true);
+    let frame = frame_decision(os);
+    let viewport = match &frame {
+        Some(decision) => apply(viewport, &decision.frame),
+        None => viewport,
+    };
+    (viewport, frame)
+}
+
+/// The root window's frame, decided for the OS. macOS draws the app's own bar over a full-size content view; the shell
+/// must be told (the install spec's frame), or it treats the window as OS-framed: the title bar has no move band to drag
+/// the window by and no room for the traffic lights (#7149 item 1). Elsewhere the OS keeps its own frame.
+fn frame_decision(os: Os) -> Option<Decision> {
+    // lean: no CRAFT_TITLEBAR override or "system title bar" setting on macOS yet; pass them to decide when asked.
+    let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+    (os == Os::Mac).then(|| decide(os, Runtime::Native, Backend::from_env(), &desktop, WindowKind::Main, TitleBarPref::default(), None))
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+    use craft::window::policy::Frame;
+
+    #[test]
+    fn only_macos_gets_the_inset_frame() {
+        assert!(matches!(frame_decision(Os::Mac).map(|d| d.frame), Some(Frame::Inset(_))));
+        assert!(frame_decision(Os::Linux).is_none());
+        assert!(frame_decision(Os::Windows).is_none());
+    }
+
+    /// The macOS window draws the app's bar over a full-size content view with the system bar hidden, and tells the
+    /// shell so; Windows and Linux keep the OS frame. Every window takes dropped files.
+    #[test]
+    fn the_root_window_is_framed_for_its_os() {
+        let (mac, frame) = root_viewport(Os::Mac, String::new());
+        assert!(frame.is_some(), "the shell is told the macOS frame");
+        assert_eq!((mac.fullsize_content_view, mac.titlebar_shown, mac.title_shown), (Some(true), Some(false), Some(false)));
+        for os in [Os::Windows, Os::Linux] {
+            let (viewport, frame) = root_viewport(os, String::new());
+            assert!(frame.is_none(), "{os:?} keeps the OS frame");
+            assert_eq!((viewport.fullsize_content_view, viewport.titlebar_shown), (None, None), "{os:?} has the system bar");
+        }
+        assert_eq!(mac.drag_and_drop, Some(true));
+    }
 }
 
 // Not on macOS: APFS refuses file names that aren't valid UTF-8, so no such file can exist there.
