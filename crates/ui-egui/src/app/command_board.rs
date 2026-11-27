@@ -29,6 +29,7 @@ fn gate(app: &WordApp, id: &str) -> (bool, Option<&'static str>) {
         None if id.starts_with("ui.zotero.") => (app.zotero.busy.is_none() && !cfg!(target_arch = "wasm32"), None),
         None if id == "ui.linkTextBox" => (command_enabled(app, "shape.link"), None),
         None if id == "ui.crop" => (crate::crop::can_toggle(app), None),
+        None if id == "ui.highlighter" => (command_enabled(app, "format.highlight"), None),
         None => (id.starts_with("ui."), None),
     }
 }
@@ -43,6 +44,7 @@ pub(crate) fn command_enabled(app: &WordApp, id: &str) -> bool {
 const GATED_UI_COMMANDS: &[(&str, &str)] = &[
     ("ui.crop", "Crop"),
     ("ui.linkTextBox", "Link Text Box"),
+    ("ui.highlighter", "Text Highlight Color"),
     ("ui.citations.provider", "Zotero"),
     ("ui.zotero.addEditCitation", "Add/Edit Citation"),
     ("ui.zotero.addNote", "Add Note"),
@@ -336,7 +338,7 @@ impl WordApp {
             if let Err(error) = result {
                 log::debug!("command {id}: {error}");
             }
-            if !from_key && !id.starts_with("ui.") {
+            if !from_key && (!id.starts_with("ui.") || id == "ui.highlighter") {
                 self.canvas.focus_page(ctx);
             }
         }

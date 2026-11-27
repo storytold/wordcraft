@@ -6,7 +6,8 @@ use craft::behavior::value::CancelReason;
 use craft::host::target::{Os, Runtime, ShellInfo};
 use craft::pages::ui::{PageBody, PlacedPage};
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
-use craft::ui::primitives::Draw;
+use craft::ui::primitives::{Draw, PaintShape, StrokeWidth};
+use craft::ui::style::DataColor;
 
 use super::links::{field_showing_code, follow_link, is_generated_bookmark_link, link_under};
 use super::story::{enters_header_footer, in_text_box, part_kind, text_box_host};
@@ -175,6 +176,38 @@ impl<'a> PageTextTool<'a> {
         let target = if is_generated_bookmark_link(&link) { tl!("Current Document").to_string() } else { link };
         Some(format!("{target}\n{}", crate::i18n::fmt(tl!("{key}+Click to follow link"), &[("key", self.link_key)])))
     }
+
+    /// Highlighter mode over page text (not over an object handle, off the page, in the selection
+    /// bar, or while the Format Painter is armed): the colour name and pointer position (#6461).
+    fn highlighter_at(&self, pointer: &ToolPointer) -> Option<(&str, Pos2)> {
+        let name = self.app.canvas.highlighter.as_deref()?;
+        if self.app.session.painter.is_some()
+            || !(pointer.pos.x.is_finite() && pointer.pos.y.is_finite())
+            || ObjectGesture::cursor(&*self.app, &self.layout, self.body, pointer.pos, pointer.mods).is_some()
+        {
+            return None;
+        }
+        let (page, x, y) = page_of(self.body.pages, pointer.pos)?;
+        if self.app.session.sel.focus.story == StoryRef::Body && !pointer.mods.alt && self.layout.selection_bar_at(page, x, y).is_some() {
+            return None;
+        }
+        Some((name, pointer.pos))
+    }
+}
+
+/// In highlighter mode (#6461), draws a highlighter pen leaning up and right from its tip at `p`,
+/// its nib in the mode's colour (white for No Color).
+fn paint_highlighter_pen(draw: &Draw<'_>, p: Pos2, name: &str) {
+    let nib = wordcraft_doc::props::Highlight::from_ooxml(name).rgb().map_or(egui::Color32::WHITE, |c| egui::Color32::from_rgb(c.0, c.1, c.2));
+    let at = |pts: &[(f32, f32)]| pts.iter().map(|&(x, y)| egui::pos2(p.x + x * 1.2, p.y + y * 1.2)).collect::<Vec<_>>();
+    let body = PaintShape::Polygon(at(&[(1.5, -3.0), (7.5, -11.0), (10.5, -8.0), (4.5, 0.0)]));
+    let tip = PaintShape::Polygon(at(&[(0.0, 0.0), (1.5, -3.0), (4.5, 0.0)]));
+    let pen = draw.role(|c| c.overlay.stroke);
+    let halo = draw.role(|c| c.overlay.halo);
+    draw.fill(&body, pen);
+    draw.stroke(&body, StrokeWidth::Thin, halo);
+    draw.data_fill(&tip, DataColor::new(nib));
+    draw.stroke(&tip, StrokeWidth::Thin, pen);
 }
 
 impl CanvasTool for PageTextTool<'_> {
@@ -265,9 +298,14 @@ impl CanvasTool for PageTextTool<'_> {
         self.app.canvas.unit_drag = None;
     }
 
-    fn paint(&self, draw: &Draw<'_>, _cx: &ToolContext<'_>) {
+    fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
         if let Some(g) = self.app.canvas.object_gesture() {
             g.paint(&*self.app, draw, self.body);
+        }
+        if let Some(pointer) = cx.pointer
+            && let Some((name, p)) = self.highlighter_at(&pointer)
+        {
+            paint_highlighter_pen(draw, p, name);
         }
     }
 
@@ -284,6 +322,10 @@ impl CanvasTool for PageTextTool<'_> {
         }
         if self.app.session.painter.is_some() {
             return Cursor::System(CursorIcon::Copy);
+        }
+        // Highlighter mode: hide the system pointer while `paint` draws the highlighter pen (#6461).
+        if self.app.canvas.highlighter.is_some() && pointer.pos.x.is_finite() && pointer.pos.y.is_finite() {
+            return Cursor::Painted(PaintedCursor::Hidden);
         }
         text()
     }

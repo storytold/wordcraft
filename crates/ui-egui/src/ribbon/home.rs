@@ -262,7 +262,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                         .icon(IconId::new("effects"))
                         .tooltip(tl!("Text Effects and Typography").to_string());
                     menu_button(ui, face, tl!("Text Effects and Typography").to_string(), None, |ui, cx| text_effects_menu(ui, cx, app));
-                    crate::colors::highlight_split(ui, app, tl!("Text Highlight Color"));
+                    crate::colors::highlighter_split(ui, app, tl!("Text Highlight Color"));
                     crate::colors::font_color_split(ui, app, tl!("Font Color"), Target::cmd("format.color").remember(Remember::FontColor));
                 });
             });

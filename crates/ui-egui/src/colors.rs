@@ -396,6 +396,7 @@ fn split_with(
     label: Label,
     icon: IconSpec<'static>,
     main: CommandRef,
+    selected: bool,
     mut body: impl FnMut(&mut Ui, &mut WordApp, &mut BodyCx<'_>) -> ColorPick,
 ) -> ColorPick {
     let mut inner: Option<(Option<Rgb>, craft::behavior::Preview<Rgb>)> = None;
@@ -411,6 +412,7 @@ fn split_with(
     .label(label)
     .arrow_label(arrow_name)
     .icon(icon)
+    .selected(selected)
     .show(ui);
     let (picked, preview) = inner.unwrap_or((None, craft::behavior::Preview::Unchanged));
     ColorPick { response: out.response, picked, preview, hover: out.hover }
@@ -432,7 +434,7 @@ fn color_split(ui: &mut Ui, app: &mut WordApp, label: Label, target: Target, abo
         }
         _ => CommandRef::new(cmd.clone()),
     };
-    split_with(ui, app, label, icon, main, |ui, app, cx| {
+    split_with(ui, app, label, icon, main, false, |ui, app, cx| {
         match above {
             Above::Nothing => {}
             Above::Automatic => {
@@ -495,6 +497,10 @@ fn highlight_body(ui: &mut Ui, app: &mut WordApp, cx: &mut BodyCx<'_>) -> ColorP
     let mut picked = None;
     if let Some((h, c)) = out.selected.and_then(|i| shown.get(i)) {
         app.canvas.last_highlight = h.ooxml().to_string();
+        // In highlighter mode the pen takes the colour picked (#6461).
+        if app.canvas.highlighter.is_some() {
+            app.canvas.highlighter = Some(h.ooxml().to_string());
+        }
         let _ = app.run("format.highlight", json!({"color": h.ooxml()}));
         picked = Some(*c);
         cx.request_close();
@@ -507,22 +513,36 @@ fn highlight_body(ui: &mut Ui, app: &mut WordApp, cx: &mut BodyCx<'_>) -> ColorP
     let none = CommandRef::with_params("format.highlight", json!({"color": "none"}));
     if MenuItem::new(tl!("No Color").to_string()).command(none).show(ui).ran {
         app.canvas.last_highlight = "none".into();
+        if app.canvas.highlighter.is_some() {
+            app.canvas.highlighter = Some("none".into());
+        }
         cx.request_close();
     }
     ColorPick { response: out.response, picked, preview, hover: Hover::default() }
 }
 
-/// Text Highlight Color: the highlight grid under the arrow; the main part applies the remembered
-/// highlight.
-pub fn highlight_split(ui: &mut Ui, app: &mut WordApp, label: impl Into<Label>) -> ColorPick {
+fn highlight_split_with(ui: &mut Ui, app: &mut WordApp, label: Label, cmd: &str, selected: bool) -> ColorPick {
     let (icon_name, bar, ooxml) = highlight_button_appearance(&app.canvas.last_highlight);
     // PLAN: assumed `for_command("format.highlightNoColor")` names the No Color icon (ribbon-w13 icons).
     let mut icon = crate::icons::for_command(if icon_name == "highlightNoColor" { "format.highlightNoColor" } else { "format.highlight" });
     if let Some(c) = bar {
         icon = icon.with_mark(IconMark::bar(DataColor::new(c)));
     }
-    let main = CommandRef::with_params("format.highlight", json!({"color": ooxml}));
-    split_with(ui, app, label.into(), icon, main, highlight_body)
+    let main = CommandRef::with_params(cmd, json!({"color": ooxml}));
+    split_with(ui, app, label, icon, main, selected, highlight_body)
+}
+
+/// Text Highlight Color: the highlight grid under the arrow; the main part applies the remembered
+/// highlight.
+pub fn highlight_split(ui: &mut Ui, app: &mut WordApp, label: impl Into<Label>) -> ColorPick {
+    highlight_split_with(ui, app, label.into(), "format.highlight", false)
+}
+
+/// Home › Text Highlight Color: with text selected the main part highlights it; with a caret it
+/// turns highlighter mode on (`ui.highlighter`, #6461).
+pub fn highlighter_split(ui: &mut Ui, app: &mut WordApp, label: impl Into<Label>) -> ColorPick {
+    let on = app.canvas.highlighter.is_some();
+    highlight_split_with(ui, app, label.into(), "ui.highlighter", on)
 }
 
 // ---------------------------------------------------------------------------------------------

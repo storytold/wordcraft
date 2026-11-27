@@ -612,7 +612,7 @@ fn cancel(app: &mut WordApp, ctx: &egui::Context) {
         return;
     }
     // Escape turns highlighter mode off (#6461).
-    if key == Key::Escape && app.canvas.highlighter.is_some() {
+    if app.canvas.highlighter.is_some() {
         app.canvas.highlighter = None;
         return;
     }

@@ -176,6 +176,9 @@ pub struct CanvasState {
     pub last_highlight: String,
     pub last_font_color: String,
     pub last_shading: String,
+    /// Highlighter mode is on with this colour (`ui.highlighter`): text selected with the
+    /// pointer is highlighted, as in Word, until the button is clicked again or Esc (#6461).
+    pub highlighter: Option<String>,
     pub open_url: Option<String>,
     /// The page being looked at (0-based), for the status bar (#3880): the caret's page while the
     /// caret is on screen, else the page at the top of the window. None until the canvas is drawn.
@@ -419,6 +422,7 @@ impl Default for CanvasState {
             last_highlight: "yellow".into(),
             last_font_color: "C00000".into(),
             last_shading: "FFF2CC".into(),
+            highlighter: None,
             open_url: None,
             viewed_page: None,
             ime_preedit: String::new(),
