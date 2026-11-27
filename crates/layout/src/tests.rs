@@ -9,6 +9,7 @@ mod balanced_tail;
 mod bidi;
 mod budget;
 mod cell_floats;
+mod combining_marks;
 mod complex;
 mod float_top;
 mod grid;

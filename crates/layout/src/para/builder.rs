@@ -5,7 +5,7 @@ use super::chars::{
 };
 use super::grid::east_asian;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, ParaEnv, RubyLayout, StyleRun, SymbolRun};
-use super::{Arc, Document, FaceRef, NumeralMode, ResolvedChar, RubyAlign, SOFT_HYPHEN};
+use super::{Arc, Document, FaceRef, NumeralMode, OBJ, ResolvedChar, RubyAlign, SOFT_HYPHEN};
 use wordcraft_fonts::ShapeContext;
 
 pub(super) struct Builder<'a> {
@@ -52,6 +52,25 @@ struct SegmentInput<'a> {
     context: &'a [bool],
 }
 
+/// Whether `face` draws `cluster`, a character and its combining marks, with no missing glyph.
+/// The shaper composes a pair the face has a precomposed glyph for (`=` and U+0338 as `≠`), so a
+/// face without the mark itself can still draw the pair.
+fn draws_all(face: FaceRef, cluster: &str) -> bool {
+    let glyphs = wordcraft_fonts::shape_in(&face, cluster, &[], |c| c, ShapeContext::default());
+    !glyphs.is_empty() && glyphs.iter().all(|g| g.gid != 0)
+}
+
+/// A face other than `current` that draws all of `cluster` (CSS Fonts 4 §5.3, cluster matching):
+/// the run's Thai face or its own font when one does, else the first face in fallback order with
+/// every character of it that draws something.
+fn cluster_face(cluster: &str, current: FaceRef, run_face: Option<FaceRef>, primary: FaceRef, bold: bool, italic: bool) -> Option<FaceRef> {
+    if let Some(f) = run_face.into_iter().chain([primary]).filter(|f| f.id() != current.id()).find(|f| draws_all(*f, cluster)) {
+        return Some(f);
+    }
+    let chars: Vec<char> = cluster.chars().filter(|c| draws_something(*c)).collect();
+    wordcraft_fonts::FontDb::global().fallback_for_run(&chars, primary.id(), bold, italic).map(|f| FaceRef::of(&f))
+}
+
 impl<'a> Builder<'a> {
     /// Displayed form of `c` at run-relative byte `at` (Word › Numeral): one char in, one
     /// char out. `rtl` is the shaping direction; in Context mode `context` (from
@@ -68,6 +87,10 @@ impl<'a> Builder<'a> {
         let mut seg_start = 0;
         let mut cur: Option<SegKey> = None;
         let mut segs = Vec::new();
+        // The character the marks after it belong to: where it starts, and as drawn.
+        let mut base: Option<(usize, char)> = None;
+        // The character whose cluster was matched, and whether its marks stay with it.
+        let mut matched: Option<(usize, bool)> = None;
         for (i, c) in text.char_indices() {
             let rtl = use_levels && levels.get(lbase + i).is_some_and(|l| l % 2 == 1);
             let c = show(c);
@@ -78,19 +101,67 @@ impl<'a> Builder<'a> {
                 _ => rc_cs.is_some() && rc.uses_complex(dc),
             };
             let primary = if complex { primary_cs.unwrap_or(primary) } else { primary };
-            let face = match cur {
-                Some(k) if mark => k.face,
+            let (bold, italic) = if complex { (rc.bold_cs, rc.italic_cs) } else { (rc.bold, rc.italic) };
+            // A mark stays in the face of the character it belongs to (Arabic harakat with their
+            // letter, so the letters join) while that face draws it. When it doesn't, the
+            // character and its marks go together to a face that draws them all (CSS Fonts 4
+            // §5.3, cluster matching). With no such face, a mark in left-to-right text that isn't
+            // complex script is matched on its own like any other character; in right-to-left or
+            // complex-script text it stays with its letter (#7865). A cluster is matched once, at
+            // its first mark the face lacks: matching it again at every later mark would make a
+            // long run of marks quadratic.
+            let mut with_base = false;
+            let mut moved = None;
+            if let Some(k) = cur.filter(|_| mark) {
+                let current = k.face.unwrap_or(primary);
+                with_base = !draws_something(c) || current.covers(dc);
+                if !with_base {
+                    match (base.filter(|(at, _)| *at >= seg_start), matched) {
+                        (Some((at, _)), Some((done, stays))) if done == at => with_base = stays,
+                        (Some((at, b)), _) => {
+                            let marks = text.get(at..).unwrap_or("").chars().skip(1).map(show).take_while(|m| is_mark(*m));
+                            let all: String = std::iter::once(b).chain(marks).inspect(|_| crate::work::steps(1)).collect();
+                            if draws_all(current, &all) {
+                                with_base = true;
+                            } else if let Some(f) = cluster_face(&all, current, run_face, primary, bold, italic) {
+                                // The character goes to that face with its marks.
+                                if at > seg_start {
+                                    segs.push((seg_start, at, k));
+                                    seg_start = at;
+                                }
+                                let face = (f.id() != primary.id()).then_some(f);
+                                cur = Some(SegKey { face, ..k });
+                                moved = Some(face);
+                            } else {
+                                with_base = k.complex || k.rtl;
+                            }
+                            matched = Some((at, with_base || moved.is_some()));
+                        }
+                        (None, _) => with_base = k.complex || k.rtl,
+                    }
+                }
+            }
+            if !mark {
+                base = (!c.is_control() && c != OBJ).then_some((i, dc));
+            }
+            let face = match (moved, cur) {
+                (Some(face), _) => face,
+                (None, Some(k)) if with_base => k.face,
                 _ if !complex && east_asian(c) && primary_ea.is_some_and(|f| f.covers(c)) => primary_ea,
                 _ if !c.is_control() && c != SOFT_HYPHEN && run_face.is_some_and(|f| f.covers(dc)) => run_face,
                 _ if primary.covers(dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
-                Some(SegKey { face: Some(face), .. }) if face.covers(dc) => Some(face),
+                (None, Some(SegKey { face: Some(face), .. })) if face.covers(dc) => Some(face),
                 _ if !complex && ea_face.is_some() && crate::kinsoku::is_east_asian(c) => ea_face,
-                _ => {
-                    let (bold, italic) = if complex { (rc.bold_cs, rc.italic_cs) } else { (rc.bold, rc.italic) };
-                    wordcraft_fonts::FontDb::global().fallback_styled(dc, primary.id(), bold, italic).map(|f| FaceRef::of(&f))
-                }
+                _ => wordcraft_fonts::FontDb::global().fallback_styled(dc, primary.id(), bold, italic).map(|f| FaceRef::of(&f)),
             };
-            let key = SegKey { face, small: rc.small_caps && !rc.caps && c.is_lowercase(), complex, rtl };
+            // A mark is set like the character it belongs to, as for `complex`: in small capitals at
+            // that character's size, so the two stay in one shaping run and its cluster is matched
+            // whole.
+            let small = match cur {
+                Some(k) if mark => k.small,
+                _ => rc.small_caps && !rc.caps && c.is_lowercase(),
+            };
+            let key = SegKey { face, small, complex, rtl };
             match cur {
                 Some(previous) if previous.same(&key) => {}
                 Some(previous) => {
