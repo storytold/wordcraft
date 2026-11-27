@@ -409,10 +409,7 @@ pub(super) fn make_face(
     legacy_family: String,
     coords: Vec<([u8; 4], f32)>,
 ) -> Option<FontFace> {
-    let data: &[u8] = match &bytes {
-        FontBytes::Static(b) => b,
-        FontBytes::Owned(v) => v.as_slice(),
-    };
+    let data: &[u8] = bytes.data();
     let f = skrifa::FontRef::from_index(data, index).ok()?;
     let settings: Vec<(skrifa::Tag, f32)> = coords.iter().map(|(t, v)| (skrifa::Tag::new(t), *v)).collect();
     let location = if coords.is_empty() { Location::default() } else { f.axes().location(settings.iter().copied()) };
@@ -447,13 +444,17 @@ pub(super) fn make_face(
         cap_height: m.cap_height.map(|v| v as f64).filter(|v| *v > 0.0).unwrap_or(m.ascent as f64 * 0.72),
         x_height: m.x_height.map(|v| v as f64).filter(|v| *v > 0.0).unwrap_or(m.ascent as f64 * 0.5),
         avg_char_width: avg_char_width(&f, upem),
-        shaper,
+        shaper: shaper.into(),
         coords,
-        location,
-        instance,
+        location: location.into(),
+        instance: instance.into(),
+        #[cfg(not(target_arch = "wasm32"))]
+        described: None,
         bytes,
         index,
         bmp: std::sync::OnceLock::new(),
+        #[cfg(not(target_arch = "wasm32"))]
+        ranges: std::sync::OnceLock::new(),
         outline_hinter: std::sync::OnceLock::new(),
         glyph_styles: std::sync::OnceLock::new(),
         hint_draws: Default::default(),

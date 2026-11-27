@@ -203,7 +203,7 @@ fn shape_dir(
 ) -> Vec<ShapedGlyph> {
     let mut out = Vec::with_capacity(text.len());
     let shaped = face.hb().map(|hb| {
-        let shaper = face.shaper.shaper(&hb).instance(face.instance.as_ref()).build();
+        let shaper = face.shaper_data(&hb).shaper(&hb).instance(face.shaper_instance()).build();
         // One script per shaping call: the shaper picks its script engine (Myanmar, Khmer,
         // Indic, USE reordering…) from the run's script, so "Hi မြန်မာ" in one face must not be
         // shaped as Latin. Runs come in text order; right-to-left callers regroup by cluster.
@@ -287,7 +287,7 @@ fn shape_plan(face: &FontFace, shaper: &Shaper, buf: &UnicodeBuffer, features: &
     if direction == Direction::Invalid {
         return None;
     }
-    let key = ShapePlanKey::new(script, direction).language(language.as_ref()).instance(face.instance.as_ref()).features(features);
+    let key = ShapePlanKey::new(script, direction).language(language.as_ref()).instance(face.shaper_instance()).features(features);
     let of = PlanFace::of(face);
     SHAPE_PLANS.with(|cell| {
         let mut plans = cell.try_borrow_mut().ok()?;
@@ -360,7 +360,7 @@ mod tests {
     fn kept_shape_plans_shape_as_fresh_ones() {
         let fresh = |face: &FontFace, text: &str, features: &[Feature], rtl: bool| -> Vec<(u32, u32, i32, i32, i32)> {
             let Some(hb) = face.hb() else { return Vec::new() };
-            let shaper = face.shaper.shaper(&hb).instance(face.instance.as_ref()).build();
+            let shaper = face.shaper_data(&hb).shaper(&hb).instance(face.shaper_instance()).build();
             let mut buf = UnicodeBuffer::new();
             buf.push_str(text);
             buf.guess_segment_properties();
@@ -396,7 +396,7 @@ mod tests {
         let face = FontDb::global().face(DEFAULT_FAMILY, "Regular");
         let fresh = |features: &[Feature], rtl: bool| -> Vec<(u32, i32)> {
             let Some(hb) = face.hb() else { return Vec::new() };
-            let shaper = face.shaper.shaper(&hb).instance(face.instance.as_ref()).build();
+            let shaper = face.shaper_data(&hb).shaper(&hb).instance(face.shaper_instance()).build();
             let mut buf = UnicodeBuffer::new();
             buf.push_str("office");
             buf.guess_segment_properties();

@@ -6,10 +6,13 @@
 //! capped, WOFF and WOFF2 are unwrapped, and every face must parse and map characters.
 //!
 //! Desktop: [`FontDb::load_user_fonts`] names a folder (the app's `fonts` folder); the fonts there
-//! load at start-up and each font added later is copied there (unwrapped from WOFF/WOFF2). Without
+//! are listed at start-up from the folder's catalogue ([`catalog`]), each read when a document
+//! first uses it, and each font added later is copied there (unwrapped from WOFF/WOFF2). Without
 //! a folder (the web, tests, `WORDCRAFT_NO_PREFS`) added fonts last for the session; the web
 //! shell keeps them in the browser itself.
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -28,6 +31,7 @@ const MAX_FACES_PER_FILE: usize = 256;
 /// Most user fonts at once.
 const MAX_USER_FONTS: usize = 1000;
 /// File extensions [`FontDb::load_user_fonts`] reads (fonts are stored unwrapped).
+#[cfg(not(target_arch = "wasm32"))]
 const STORED_EXTS: &[&str] = &["ttf", "otf", "ttc", "otc"];
 /// Extensions a font file the user picks or drops may have.
 pub const FONT_FILE_EXTS: &[&str] = &["ttf", "otf", "ttc", "otc", "woff", "woff2"];
@@ -121,6 +125,9 @@ pub struct Installed {
 pub(super) struct UserFonts {
     fonts: Vec<UserFont>,
     dir: Option<PathBuf>,
+    /// The folder's catalogue, as kept in it.
+    #[cfg(not(target_arch = "wasm32"))]
+    entries: Vec<catalog::Entry>,
 }
 
 /// The kind of font file `bytes` holds, from its signature.
@@ -181,6 +188,16 @@ pub fn decode_font_file(bytes: &[u8]) -> Result<Vec<u8>, UserFontError> {
     match sniff(&decoded) {
         Some(FontFormat::TrueType | FontFormat::OpenType | FontFormat::Collection) => Ok(decoded),
         _ => Err(UserFontError::BadWebFont("it doesn't hold a TrueType or OpenType font".into())),
+    }
+}
+
+/// [`decode_font_file`] for bytes the caller gives up: plain OpenType bytes come back as they
+/// are, not copied.
+#[cfg(not(target_arch = "wasm32"))]
+fn decode_owned(bytes: Vec<u8>) -> Result<Vec<u8>, UserFontError> {
+    match sniff(&bytes) {
+        Some(FontFormat::TrueType | FontFormat::OpenType | FontFormat::Collection) if bytes.len() <= MAX_FONT_FILE_BYTES => Ok(bytes),
+        _ => decode_font_file(&bytes),
     }
 }
 
@@ -393,6 +410,33 @@ fn unwrap_web_font(decode: impl FnOnce() -> Result<Vec<u8>, wuff::WuffErr>) -> R
     }
 }
 
+/// The faces of the font file `bytes` (plain OpenType bytes), each checked as an added font is: the
+/// file parses, has at most [`MAX_FACES_PER_FILE`] faces, and each face parses and maps characters.
+fn check_faces(bytes: FontBytes) -> Result<Vec<super::FontFace>, UserFontError> {
+    let sfnt = bytes.data();
+    if FileRef::new(sfnt).is_err() {
+        return Err(UserFontError::Unusable("not a valid OpenType file".into()));
+    }
+    let found = enumerate_faces(sfnt, MAX_FACES_PER_FILE + 1);
+    if found.is_empty() {
+        return Err(UserFontError::Unusable("no face with a family name".into()));
+    }
+    if found.len() > MAX_FACES_PER_FILE {
+        return Err(UserFontError::Unusable(format!("more than {MAX_FACES_PER_FILE} faces")));
+    }
+    let mut faces = Vec::new();
+    for f in found {
+        let label = format!("{} {}", f.family, f.style);
+        let face = make_face(bytes.clone(), f.index, f.family, f.style, f.legacy, f.coords)
+            .ok_or_else(|| UserFontError::Unusable(format!("{label} doesn't parse")))?;
+        if face.skrifa().is_none_or(|s| s.charmap().mappings().next().is_none()) {
+            return Err(UserFontError::Unusable(format!("{label} maps no characters")));
+        }
+        faces.push(face);
+    }
+    Ok(faces)
+}
+
 /// A file name for a user font from the name it came with: letters, digits, spaces, `-` and `_`
 /// of its stem (others become `_`, at most 64), and the extension of its unwrapped format.
 fn stored_name(name: &str, sfnt: &[u8]) -> String {
@@ -416,7 +460,11 @@ impl FontDb {
     /// A counter that changes whenever user fonts are added or removed: a UI caching the font
     /// list or a layout redraws when it moves.
     pub fn generation(&self) -> u64 {
-        self.generation.load(Ordering::Acquire)
+        let generation = self.generation.load(Ordering::Acquire);
+        // An added font whose file couldn't be read when first used is passed over from then on.
+        #[cfg(not(target_arch = "wasm32"))]
+        let generation = generation.wrapping_add(self.files.failures.load(Ordering::Acquire));
+        generation
     }
 
     fn read_user(&self) -> std::sync::RwLockReadGuard<'_, UserFonts> {
@@ -443,11 +491,27 @@ impl FontDb {
     /// font is stored there too, for the next start.
     pub fn install_font(&self, name: &str, bytes: &[u8]) -> Result<Installed, UserFontError> {
         let sfnt = decode_font_file(bytes)?;
-        let mut font = self.add_user_faces(name, sfnt.clone(), None)?;
+        if self.read_user().fonts.len() >= MAX_USER_FONTS {
+            return Err(UserFontError::TooMany);
+        }
+        let file = stored_name(name, &sfnt);
+        let sfnt = Arc::new(sfnt);
+        let checked = check_faces(FontBytes::Owned(sfnt.clone()))?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let records: Vec<catalog::FaceRecord> = checked.iter().map(catalog::FaceRecord::of).collect();
+        let mut font = self.add_user_faces(&file, checked)?;
         let warning = match self.user_font_dir() {
             Some(dir) => match write_unique(&dir, &font.file, &sfnt) {
                 Ok(path) => {
                     font.file = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(font.file);
+                    // Catalogued, so the next start lists it without reading it.
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some(stamp) = std::fs::metadata(&path).ok().as_ref().and_then(catalog::Stamp::of)
+                        && let Some(entry) = path.file_name().and_then(|name| catalog::Entry::new(name, stamp, records))
+                    {
+                        self.write_user().entries.push(entry);
+                        self.save_catalog();
+                    }
                     font.path = Some(path);
                     None
                 }
@@ -496,41 +560,21 @@ impl FontDb {
         self.fonts_changed();
     }
 
-    /// Check the faces in `sfnt` and add the new ones, recording them as a user font.
-    fn add_user_faces(&self, name: &str, sfnt: Vec<u8>, path: Option<PathBuf>) -> Result<UserFont, UserFontError> {
-        if self.read_user().fonts.len() >= MAX_USER_FONTS {
-            return Err(UserFontError::TooMany);
-        }
-        if FileRef::new(&sfnt).is_err() {
-            return Err(UserFontError::Unusable("not a valid OpenType file".into()));
-        }
-        let found = enumerate_faces(&sfnt, MAX_FACES_PER_FILE + 1);
-        if found.is_empty() {
-            return Err(UserFontError::Unusable("no face with a family name".into()));
-        }
-        if found.len() > MAX_FACES_PER_FILE {
-            return Err(UserFontError::Unusable(format!("more than {MAX_FACES_PER_FILE} faces")));
-        }
-        let file = stored_name(name, &sfnt);
-        let data = Arc::new(sfnt);
-        let mut new = Vec::new();
-        for f in found {
-            let label = format!("{} {}", f.family, f.style);
-            let face = make_face(FontBytes::Owned(data.clone()), f.index, f.family, f.style, f.legacy, f.coords)
-                .ok_or_else(|| UserFontError::Unusable(format!("{label} doesn't parse")))?;
-            if face.skrifa().is_none_or(|s| s.charmap().mappings().next().is_none()) {
-                return Err(UserFontError::Unusable(format!("{label} maps no characters")));
-            }
-            new.push(Arc::new(face));
-        }
+    /// Add the new ones of a font file's `checked` faces ([`check_faces`]), recording them as a
+    /// user font stored as `file` (made unique among the user fonts).
+    fn add_user_faces(&self, file: &str, checked: Vec<super::FontFace>) -> Result<UserFont, UserFontError> {
+        let new: Vec<Arc<super::FontFace>> = checked.into_iter().map(Arc::new).collect();
         let families = |faces: &[Arc<super::FontFace>]| {
             let mut v: Vec<String> = faces.iter().map(|f| f.family.clone()).collect();
             v.dedup();
             v
         };
         let mut user = self.write_user();
+        if user.fonts.len() >= MAX_USER_FONTS {
+            return Err(UserFontError::TooMany);
+        }
         // Unique among the user fonts (the folder is checked when writing).
-        let file = unique_name(&file, |n| user.fonts.iter().any(|f| f.file.eq_ignore_ascii_case(n)));
+        let file = unique_name(file, |n| user.fonts.iter().any(|f| f.file.eq_ignore_ascii_case(n)));
         let added: Vec<Arc<super::FontFace>> = {
             let mut faces = self.faces.write().unwrap_or_else(|e| e.into_inner());
             let fresh: Vec<_> = new
@@ -547,7 +591,7 @@ impl FontDb {
         let font = UserFont {
             file,
             faces: added.iter().map(|f| (f.family.clone(), f.style.clone())).collect(),
-            path,
+            path: None,
             face_ids: added.iter().map(|f| f.id).collect(),
         };
         user.fonts.push(font.clone());
@@ -591,53 +635,241 @@ impl FontDb {
                 log::warn!("couldn't delete the font file {}: {e}", p.display());
             }
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // By the files' exact names: two names can read the same once made text.
+            let stored: Vec<&OsStr> = gone.iter().filter_map(|u| u.path.as_ref()?.file_name()).collect();
+            if !stored.is_empty() {
+                self.write_user().entries.retain(|e| e.name().is_none_or(|name| !stored.contains(&name.as_os_str())));
+                self.save_catalog();
+            }
+        }
         self.fonts_changed();
         Ok(gone)
     }
 
-    /// Use `dir` as the user font folder: load the fonts stored there (each checked like an added
-    /// font; one that fails is logged and skipped) and store fonts added later there. The folder is
-    /// made when the first font is stored. Returns the fonts loaded and the files skipped (with
-    /// why).
+    /// Use `dir` as the user font folder: list the fonts stored there, and store fonts added later
+    /// there. The folder is made when the first font is stored. The fonts are listed from the
+    /// folder's catalogue ([`catalog`]), and a font's file is read when one of its faces is first
+    /// handed out; a file the catalogue doesn't describe as it is now (added or changed since, or
+    /// unusable before) is read and checked like an added font, and one that fails is logged and
+    /// skipped. Returns the fonts listed and the files skipped (with why).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn load_user_fonts(&self, dir: &Path) -> (Vec<UserFont>, Vec<(String, String)>) {
         self.write_user().dir = Some(dir.to_path_buf());
-        let mut loaded = Vec::new();
         let mut skipped = Vec::new();
-        let Ok(rd) = std::fs::read_dir(dir) else { return (loaded, skipped) };
-        let mut paths: Vec<PathBuf> = rd
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.is_file())
-            .filter(|p| p.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| STORED_EXTS.contains(&e.to_ascii_lowercase().as_str())))
-            .collect();
-        paths.sort();
-        for p in paths {
-            let file = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-            let read = match std::fs::metadata(&p) {
-                Ok(m) if m.len() > MAX_FONT_FILE_BYTES as u64 => {
-                    Err(UserFontError::TooLarge { bytes: usize::try_from(m.len()).unwrap_or(usize::MAX) })
-                }
-                Ok(_) => std::fs::read(&p).map_err(|e| UserFontError::Unusable(e.to_string())),
-                Err(e) => Err(UserFontError::Unusable(e.to_string())),
-            };
-            let r = read.and_then(|b| decode_font_file(&b)).and_then(|sfnt| self.add_user_faces(&file, sfnt, Some(p.clone())));
-            match r {
-                Ok(mut f) => {
-                    // Its own file name, so removing it deletes this file.
-                    if let Some(u) = self.write_user().fonts.iter_mut().find(|u| u.face_ids == f.face_ids) {
-                        u.file.clone_from(&file);
-                    }
-                    f.file = file;
-                    loaded.push(f);
-                }
-                Err(e) => {
-                    log::warn!("skipped the user font {}: {e}", p.display());
-                    skipped.push((file, e.to_string()));
-                }
+        let Ok(rd) = std::fs::read_dir(dir) else { return (Vec::new(), skipped) };
+        // Each font file with its metadata (read once: it is the catalogue's key).
+        let mut paths: Vec<(PathBuf, std::fs::Metadata)> = Vec::new();
+        for p in rd.flatten().map(|e| e.path()) {
+            if catalog::abandoned(&p) {
+                // A catalogue write that never finished: its process stopped.
+                let _ = std::fs::remove_file(&p);
+            } else if p.extension().and_then(OsStr::to_str).is_some_and(|e| STORED_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+                && let Some(m) = std::fs::metadata(&p).ok().filter(std::fs::Metadata::is_file)
+            {
+                paths.push((p, m));
             }
+        }
+        paths.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut known = catalog::read(dir);
+        let described = known.len();
+        let mut listed = Vec::new();
+        let mut changed = false;
+        for (p, m) in paths {
+            let Some(name) = p.file_name() else { continue };
+            let file = name.to_string_lossy().into_owned();
+            let meta = if m.len() > MAX_FONT_FILE_BYTES as u64 {
+                Err(UserFontError::TooLarge { bytes: usize::try_from(m.len()).unwrap_or(usize::MAX) })
+            } else {
+                Ok(m)
+            };
+            let stamp = meta.as_ref().ok().and_then(catalog::Stamp::of);
+            // What the file holds: as catalogued while it is the same file, else read and checked
+            // now. The catalogue keeps a usable file's faces; a reason to skip a file isn't kept,
+            // so the file is read again at the next start and a repair shows.
+            let faces = match (meta, known.remove(name).filter(|e| stamp == Some(e.stamp))) {
+                (Err(e), _) => Err(e.to_string()),
+                (Ok(_), Some(entry)) => Ok(entry.faces),
+                (Ok(_), None) => match catalog::scan(&p, &self.files) {
+                    Ok(faces) => {
+                        changed |= faces.is_ok() && stamp.is_some() && catalog::keeps(name);
+                        faces
+                    }
+                    Err(e) => Err(UserFontError::Unusable(e.to_string()).to_string()),
+                },
+            };
+            if let Err(why) = &faces {
+                log::warn!("skipped the user font {}: {why}", p.display());
+                skipped.push((file.clone(), why.clone()));
+            }
+            listed.push(Listed { file, path: p, stamp, faces });
+        }
+        let (loaded, refused) = self.add_catalogued(&listed);
+        skipped.extend(refused);
+        skipped.sort();
+        let entries: Vec<catalog::Entry> =
+            listed.into_iter().filter_map(|l| catalog::Entry::new(l.path.file_name()?, l.stamp?, l.faces.ok()?)).collect();
+        // Rewritten when a file was read and kept, or one it described is gone or unusable now.
+        let save = changed || entries.len() != described;
+        self.write_user().entries = entries;
+        if save {
+            self.save_catalog();
         }
         (loaded, skipped)
     }
+
+    /// Is `face` fit to hand out? A face of an added font's file, listed from the catalogue or from
+    /// what this start read, is checked against the file the first time one of the file's faces
+    /// is handed out ([`FontDb::face`], also when it makes a style at other axis values from one,
+    /// and the fallback searches), which reads the file: when its faces aren't the ones listed,
+    /// they are made again from its bytes (or dropped, when it can't be used any more), the
+    /// catalogue is corrected, and the answer is no, so the caller looks again.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn checked(&self, face: &super::FontFace) -> bool {
+        // Faces made from the bytes (named instances, or faces a check made again) fit them.
+        let (FontBytes::File(file), Some(_)) = (&face.bytes, &face.described) else { return true };
+        file.listed_faces_fit(|| {
+            let real = check_faces(FontBytes::File(file.clone()));
+            let records: Option<Vec<catalog::FaceRecord>> = real.as_ref().ok().map(|faces| faces.iter().map(catalog::FaceRecord::of).collect());
+            let name = file.path().file_name().map(OsStr::to_os_string);
+            let fits = records.as_ref().is_some_and(|r| self.read_user().entries.iter().any(|e| e.name() == name && e.faces == *r));
+            if !fits {
+                self.refresh(file, real, records);
+            }
+            fits
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn checked(&self, _face: &super::FontFace) -> bool {
+        true
+    }
+
+    /// Replace the faces listed for `file` with `real`, the faces its bytes hold (in the same
+    /// place in the face list, leaving out those already available), or drop them when it can't be
+    /// used; describe it afresh in the catalogue (with `records`), and forget lookups made with the
+    /// old faces ([`FontDb::generation`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn refresh(&self, file: &Arc<catalog::FontFile>, real: Result<Vec<super::FontFace>, UserFontError>, records: Option<Vec<catalog::FaceRecord>>) {
+        match &real {
+            Ok(_) => log::warn!("the added font {} isn't as its catalogue described it: its faces are read from it again", file.path().display()),
+            Err(e) => log::warn!("skipped the user font {}: {e}", file.path().display()),
+        }
+        let ours = |f: &super::FontFace| matches!(&f.bytes, FontBytes::File(g) if Arc::ptr_eq(g, file));
+        let key = |f: &super::FontFace| (f.family.to_ascii_lowercase(), f.style.to_ascii_lowercase());
+        {
+            let mut user = self.write_user();
+            let mut faces = self.faces.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let stale: Vec<u32> = faces.iter().filter(|f| ours(f)).map(|f| f.id).collect();
+            let at = faces.iter().position(|f| ours(f)).unwrap_or(faces.len());
+            faces.retain(|f| !ours(f));
+            let present: std::collections::HashSet<(String, String)> = faces.iter().map(|f| key(f)).collect();
+            let added: Vec<Arc<super::FontFace>> = real.into_iter().flatten().filter(|f| !present.contains(&key(f))).map(Arc::new).collect();
+            faces.splice(at..at, added.iter().cloned());
+            drop(faces);
+            if let Some(i) = user.fonts.iter().position(|u| u.face_ids.iter().any(|id| stale.contains(id))) {
+                if added.is_empty() {
+                    user.fonts.remove(i);
+                } else {
+                    user.fonts[i].faces = added.iter().map(|f| (f.family.clone(), f.style.clone())).collect();
+                    user.fonts[i].face_ids = added.iter().map(|f| f.id).collect();
+                }
+            }
+            let name = file.path().file_name().map(OsStr::to_os_string);
+            user.entries.retain(|e| e.name() != name);
+            if let (Some(name), Some(stamp), Some(records)) = (&name, file.stamp(), records)
+                && let Some(entry) = catalog::Entry::new(name, stamp, records)
+            {
+                user.entries.push(entry);
+            }
+        }
+        self.save_catalog();
+        self.fonts_changed();
+    }
+
+    /// The web has no font folder: its shell keeps added fonts in the browser itself.
+    #[cfg(target_arch = "wasm32")]
+    pub fn load_user_fonts(&self, dir: &Path) -> (Vec<UserFont>, Vec<(String, String)>) {
+        self.write_user().dir = Some(dir.to_path_buf());
+        (Vec::new(), Vec::new())
+    }
+
+    /// Add the usable fonts of `listed`, in order, as user fonts whose files are read on first
+    /// use: each with the checks a font added on its own gets (at most [`MAX_USER_FONTS`]; faces
+    /// whose family and style are already available are left out, and a font with nothing new is
+    /// refused). Returns the fonts added and the files refused (with why).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn add_catalogued(&self, listed: &[Listed]) -> (Vec<UserFont>, Vec<(String, String)>) {
+        let (mut loaded, mut refused) = (Vec::new(), Vec::new());
+        let mut user = self.write_user();
+        let mut faces = self.faces.write().unwrap_or_else(|e| e.into_inner());
+        // Indexed: a folder may hold a thousand fonts.
+        let key = |family: &str, style: &str| (family.to_ascii_lowercase(), style.to_ascii_lowercase());
+        let mut present: std::collections::HashSet<(String, String)> = faces.iter().map(|f| key(&f.family, &f.style)).collect();
+        for Listed { file, path, stamp, faces: records } in listed {
+            let Ok(records) = records else { continue };
+            let refuse = |e: UserFontError| {
+                log::warn!("skipped the user font {}: {e}", path.display());
+                (file.clone(), e.to_string())
+            };
+            if user.fonts.len() >= MAX_USER_FONTS {
+                refused.push(refuse(UserFontError::TooMany));
+                continue;
+            }
+            let fresh: Vec<(&catalog::FaceRecord, (String, String))> =
+                records.iter().map(|r| (r, key(&r.family, &r.style))).filter(|(_, k)| !present.contains(k)).collect();
+            if fresh.is_empty() {
+                let mut families: Vec<String> = records.iter().map(|r| r.family.clone()).collect();
+                families.dedup();
+                refused.push(refuse(UserFontError::AlreadyAvailable(families)));
+                continue;
+            }
+            let shared = Arc::new(catalog::FontFile::new(path.clone(), *stamp, self.files.clone()));
+            let added: Vec<Arc<super::FontFace>> = fresh.iter().map(|(r, _)| Arc::new(r.face(&shared))).collect();
+            present.extend(fresh.into_iter().map(|(_, k)| k));
+            faces.extend(added.iter().cloned());
+            let font = UserFont {
+                file: file.clone(),
+                faces: added.iter().map(|f| (f.family.clone(), f.style.clone())).collect(),
+                path: Some(path.clone()),
+                face_ids: added.iter().map(|f| f.id).collect(),
+            };
+            user.fonts.push(font.clone());
+            loaded.push(font);
+        }
+        drop(faces);
+        drop(user);
+        if !loaded.is_empty() {
+            self.fonts_changed();
+        }
+        (loaded, refused)
+    }
+
+    /// Keep the folder's catalogue as it stands now (a failure is logged: the next start reads the
+    /// fonts it would have described).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn save_catalog(&self) {
+        let (dir, entries) = {
+            let user = self.read_user();
+            (user.dir.clone(), user.entries.clone())
+        };
+        if let Some(dir) = dir
+            && let Err(e) = catalog::write(&dir, &entries)
+        {
+            log::warn!("couldn't keep the added fonts' catalogue in {}: {e}", dir.display());
+        }
+    }
+}
+
+/// A file in the user font folder, as a start found it: its faces (or why it can't be used), and
+/// its stamp.
+#[cfg(not(target_arch = "wasm32"))]
+struct Listed {
+    file: String,
+    path: PathBuf,
+    stamp: Option<catalog::Stamp>,
+    faces: Result<Vec<catalog::FaceRecord>, String>,
 }
 
 /// `name`, or `name` with `-2`, `-3`… before its extension, the first that `taken` refuses.
@@ -680,6 +912,9 @@ fn write_unique(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf
     }
     Ok(path)
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) mod catalog;
 
 #[cfg(test)]
 pub(crate) mod tests;
