@@ -511,6 +511,9 @@ fn run_convert(rest: &[String], open: impl Fn(&str, Option<&str>) -> Result<Sess
         OptionArg::Value(value) => Some(value),
     };
     let paths = positionals(rest, CONVERT_OPTIONS);
+    if let Some(extra) = paths.get(2) {
+        return Err(format!("convert: unexpected positional argument `{extra}`").into());
+    }
     let (i, o) = (paths.first().ok_or_else(missing_argument)?.to_string(), paths.get(1).ok_or_else(missing_argument)?.to_string());
     let markup = rest.iter().any(|a| a == "--markup");
     let strict = rest.iter().any(|a| a == "--strict");
