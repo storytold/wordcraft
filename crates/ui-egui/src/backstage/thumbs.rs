@@ -60,7 +60,7 @@ impl ThumbSource<ThumbKey> for TemplateThumbs {
         let Some(page) = layout.pages.first() else { return ThumbRender::Blank };
         // The longest side of the page is `request.side` pixels; the store never asks for zero.
         let scale = request.side as f32 / page.w.max(page.h).max(1.0);
-        let image = wordcraft_render::render_page(&session.doc, page, scale, &crate::canvas::screen_render_options());
+        let image = wordcraft_render::render_page(&session.doc, page, scale, &crate::canvas::screen_render_options(request.pixels_per_point));
         let pixels = image.to_straight();
         ThumbRender::Ready(egui::ColorImage::from_rgba_unmultiplied([image.width as usize, image.height as usize], &pixels))
     }

@@ -174,6 +174,11 @@ pub struct RenderOptions {
     /// Read Mode's Page Color: paper drawn instead of the document's page color and page
     /// picture. `None` shows the document's page background. Screen only.
     pub read_paper: Option<Rgb>,
+    /// Draw borders and rules (lines from layout's `rule()`) one device pixel lighter than the
+    /// nearest whole number of pixels, never under one (`rule_px` says why). For on-screen rasters
+    /// on screens of 2 or more device pixels per point only: exports, PDF and printing, and
+    /// lower-density screens, keep the nearest whole pixel.
+    pub light_rules: bool,
 }
 
 /// Default grey for a dark page's paper.
@@ -272,6 +277,7 @@ impl Default for RenderOptions {
             dark: false,
             dark_paper: DARK_PAPER,
             read_paper: None,
+            light_rules: false,
         }
     }
 }
@@ -313,9 +319,7 @@ fn render_region_capped(doc: &Document, page: &Page, w: u32, h: u32, view: Affin
         if faded {
             ctx.push_opacity_layer(alpha);
         }
-        for it in &items {
-            draw(&mut ctx, doc, it, view, &visible, opts);
-        }
+        draw_items(&mut ctx, doc, &items, view, &visible, opts);
         if faded {
             ctx.pop_layer();
         }
@@ -610,11 +614,7 @@ fn kurbo_rect(rect: &wordcraft_geom::Rect) -> kurbo::Rect {
 fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visible: &kurbo::Rect, opts: &RenderOptions) {
     let fr = Frame { doc, opts, view, visible };
     match it {
-        Draw::Figure { draws, .. } => {
-            for d in draws {
-                draw(ctx, doc, d, view, visible, opts);
-            }
-        }
+        Draw::Figure { draws, .. } => draw_items(ctx, doc, draws, view, visible, opts),
         Draw::Fill { .. } => draw_fill(ctx, &fr, it),
         Draw::Line { .. } => draw_line(ctx, &fr, it),
         Draw::Glyphs { .. } => draw_glyphs(ctx, &fr, it),
@@ -633,24 +633,30 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             ctx.set_transform(view);
             ctx.push_clip_layer(&r.to_path(0.1));
             let local = r.intersect(*visible);
-            for it in items {
-                draw(ctx, doc, it, view, &local, opts);
-            }
+            draw_items(ctx, doc, items, view, &local, opts);
             ctx.pop_layer();
         }
         Draw::Turned { x, y, turn, items } => {
             let m = Affine::new(Draw::turn_matrix(*turn, *x, *y).map(f64::from));
             let local = m.inverse().transform_rect_bbox(*visible);
-            for it in items {
-                draw(ctx, doc, it, view * m, &local, opts);
-            }
+            draw_items(ctx, doc, items, view * m, &local, opts);
         }
         Draw::Rotated { cx, cy, spin, items } => {
             let m = Affine::new(spin.matrix(*cx, *cy).map(f64::from));
             let local = m.inverse().transform_rect_bbox(*visible);
-            for it in items {
-                draw(ctx, doc, it, view * m, &local, opts);
-            }
+            draw_items(ctx, doc, items, view * m, &local, opts);
+        }
+    }
+}
+
+/// Draw `items` in order, with the ends of borders that run past a border they cross moved onto
+/// its drawn edge ([`rule_ends`]).
+fn draw_items(ctx: &mut RenderContext, doc: &Document, items: &[Draw], view: Affine, visible: &kurbo::Rect, opts: &RenderOptions) {
+    let ends = rule_ends(items, view, visible, opts.light_rules);
+    for (i, it) in items.iter().enumerate() {
+        match ends.get(&i) {
+            Some(&moved) => draw_line_from(ctx, &Frame { doc, opts, view, visible }, it, Some(moved)),
+            None => draw(ctx, doc, it, view, visible, opts),
         }
     }
 }
@@ -667,11 +673,17 @@ fn draw_fill(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
 }
 
 fn draw_line(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
-    let Draw::Line { x0, y0, x1, y1, width, color: c, stroke, alpha, text_bg } = it else { return };
+    draw_line_from(ctx, fr, it, None);
+}
+
+/// [`draw_line`], with the line running between `ends` (points, `x0, y0, x1, y1`) instead when
+/// [`rule_ends`] moved them.
+fn draw_line_from(ctx: &mut RenderContext, fr: &Frame, it: &Draw, ends: Option<(f64, f64, f64, f64)>) {
+    let Draw::Line { x0, y0, x1, y1, width, color: c, stroke, alpha, text_bg, rule } = it else { return };
     ctx.set_transform(fr.view);
     ctx.set_paint(color(fr.opts.ink_text(*c, *text_bg), *alpha));
     let w = *width as f64;
-    let (x0, y0, x1, y1) = (*x0 as f64, *y0 as f64, *x1 as f64, *y1 as f64);
+    let (x0, y0, x1, y1) = ends.unwrap_or((*x0 as f64, *y0 as f64, *x1 as f64, *y1 as f64));
     // Flat ends, like the PDF export and Word: a round cap sticks half the width out past
     // every end, blobbing over the neighbouring border at a table's corners (#2892). Wavy
     // underlines keep round ends, as the PDF draws them.
@@ -703,7 +715,7 @@ fn draw_line(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
             stroke_segment(ctx, (x0, y0, x1, y1), (-nx, -ny));
         }
         _ => {
-            let (st, off) = match snap_rule(fr.view, (x0, y0, x1, y1), w) {
+            let (st, off) = match snap_rule(fr.view, (x0, y0, x1, y1), w, *rule && fr.opts.light_rules) {
                 Some((w_px, off)) => (kurbo::Stroke { width: w_px / fr.view.as_coeffs()[0], ..st }, off),
                 None => (st, (0.0, 0.0)),
             };
@@ -716,17 +728,17 @@ fn draw_line(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
 /// Snap a horizontal or vertical rule to the device pixel grid so every border of one nominal
 /// width covers the same number of pixels at any zoom (#5967). Returns the stroke width in device
 /// pixels and the offset, in points, that moves the line onto the snapped spot; `None` for slanted
-/// lines or a view that rotates or skews.
-fn snap_rule(view: Affine, (x0, y0, x1, y1): (f64, f64, f64, f64), width: f64) -> Option<(f64, (f64, f64))> {
+/// lines or a view that rotates or skews. `light`: see [`rule_px`].
+fn snap_rule(view: Affine, (x0, y0, x1, y1): (f64, f64, f64, f64), width: f64, light: bool) -> Option<(f64, (f64, f64))> {
     if !is_upright(view) {
         return None;
     }
     let [k, _, _, _, tx, ty] = view.as_coeffs();
     if y0 == y1 && x0 != x1 {
-        let (w_px, c) = snap_hairline(y0 * k + ty, width * k);
+        let (w_px, c) = snap_hairline(y0 * k + ty, width * k, light);
         Some((w_px, (0.0, (c - ty) / k - y0)))
     } else if x0 == x1 && y0 != y1 {
-        let (w_px, c) = snap_hairline(x0 * k + tx, width * k);
+        let (w_px, c) = snap_hairline(x0 * k + tx, width * k, light);
         Some((w_px, ((c - tx) / k - x0, 0.0)))
     } else {
         None
@@ -734,10 +746,137 @@ fn snap_rule(view: Affine, (x0, y0, x1, y1): (f64, f64, f64, f64), width: f64) -
 }
 
 /// A line `width_px` wide centred at device coordinate `centre`, moved so both edges fall on whole
-/// pixels. Returns the width, made a whole number of pixels (at least one), and the new centre.
-fn snap_hairline(centre: f64, width_px: f64) -> (f64, f64) {
-    let w = width_px.round().max(1.0);
+/// pixels. Returns its width in whole pixels ([`rule_px`]) and its new centre.
+fn snap_hairline(centre: f64, width_px: f64, light: bool) -> (f64, f64) {
+    let w = rule_px(width_px, light);
     (w, (centre - w / 2.0).round() + w / 2.0)
+}
+
+/// How many whole device pixels wide a level or upright line `width_px` wide is drawn: the
+/// nearest whole number, never under one; with `light`, one less, never under one. A 1 pt border
+/// at 125 % on a 2x screen, 3.33 pixels wide, is then 2 pixels, not 3.
+///
+/// `light` is for borders and rules on screens of 2 or more device pixels per point
+/// ([`RenderOptions::light_rules`]). The step was chosen by eye: the reporter compared WordCraft
+/// with Word side by side on a Retina Mac at 125 %, and of three candidate renderings (the
+/// nearest whole number, rounded down, one pixel lighter) one pixel lighter looked right. No
+/// number was measured from Word's output.
+///
+/// The reason, from our own renders of 11 pt Source Sans 3 at 125 % on a 2x screen (3.33 pixels
+/// per point; exported, so without the screen's text darkening or hinting): a rule drawn to whole
+/// pixels is solid from edge to edge, while a stem has a solid core of 2 pixels within the 4 it
+/// touches. At the nearest whole number a ½ pt rule is 2 solid pixels, as heavy as that core, and
+/// a 1 pt rule 3, half as heavy again, where on paper they are about 0.55 and 1.1 times a stem.
+/// One pixel lighter they are 1 and 2, and a 1 pt rule matches the stems' core at 100, 125 and
+/// 150 % on a 2x screen (2, 2 and 3 pixels). The step was not judged on screens below 2 pixels per
+/// point, so rules keep the nearest whole number there; at 100 % on a 1x screen a stem has no
+/// solid core (1.2 pixels of ink over 2), and rules up to 1 pt are one pixel either way.
+fn rule_px(width_px: f64, light: bool) -> f64 {
+    if light { (width_px - 1.0).round().max(1.0) } else { width_px.round().max(1.0) }
+}
+
+/// A snapped level or upright border in [`rule_ends`]: its item index, where it lies across
+/// (points), where it starts and ends along (points), half its width (points), and its drawn
+/// edges across (device pixels).
+struct RuleLine {
+    i: usize,
+    at: f64,
+    lo: f64,
+    hi: f64,
+    half: f64,
+    drawn: (f64, f64),
+}
+
+/// How far an end may be from a crossing border's edge, in points, and still be taken to run to
+/// it: layout places both from the same widths, so they agree to rounding.
+const RULE_JOIN_SLACK: f64 = 1e-3;
+
+/// Where the snapped borders in `items` that reach `visible` (points) end on this raster, by item
+/// index (points, `x0, y0, x1, y1`): every end on a whole device pixel.
+///
+/// Layout runs a border half the width of the border it meets past that border's centre line,
+/// so the corner closes (#1757): every side of a paragraph or page box, and a table cell's level
+/// edges. Drawn to whole pixels, the border it meets is narrower or wider than its weight, by up
+/// to a pixel with `light`, so such an end would stand out past it or stop short of its edge: it
+/// goes onto that border's drawn edge instead. So do the ends of two borders that each stop on
+/// the other's centre line, as a comment card's sides do, so that corner is square too. Every other
+/// end goes to the nearest whole pixel:
+/// one that stops at the other border's centre line, as a table cell's upright edges do, then
+/// stays inside that border, and pieces of one border that meet end to end (a cell's upright
+/// edge continuing into the next row, paragraphs sharing a box) meet on the same pixel instead of
+/// each covering part of it, which left a lighter seam between them.
+///
+/// Borders that don't reach `visible` keep their ends: the continuous views lay a long table out
+/// on one tall page, and [`crossing_at`] walks a column's edge piece by piece, so looking at every
+/// row would cost each render time in the square of the rows.
+fn rule_ends(items: &[Draw], view: Affine, visible: &kurbo::Rect, light: bool) -> HashMap<usize, (f64, f64, f64, f64)> {
+    let mut ends = HashMap::new();
+    if !is_upright(view) {
+        return ends;
+    }
+    // x by the view's scale across, y by its scale down.
+    let [kx, _, _, ky, tx, ty] = view.as_coeffs();
+    let (mut level, mut upright) = (Vec::new(), Vec::new());
+    for (i, it) in items.iter().enumerate() {
+        let Draw::Line { x0, y0, x1, y1, width, stroke, rule: true, .. } = it else { continue };
+        if matches!(stroke, Stroke::Wave | Stroke::Double | Stroke::Triple) {
+            continue;
+        }
+        let (x0, y0, x1, y1, w) = (f64::from(*x0), f64::from(*y0), f64::from(*x1), f64::from(*y1), f64::from(*width));
+        if !kurbo::Rect::new(x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)).inflate(w, w).overlaps(*visible) {
+            continue;
+        }
+        let Some((w_px, (ox, oy))) = snap_rule(view, (x0, y0, x1, y1), w, light) else { continue };
+        if y0 == y1 {
+            let c = (y0 + oy) * ky + ty;
+            level.push(RuleLine { i, at: y0, lo: x0.min(x1), hi: x0.max(x1), half: w / 2.0, drawn: (c - w_px / 2.0, c + w_px / 2.0) });
+        } else {
+            let c = (x0 + ox) * kx + tx;
+            upright.push(RuleLine { i, at: x0, lo: y0.min(y1), hi: y0.max(y1), half: w / 2.0, drawn: (c - w_px / 2.0, c + w_px / 2.0) });
+        }
+    }
+    level.sort_by(|a, b| a.at.total_cmp(&b.at));
+    upright.sort_by(|a, b| a.at.total_cmp(&b.at));
+    for (lines, crossing, along) in [(&level, &upright, (tx, kx)), (&upright, &level, (ty, ky))] {
+        let reach = crossing.iter().map(|c| c.half).fold(0.0, f64::max) + RULE_JOIN_SLACK;
+        for line in lines.iter() {
+            let edge = |end: f64, low: bool| {
+                crossing_at(crossing, line, end, low, reach).map(|c| ((if low { c.drawn.0 } else { c.drawn.1 }) - along.0) / along.1)
+            };
+            let pixel = |end: f64| ((end * along.1 + along.0).round() - along.0) / along.1;
+            let lo = edge(line.lo, true).unwrap_or_else(|| pixel(line.lo));
+            let hi = edge(line.hi, false).unwrap_or_else(|| pixel(line.hi));
+            if hi <= lo {
+                continue;
+            }
+            let Some(Draw::Line { x0, y0, x1, y1, .. }) = items.get(line.i) else { continue };
+            let (x0, y0, x1, y1) = (f64::from(*x0), f64::from(*y0), f64::from(*x1), f64::from(*y1));
+            let moved = if y0 == y1 {
+                if x0 <= x1 { (lo, y0, hi, y1) } else { (hi, y0, lo, y1) }
+            } else if y0 <= y1 {
+                (x0, lo, x1, hi)
+            } else {
+                (x0, hi, x1, lo)
+            };
+            ends.insert(line.i, moved);
+        }
+    }
+    ends
+}
+
+/// The border in `crossing` (sorted by where it lies across) that `line`'s end at `end` runs to,
+/// for [`rule_ends`]: one whose edge on the `low` side (or the other) the end lies on, or one whose
+/// centre line it lies on where that border also stops on `line`'s. `reach`: the widest half width
+/// in `crossing`, and the slack.
+fn crossing_at<'a>(crossing: &'a [RuleLine], line: &RuleLine, end: f64, low: bool, reach: f64) -> Option<&'a RuleLine> {
+    let near = |a: f64, b: f64| (a - b).abs() < RULE_JOIN_SLACK;
+    let band = (line.at - line.half, line.at + line.half);
+    let from = crossing.partition_point(|c| c.at < end - reach);
+    crossing[from..].iter().take_while(|c| c.at <= end + reach).find(|c| {
+        let edge = if low { c.at - c.half } else { c.at + c.half };
+        let meets = near(edge, end) || (near(c.at, end) && (near(c.lo, line.at) || near(c.hi, line.at)));
+        meets && c.lo <= band.1 + RULE_JOIN_SLACK && c.hi >= band.0 - RULE_JOIN_SLACK
+    })
 }
 
 /// Stroke the line from (`x0`, `y0`) to (`x1`, `y1`), moved by (`ox`, `oy`).
@@ -1293,9 +1432,7 @@ pub fn render_items(doc: &Document, items: &[Draw], area: wordcraft_geom::Rect, 
         * Affine::translate((-x as f64, -y as f64));
     let mut ctx = RenderContext::new_with(w16, h16, vello_cpu::RenderSettings { num_threads: 0, ..Default::default() });
     let visible = view.inverse().transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, w16 as f64, h16 as f64)).inflate(40.0, 40.0);
-    for it in items {
-        draw(&mut ctx, doc, it, view, &visible, opts);
-    }
+    draw_items(&mut ctx, doc, items, view, &visible, opts);
     ctx.flush();
     let mut pixels = vec![0u8; w16 as usize * h16 as usize * 4];
     let mut res = Resources::new();

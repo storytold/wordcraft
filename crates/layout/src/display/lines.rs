@@ -245,6 +245,7 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                     stroke: Stroke::Solid,
                     alpha,
                     text_bg,
+                    rule: false,
                 });
                 out.push(Draw::Line {
                     x0: cx,
@@ -256,6 +257,7 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                     stroke: Stroke::Solid,
                     alpha,
                     text_bg,
+                    rule: false,
                 });
             }
             continue;
@@ -328,17 +330,39 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 if underline == Underline::Words {
                     let words = word_spans(pl, line, (run_start, end_k), x, (x0, x1));
                     for (a, b) in words {
-                        out.push(Draw::Line { x0: a, y0: uy, x1: b, y1: uy, width: thick, color: ucolor, stroke: Stroke::Solid, alpha, text_bg });
+                        out.push(Draw::Line {
+                            x0: a,
+                            y0: uy,
+                            x1: b,
+                            y1: uy,
+                            width: thick,
+                            color: ucolor,
+                            stroke: Stroke::Solid,
+                            alpha,
+                            text_bg,
+                            rule: false,
+                        });
                     }
                 } else {
                     let w = if underline == Underline::Thick { thick * 2.0 } else { thick };
-                    out.push(Draw::Line { x0, y0: uy, x1, y1: uy, width: w, color: ucolor, stroke: stroke_of(underline), alpha, text_bg });
+                    out.push(Draw::Line {
+                        x0,
+                        y0: uy,
+                        x1,
+                        y1: uy,
+                        width: w,
+                        color: ucolor,
+                        stroke: stroke_of(underline),
+                        alpha,
+                        text_bg,
+                        rule: false,
+                    });
                 }
             }
             if struck {
                 let sy = base - st.shift - st.size * 0.28;
                 let stroke = if double { Stroke::Double } else { Stroke::Solid };
-                out.push(Draw::Line { x0, y0: sy, x1, y1: sy, width: thick, color, stroke, alpha, text_bg });
+                out.push(Draw::Line { x0, y0: sy, x1, y1: sy, width: thick, color, stroke, alpha, text_bg, rule: false });
             }
         }
         // Emphasis marks (Font › Emphasis mark): one over (or under) each character.
@@ -520,7 +544,7 @@ fn draw_label_and_hyphen(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             // A caret where the number was, instead of the number.
             let (h, w, y) = (style.size * 0.3, (style.size / 18.0).max(0.6), ctx.base + 1.0);
             for (x0, y0, x1, y1) in [(gx - h * 0.6, y, gx, y - h), (gx, y - h, gx + h * 0.6, y)] {
-                out.push(Draw::Line { x0, y0, x1, y1, width: w, color, stroke: Stroke::Solid, alpha: ctx.alpha, text_bg: None });
+                out.push(Draw::Line { x0, y0, x1, y1, width: w, color, stroke: Stroke::Solid, alpha: ctx.alpha, text_bg: None, rule: false });
             }
             return draw_hyphen(ctx, out);
         }
@@ -563,7 +587,18 @@ fn draw_label_and_hyphen(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             };
             if let Some((y, stroke)) = line {
                 let width = (style.size / 18.0).max(0.5);
-                out.push(Draw::Line { x0: gx, y0: y, x1: gx + label.width, y1: y, width, color, stroke, alpha: ctx.alpha, text_bg: None });
+                out.push(Draw::Line {
+                    x0: gx,
+                    y0: y,
+                    x1: gx + label.width,
+                    y1: y,
+                    width,
+                    color,
+                    stroke,
+                    alpha: ctx.alpha,
+                    text_bg: None,
+                    rule: false,
+                });
             }
         }
     }
@@ -624,6 +659,7 @@ fn formatting_marks(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                         stroke: Stroke::Dotted,
                         alpha,
                         text_bg: None,
+                        rule: false,
                     });
                     out.push(Draw::Mark { x: cx + 1.0, baseline: base, size, ch: label, color: None });
                 }
@@ -770,6 +806,7 @@ fn proofing_marks(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 stroke: if *grammar { Stroke::Double } else { Stroke::Wave },
                 alpha: ctx.alpha,
                 text_bg: None,
+                rule: false,
             });
         }
     }
@@ -911,7 +948,7 @@ fn section_break_mark(start: SectionStart, x0: f32, x1: f32, base: f32, size: f3
     let tx = (x0 + x1 - w) / 2.0;
     for (a, b) in [(x0, tx - gap), (tx + w + gap, x1)] {
         for y in [mid - 1.2, mid + 1.2] {
-            out.push(Draw::Line { x0: a, y0: y, x1: b, y1: y, width: 0.5, color, stroke: Stroke::Dotted, alpha, text_bg: None });
+            out.push(Draw::Line { x0: a, y0: y, x1: b, y1: y, width: 0.5, color, stroke: Stroke::Dotted, alpha, text_bg: None, rule: false });
         }
     }
     out.push(Draw::MarkText { x: tx, baseline: mid + lsize * 0.33, size: lsize, text: text.into() });
@@ -948,6 +985,7 @@ fn equation(items: &[MItem], x: f32, base: f32, alpha: f32, screen: bool, out: &
                 stroke: if *dotted { Stroke::Dotted } else { Stroke::Solid },
                 alpha,
                 text_bg: None,
+                rule: false,
             }),
             MItem::ScreenOnly(inner) => {
                 if screen {
