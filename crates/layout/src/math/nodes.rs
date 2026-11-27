@@ -54,8 +54,16 @@ impl Ctx {
 
     /// The atoms of a row with their alignment segment (`&` starts a new segment). `u0`: the
     /// unit offset of the row's first node (for caret slots).
+    ///
+    /// `depth` is the nesting of this argument; a node in it is laid out at that same depth, and
+    /// only [`Ctx::node`] spends a unit, for the arguments of the structure it lays out. So a
+    /// structure costs one unit, as the DOCX writer's `arg` and the reader spend one per level,
+    /// and [`MAX_DEPTH`] means the same nesting in all three (#6595).
     pub(super) fn row(&mut self, a: &[MNode], st: St, depth: usize, u0: usize) -> Vec<(Bx, usize)> {
         let mut out = Vec::new();
+        // Bounds the recursion row → node → argument → row: an equation can nest without limit
+        // (a file's, a paste's, a command's), and a stack overflow cannot be recovered from.
+        // `MAX_DEPTH` levels are laid out, which is every level the model keeps.
         if depth > MAX_DEPTH {
             return out;
         }
@@ -86,6 +94,8 @@ impl Ctx {
                 }
                 MNode::Nary { .. } | MNode::Func { .. } => {
                     self.node_stack.push(i);
+                    // `op_atoms` is `node`'s own arm for these, so it takes the depth of the
+                    // operator's arguments: the one unit this structure costs.
                     let mut atoms = self.op_atoms(n, st, depth + 1);
                     self.node_stack.pop();
                     if let Some(f) = atoms.first_mut() {
@@ -102,7 +112,7 @@ impl Ctx {
                 }
                 _ => {
                     self.node_stack.push(i);
-                    let mut b = self.node(n, st, depth + 1);
+                    let mut b = self.node(n, st, depth);
                     self.node_stack.pop();
                     let w = b.w;
                     b.slot(&path, u, 0.0);
@@ -226,7 +236,9 @@ impl Ctx {
         out
     }
 
-    /// N-ary operators and functions: the operator atom (class Op) then the operand.
+    /// N-ary operators and functions: the operator atom (class Op) then the operand. `depth` is
+    /// the depth of the operator's arguments, one past that of the row it sits in — the caller
+    /// has already spent this structure's unit.
     fn op_atoms(&mut self, n: &MNode, st: St, depth: usize) -> Vec<Bx> {
         match n {
             MNode::Nary { chr, lim_loc, grow, sub_hide, sup_hide, sub, sup, e } => {
@@ -293,10 +305,14 @@ impl Ctx {
         }
     }
 
+    /// One node at `depth`, the nesting of the row it sits in.
     fn node(&mut self, n: &MNode, st: St, depth: usize) -> Bx {
+        // The same bound as [`Ctx::row`], which is the one the recursion passes through; this
+        // one holds if a node is ever laid out other than from a row.
         if depth > MAX_DEPTH {
             return Bx::default();
         }
+        // The one unit a structure costs: its arguments nest one level deeper than it does.
         let d = depth + 1;
         let em = self.em(st);
         match n {
