@@ -205,13 +205,14 @@ impl Session {
     }
 
     /// How wide a picture put in at `pos` may be, as Word fits an inserted or pasted picture
-    /// (#5428): the room its paragraph's lines have (inside a table cell, the innermost cell's
-    /// text area, nested tables included; the paragraph's indents left out), never wider than the
-    /// column it is in, of its own section. The first section's text width when `pos` isn't laid
-    /// out. It is measured on the pages, whatever the view: Web Layout and Read Mode reflow the
+    /// (#5428): the room its paragraph's lines have (the width available to its widest laid-out line,
+    /// so the paragraph's indents are already taken out; inside a table cell, the innermost cell's
+    /// text area, nested tables included; a turned cell isn't measured and falls back to the
+    /// column width), never wider than the column it is in, of its own section. The narrowest
+    /// section's text width ([`crate::io::text_width`]) when `pos` isn't laid out. It is measured on the pages, whatever the view: Web Layout and Read Mode reflow the
     /// text to the window, and a picture put in there keeps the size it gets in the document.
     pub(crate) fn room_at(&mut self, pos: &wordcraft_doc::Pos) -> f32 {
-        let first = self.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
+        let first = crate::io::text_width(&self.doc);
         let l =
             if !self.view.read_mode && self.view.mode == ViewMode::Print { self.layout() } else { self.output_layout_of(&self.doc, false, false) };
         let Some((caret, page)) = l.caret_on(pos, self.page_hint).and_then(|c| Some((c, l.pages.get(c.page)?))) else { return first };
