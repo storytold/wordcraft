@@ -115,7 +115,7 @@ impl SpellingForm {
             return;
         }
         if let Some(command) = command {
-            let params = if command == "review.applySuggestion" { json!({"text": self.replacement}) } else { json!({}) };
+            let params = if matches!(command, "review.applySuggestion" | "review.changeAll") { json!({"text": self.replacement}) } else { json!({}) };
             if let Err(e) = app.run(command, params) {
                 self.message = e;
                 return;
@@ -131,6 +131,7 @@ enum Ask {
     CheckAgain,
     ReadAloud,
     Change(String),
+    ChangeAll(String),
     Manual(String),
     AddToAutoCorrect(String),
     AutoCorrectOptions,
@@ -142,8 +143,9 @@ enum Ask {
 
 /// The more-options menu rows of a suggestion.
 const MORE_CHANGE: u8 = 0;
-const MORE_ADD: u8 = 1;
-const MORE_OPTIONS: u8 = 2;
+const MORE_CHANGE_ALL: u8 = 1;
+const MORE_ADD: u8 = 2;
+const MORE_OPTIONS: u8 = 3;
 
 /// The shared task-pane host supplies the title, menu, Close button, docking and keyboard routing.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
@@ -217,6 +219,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, form: &mut SpellingForm) {
         if let Some(row) = form.menu_row {
             let mut entries = vec![Entry::new(MORE_CHANGE, tl!("Change…"))];
             if spelling {
+                entries.push(Entry::new(MORE_CHANGE_ALL, tl!("Change All")));
                 entries.push(Entry::new(MORE_ADD, tl!("Add to AutoCorrect")));
             }
             entries.push(Entry::new(MORE_OPTIONS, tl!("AutoCorrect Options…")));
@@ -224,6 +227,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, form: &mut SpellingForm) {
             let menu = Menu::context(tl!("More options"), &listed.response).pick(ui, &entries);
             match menu.picked {
                 Some(MORE_CHANGE) => ask = Some(Ask::Manual(target)),
+                Some(MORE_CHANGE_ALL) => ask = Some(Ask::ChangeAll(target)),
                 Some(MORE_ADD) => ask = Some(Ask::AddToAutoCorrect(target)),
                 Some(MORE_OPTIONS) => ask = Some(Ask::AutoCorrectOptions),
                 _ => {}
@@ -280,6 +284,10 @@ fn body(app: &mut WordApp, ui: &mut Ui, form: &mut SpellingForm) {
         Ask::Change(suggestion) => {
             form.replacement = suggestion;
             form.act(app, Some("review.applySuggestion"));
+        }
+        Ask::ChangeAll(suggestion) => {
+            form.replacement = suggestion;
+            form.act(app, Some("review.changeAll"));
         }
         Ask::Manual(suggestion) => {
             if !suggestion.is_empty() {
@@ -352,6 +360,23 @@ mod tests {
         assert!(h.state().spelling_review.is_none());
         h.state_mut().run("edit.undo", json!({})).unwrap();
         assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "The quick brwn fox.");
+    }
+
+    /// #6510: Change All sits in a suggestion's menu, where Word has it, and corrects every
+    /// occurrence at once (so the pass then finds nothing left) in a single undo step.
+    #[test]
+    fn spelling_review_dialog_changes_all_occurrences_from_a_suggestion_menu() {
+        let text = "The brwn fox and the brwn dog.";
+        let mut h = harness(text);
+        let replacement = form(h.state()).issue["suggestions"][0].as_str().unwrap().to_string();
+        h.get_by_label(&format!("More ({replacement})")).click();
+        h.run_steps(3);
+        h.get_by_label("Change All").click();
+        h.run_steps(3);
+        assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), format!("The {replacement} fox and the {replacement} dog."));
+        assert!(form(h.state()).done(), "both occurrences are corrected, so the pass is finished");
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), text);
     }
 
     #[test]
