@@ -11,14 +11,22 @@ use serde_json::json;
 use super::{HOME_TEMPLATES, TEMPLATES, TemplateThumbs, error_line, heading, label, open_recent, thumbs};
 use crate::WordApp;
 
-/// The recent documents as the framework lists them: the app's paths, each named by its file name.
-fn recent_files(app: &WordApp) -> Vec<RecentFile> {
-    app.ui
-        .recent
+/// Lists visible recent documents with any confirmed desktop availability note.
+fn recent_files(_ctx: &egui::Context, app: &mut WordApp) -> Vec<RecentFile> {
+    let count = app.ui.recent.len().min(app.ui.recent_shown());
+    let paths = &app.ui.recent[..count];
+    #[cfg(not(target_arch = "wasm32"))]
+    app.recent_files.refresh(_ctx, paths, std::time::Instant::now());
+    paths
         .iter()
         .map(|path| {
             let name = std::path::Path::new(path).file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
-            RecentFile::new(path.as_str(), name)
+            let file = RecentFile::new(path.as_str(), name);
+            #[cfg(not(target_arch = "wasm32"))]
+            if app.recent_files.missing(path) {
+                return file.note(tl!("File not found"));
+            }
+            file
         })
         .collect()
 }
@@ -75,7 +83,7 @@ pub(super) fn home(ui: &mut Ui, app: &mut WordApp) {
     if let Some(error) = app.backstage_state.open_error.clone() {
         error_line(ui, &error);
     }
-    let recent = recent_files(app);
+    let recent = recent_files(ui.ctx(), app);
     let cards = template_cards(&TEMPLATES[..HOME_TEMPLATES.min(TEMPLATES.len())]);
     let store = thumbs::store(&ctx);
     let region = app.session.region();
@@ -119,7 +127,34 @@ pub(super) fn open(ui: &mut Ui, app: &mut WordApp) {
     if let Some(error) = app.backstage_state.open_error.clone() {
         error_line(ui, &error);
     }
-    let recent = recent_files(app);
+    let recent = recent_files(ui.ctx(), app);
     let out = RecentList::new(&recent).max_recent(app.ui.recent_shown()).empty(label("Documents you open will show up here.")).show(ui);
     run_actions(app, out.actions);
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    /// The shared Home/Open list gets a note for a missing path without changing its label or identity.
+    #[test]
+    fn recent_file_retains_identity_and_gets_missing_note() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let unique = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let path = std::env::temp_dir().join(format!("wordcraft-recent-{}-{unique}.docx", std::process::id()));
+        app.ui.recent = vec![path.to_string_lossy().into_owned()];
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let files = recent_files(&ctx, &mut app);
+            let [file] = files.as_slice() else { panic!("expected one recent file") };
+            assert_eq!(file.path, path);
+            assert_eq!(file.name, path.file_name().unwrap().to_string_lossy());
+            if file.note.as_deref() == Some(tl!("File not found")) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "the missing file did not get a note");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
 }

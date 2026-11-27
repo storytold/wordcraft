@@ -140,6 +140,8 @@ impl WordApp {
             closing: _,
             session: _,
             services: _,
+            #[cfg(not(target_arch = "wasm32"))]
+                recent_files: _,
             host: _,
             settings: _,
             settings_notices: _,

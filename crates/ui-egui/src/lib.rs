@@ -65,6 +65,8 @@ pub mod print_page;
 pub mod printing;
 pub mod proofing_pane;
 pub mod read_aloud;
+#[cfg(not(target_arch = "wasm32"))]
+mod recent_files;
 mod restrict_pane;
 pub mod ribbon;
 mod save_types;
@@ -478,6 +480,9 @@ pub struct WordApp {
     pub export_error: String,
     /// The document's [`StatusCounts`] and the key they were computed for; see [`WordApp::cached_status_counts`].
     pub status_counts: (u64, StatusCounts),
+    /// Availability of displayed recent files, checked off the UI thread (#3314).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) recent_files: recent_files::RecentFiles,
     last_autosave: f64,
     /// The tab shown before the Equation tab came up (restored when editing ends).
     pub(crate) equation_prev_tab: Option<String>,
