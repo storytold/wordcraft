@@ -91,6 +91,11 @@ pub struct Settings {
     /// Most consecutive lines that may end with a hyphen (`w:consecutiveHyphenLimit`); 0 = no limit.
     pub consecutive_hyphen_limit: u32,
     pub page_color: Option<Rgb>,
+    /// The theme colour `page_color` came from (`w:background/@w:themeColor`), as the file gave
+    /// it ([`crate::props::CharProps::color_sources`]). Set the colour through
+    /// [`Settings::set_page_color`], which drops it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_color_source: Option<crate::props::ColorSource>,
     /// Picture or texture page background (Design › Page Color › Fill Effects), drawn over the colour.
     pub page_picture: Option<PagePicture>,
     pub watermark: Option<Watermark>,
@@ -100,6 +105,11 @@ pub struct Settings {
     /// Theme colours: dk1 lt1 dk2 lt2 accent1..6 hlink folHlink.
     pub theme_colors: Vec<Rgb>,
     pub theme_name: String,
+    /// The colour scheme mapping (`w:clrSchemeMapping`, ECMA-376 §17.15.1.20): the theme colour
+    /// (an index into `theme_colors`) that text1, background1, text2, background2, accent1–6,
+    /// hyperlink and followedHyperlink each stand for. `None`: each stands for its own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme_color_map: Option<[u8; 12]>,
     pub footnote_format: section::NumFormat,
     pub endnote_format: section::NumFormat,
     /// The document's footnote and endnote placement, start and restart (`w:footnotePr` /
@@ -319,12 +329,14 @@ impl Default for Settings {
             hyphenate_caps: true,
             consecutive_hyphen_limit: 0,
             page_color: None,
+            page_color_source: None,
             page_picture: None,
             watermark: None,
             major_font: styles::HEADING_FONT.into(),
             minor_font: styles::BODY_FONT.into(),
             theme_colors: THEME_COLORS.to_vec(),
             theme_name: "Craft".into(),
+            theme_color_map: None,
             footnote_format: section::NumFormat::Decimal,
             endnote_format: section::NumFormat::LowerRoman,
             footnote_pr: section::NoteProps::default(),
@@ -351,5 +363,13 @@ impl Default for Settings {
             remove_date_time: false,
             odf: None,
         }
+    }
+}
+
+impl Settings {
+    /// Set the page colour as a colour chosen: the theme colour it had goes.
+    pub fn set_page_color(&mut self, color: Option<Rgb>) {
+        self.page_color = color;
+        self.page_color_source = None;
     }
 }

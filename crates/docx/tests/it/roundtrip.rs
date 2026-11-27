@@ -6,8 +6,9 @@ use wordcraft_doc::fill::Fill;
 use wordcraft_doc::numbering::ListKind;
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{
-    Align, Border, BorderStyle, Borders, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, ParagraphTextDirection, PropChange, Rgb,
-    RowProps, TabAlign, TabLeader, TabStop, TableLook, TextAlignment, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
+    Align, BlockColorSources, Border, BorderStyle, Borders, CharColorSources, CharProps, ColorSource, HeightRule, Highlight, LineSpacing, NumRef,
+    ParaProps, ParagraphTextDirection, PropChange, Rgb, RowProps, ShadingSource, TabAlign, TabLeader, TabStop, TableLook, TextAlignment, TextColor,
+    TextDirection, ThemeColor, ThemeRef, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, NumFormat, PageVAlign, SectionProps, SectionStart};
 use wordcraft_doc::styles::{Style, StyleKind};
@@ -73,6 +74,9 @@ fn tiny_png() -> Vec<u8> {
 
 #[test]
 fn every_char_prop_round_trips() {
+    // The underline in a theme colour, with the colour stored beside it (ECMA-376 §17.3.2.40).
+    let accent = ThemeRef { color: ThemeColor::Accent2, tint: Some(0x99), shade: None };
+    let underline = accent.resolve(&wordcraft_doc::THEME_COLORS, None);
     let all = CharProps {
         style: Some("Strong".into()),
         font: Some("Georgia".into()),
@@ -82,13 +86,17 @@ fn every_char_prop_round_trips() {
         bold: Some(true),
         italic: Some(false),
         underline: Some(Underline::DotDash),
-        underline_color: Some(Rgb(1, 2, 3)),
+        underline_color: underline,
         strike: Some(true),
         double_strike: Some(false),
         color: Some(TextColor::Rgb(Rgb(0xAA, 0x10, 0x20))),
         highlight: Some(Highlight::Turquoise),
         shading: Some(Rgb(0xEE, 0xEE, 0x00)),
         border: Some(Border { style: BorderStyle::Double, width: 1.5, color: Some(Rgb(0xC0, 0, 0)), space: 2.0 }),
+        color_sources: Some(Box::new(CharColorSources {
+            underline: Some(ColorSource { theme: accent, value: Some(TextColor::Rgb(Rgb(1, 2, 3))), shown: underline.map(TextColor::Rgb) }),
+            ..Default::default()
+        })),
         vert_align: Some(VertAlign::Superscript),
         caps: Some(true),
         small_caps: Some(false),
@@ -164,6 +172,9 @@ fn every_char_prop_round_trips() {
 #[test]
 fn every_para_prop_round_trips() {
     let b = Border { style: BorderStyle::Double, width: 0.75, color: Some(Rgb(9, 8, 7)), space: 4.0 };
+    // The shading's fill in a theme colour, with the colours stored beside it (§17.3.5).
+    let accent = ThemeRef { color: ThemeColor::Accent5, tint: None, shade: Some(0xBF) };
+    let fill = accent.resolve(&wordcraft_doc::THEME_COLORS, None);
     let pp = ParaProps {
         style: Some("Heading1".into()),
         align: Some(Align::Justify),
@@ -194,8 +205,19 @@ fn every_para_prop_round_trips() {
             TabStop { pos: 216.0, align: TabAlign::Clear, leader: TabLeader::None },
             TabStop { pos: 250.0, align: TabAlign::Bar, leader: TabLeader::MiddleDot },
         ]),
-        shading: Some(Rgb(0xDD, 0xEE, 0xFF)),
+        shading: fill,
         borders: Some(Borders { top: Some(b), left: Some(Border::single(0.5)), bottom: Some(b), right: None, between: Some(b), inside_v: None }),
+        color_sources: Some(Box::new(BlockColorSources {
+            shading: Some(ShadingSource {
+                pattern: Some("clear".into()),
+                color: Some(TextColor::Auto),
+                fill: Some(TextColor::Rgb(Rgb(0xDD, 0xEE, 0xFF))),
+                fill_theme: Some(accent),
+                shown: fill,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })),
         suppress_hyphens: Some(true),
         suppress_line_numbers: Some(true),
         bidi: Some(false),
@@ -646,6 +668,18 @@ fn every_table_style_part_round_trips() {
     let valigns = [VAlign::Top, VAlign::Center, VAlign::Bottom];
     for (i, part) in TablePart::ALL.into_iter().enumerate() {
         let n = i as u8;
+        // Every other part's fill in a theme colour, the colour it stores beside it as the others'.
+        let stored = Rgb(0x10 + n, 0x80, 0xF0 - n);
+        let theme = (i % 2 == 1).then_some(ThemeRef { color: ThemeColor::ALL[i % 16], tint: Some(0x40 + n), shade: None });
+        let fill = theme.map_or(Some(stored), |t| t.resolve(&wordcraft_doc::THEME_COLORS, None));
+        let shading = theme.map(|t| ShadingSource {
+            pattern: Some("clear".into()),
+            color: Some(TextColor::Auto),
+            fill: Some(TextColor::Rgb(stored)),
+            fill_theme: Some(t),
+            shown: fill,
+            ..Default::default()
+        });
         let f = PartFormat {
             chr: CharProps {
                 bold: Some(i % 2 == 0),
@@ -656,7 +690,7 @@ fn every_table_style_part_round_trips() {
                 color: Some(TextColor::Rgb(Rgb(n, 0x20, 0x40))),
                 ..Default::default()
             },
-            fill: Some(Rgb(0x10 + n, 0x80, 0xF0 - n)),
+            fill,
             borders: Some(Borders {
                 top: Some(Border { style: BorderStyle::Double, width: 1.5, color: Some(Rgb(n, 0, 0)), space: 0.0 }),
                 bottom: Some(Border::single(0.5 + i as f32 / 4.0)),
@@ -666,6 +700,7 @@ fn every_table_style_part_round_trips() {
             }),
             align: aligns.get(i % 3).copied(),
             v_align: valigns.get(i % 3).copied(),
+            color_sources: shading.map(|shading| Box::new(BlockColorSources { shading: Some(shading), ..Default::default() })),
         };
         st.set_table_part(part, f);
     }

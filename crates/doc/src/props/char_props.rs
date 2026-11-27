@@ -1,4 +1,5 @@
 use super::color::{Rgb, TextColor};
+use super::color_source::{CharColorSources, put, source};
 use super::para_props::Border;
 use super::{Deserialize, Serialize};
 
@@ -265,6 +266,12 @@ pub struct CharProps {
     /// Character border (`w:bdr`); `style: None` = explicitly no border.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub border: Option<Border>,
+    /// The theme colours `color`, `underline_color`, the border's colour and `shading` came from,
+    /// as the file gave them ([`CharColorSources`]), so saving writes them back. Layout reads the
+    /// colours themselves. Set those through [`CharProps::set_color`] and its kind, which drop
+    /// the record of a colour chosen in its place.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_sources: Option<Box<CharColorSources>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vert_align: Option<VertAlign>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -500,8 +507,35 @@ impl CharProps {
     }
 
     fn minus_text_style(&mut self, base: &CharProps) {
-        drop_same_fields!(self, base; style, font, sym_font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
-            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl);
+        drop_same_fields!(self, base; style, font, sym_font, size, bold, italic, underline, strike, double_strike, highlight,
+            vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl);
+        self.minus_colors(base);
+    }
+
+    /// Each colour goes with its theme colour record: it is dropped only when both are the base's,
+    /// so a colour chosen to look like the base's theme colour stays chosen.
+    fn minus_colors(&mut self, base: &CharProps) {
+        let (mine, theirs) = (&self.color_sources, &base.color_sources);
+        let color = self.color == base.color && source(mine, |s| &s.color) == source(theirs, |s| &s.color);
+        let underline = self.underline_color == base.underline_color && source(mine, |s| &s.underline) == source(theirs, |s| &s.underline);
+        let border = self.border == base.border && source(mine, |s| &s.border) == source(theirs, |s| &s.border);
+        let shading = self.shading == base.shading && source(mine, |s| &s.shading) == source(theirs, |s| &s.shading);
+        if color {
+            self.color = None;
+            put(&mut self.color_sources, |s| &mut s.color, None, CharColorSources::is_empty);
+        }
+        if underline {
+            self.underline_color = None;
+            put(&mut self.color_sources, |s| &mut s.underline, None, CharColorSources::is_empty);
+        }
+        if border {
+            self.border = None;
+            put(&mut self.color_sources, |s| &mut s.border, None, CharColorSources::is_empty);
+        }
+        if shading {
+            self.shading = None;
+            put(&mut self.color_sources, |s| &mut s.shading, None, CharColorSources::is_empty);
+        }
     }
 
     fn minus_run_visibility(&mut self, base: &CharProps) {
@@ -531,8 +565,56 @@ impl CharProps {
     }
 
     fn overlay_text_style(&mut self, patch: &CharProps) {
-        overlay_fields!(self, patch; style, font, sym_font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
-            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl);
+        overlay_fields!(self, patch; style, font, sym_font, size, bold, italic, underline, strike, double_strike, highlight,
+            vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl);
+        self.overlay_colors(patch);
+    }
+
+    /// A colour `patch` sets, or gives a theme colour for, replaces this one together with its
+    /// theme colour record: a colour set without one clears the record (the colour was chosen).
+    fn overlay_colors(&mut self, patch: &CharProps) {
+        let theirs = patch.color_sources.as_deref();
+        if patch.color.is_some() || theirs.is_some_and(|s| s.color.is_some()) {
+            self.color = patch.color;
+            put(&mut self.color_sources, |s| &mut s.color, theirs.and_then(|s| s.color), CharColorSources::is_empty);
+        }
+        if patch.underline_color.is_some() || theirs.is_some_and(|s| s.underline.is_some()) {
+            self.underline_color = patch.underline_color;
+            put(&mut self.color_sources, |s| &mut s.underline, theirs.and_then(|s| s.underline), CharColorSources::is_empty);
+        }
+        if patch.border.is_some() || theirs.is_some_and(|s| s.border.is_some()) {
+            self.border = patch.border;
+            put(&mut self.color_sources, |s| &mut s.border, theirs.and_then(|s| s.border), CharColorSources::is_empty);
+        }
+        if patch.shading.is_some() || theirs.is_some_and(|s| s.shading.is_some()) {
+            self.shading = patch.shading;
+            put(&mut self.color_sources, |s| &mut s.shading, theirs.and_then(|s| s.shading.clone()), CharColorSources::is_empty);
+        }
+    }
+
+    /// Set the text colour (`None` inherits) as a colour chosen: the theme colour it had goes.
+    pub fn set_color(&mut self, color: Option<TextColor>) {
+        self.color = color;
+        put(&mut self.color_sources, |s| &mut s.color, None, CharColorSources::is_empty);
+    }
+
+    /// Set the underline colour, as [`CharProps::set_color`] sets the text colour.
+    pub fn set_underline_color(&mut self, color: Option<Rgb>) {
+        self.underline_color = color;
+        put(&mut self.color_sources, |s| &mut s.underline, None, CharColorSources::is_empty);
+    }
+
+    /// Set the character border, its colour as [`CharProps::set_color`] sets the text colour. A
+    /// change of the border's width or style alone keeps its theme colour: change it in place.
+    pub fn set_border(&mut self, border: Option<Border>) {
+        self.border = border;
+        put(&mut self.color_sources, |s| &mut s.border, None, CharColorSources::is_empty);
+    }
+
+    /// Set the character shading, as [`CharProps::set_color`] sets the text colour.
+    pub fn set_shading(&mut self, shading: Option<Rgb>) {
+        self.shading = shading;
+        put(&mut self.color_sources, |s| &mut s.shading, None, CharColorSources::is_empty);
     }
 
     fn overlay_run_visibility(&mut self, patch: &CharProps) {

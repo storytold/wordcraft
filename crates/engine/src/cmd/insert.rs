@@ -132,7 +132,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .when(drop_cap_off),
         CommandSpec::new("insert.horizontalLine", "Horizontal Line", "Home › Paragraph › Borders", |s, _| {
             super::para::fmt(s, &|p| {
-                p.borders = Some(wordcraft_doc::props::Borders { bottom: Some(wordcraft_doc::props::Border::single(1.5)), ..Default::default() })
+                p.set_borders(Some(wordcraft_doc::props::Borders { bottom: Some(wordcraft_doc::props::Border::single(1.5)), ..Default::default() }))
             })
         }),
         CommandSpec::new("insert.textFromFile", "Text from File", "Insert › Text › Object", |s, v| {

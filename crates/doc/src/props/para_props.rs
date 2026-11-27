@@ -1,5 +1,6 @@
 use super::char_props::{NumChange, PropChange};
 use super::color::Rgb;
+use super::color_source::{BlockColorSources, put, put_borders};
 use super::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -446,6 +447,10 @@ pub struct ParaProps {
     pub shading: Option<Rgb>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub borders: Option<Borders>,
+    /// The theme colours `shading` and the borders' colours came from, as the file gave them
+    /// ([`BlockColorSources`]), so saving writes them back; see [`super::CharProps::color_sources`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_sources: Option<Box<BlockColorSources>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suppress_hyphens: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -517,7 +522,31 @@ impl ParaProps {
 
     fn overlay_layout(&mut self, patch: &ParaProps) {
         overlay_fields!(self, patch; style, align, indent_left, indent_right, indent_first, indent_left_chars, indent_right_chars, indent_first_chars,
-            space_before, space_after, space_before_auto, space_after_auto, line_spacing, contextual_spacing, mirror_indents, adjust_right_indent, tabs, shading, borders);
+            space_before, space_after, space_before_auto, space_after_auto, line_spacing, contextual_spacing, mirror_indents, adjust_right_indent, tabs);
+        // The shading and the borders go with their theme colours, as a run's colours do
+        // (`CharProps::overlay`); the borders replace the inherited ones whole.
+        let theirs = patch.color_sources.as_deref();
+        if patch.shading.is_some() || theirs.is_some_and(|s| s.shading.is_some()) {
+            self.shading = patch.shading;
+            put(&mut self.color_sources, |s| &mut s.shading, theirs.and_then(|s| s.shading.clone()), BlockColorSources::is_empty);
+        }
+        if patch.borders.is_some() || theirs.is_some_and(|s| !s.borders.is_empty()) {
+            self.borders = patch.borders;
+            put_borders(&mut self.color_sources, theirs.map(|s| s.borders).unwrap_or_default());
+        }
+    }
+
+    /// Set the shading as a colour chosen: the theme colour it had goes.
+    pub fn set_shading(&mut self, shading: Option<Rgb>) {
+        self.shading = shading;
+        put(&mut self.color_sources, |s| &mut s.shading, None, BlockColorSources::is_empty);
+    }
+
+    /// Set the borders, their colours chosen: the theme colours they had go. A change of a
+    /// border's width or style alone keeps its theme colour: change it in place.
+    pub fn set_borders(&mut self, borders: Option<Borders>) {
+        self.borders = borders;
+        put_borders(&mut self.color_sources, Default::default());
     }
 
     fn overlay_pagination(&mut self, patch: &ParaProps) {

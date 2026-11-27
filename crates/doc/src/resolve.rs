@@ -360,7 +360,9 @@ impl StyleSheet {
         with.overlay(&ParaProps { style: None, ..table.clone() });
         let (with, _) = self.para_style_props_over(&style, with, CharProps::default());
         let (without, _) = self.para_style_props_over(&style, self.default_para.clone(), CharProps::default());
-        diff_patch(&with, &without)
+        let mut patch = diff_patch(&with, &without);
+        pair_para_colors(&mut patch, &with);
+        patch
     }
 
     /// What a table style's run formatting `table` changes for a run of character style
@@ -380,7 +382,10 @@ impl StyleSheet {
         };
         let mut with = self.default_chr.clone();
         with.overlay(&CharProps { style: None, ..table.clone() });
-        diff_patch(&chain(with), &chain(self.default_chr.clone()))
+        let with = chain(with);
+        let mut patch = diff_patch(&with, &chain(self.default_chr.clone()));
+        pair_char_colors(&mut patch, &with);
+        patch
     }
 
     /// Resolve a paragraph's properties.
@@ -445,6 +450,42 @@ impl StyleSheet {
         cp.overlay(&direct);
         ResolvedChar::from(&cp)
     }
+}
+
+/// Each colour of `patch` whole: a colour and its theme colour record go together
+/// (`CharProps::overlay`), so where the patch has either (the records differ by box, not one by
+/// one, in [`diff_patch`]), it takes both from `with`.
+fn pair_char_colors(patch: &mut CharProps, with: &CharProps) {
+    let records = |p: &CharProps| p.color_sources.as_deref().cloned().unwrap_or_default();
+    let (mine, theirs) = (records(patch), records(with));
+    let mut kept = crate::props::CharColorSources::default();
+    if patch.color.is_some() || mine.color.is_some() {
+        (patch.color, kept.color) = (with.color, theirs.color);
+    }
+    if patch.underline_color.is_some() || mine.underline.is_some() {
+        (patch.underline_color, kept.underline) = (with.underline_color, theirs.underline);
+    }
+    if patch.border.is_some() || mine.border.is_some() {
+        (patch.border, kept.border) = (with.border, theirs.border);
+    }
+    if patch.shading.is_some() || mine.shading.is_some() {
+        (patch.shading, kept.shading) = (with.shading, theirs.shading);
+    }
+    patch.edit_color_sources(|s| *s = kept);
+}
+
+/// [`pair_char_colors`] for a paragraph's shading and borders.
+fn pair_para_colors(patch: &mut ParaProps, with: &ParaProps) {
+    let records = |p: &ParaProps| p.color_sources.as_deref().cloned().unwrap_or_default();
+    let (mine, theirs) = (records(patch), records(with));
+    let mut kept = crate::props::BlockColorSources::default();
+    if patch.shading.is_some() || mine.shading.is_some() {
+        (patch.shading, kept.shading) = (with.shading, theirs.shading);
+    }
+    if patch.borders.is_some() || !mine.borders.is_empty() {
+        (patch.borders, kept.borders) = (with.borders, theirs.borders);
+    }
+    patch.edit_color_sources(|s| *s = kept);
 }
 
 /// The properties of `with` that differ from `without` (both fully resolved property sets of one

@@ -456,12 +456,12 @@ fn region(r: &Value, f: &mut PartFormat) -> Result<(), CmdError> {
     if !r.is_object() {
         return Err(CmdError::Params("a part is an object".into()));
     }
-    let chr = &mut f.chr;
     if r.get("fill").is_some() {
-        f.fill = color_param(r, "fill")?;
+        f.set_fill(color_param(r, "fill")?);
     }
+    let chr = &mut f.chr;
     if r.get("color").is_some() {
-        chr.color = color_param(r, "color")?.map(TextColor::Rgb);
+        chr.set_color(color_param(r, "color")?.map(TextColor::Rgb));
     }
     if let Some(b) = p::bool(r, "bold") {
         chr.bold = Some(b);
@@ -520,21 +520,22 @@ fn region(r: &Value, f: &mut PartFormat) -> Result<(), CmdError> {
     match r.get("borders") {
         Some(Value::Bool(true)) => {
             let width = p::f32(r, "borderWidth").unwrap_or(0.5).clamp(0.25, 6.0);
-            f.borders = Some(Borders::all(Border { style: BorderStyle::Single, width, color: color_param(r, "borderColor")?, space: 0.0 }));
+            f.set_borders(Some(Borders::all(Border { style: BorderStyle::Single, width, color: color_param(r, "borderColor")?, space: 0.0 })));
         }
-        Some(Value::Bool(false)) => f.borders = Some(Borders::all(NO_LINE)),
-        Some(Value::Null) => f.borders = None,
+        Some(Value::Bool(false)) => f.set_borders(Some(Borders::all(NO_LINE))),
+        Some(Value::Null) => f.set_borders(None),
+        // The edges set lose their theme colours; the others keep theirs.
         Some(Value::Array(list)) => {
             let mut b = f.borders.unwrap_or_default();
             for e in list.iter().take(64) {
                 edges_param(e, &mut b)?;
             }
-            f.borders = Some(b);
+            f.replace_borders(Some(b));
         }
         Some(e) => {
             let mut b = f.borders.unwrap_or_default();
             edges_param(e, &mut b)?;
-            f.borders = Some(b);
+            f.replace_borders(Some(b));
         }
         None => {}
     }

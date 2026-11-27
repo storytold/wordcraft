@@ -1211,6 +1211,11 @@ impl Document {
     /// [`Self::adopt_with`], its permission range ids from at least `perms` on (and past ours);
     /// `perms` moves past them.
     fn adopt_in(&mut self, mut src: Document, keep_styles: bool, perms: &mut u32) -> Fragment {
+        // Its theme colours would name this document's colours here: unless the two themes give
+        // them the same colours, the content keeps the colours it shows, as fixed ones.
+        if !self.same_theme_colors(&src) {
+            src.forget_theme_colors();
+        }
         let mut renamed = BTreeMap::new();
         let mut default_style = None;
         if keep_styles {

@@ -36,6 +36,28 @@ const MAX_DEPTH: usize = 16;
 /// A paragraph's, table's or cell's tracked formatting change, if it carries one.
 type Slot<T> = Option<Box<PropChange<T>>>;
 
+/// Properties as their authoring compares them (`CharProps::authored`): a colour that follows a
+/// theme colour by its record, not by the colour the theme gives it, so a theme change makes no
+/// formatting change, where a colour chosen in its place does.
+trait Authored: PartialEq + Sized {
+    fn authored(&self) -> Self;
+    fn same(&self, other: &Self) -> bool {
+        self == other || self.authored() == other.authored()
+    }
+}
+
+macro_rules! authored {
+    ($($t:ty),*) => {
+        $( impl Authored for $t {
+            fn authored(&self) -> Self {
+                <$t>::authored(self)
+            }
+        } )*
+    };
+}
+
+authored!(CharProps, ParaProps, TableProps, RowProps, CellProps, SectionProps);
+
 /// What a [`Slot`] should become (which may be no change at all).
 struct Replacement<T>(Slot<T>);
 
@@ -71,14 +93,14 @@ impl Recorder<'_> {
 
     /// The tracked change `after` should carry, given the props `before` the command (`f` strips
     /// everything that isn't formatting); `None` when it already carries the right one.
-    fn change<T: Clone + PartialEq>(&mut self, before: &T, after: &T, f: fn(&T) -> T, get: fn(&T) -> &Slot<T>) -> Option<Replacement<T>> {
+    fn change<T: Clone + Authored>(&mut self, before: &T, after: &T, f: fn(&T) -> T, get: fn(&T) -> &Slot<T>) -> Option<Replacement<T>> {
         let (fb, fa) = (f(before), f(after));
         let (had, has) = (get(before), get(after));
         self.change_values(fb, fa, had, has)
     }
 
-    fn change_values<T: Clone + PartialEq>(&mut self, fb: T, fa: T, had: &Slot<T>, has: &Slot<T>) -> Option<Replacement<T>> {
-        let want = if fb == fa {
+    fn change_values<T: Clone + Authored>(&mut self, fb: T, fa: T, had: &Slot<T>, has: &Slot<T>) -> Option<Replacement<T>> {
+        let want = if fb.same(&fa) {
             // Not formatted by this command: keep the change it carries (or carried).
             if has.is_some() {
                 return None;
@@ -89,7 +111,7 @@ impl Recorder<'_> {
             // is superseded by this one.
             let own = had.as_ref().filter(|c| self.own(c.rev));
             let old = own.map(|c| c.old.clone()).unwrap_or(fb);
-            if old == fa {
+            if old.same(&fa) {
                 None
             } else {
                 let rev = own.map(|c| c.rev).unwrap_or_else(|| self.rid());
@@ -312,7 +334,38 @@ pub fn diff<T: Serialize>(old: &T, new: &T) -> Vec<Value> {
             out.push(json!({"prop": k, "value": if v.is_boolean() { json!(false) } else { Value::Null }}));
         }
     }
+    theme_colors_as_colors(&o, &n, &mut out);
     out
+}
+
+/// A change of a colour's theme colour record (`colorSources`, `pageBorderSources`) listed as
+/// the change of the colour it belongs to: the record isn't a property of its own.
+fn theme_colors_as_colors(o: &serde_json::Map<String, Value>, n: &serde_json::Map<String, Value>, out: &mut Vec<Value>) {
+    const RECORDS: [(&str, &[(&str, &str)]); 2] = [
+        (
+            "colorSources",
+            &[("color", "color"), ("underline", "underlineColor"), ("border", "border"), ("shading", "shading"), ("borders", "borders")],
+        ),
+        ("pageBorderSources", &[("", "pageBorders")]),
+    ];
+    let mut colors = Vec::new();
+    for (key, members) in RECORDS {
+        let (a, b) = (o.get(key), n.get(key));
+        if a == b {
+            continue;
+        }
+        for (member, prop) in members {
+            if member.is_empty() || a.and_then(|v| v.get(member)) != b.and_then(|v| v.get(member)) {
+                colors.push(*prop);
+            }
+        }
+    }
+    out.retain(|d| !matches!(d["prop"].as_str(), Some("colorSources" | "pageBorderSources")));
+    for prop in colors {
+        if !out.iter().any(|d| d["prop"] == prop) {
+            out.push(json!({"prop": prop, "value": n.get(prop).cloned().unwrap_or(Value::Null)}));
+        }
+    }
 }
 
 /// The properties a run's (or paragraph mark's) change set.
