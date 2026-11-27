@@ -1141,8 +1141,8 @@ impl FooterWalks {
             rules: "-";
             collections: "field.done*2";
             scope: "memo lookup and insert keyed by directory start and count, one insert per budget-charged walk";
-            loss: "a refused walk (budget spent) or a previously rejected walk, which is never reused";
-            fallback: "report the footer as unanchored so the scan records incomplete coverage";
+            loss: "a refused walk (budget spent), or a cached rejected walk, which is never reused";
+            fallback: "a refused charge reports the footer unanchored so the scan records incomplete coverage; a cached rejection is charged again and, when the charge succeeds, verified afresh under the new footer's upper bound, returning that result";
             package_loss: "independent";
         }
 
@@ -1441,14 +1441,15 @@ fn directory_at(bytes: &[u8], footer: usize) -> Option<(usize, u64)> {
 
 /// Load the trailing slice of a split. A footer proven to be the archive's own (its directory, every local
 /// extent and its comment are verified) is read through a view that ends at that footer with an empty comment,
-/// so a record copied into the comment cannot compete with it. Without that proof the slice is read whole.
+/// so a record copied into the comment cannot compete with it. Without that proof, or when that view does not
+/// certify, the slice is read whole; either load certifying is enough.
 fn standalone_trailing(bytes: &[u8], footer: usize, limits: crate::Limits, walks: &mut FooterWalks) -> Option<bool> {
     observation_contract! {
         rules: "-";
         collections: "-";
         scope: "one copy of the proven trailing archive, bounded by the input, with a zeroed comment length";
-        loss: "an unverified footer, a directory larger than the entry budget, or an exhausted walk budget";
-        fallback: "read the whole slice as given, which can only withhold certification";
+        loss: "an unverified footer, a directory larger than the entry budget, an exhausted walk budget, or a proven-footer view that does not certify";
+        fallback: "the ordinary whole-slice loader decides whether the slice qualifies and can certify it; this happens on budget refusal, on unsuccessful footer verification, and when the proven-footer view does not certify, so certification is either view certifying and is withheld only when both withhold";
         package_loss: "independent";
     }
 
@@ -1461,7 +1462,12 @@ fn standalone_trailing(bytes: &[u8], footer: usize, limits: crate::Limits, walks
     }
     let mut view = bytes.get(..footer + 22)?.to_vec();
     view.get_mut(footer + 20..footer + 22)?.fill(0);
-    standalone_opc(&view, footer, limits)
+    // Shortening moves find_eocd's scan window, so the bounded view is not a strict superset of what the whole
+    // slice accepts: a view that does not certify defers to the whole-slice load.
+    match standalone_opc(&view, footer, limits) {
+        Some(true) => Some(true),
+        _ => standalone_opc(bytes, footer, limits),
+    }
 }
 
 /// Isolated loading reuses the normal entry, decompression and XML budgets. `None` when the slice is not a
