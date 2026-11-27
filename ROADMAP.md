@@ -1010,6 +1010,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-06 | trivial | Progress log: Change Picture keeps the width and takes the new picture's aspect ratio (#5761) |
 | 2026-11-06 | trivial | Progress log: superscript and subscript text at 0.65 of its size rounded to the half point (Word for Mac) |
 | 2026-11-06 | trivial | Progress log: line numbers take the document's "Line Number" style |
+| 2026-11-07 | trivial | P0113: paragraph and character style shortcuts in Customize Keyboard’s Styles category and Modify Style › Format › Shortcut key; preferences persist the bindings and applying a style uses the existing undo path (#3910). New Style disables the shortcut item until creation. Readiness estimates unchanged. |
 | 2026-11-06 | trivial | Print helpers remove loaded PDF/settings files before driver work, tolerate prior removal and report cleanup errors; a held-driver regression checks the files are already absent (#5710) |
 | 2026-11-06 | trivial | Windows print submissions isolated per helper process; cancelled driver work cannot block a retry (#5710) |
 | 2026-11-06 | trivial | Progress log: print cancellation before sending, including without a document, and the Windows repeated-conversion limitation (#5710) |

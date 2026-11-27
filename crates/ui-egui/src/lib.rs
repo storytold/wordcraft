@@ -396,6 +396,9 @@ pub struct WordApp {
     pub(crate) command_catalog_mac: bool,
     /// The interface language the catalog's labels were translated into: rebuilt when it changes.
     pub(crate) command_catalog_lang: &'static str,
+    /// The styles with shortcut keys (#3910) the catalog has entries for, with the names it shows:
+    /// rebuilt when a style gains or loses its keys or is renamed.
+    pub(crate) command_catalog_styles: Vec<(String, String)>,
     /// The session's key overrides, kept as one `Arc` while they do not change: the runtime
     /// rebuilds its keymap when the `Arc` it is handed changes ([`WordApp::overrides`]).
     pub(crate) key_overrides: std::sync::Arc<craft::keymap::Overrides>,

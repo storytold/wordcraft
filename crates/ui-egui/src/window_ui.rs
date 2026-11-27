@@ -146,6 +146,7 @@ impl WordApp {
             command_catalog: _,
             command_catalog_mac: _,
             command_catalog_lang: _,
+            command_catalog_styles: _,
             key_overrides: _,
             command_states: _,
             command_states_cache: _,

@@ -77,6 +77,7 @@ languages, screen-reader access, ecosystem decisions (VBA, add-ins, cloud), an i
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-12 | minor | #5875 round 18: package entry and availability lookups carry explicit absence/unknown states; the observation gate resolves bounded helper/accessor aliases and pins completeness predicates and reader derives. Qualified standard macros and four inert attributes are supported; named-field bindings and trait bodies remain closed grammar. Synthetic controls only; independent endpoint review remains required and readiness estimates are unchanged. |
+| 2026-11-07 | trivial | P0113: paragraph and character style shortcuts in Customize Keyboard’s Styles category and Modify Style › Format › Shortcut key; preferences persist the bindings and applying a style uses the existing undo path (#3910). New Style disables the shortcut item until creation. Readiness estimates unchanged. |
 | 2026-11-03 | trivial | DOCX text-frame anchor locks survive JSON and two save/reopen cycles, including position and size edits |
 | 2026-11-03 | minor | M15: Arabic mirrored interface (#1195); 28 UI languages from craft-i18n; Hebrew UI, native-speaker review and native IME acceptance (#155–#164) remain open |
 | 2026-10-31 | minor | #3398: persistent screen-only green, cream and gray paper presets, with document backgrounds and export colors retained. Read Mode None follows the screen preset; Sepia/Inverse retain priority. |

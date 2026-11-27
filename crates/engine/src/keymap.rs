@@ -29,7 +29,14 @@ fn pieces(spec: &CommandSpec) -> impl Iterator<Item = &'static str> {
 /// The keymap of every engine command with its registry keys, under `overrides`. Off macOS,
 /// Alt+Q is the interface's command search key, so it never reaches an engine command.
 pub(crate) fn registry_keymap(reg: &Registry, overrides: &Overrides) -> Keymap {
-    let catalog: Vec<CommandDef> = reg
+    keymap_with_style(reg, overrides, None)
+}
+
+/// [`registry_keymap`], with an entry for the style `extra` (its id) too, so a key can be given
+/// to a style that has none yet. The styles that already have keys in `overrides` always have
+/// their entries ([`style_defs`]).
+pub(crate) fn keymap_with_style(reg: &Registry, overrides: &Overrides, extra: Option<&str>) -> Keymap {
+    let mut catalog: Vec<CommandDef> = reg
         .all()
         .iter()
         .map(|spec| {
@@ -38,9 +45,43 @@ pub(crate) fn registry_keymap(reg: &Registry, overrides: &Overrides) -> Keymap {
                 .fold(CommandDef::new(CommandRef::new(spec.id), spec.label, Scope::app()), CommandDef::with_default)
         })
         .collect();
+    let extra = extra.map(style_command).filter(|c| overrides.get(&c.key()).is_none());
+    catalog.extend(style_defs(overrides).chain(extra.map(style_def)));
     let platform = Platform::current();
     let reserved: Vec<Chord> = if platform == Platform::Mac { Vec::new() } else { Chord::parse("Alt+Q").ok().into_iter().collect() };
     Keymap::new(catalog, Scopes::new(), platform).with_reserved(reserved).with_overrides(overrides.clone())
+}
+
+/// The command a style's shortcut key runs (#3910): Apply Styles with the style's id, as a
+/// command with parameters, so the key is kept in the same [`Overrides`] as command keys (saved
+/// with the preferences), and taking a key from a command or another style works as between
+/// commands. Word binds the key to the style, so a renamed style keeps it.
+pub fn style_command(style_id: &str) -> CommandRef {
+    CommandRef::with_params(STYLE_COMMAND, serde_json::json!({"style": style_id}))
+}
+
+/// The command style keys run.
+pub const STYLE_COMMAND: &str = "styles.apply";
+
+/// The style id a style key's command applies; `None` for any other command.
+pub fn style_of(command: &CommandRef) -> Option<&str> {
+    if command.id != STYLE_COMMAND {
+        return None;
+    }
+    command.params.get("style").and_then(Value::as_str).filter(|id| !id.trim().is_empty() && id.len() <= MAX_ID_LEN)
+}
+
+/// A style's catalog entry: no built-in keys, the style id as its label (the front end shows the
+/// style's name).
+fn style_def(command: CommandRef) -> CommandDef {
+    let label = style_of(&command).unwrap_or_default().to_string();
+    CommandDef::new(command, label, Scope::app())
+}
+
+/// Catalog entries for the styles that have keys in `overrides`, in key order. The front end's
+/// catalog adds these too, so a style key dispatches `styles.apply` with the style.
+pub fn style_defs(overrides: &Overrides) -> impl Iterator<Item = CommandDef> + '_ {
+    overrides.iter().filter_map(|(key, _)| CommandRef::parse_key(key)).filter(|c| style_of(c).is_some()).map(style_def)
 }
 
 /// A key of an old saved map: its canonical text and the chord it is on `platform`.
