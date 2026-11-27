@@ -2442,3 +2442,69 @@ fn hostile_numbers_are_ignored() {
     assert!(h.state().canvas.view.zoom.is_finite() && h.state().canvas.view.zoom > 0.0);
     assert!(h.state().canvas.view.offset.0.is_finite() && h.state().canvas.view.offset.1.is_finite());
 }
+
+/// `viewed_page` with the sliver of the page above that Go To leaves at the top of the window: it is not the page in view.
+#[test]
+fn a_sliver_of_the_page_above_is_not_the_page_in_view() {
+    let rects: Vec<craft::behavior::kurbo::Rect> =
+        (0..4).map(|i| craft::behavior::kurbo::Rect::new(0.0, f64::from(i) * 110.0, 80.0, f64::from(i) * 110.0 + 100.0)).collect();
+    let layout = craft::pages::layout::PagedLayout { rects, size: Default::default(), columns: 1, bands: vec![(0.0, 100.0); 4] };
+    // The gap between pages is 10; page 2 ends at 320. A window top 4 above its end shows 4 of it: a sliver.
+    assert_eq!(viewed_page(None, 316.0, &layout, 100.0), 3, "4 points of page 2 is a sliver");
+    assert_eq!(viewed_page(None, 310.0, &layout, 100.0), 3, "as much as the gap is still a sliver");
+    assert_eq!(viewed_page(None, 300.0, &layout, 100.0), 2, "20 points of page 2 is the page in view");
+}
+
+/// In Columns and Two Up the pages are stored row by row: the gap to measure is the one to the page below, not to the
+/// page beside.
+#[test]
+fn a_sliver_of_a_row_above_is_not_the_page_in_view_with_columns() {
+    let rects: Vec<craft::behavior::kurbo::Rect> = [(0.0, 0.0), (90.0, 0.0), (0.0, 110.0), (90.0, 110.0)]
+        .iter()
+        .map(|&(x, y)| craft::behavior::kurbo::Rect::new(x, y, x + 80.0, y + 100.0))
+        .collect();
+    let layout = craft::pages::layout::PagedLayout { rects, size: Default::default(), columns: 2, bands: vec![(0.0, 100.0); 4] };
+    // The first row ends at 100 and the next starts at 110: a window top at 96 shows 4 points of it, a sliver.
+    assert_eq!(viewed_page(None, 96.0, &layout, 100.0), 2, "4 points of the row above is a sliver");
+    assert_eq!(viewed_page(None, 80.0, &layout, 100.0), 0, "20 points of the first row is the page in view");
+}
+
+/// A last row that is not full has no page below the one above it: the gap is still the one to the next row.
+#[test]
+fn a_sliver_of_a_row_above_is_not_the_page_in_view_with_an_incomplete_last_row() {
+    let rects: Vec<craft::behavior::kurbo::Rect> =
+        [(0.0, 0.0), (90.0, 0.0), (0.0, 110.0)].iter().map(|&(x, y)| craft::behavior::kurbo::Rect::new(x, y, x + 80.0, y + 100.0)).collect();
+    let layout = craft::pages::layout::PagedLayout { rects, size: Default::default(), columns: 2, bands: vec![(0.0, 100.0); 3] };
+    assert_eq!(viewed_page(None, 96.0, &layout, 100.0), 2, "4 points of the row above is a sliver");
+    assert_eq!(viewed_page(None, 80.0, &layout, 100.0), 0, "20 points of the first row is the page in view");
+}
+
+/// Pages of different heights share a row and the next row starts below the tallest: the gap is measured from the row's bottom.
+#[test]
+fn a_shorter_page_in_a_taller_row_is_still_the_page_in_view() {
+    let rects: Vec<craft::behavior::kurbo::Rect> = [(0.0, 0.0, 100.0), (90.0, 0.0, 200.0), (0.0, 210.0, 100.0), (90.0, 210.0, 100.0)]
+        .iter()
+        .map(|&(x, y, h)| craft::behavior::kurbo::Rect::new(x, y, x + 80.0, y + h))
+        .collect();
+    let layout = craft::pages::layout::PagedLayout {
+        rects,
+        size: Default::default(),
+        columns: 2,
+        bands: vec![(0.0, 100.0), (0.0, 200.0), (0.0, 100.0), (0.0, 100.0)],
+    };
+    assert_eq!(viewed_page(None, 50.0, &layout, 100.0), 0, "the short page is fully visible, the row gap is 10 not 110");
+    assert_eq!(viewed_page(None, 196.0, &layout, 100.0), 2, "4 points of the tall page's row is a sliver");
+}
+
+/// Two Up with a cover: page 0 is a row of its own, so there is no page `columns` after it.
+#[test]
+fn a_sliver_of_the_cover_is_not_the_page_in_view() {
+    let rects: Vec<craft::behavior::kurbo::Rect> = [(90.0, 0.0), (0.0, 110.0), (90.0, 110.0), (0.0, 220.0)]
+        .iter()
+        .map(|&(x, y)| craft::behavior::kurbo::Rect::new(x, y, x + 80.0, y + 100.0))
+        .collect();
+    let layout = craft::pages::layout::PagedLayout { rects, size: Default::default(), columns: 2, bands: vec![(0.0, 100.0); 4] };
+    assert_eq!(viewed_page(None, 96.0, &layout, 100.0), 1, "4 points of the cover is a sliver");
+    assert_eq!(viewed_page(None, 80.0, &layout, 100.0), 0, "20 points of the cover is the page in view");
+    assert_eq!(viewed_page(None, 206.0, &layout, 100.0), 3, "4 points of the spread is a sliver");
+}
