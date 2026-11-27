@@ -116,7 +116,7 @@ pub fn wrong_password(err: &str) -> bool {
 /// can't be read: opening it says why.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn is_empty_file(path: &std::path::Path) -> bool {
-    crate::file_access::check_read(&path.to_string_lossy()).is_ok() && std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() == 0)
+    metadata_for_read(path).is_ok_and(|m| m.is_file() && m.len() == 0)
 }
 
 /// [`is_empty_file`]: on the web files come through the browser, never by path.
@@ -514,8 +514,7 @@ const MAX_DOCUMENT: u64 = 2 << 30;
 /// opens a file whose name isn't valid Unicode through `file.open`'s `data` (#1440).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_document(path: &std::path::Path) -> Result<Vec<u8>, String> {
-    crate::file_access::check_read(&path.to_string_lossy())?;
-    let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let meta = metadata_for_read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     if !meta.is_file() {
         return Err(format!("{}: not a file", path.display()));
     }
@@ -651,22 +650,189 @@ pub fn read_regular_file_within(_path: &std::path::Path, _limit: u64) -> Option<
     None
 }
 
+/// Most links [`open_for_read`] follows by hand on one path, like the OS limit.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_LINK_DEPTH: usize = 40;
+
+/// Whether `error` says the OS refused to traverse a link on the path, rather than the file being
+/// missing or unreadable. Only Windows reports these.
+#[cfg(not(target_arch = "wasm32"))]
+fn refuses_traversal(error: &std::io::Error) -> bool {
+    // 448 ERROR_UNTRUSTED_MOUNT_POINT, 1920 ERROR_CANT_ACCESS_FILE, 1921 ERROR_CANT_RESOLVE_FILENAME.
+    cfg!(windows) && matches!(error.raw_os_error(), Some(448 | 1920 | 1921))
+}
+
+/// Where the symlink or junction at `path` points, `None` for anything else (or when it can't be
+/// read). Reading a link opens the link itself, so it works where following it is refused.
+#[cfg(not(target_arch = "wasm32"))]
+fn link_target(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let is_link = std::fs::symlink_metadata(path).ok()?.file_type().is_symlink();
+    is_link.then(|| std::fs::read_link(path).ok()).flatten()
+}
+
+/// One step of a path being walked by [`follow_links`].
+#[cfg(not(target_arch = "wasm32"))]
+enum Piece {
+    /// A drive prefix or the root: starts the path over.
+    Anchor(std::ffi::OsString),
+    CurDir,
+    ParentDir,
+    Name(std::ffi::OsString),
+}
+
+/// The pieces of `path`, last first, so that `pop` takes them in path order.
+#[cfg(not(target_arch = "wasm32"))]
+fn pieces(path: &std::path::Path) -> Vec<Piece> {
+    let mut pieces: Vec<Piece> = path
+        .components()
+        .map(|component| match component {
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => Piece::Anchor(component.as_os_str().to_owned()),
+            std::path::Component::CurDir => Piece::CurDir,
+            std::path::Component::ParentDir => Piece::ParentDir,
+            std::path::Component::Normal(name) => Piece::Name(name.to_owned()),
+        })
+        .collect();
+    pieces.reverse();
+    pieces
+}
+
+/// `path` with every symlink and junction on it replaced by its target, found with `link_target`.
+/// `None` when there is no link to replace, or when links nest deeper than [`MAX_LINK_DEPTH`].
+#[cfg(not(target_arch = "wasm32"))]
+fn follow_links(path: &std::path::Path, link_target: &dyn Fn(&std::path::Path) -> Option<std::path::PathBuf>) -> Option<std::path::PathBuf> {
+    let mut todo = pieces(path);
+    let mut resolved = std::path::PathBuf::new();
+    let mut followed = 0usize;
+    while let Some(piece) = todo.pop() {
+        match piece {
+            Piece::Anchor(anchor) => resolved.push(anchor),
+            Piece::CurDir => {}
+            Piece::ParentDir => {
+                if matches!(resolved.components().next_back(), Some(std::path::Component::Normal(_))) {
+                    resolved.pop();
+                } else {
+                    resolved.push("..");
+                }
+            }
+            Piece::Name(name) => {
+                resolved.push(name);
+                let Some(target) = link_target(&resolved) else { continue };
+                followed += 1;
+                if followed > MAX_LINK_DEPTH {
+                    return None;
+                }
+                // A relative target starts where the link sat; an absolute one starts over.
+                resolved.pop();
+                if target.has_root() || target.is_absolute() {
+                    resolved.clear();
+                }
+                todo.extend(pieces(&target));
+            }
+        }
+    }
+    (followed > 0).then_some(resolved)
+}
+
+/// The routes [`open_with`] tries after the path as written, in order: its links followed by hand,
+/// then the OS's canonical path. Canonicalizing touches the disk, so it waits for the by-hand route.
+#[cfg(not(target_arch = "wasm32"))]
+type Fallbacks = Box<dyn Iterator<Item = std::path::PathBuf>>;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn fallback_paths(path: &std::path::Path) -> Fallbacks {
+    let by_hand = std::path::absolute(path).ok().and_then(|path| follow_links(&path, &link_target));
+    let path = path.to_path_buf();
+    let canonical = std::iter::once_with(move || std::fs::canonicalize(path).ok()).flatten();
+    Box::new(by_hand.into_iter().chain(canonical))
+}
+
+/// A refusal from the automation read root as the open/metadata error callers already handle.
+#[cfg(not(target_arch = "wasm32"))]
+fn unauthorized(reason: String) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::PermissionDenied, reason)
+}
+
+/// [`open_for_read`] with each step injectable, for tests: `open` opens a path, `retry` says whether
+/// an error is worth another route, and `fallbacks` lists those routes lazily.
+#[cfg(any(windows, test))]
+fn open_with(
+    path: &std::path::Path,
+    open: &dyn Fn(&std::path::Path) -> std::io::Result<std::fs::File>,
+    retry: &dyn Fn(&std::io::Error) -> bool,
+    fallbacks: &dyn Fn(&std::path::Path) -> Fallbacks,
+) -> std::io::Result<std::fs::File> {
+    let first = match crate::file_access::check_read(&path.to_string_lossy()) {
+        Ok(()) => match open(path) {
+            Ok(file) => return Ok(file),
+            Err(error) if retry(&error) => error,
+            Err(error) => return Err(error),
+        },
+        Err(reason) => unauthorized(reason),
+    };
+    for candidate in fallbacks(path) {
+        if candidate != path
+            && crate::file_access::check_read(&candidate.to_string_lossy()).is_ok()
+            && let Ok(file) = open(&candidate)
+        {
+            return Ok(file);
+        }
+    }
+    Err(first)
+}
+
+/// Open `path` for reading, working around a Windows link the OS refuses to traverse.
+#[cfg(not(target_arch = "wasm32"))]
+fn open_for_read(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    #[cfg(windows)]
+    {
+        open_with(path, &|path| std::fs::File::open(path), &refuses_traversal, &fallback_paths)
+    }
+    #[cfg(not(windows))]
+    {
+        crate::file_access::check_read(&path.to_string_lossy()).map_err(unauthorized)?;
+        let mut open = std::fs::OpenOptions::new();
+        open.read(true);
+        // A path swapped for a named pipe since the check above would block `open`; non-blocking
+        // opens it at once (no effect on a regular file) and the handle check below refuses it.
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::custom_flags(&mut open, libc::O_NONBLOCK);
+        open.open(path)
+    }
+}
+
+/// Metadata of `path`, retrying through [`fallback_paths`] when Windows refuses the traversal.
+#[cfg(not(target_arch = "wasm32"))]
+fn metadata_for_read(path: &std::path::Path) -> std::io::Result<std::fs::Metadata> {
+    let original_error = match crate::file_access::check_read(&path.to_string_lossy()) {
+        Ok(()) => match std::fs::metadata(path) {
+            Ok(meta) => return Ok(meta),
+            Err(error) if !refuses_traversal(&error) => return Err(error),
+            Err(error) => error,
+        },
+        Err(reason) if !cfg!(windows) => return Err(unauthorized(reason)),
+        Err(reason) => unauthorized(reason),
+    };
+    for candidate in fallback_paths(path) {
+        if candidate != path
+            && crate::file_access::check_read(&candidate.to_string_lossy()).is_ok()
+            && let Ok(meta) = std::fs::metadata(&candidate)
+        {
+            return Ok(meta);
+        }
+    }
+    Err(original_error)
+}
+
 /// The regular file at `path`, opened once, with the opened handle's metadata. The path is
 /// checked before opening (a named pipe blocks in `open` until a writer appears) and the handle
 /// after (the path may have been swapped in between); anything but a regular file is "not a file".
 #[cfg(not(target_arch = "wasm32"))]
 fn open_regular_file(path: &std::path::Path) -> Result<(std::fs::File, std::fs::Metadata), String> {
-    let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let meta = metadata_for_read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     if !meta.is_file() {
         return Err(format!("{}: not a file", path.display()));
     }
-    let mut open = std::fs::OpenOptions::new();
-    open.read(true);
-    // A path swapped for a named pipe since the check above would block `open`; non-blocking
-    // opens it at once (no effect on a regular file) and the handle check below refuses it.
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut open, libc::O_NONBLOCK);
-    let file = open.open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let file = open_for_read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let meta = file.metadata().map_err(|e| format!("{}: {e}", path.display()))?;
     if !meta.is_file() {
         return Err(format!("{}: not a file", path.display()));
@@ -706,7 +872,6 @@ pub fn read_file(path: &str) -> Result<Vec<u8>, String> {
 /// and the read stops past `max`, so a file swapped or grown after the check is refused too (#3666).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_file_capped(path: &str, max: u64, what: &str) -> Result<Vec<u8>, String> {
-    crate::file_access::check_read(path)?;
     let too_large = || format!("{path}: the {what} is larger than {} MB", max >> 20);
     let (file, meta) = open_regular_file(std::path::Path::new(path))?;
     if meta.len() > max {
@@ -725,7 +890,6 @@ pub fn read_file_capped(path: &str, max: u64, what: &str) -> Result<Vec<u8>, Str
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_file_head(path: &str, max: u64) -> Result<Vec<u8>, String> {
     use std::io::Read;
-    crate::file_access::check_read(path)?;
     let (file, _) = open_regular_file(std::path::Path::new(path))?;
     let mut head = Vec::new();
     file.take(max).read_to_end(&mut head).map_err(|e| format!("{path}: {e}"))?;
@@ -865,7 +1029,6 @@ pub fn list_dir(path: &std::path::Path, max: usize) -> Result<(Vec<DirEntry>, bo
 /// bytes; at most `max_part` bytes of the part are read), inside the automation read root.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn package_title(path: &std::path::Path, max_file: u64, max_part: u64) -> Option<String> {
-    crate::file_access::check_read(&path.to_string_lossy()).ok()?;
     let (file, meta) = open_regular_file(path).ok()?;
     if meta.len() > max_file {
         return None;
@@ -966,4 +1129,122 @@ pub fn save_text_path(path: &std::path::Path, _text: &str) -> Result<(), String>
 /// [`wordcraft_formats::txt::decode`]).
 pub fn decode_text(b: &[u8]) -> String {
     wordcraft_formats::txt::decode(b)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use std::io;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("wordcraft-io-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_refused_traversal_retries_through_followed_links() {
+        let dir = scratch("traversal");
+        let real = dir.join("doc.txt");
+        std::fs::write(&real, b"document").unwrap();
+        let refused = dir.join("link/doc.txt");
+        let open = |path: &std::path::Path| {
+            if path == real { std::fs::File::open(path) } else { Err(io::Error::from_raw_os_error(448)) }
+        };
+        let fallbacks = |_: &std::path::Path| -> Fallbacks { Box::new(std::iter::once(real.clone())) };
+        let file = open_with(&refused, &open, &|error| error.raw_os_error() == Some(448), &fallbacks).expect("the fallback opens");
+        drop(file);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_failed_traversal_returns_the_original_error() {
+        let error = open_with(
+            std::path::Path::new("blocked"),
+            &|_| Err(io::Error::from_raw_os_error(448)),
+            &|error| error.raw_os_error() == Some(448),
+            &|_| -> Fallbacks { Box::new(std::iter::empty()) },
+        )
+        .unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(448));
+    }
+
+    #[test]
+    fn followed_links_keep_the_remaining_path() {
+        let base = std::env::temp_dir().join(format!("wordcraft-io-links-{}", std::process::id()));
+        let link = base.join("link");
+        let target = base.join("real");
+        let resolved = follow_links(&link.join("folder/doc.txt"), &|path| (path == link).then(|| target.clone()));
+        assert_eq!(resolved, Some(target.join("folder/doc.txt")));
+    }
+
+    #[test]
+    fn followed_links_resolve_relative_targets_and_parent_components() {
+        let base = std::env::temp_dir().join(format!("wordcraft-io-links-rel-{}", std::process::id()));
+        let link = base.join("link");
+        let target = base.join("real");
+        let resolved = follow_links(&link.join("..").join("doc.txt"), &|path| (path == link).then(|| target.clone()));
+        assert_eq!(resolved, Some(base.join("doc.txt")));
+
+        let relative = follow_links(std::path::Path::new("a/link/doc.txt"), &|path| (path == std::path::Path::new("a/link")).then(|| "real".into()));
+        assert_eq!(relative, Some(std::path::PathBuf::from("a/real/doc.txt")));
+    }
+
+    #[test]
+    fn followed_links_stop_at_the_depth_limit() {
+        let base = std::env::temp_dir().join(format!("wordcraft-io-links-loop-{}", std::process::id()));
+        let link = base.join("loop");
+        let resolved = follow_links(&link, &|_| Some(link.clone()));
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn a_confined_read_reaches_a_fallback_inside_the_root() {
+        use std::io::Read;
+        let root = scratch("fallback-inside-root");
+        let outside = scratch("fallback-inside-outside");
+        let inside = root.join("inside.txt");
+        let blocked = outside.join("blocked.txt");
+        std::fs::write(&inside, b"inside").unwrap();
+        std::fs::write(&blocked, b"outside").unwrap();
+        let roots = crate::file_access::AutomationRoots::new(Some(&root), None).unwrap().expect("read roots");
+        let mut file = crate::file_access::confine(Some(&roots), || {
+            open_with(&blocked, &|path| std::fs::File::open(path), &|_| false, &|_| -> Fallbacks { Box::new(std::iter::once(inside.clone())) })
+        })
+        .expect("the permitted fallback opens");
+        let mut text = String::new();
+        file.read_to_string(&mut text).unwrap();
+        assert_eq!(text, "inside");
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(outside);
+    }
+
+    #[test]
+    fn a_fallback_outside_the_read_root_is_refused() {
+        let root = scratch("fallback-root");
+        let outside = scratch("fallback-outside");
+        let secret = outside.join("secret.txt");
+        std::fs::write(&secret, b"secret").unwrap();
+        let roots = crate::file_access::AutomationRoots::new(Some(&root), None).unwrap().expect("read roots");
+        let blocked = root.join("blocked");
+        let opened = std::cell::RefCell::new(Vec::new());
+        let error = crate::file_access::confine(Some(&roots), || {
+            open_with(
+                &blocked,
+                &|path| {
+                    opened.borrow_mut().push(path.to_owned());
+                    if path == blocked { Err(io::Error::from_raw_os_error(448)) } else { std::fs::File::open(path) }
+                },
+                &|error| error.raw_os_error() == Some(448),
+                &|_| -> Fallbacks { Box::new(std::iter::once(secret.clone())) },
+            )
+        })
+        .unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(448));
+        assert!(!opened.borrow().iter().any(|path| path == &secret), "the outside candidate was opened");
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(outside);
+    }
 }
