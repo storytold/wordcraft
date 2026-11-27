@@ -162,7 +162,7 @@ impl WordForm for CompareForm {
                 Field::new(Label::from(tl!("Another file").to_string())).enabled(another).show(ui, |ui, _| {
                     let mut row = PathRow::new(Label::from(tl!("Another file").to_string()), Bind::bound(&mut self.original))
                         .placeholder(Label::from(tl!("Another file").to_string()))
-                        .pick(PickRequest::open("document"));
+                        .pick(PickRequest::open("compare"));
                     if let Some(r) = &reason {
                         row = row.browse_reason(r.clone());
                     }
@@ -170,7 +170,7 @@ impl WordForm for CompareForm {
                 });
                 Field::new(Label::from(tl!("Revised document").to_string())).show(ui, |ui, _| {
                     let mut row = PathRow::new(Label::from(tl!("Revised document").to_string()), Bind::bound(&mut self.revised))
-                        .pick(PickRequest::open("document"));
+                        .pick(PickRequest::open("compare"));
                     if let Some(r) = &reason {
                         row = row.browse_reason(r.clone());
                     }
