@@ -7047,6 +7047,36 @@ fn multiple_line_spacing_adds_its_leading_below_the_text() {
 }
 
 #[test]
+fn a_picture_alone_in_multiple_spacing_fits_at_the_page_foot_without_its_leading() {
+    // Word for Mac 16.93, a 56.7 pt picture alone in 1.5-spaced 12 pt text: at the foot of a page
+    // it stays as soon as the picture fits above the bottom margin (57 pt of room: its bottom
+    // 0.4 pt above it), the spacing and the font's descent running into the margin; at 56 pt it
+    // moves on.
+    use wordcraft_doc::props::LineSpacing;
+    let pic = 56.7;
+    let doc = |spare: f32| {
+        let mut d = Document::from_text("Text");
+        let s = d.last_section.clone();
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.props.line_spacing = Some(LineSpacing::Exactly(20.0));
+        p.props.space_before = Some(0.0);
+        p.props.space_after = Some(s.page_h - s.margin_bottom - s.margin_top - 20.0 - pic - spare);
+        let mut q = wordcraft_doc::Paragraph::with_text("", Default::default());
+        q.props.line_spacing = Some(LineSpacing::Multiple(1.5));
+        q.props.space_before = Some(0.0);
+        q.insert_object(0, picture(56.7, pic, Default::default()), &Default::default()).unwrap();
+        d.body.push(wordcraft_doc::para_block(q));
+        d
+    };
+    let on_first = |spare: f32| {
+        let l = lay(&doc(spare));
+        l.pages[0].items.iter().any(|i| matches!(i, Placed::Lines { para, l0, .. } if para.lines.get(*l0).is_some_and(|x| x.text_asc >= pic)))
+    };
+    assert!(on_first(0.3), "the picture fits: it should stay on page 1");
+    assert!(!on_first(-0.3), "the picture ends past the margin: it should move on");
+}
+
+#[test]
 fn list_label_does_not_inflate_an_inline_picture_floor() {
     crate::test_fonts();
     use wordcraft_doc::props::{LineSpacing, NumRef};
@@ -7062,13 +7092,11 @@ fn list_label_does_not_inflate_an_inline_picture_floor() {
         let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
         let line = &para.lines[0];
         let st = &para.styles[para.clusters[0].style as usize];
-        let label = para.label.as_ref().unwrap().runs.iter().map(|r| &para.styles[r.style as usize]);
-        let (a, d) = label.fold((st.ascent, st.descent), |(a, d), s| (a.max(s.ascent), d.max(s.descent)));
-        // Multiple spacing: the picture plus its share of the font's height, the label's being a
-        // font too (Word, measured: 144 pt at 1.25 with a 24 pt label takes 144 + 0.25 * 27.6);
-        // at least: the picture and the descent.
+        // Multiple spacing: the picture plus its share of the picture run's font height, the
+        // label's font not counting (Word for Mac 16.93, 144 pt at 1.25 spacing: 3.60 pt below the
+        // picture both without a label and with a 24 pt one); at least: the picture and the descent.
         let want = match spacing {
-            LineSpacing::Multiple(m) => 144.0 + (m - 1.0) * (a + d),
+            LineSpacing::Multiple(m) => 144.0 + (m - 1.0) * (st.ascent + st.descent),
             _ => 144.0 + st.descent,
         };
         assert!((line.height - want).abs() < 0.01, "{spacing:?}: {} (want {want})", line.height);

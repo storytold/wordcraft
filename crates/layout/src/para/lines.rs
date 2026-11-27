@@ -389,6 +389,7 @@ impl<'e> Breaker<'e> {
             baseline: v.baseline,
             text_asc: v.text_asc,
             text_desc: v.text_desc,
+            leading: v.leading,
             c0: sc.c0,
             c1,
             xs: sc.xs,
@@ -509,8 +510,9 @@ impl<'e> Breaker<'e> {
         let (text_asc, text_desc) = (asc.max(obj_asc), desc);
         // With multiple spacing a line of only pictures (and spaces) is as tall as they reach,
         // raised or lowered, and never less than its font's height, a list label's font counting
-        // too: they end at its bottom, and the spacing adds its share of the font's height. Beside
-        // text they take the text's ascent and descent too, each only where it reaches further.
+        // too: they end at its bottom, and the spacing adds its share of the font's height, not
+        // the label's. Beside text they take the text's ascent and descent too, each only where it
+        // reaches further.
         // Word, measured with Arial at 10 and 20 pt, single, 1.15 and 1.5 spacing: a 30 pt picture
         // alone takes 30, 30 + 0.15 and 30 + 0.5 times the font's height, lowered 10 or 30 pt or
         // not; raised 10 pt, 10 more; a 6 pt one, the font's height; beside text and lowered
@@ -526,6 +528,10 @@ impl<'e> Breaker<'e> {
         } else {
             0.0
         };
+        // Word for Mac 16.93: a list label's font, set in the level or taken from the paragraph
+        // mark, adds nothing below a picture alone on its line (144 pt at 1.25 spacing with a 24 pt
+        // label: 3.6 pt below it, as without a label).
+        let font_natural = text_natural;
         let mut label_extra = 0.0;
         if self.first
             && let Some(lab) = &pl.label
@@ -556,7 +562,7 @@ impl<'e> Breaker<'e> {
         let (height, centred) = match (rp.line_spacing, grid) {
             (LineSpacing::Multiple(m), Some(g)) => ((g.snap_height(natural) * m).max(g.snap_height(pictures)), true),
             (LineSpacing::AtLeast(v), Some(g)) => (g.snap_height(natural.max(pictures)).max(v), true),
-            (LineSpacing::Multiple(m), None) => ((text_natural * m + label_extra).max(text_pictures + (m - 1.0).max(0.0) * text_natural), false),
+            (LineSpacing::Multiple(m), None) => ((text_natural * m + label_extra).max(text_pictures + (m - 1.0).max(0.0) * font_natural), false),
             (LineSpacing::AtLeast(v), None) => (natural.max(text_pictures).max(v), false),
             (LineSpacing::Exactly(v), _) => (v, false),
         };
@@ -568,7 +574,9 @@ impl<'e> Breaker<'e> {
         } else {
             self.top + baseline_offset(rp.line_spacing, asc, height, below).max(obj_asc.min(height - below))
         };
-        Measure { height, baseline, text_asc, text_desc }
+        // A picture alone on its line ends at its own bottom, text at its descent.
+        let leading = (self.top + height - baseline - below).max(0.0);
+        Measure { height, baseline, text_asc, text_desc, leading }
     }
 
     /// Alignment / justification of the line (trailing spaces hang).
@@ -660,12 +668,14 @@ impl<'e> Breaker<'e> {
         };
         let (width, x0) = (self.width, rp.indent_left);
         let (x0, left, right) = if self.rtl_para { (width - x0, width - self.base_right, width - x0) } else { (x0, x0, self.base_right) };
+        let base = if grid.is_some() { h - desc } else { baseline_offset(rp.line_spacing, asc, h, desc) };
         self.lines.push(Line {
             top: self.top,
             height: h,
-            baseline: self.top + if grid.is_some() { h - desc } else { baseline_offset(rp.line_spacing, asc, h, desc) },
+            baseline: self.top + base,
             text_asc: asc,
             text_desc: desc,
+            leading: (h - base - desc).max(0.0),
             c0: self.n,
             c1: self.n,
             xs: vec![if self.rtl_para { x0 - shift } else { x0 + shift }],
@@ -743,6 +753,8 @@ struct Measure {
     baseline: f32,
     text_asc: f32,
     text_desc: f32,
+    /// Room at the bottom of the line below its text or picture (see `Line::leading`).
+    leading: f32,
 }
 
 /// Where the line's content ends: trailing spaces and markers hang.
