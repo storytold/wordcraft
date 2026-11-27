@@ -22,6 +22,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 image = { workspace = true }
 log = { workspace = true }
+encoding_rs = { workspace = true }
 
 [dev-dependencies]
 wordcraft-doc = { workspace = true, features = ["test-support"] }
