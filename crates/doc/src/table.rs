@@ -221,6 +221,17 @@ impl Table {
             }
             row.cells.push(nc);
         }
+        // #6326: text typed into a new cell gets the font formatting of the cell it was copied
+        // from, as in Word: that of the first character of the source cell's first paragraph (its
+        // mark when it's empty), never a link, revision mark or symbol's own font.
+        for (nc, c) in row.cells.iter_mut().zip(&src.cells) {
+            let mark = c.blocks.iter().find_map(|b| b.as_para()).map(|p| p.props_at(0).formatting().without_symbol());
+            if let Some(mark) = mark
+                && let Some(crate::Block::Para(p)) = nc.blocks.first_mut().map(std::sync::Arc::make_mut)
+            {
+                p.mark = mark;
+            }
+        }
         self.rows.insert(at.min(self.rows.len()), row);
     }
 
@@ -742,6 +753,38 @@ mod tests {
         assert_eq!(t.rows.len(), 2);
         t.delete_row(99);
         t.delete_col(99);
+    }
+
+    /// #6326: a new row's empty cells type in the font formatting of the cells it was copied
+    /// from, as in Word: that of the first character of the source cell's first paragraph (not
+    /// its mark), or the mark of an empty one; never its link or revision marks.
+    #[test]
+    fn insert_row_types_in_the_source_cells_font() {
+        let courier = crate::CharProps {
+            font: Some("Courier New".into()),
+            size: Some(16.0),
+            bold: Some(true),
+            link: Some("https://example.com".into()),
+            ins: Some(0),
+            ..Default::default()
+        };
+        let mut p = Paragraph::with_text("A", courier.clone());
+        p.insert_text(1, "B", &crate::CharProps { font: Some("Georgia".into()), ..Default::default() }).unwrap();
+        p.mark = crate::CharProps { font: Some("Arial".into()), ..Default::default() };
+        let mut empty = Paragraph::new();
+        empty.mark = crate::CharProps { italic: Some(true), size: Some(20.0), ..Default::default() };
+        let mut t = Table::new(2, 2, 200.0);
+        t.rows[0].cells[0].blocks = vec![para_block(p)];
+        t.rows[0].cells[1].blocks = vec![para_block(empty)];
+        t.insert_row(1, 0);
+        t.insert_row(0, 0);
+        let want = crate::CharProps { link: None, ins: None, ..courier };
+        let italic = crate::CharProps { italic: Some(true), size: Some(20.0), ..Default::default() };
+        for r in [0, 2] {
+            let mark = |c: usize| t.rows[r].cells[c].blocks[0].as_para().map(|p| (p.text.clone(), p.mark.clone()));
+            assert_eq!(mark(0), Some((String::new(), want.clone())), "row {r}");
+            assert_eq!(mark(1), Some((String::new(), italic.clone())), "row {r}");
+        }
     }
 
     /// #3637: a `.json` file can give a cell any span; inserting a column through it, merging it
