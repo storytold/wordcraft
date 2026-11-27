@@ -152,7 +152,7 @@ fn grid_multiple_line_with_float(font_size: f32, float_top: f32) -> (f32, f32, f
     };
     d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
     let l = lay(&d);
-    let first = l.pages[0]
+    l.pages[0]
         .items
         .iter()
         .find_map(|it| match it {
@@ -163,8 +163,7 @@ fn grid_multiple_line_with_float(font_size: f32, float_top: f32) -> (f32, f32, f
             }
             _ => None,
         })
-        .expect("first paragraph's lines");
-    first
+        .expect("first paragraph's lines")
 }
 
 /// A 55 pt offset leaves the measured 54 pt line above the shape; the old `natural × 3` estimate
