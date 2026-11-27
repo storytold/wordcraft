@@ -18,7 +18,13 @@ pub(super) fn viewed_page(caret: Option<(usize, f64, f64)>, top: f64, layout: &P
                 // The gap to the first later page whose shown part starts at or below this one's end: the page below,
                 // whatever the column (an incomplete last row, a Two Up cover) and with Hide White Space (a seam).
                 let below = |j: &usize| layout.rects.get(*j).is_some_and(|r| r.y0 + layout.bands.get(*j).map_or(0.0, |b| b.0) >= end);
-                let gap = ((i + 1)..layout.rects.len()).find(below).and_then(|j| layout.rects.get(j)).map_or(0.0, |next| (next.y0 - end).max(0.0));
+                // Measured from the bottom of the row (the tallest page between this one and that page): pages of different
+                // heights share a row, and the next row starts below the tallest.
+                let gap =
+                    ((i + 1)..layout.rects.len()).find(below).and_then(|j| layout.rects.get(j).map(|next| (j, next))).map_or(0.0, |(j, next)| {
+                        let row_end = (i..j).map(|k| layout.rects[k].y0 + layout.bands.get(k).map_or(0.0, |b| b.1)).fold(end, f64::max);
+                        (next.y0 - row_end).max(0.0)
+                    });
                 end > top + gap
             })
             .unwrap_or(layout.rects.len().saturating_sub(1)),

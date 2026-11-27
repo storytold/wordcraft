@@ -2479,6 +2479,23 @@ fn a_sliver_of_a_row_above_is_not_the_page_in_view_with_an_incomplete_last_row()
     assert_eq!(viewed_page(None, 80.0, &layout, 100.0), 0, "20 points of the first row is the page in view");
 }
 
+/// Pages of different heights share a row and the next row starts below the tallest: the gap is measured from the row's bottom.
+#[test]
+fn a_shorter_page_in_a_taller_row_is_still_the_page_in_view() {
+    let rects: Vec<craft::behavior::kurbo::Rect> = [(0.0, 0.0, 100.0), (90.0, 0.0, 200.0), (0.0, 210.0, 100.0), (90.0, 210.0, 100.0)]
+        .iter()
+        .map(|&(x, y, h)| craft::behavior::kurbo::Rect::new(x, y, x + 80.0, y + h))
+        .collect();
+    let layout = craft::pages::layout::PagedLayout {
+        rects,
+        size: Default::default(),
+        columns: 2,
+        bands: vec![(0.0, 100.0), (0.0, 200.0), (0.0, 100.0), (0.0, 100.0)],
+    };
+    assert_eq!(viewed_page(None, 50.0, &layout, 100.0), 0, "the short page is fully visible, the row gap is 10 not 110");
+    assert_eq!(viewed_page(None, 196.0, &layout, 100.0), 2, "4 points of the tall page's row is a sliver");
+}
+
 /// Two Up with a cover: page 0 is a row of its own, so there is no page `columns` after it.
 #[test]
 fn a_sliver_of_the_cover_is_not_the_page_in_view() {
