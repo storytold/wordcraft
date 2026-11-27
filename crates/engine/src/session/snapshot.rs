@@ -7,6 +7,8 @@ impl Session {
     pub fn set_document(&mut self, doc: Document) {
         self.autocap = None;
         let replaced = self.document_id;
+        self.md_source = None;
+        self.md_file = Default::default();
         self.document_id = next_document_id();
         if let Some(at) = self.order.iter_mut().find(|d| **d == replaced) {
             *at = self.document_id;
@@ -21,6 +23,7 @@ impl Session {
         self.math = None;
         self.sel = Selection::caret(self.doc.start_of(StoryRef::Body));
         self.pending = None;
+        self.pending_at = None;
         self.typing = None;
         self.also_selected.clear();
         self.member = None;
@@ -49,7 +52,7 @@ impl Session {
     /// A snapshot to put back with [`Session::restore`], for a caller that runs a command and
     /// may want to take it back without a trace (cheap: the document's blocks are shared).
     ///
-    /// Covered: `doc`, `sel`, the undo stack (its length, and its oldest steps when it is near
+    /// Covered: `doc`, `sel`, `pending` with `pending_at`, the undo stack (its length, and its oldest steps when it is near
     /// the limit), `redo`, the open typing group, the pending `join_next_undo`,
     /// `join_next_equation_edit` and body replacement promises, whether the typing group has a
     /// step of its own, and `dirty`. `rev`,
@@ -69,12 +72,14 @@ impl Session {
             doc,
             sel,
             view: _,
-            pending: _,
+            pending,
+            pending_at,
             last_highlight: _,
             path: _,
             file_name: _,
             // The custom dictionary file, like the file path: host wiring, not an edit.
             user_dict_path: _,
+            default_user_dict_path: _,
             dirty,
             clipboard: _,
             // Like the clipboard: what the next paste can make a move of.
@@ -90,10 +95,13 @@ impl Session {
             author: _,
             initials: _,
             painter: _,
+            copied_format: _,
             status: _,
             // Headers just created to edit: closing checks they still exist and are empty.
             new_header_parts: _,
             hf_return: _,
+            // Which navigated style change Accept/Reject acts on: it checks the selection itself.
+            review_style: _,
             history,
             undo_evicted,
             redo,
@@ -110,6 +118,8 @@ impl Session {
             // The word being typed, like `column`: valid only while `sel` is where typing left it.
             typing: _,
             originals: _,
+            md_source: _,
+            md_file: _,
             picture_looks: _,
             last_command: _,
             recording: _,
@@ -144,6 +154,8 @@ impl Session {
             prefs: _,
             system_region: _,
             keymap: _,
+            // Derived from `document_id` and `rev`: rebuilt on the next read, not an edit.
+            findings: _,
             ribbon: _,
             // A preference for new documents, like `prefs`: not part of this document.
             editing_lang: _,
@@ -172,6 +184,8 @@ impl Session {
         EditSnapshot {
             doc: doc.clone(),
             sel: sel.clone(),
+            pending: pending.clone(),
+            pending_at: pending_at.clone(),
             history_len: history.len(),
             evicted: *undo_evicted,
             head,
@@ -187,12 +201,14 @@ impl Session {
     }
 
     /// Put a snapshot back: the commands run since leave no trace in the document, the
-    /// selection or undo/redo (undo steps the limit pushed out meanwhile come back). The layout
+    /// selection, the formatting waiting at the caret or undo/redo (undo steps the limit pushed out meanwhile come back). The layout
     /// is recomputed.
     pub fn restore(&mut self, snap: EditSnapshot) {
         let EditSnapshot {
             doc,
             sel,
+            pending,
+            pending_at,
             history_len,
             evicted,
             head,
@@ -214,6 +230,8 @@ impl Session {
         self.autocap = None;
         self.doc = doc;
         self.sel = sel;
+        self.pending = pending;
+        self.pending_at = pending_at;
         self.also_selected.clear();
         self.member = None;
         self.history.truncate(history_len);
@@ -253,7 +271,9 @@ impl Session {
     /// Restrict Editing refuses outright. `None` when it can run (or doesn't exist).
     pub fn why_disabled(&self, id: &str) -> Option<&'static str> {
         let spec = self.registry.get(id)?;
-        (spec.enabled)(self).or_else(|| if spec.mutates { crate::cmd::protect::greyed_out(self, id, || self.protect_facts()) } else { None })
+        (spec.enabled)(self)
+            .or_else(|| crate::cmd::md_source::refusal(self, id, spec.mutates))
+            .or_else(|| if spec.mutates { crate::cmd::protect::greyed_out(self, id, || self.protect_facts()) } else { None })
     }
 
     /// Put the revision back to `rev` after a command that changed nothing or failed. What the

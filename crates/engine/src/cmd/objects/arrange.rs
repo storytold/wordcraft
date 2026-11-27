@@ -1,4 +1,4 @@
-use super::select::{edit_float, min_size, movable_story, obj_size, select_object, selected, with_obj};
+use super::select::{edit_float, min_size, movable_story, obj_size, select_object, selected_or_text_box, with_obj};
 use super::{CmdError, CmdResult, Float, InlineObject, Pos, Selection, Session, StoryRef, Value, Wrap, json, p};
 
 /// Largest object offset or move, points.
@@ -9,7 +9,7 @@ pub(super) fn bounds(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(r) = crate::cmd::canvas::member_bounds(s, v) {
         return r;
     }
-    let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
+    let (pos, obj) = selected_or_text_box(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
     let to = match (p::f32(v, "x"), p::f32(v, "y")) {
         (Some(x), Some(y)) => Some((x, y)),
         (None, None) => None,
@@ -21,8 +21,9 @@ pub(super) fn bounds(s: &mut Session, v: &Value) -> CmdResult {
     }
     let (w0, h0) = obj_size(&obj);
     let min = min_size(&obj);
-    let w = p::f32(v, "width").unwrap_or(w0).clamp(min, MAX_OFFSET);
-    let h = p::f32(v, "height").unwrap_or(h0).clamp(min, MAX_OFFSET);
+    // A size not given stays as it is: a move must not give a level line (0 high) a height.
+    let w = p::f32(v, "width").map_or(w0, |w| w.clamp(min, MAX_OFFSET));
+    let h = p::f32(v, "height").map_or(h0, |h| h.clamp(min, MAX_OFFSET));
     if (w, h) != (w0, h0) {
         with_obj(s, |o| o.set_size(w, h))?;
     }
@@ -87,7 +88,7 @@ fn move_in_text(s: &mut Session, pos: Pos, to: &Pos) -> Result<Pos, CmdError> {
 /// (x, y), or for an In Line with Text object put it at the text position `to`, leaving the
 /// original in place and the clipboard alone. The copy is selected.
 pub(super) fn copy_to(s: &mut Session, v: &Value) -> CmdResult {
-    let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
+    let (pos, obj) = selected_or_text_box(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
     let len = wordcraft_doc::para::OBJ.len_utf8();
     let end = Pos { off: pos.off + len, ..pos.clone() };
     if let Some(to) = text_target(v, &obj)? {
@@ -147,7 +148,8 @@ pub(super) fn move_object(s: &mut Session, pos: Pos, page: Option<u64>, x: f32, 
 }
 
 /// [`move_object`]'s one placement: move the object's character to the anchor under (x, y) on
-/// `page` and offset it from there.
+/// `page` and offset it from there. Objects in headers/footers, or on pages without anchoring
+/// text, retain page-relative anchoring; a body object is placed by its paragraph (#5705).
 fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w, h): (f32, f32)) -> Result<Pos, CmdError> {
     use wordcraft_doc::para::Anchor;
     if pos.path.depth() > 0 || !movable_story(s, pos.story) {
@@ -196,7 +198,7 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
         f.x = x.clamp(-MAX_OFFSET, MAX_OFFSET);
         f.y = y.clamp(-MAX_OFFSET, MAX_OFFSET);
     })?;
-    if on_page {
+    if on_page || story != StoryRef::Body {
         return Ok(at);
     }
     // Then offsets from its paragraph, as laid out with the object there.
@@ -217,22 +219,29 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
 /// column / paragraph that keeps it where it is, so it can be moved by an offset.
 pub(super) fn unalign(s: &mut Session) -> Result<(), CmdError> {
     use wordcraft_doc::para::Anchor;
-    let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
+    let (pos, obj) = selected_or_text_box(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
     let Some((_, _, float)) = obj.frame() else { return Ok(()) };
     if float.h_align.is_none() && float.v_align.is_none() {
         return Ok(());
     }
     let hit = s.layout().object(&pos, s.page_hint).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?;
-    let (ox, oy) = (hit.rect.x - hit.origin.x, hit.rect.y - hit.origin.y);
+    let (ox, oy) = (
+        if float.h_rel == Anchor::Page { hit.rect.x } else { hit.rect.x - hit.origin.x },
+        if float.v_rel == Anchor::Page { hit.rect.y } else { hit.rect.y - hit.origin.y },
+    );
     edit_float(s, &pos, |f| {
         if f.h_align.is_some() {
             f.h_align = None;
-            f.h_rel = Anchor::Column;
+            if f.h_rel != Anchor::Page {
+                f.h_rel = Anchor::Column;
+            }
             f.x = ox.clamp(-MAX_OFFSET, MAX_OFFSET);
         }
         if f.v_align.is_some() {
             f.v_align = None;
-            f.v_rel = Anchor::Paragraph;
+            if f.v_rel != Anchor::Page {
+                f.v_rel = Anchor::Paragraph;
+            }
             f.y = oy.clamp(-MAX_OFFSET, MAX_OFFSET);
         }
     })?;
@@ -251,7 +260,7 @@ pub fn moves_with_text(f: &Float) -> bool {
 /// object's vertical position to its paragraph or to the page, keeping it where it is now.
 pub(super) fn move_with_text(s: &mut Session, with_text: bool) -> CmdResult {
     use wordcraft_doc::para::Anchor;
-    let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
+    let (pos, obj) = selected_or_text_box(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
     let Some((_, _, float)) = obj.frame() else { return Err(CmdError::Disabled("select a floating picture or shape first".into())) };
     if moves_with_text(float) == with_text {
         return Ok(json!({"object": serde_json::to_value(&obj).unwrap_or(Value::Null)}));

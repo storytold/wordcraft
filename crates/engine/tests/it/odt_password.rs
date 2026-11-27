@@ -22,9 +22,8 @@ fn an_odt_is_saved_and_opened_with_a_password() {
 fn an_odt_template_opens_and_saves_as_a_template_with_a_password_too() {
     let doc = io::open_bytes("plain.txt", b"Letterhead.").unwrap();
     let ott = io::save_bytes("letter.ott", &doc).unwrap();
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&ott)).unwrap();
-    let mut mime = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("mimetype").unwrap(), &mut mime).unwrap();
+    let mut z = craft_zip::Archive::open(&ott, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let mime = String::from_utf8(z.read("mimetype", 16 << 20).unwrap().unwrap()).unwrap();
     assert_eq!(mime, wordcraft_formats::odt::TEMPLATE_MIME);
     let opened = io::open_bytes("letter.ott", &ott).unwrap();
     assert_eq!(opened.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.as_str()).collect::<Vec<_>>(), ["Letterhead."]);
