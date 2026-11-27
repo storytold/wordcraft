@@ -533,11 +533,11 @@ impl FontDb {
         let file = unique_name(&file, |n| user.fonts.iter().any(|f| f.file.eq_ignore_ascii_case(n)));
         let added: Vec<Arc<super::FontFace>> = {
             let mut faces = self.faces.write().unwrap_or_else(|e| e.into_inner());
-            let fresh: Vec<_> = new
-                .iter()
-                .filter(|f| !faces.iter().any(|g| g.family.eq_ignore_ascii_case(&f.family) && g.style.eq_ignore_ascii_case(&f.style)))
-                .cloned()
-                .collect();
+            // The same key as loading uses ([`super::catalog::push_new_faces`]): a face that only
+            // claims the family (TH SarabunIT๙ as "TH SarabunPSK") doesn't keep the family's own
+            // file out.
+            let present: std::collections::HashSet<_> = faces.iter().map(|g| super::catalog::face_key(g)).collect();
+            let fresh: Vec<_> = new.iter().filter(|f| !present.contains(&super::catalog::face_key(f))).cloned().collect();
             faces.extend(fresh.iter().cloned());
             fresh
         };
