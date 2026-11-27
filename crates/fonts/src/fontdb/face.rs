@@ -13,6 +13,16 @@ pub fn bundled() -> &'static [&'static [u8]] {
     BUNDLED
 }
 
+/// The bundled Inter Regular and SemiBold, each with its style name: the same bytes as in [`bundled`], so a caller
+/// adds no second copy to the binary. The interface draws with them behind the suite's Inter, which is cut to Latin,
+/// Greek and Cyrillic.
+pub fn bundled_inter() -> [(&'static str, &'static [u8]); 2] {
+    [("Regular", INTER_REGULAR), ("SemiBold", INTER_SEMIBOLD)]
+}
+
+static INTER_REGULAR: &[u8] = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+static INTER_SEMIBOLD: &[u8] = include_bytes!("../../../../assets/fonts/Inter-SemiBold.ttf");
+
 pub(super) static BUNDLED: &[&[u8]] = &[
     include_bytes!("../../../../assets/fonts/SourceSans3-Regular.ttf"),
     include_bytes!("../../../../assets/fonts/SourceSans3-Semibold.ttf"),
@@ -23,9 +33,9 @@ pub(super) static BUNDLED: &[&[u8]] = &[
     include_bytes!("../../../../assets/fonts/SourceSerif4-Semibold.ttf"),
     include_bytes!("../../../../assets/fonts/SourceSerif4-Bold.ttf"),
     include_bytes!("../../../../assets/fonts/SourceSerif4-BoldIt.ttf"),
-    include_bytes!("../../../../assets/fonts/Inter-Regular.ttf"),
+    INTER_REGULAR,
     include_bytes!("../../../../assets/fonts/Inter-Medium.ttf"),
-    include_bytes!("../../../../assets/fonts/Inter-SemiBold.ttf"),
+    INTER_SEMIBOLD,
     include_bytes!("../../../../assets/fonts/JetBrainsMono-Regular.ttf"),
 ];
 

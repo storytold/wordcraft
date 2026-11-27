@@ -931,6 +931,28 @@ fn bullets_dropdown_renders_compact_bullet_tiles() {
     assert!((rect.width() - rect.height()).abs() <= 2.0, "bullet tile should be square: {}x{}", rect.width(), rect.height());
 }
 
+/// The Bullet Library and the Symbol drop-down draw their symbols with the interface's own faces, under kittest's
+/// strict missing-glyph policy: neither the optional craft-fonts faces nor installed fonts may supply them.
+#[test]
+fn the_bullet_and_symbol_menus_draw_their_symbols_without_optional_or_installed_fonts() {
+    use egui::accesskit::Role;
+
+    for (tab, menu, symbols) in [("Home", "Bullets", ["○", "▪", "◆", "✓"]), ("Insert", "Symbol", ["✓", "★", "♥", "©"])] {
+        let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Sample")), crate::Services::default());
+        let mut h = tab_harness(app, tab);
+        crate::app::fonts::ui_fonts_with_optional_faces(crate::i18n::Lang::EN, &[])
+            .system_fonts(craft::ui::fonts::SystemFonts::Off)
+            .stack()
+            .install(&h.ctx);
+        // Bullets is a split button whose second node opens the menu; Symbol has one node.
+        h.query_all(By::new().role(Role::Button).label(menu)).last().expect("the menu's button").click();
+        crate::test_harness::frames(&mut h, 3);
+        for symbol in symbols {
+            assert!(h.query_all_by_label(symbol).next().is_some(), "{menu} shows {symbol}");
+        }
+    }
+}
+
 /// #7310: unimplemented stub ribbon buttons (Dictate, Ink to Math, Translate, Block Authors)
 /// resolve disabled in the ribbon UI and are known to the command catalog without warnings.
 #[test]
