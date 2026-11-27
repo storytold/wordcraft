@@ -101,11 +101,14 @@ pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Optio
     Some(open_form(app, parent, form))
 }
 
-/// The caret paragraph's stops, those a dialog can edit (finite, not the `Clear` marks, at most [`MAX_STOPS`]), and
-/// the document's default interval, points.
+/// The first selected paragraph's stops, those a dialog can edit (finite, not the `Clear` marks, at most
+/// [`MAX_STOPS`]), and the document's default interval, points. The paragraph is the first one `para.tabs` changes: a
+/// selection that ends at the start of the next paragraph (a whole paragraph selected) leaves that one out (#418), so
+/// its stops are not the ones shown.
 pub(super) fn caret_tabs(app: &WordApp) -> Option<(Vec<TabStop>, f32)> {
     let s = &app.session;
-    let rp = s.doc.para_at(&s.sel.focus).map(|p| s.doc.styles.resolve_para(&p.props))?;
+    let first = wordcraft_engine::cmd::selected_paths(s).into_iter().next().and_then(|path| s.doc.para(s.sel.focus.story, &path));
+    let rp = first.or_else(|| s.doc.para_at(&s.sel.focus)).map(|p| s.doc.styles.resolve_para(&p.props))?;
     let stops = rp.tabs.iter().copied().filter(|t| t.align != TabAlign::Clear && t.pos.is_finite()).take(MAX_STOPS).collect();
     Some((stops, s.doc.settings.default_tab))
 }
@@ -641,7 +644,7 @@ mod tests {
     /// interval; an unchanged OK runs nothing.
     #[test]
     fn tabs_table_builds_and_clears() {
-        let mut h = harness(app_with("a\tb"));
+        let mut h = harness(app_with("a\tb\nc"));
         let id = open_tabs(&mut h);
         let dialog = h.state_mut().dialog_host.get_mut_by_id::<TabStopsHost>(id).expect("the dialog is hosted").inner_mut();
         // Set, Set: rows at one and two default intervals; the first is cleared again.
@@ -670,6 +673,13 @@ mod tests {
         h.state_mut().dialog_host.get_mut_by_id::<TabStopsHost>(id).expect("the dialog is hosted").inner_mut().clear_all();
         confirm(&mut h, id);
         assert!(caret_tabs_of(h.state()).is_none_or(|t| t.is_empty()));
+
+        // A whole paragraph selected ends at the next one's start: the dialog shows the selected paragraph's stops,
+        // those `para.tabs` changed, not the next one's.
+        let _ = h.state_mut().run("select.paragraph", json!({}));
+        let _ = h.state_mut().run("para.tabs", json!({"set": [{"pos": 216.0, "align": "left"}]}));
+        let shown = caret_tabs(h.state()).map(|(stops, _)| stops).unwrap_or_default();
+        assert_eq!(shown, vec![TabStop { pos: 216.0, align: TabAlign::Left, leader: TabLeader::None }], "the selected paragraph's stops");
 
         // The default interval, in points whatever the dialog shows.
         let mut result = TabStopsResult::default();
