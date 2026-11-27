@@ -109,6 +109,8 @@ craft-zip = { git = "https://github.com/storytold/craft-libs", rev = "0b8bbaf4c8
 # zlib streams (compressed metafile pictures in `.doc` drawings); already in the lock as a dependency of other crates.
 miniz_oxide = "0.9"
 cfb = "0.15"
+# Fillable PDF form fields (AcroForm), added to the exported PDF: lopdf (MIT), no default features.
+lopdf = { version = "0.45", default-features = false }
 # Legacy text encodings (GBK/GB18030, Big5, Shift_JIS, EUC-KR, single-byte code pages) for plain
 # text and CSV recipient lists (#778): encoding_rs ((Apache-2.0 OR MIT) AND BSD-3-Clause), pure
 # Rust (Firefox's). Detection is craft-mime's `detect` feature.
