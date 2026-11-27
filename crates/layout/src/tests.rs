@@ -17,6 +17,7 @@ mod joined;
 mod keep_next_section;
 mod ligature;
 pub(crate) mod linear;
+mod list_label_decorations;
 mod missing_glyphs;
 mod nbsp;
 mod nested_cant_split;
