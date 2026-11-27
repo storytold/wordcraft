@@ -527,7 +527,14 @@ pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>
     let ctx = ui.ctx().clone();
     // Alt during an object drag is part of the drag (Alt moves an object freely), not a keytip tap.
     // PLAN: `CanvasState::object_gesture` is canvas-w9's (cv.A10).
-    let enabled = app.ui.keytips_enabled && app.canvas.object_gesture().is_none();
+    let mut enabled = app.ui.keytips_enabled && app.canvas.object_gesture().is_none();
+
+    let backstage_key = egui::Id::unique(("wc_backstage_keytips_active", app.windows.shown()));
+    let was_backstage_keytips: bool = ctx.data(|d| d.get_temp(backstage_key)).unwrap_or(false);
+    if was_backstage_keytips && !app.ui.backstage {
+        // #4981: the Backstage closed while its badges show (the back chevron, a mouse Save) ends them.
+        enabled = false;
+    }
 
     // A tab the ribbon shows has an element id this pass; one in the overflow menu has none and gets no badge.
     // PLAN: assumed `RibbonOutput::tab_ids: Vec<(T, egui::Id)>` (ribbon-w3, S-L361).
@@ -579,6 +586,7 @@ pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>
     app.keytip_cache = Some(cache);
     // PLAN: `WordApp::keytips_active` is app-hub's (rb.A11).
     app.keytips_active = out.active;
+    ctx.data_mut(|d| d.insert_temp(backstage_key, app.ui.backstage && out.active));
     if let Some(tab) = out.tab.as_deref().and_then(tab_of_badge) {
         let _ = app.run("ui.tab", serde_json::json!({ "tab": tab }));
     }
