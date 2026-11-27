@@ -252,39 +252,39 @@ mod tests {
     #[test]
     fn shortcut_capture_exposes_its_name_and_current_value() {
         use craft::ui::dialog::StackDialog;
+        use egui::accesskit::Role;
         use egui_kittest::kittest::Queryable;
 
         use super::CustomizeKeyboardDialog;
 
-        let frames = crate::test_harness::frames;
-        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app(),
-        );
-        frames(&mut h, 4);
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_eframe(|_| app());
+        h.run_steps(4);
 
         h.state_mut().run("ui.dialog", json!({"name": "customizeKeyboard"})).unwrap();
         let id = craft::ui::dialog::dialog_id("customizeKeyboard");
-        frames(&mut h, 2);
+        h.run_steps(2);
         assert!(h.state().dialog_host.open_dialogs().iter().any(|d| d.id == id), "customizeKeyboard is open");
 
         let ctx = h.ctx.clone();
         h.state_mut().dialog_host.set_json_field(&ctx, id, "command", json!("format.bold")).unwrap();
-        frames(&mut h, 4);
+        h.run_steps(4);
 
-        let input = h.query_by_label("New shortcut: None").expect("New shortcut recorder is present");
+        let input = h.get_by_role_and_label(Role::Button, "New shortcut: None");
         assert_eq!(input.value().as_deref(), Some(""));
+        input.click();
+        h.run_steps(2);
+        let rec = h
+            .query_all(By::new().role(Role::Button))
+            .find(|n| n.accesskit_node().label().is_some_and(|l| l.starts_with("New shortcut:")))
+            .expect("recorder button");
+        assert!(rec.is_focused(), "recorder is focused before F6: {:?}", rec.accesskit_node().label());
 
-        h.state_mut().dialog_host.set_json_field(&ctx, id, "pressed", json!("F6")).unwrap();
-        frames(&mut h, 2);
+        h.key_press(egui::Key::F7);
+        h.run_steps(2);
 
         let fields = h.state().dialog_host.get_by_id::<CustomizeKeyboardDialog>(id).and_then(|d| d.json_fields()).unwrap();
-        assert_eq!(fields["pressed"], "F6", "recorder exposed the captured shortcut in fields");
-        let captured = h.query_by_label("New shortcut: F6").expect("recorder label reflects captured chord");
-        assert_eq!(captured.value().as_deref(), Some("F6"));
+        assert_eq!(fields["pressed"], "F7", "recorder exposed the captured shortcut in fields");
+        let captured = h.get_by_role_and_label(Role::Button, "New shortcut: F7");
+        assert_eq!(captured.value().as_deref(), Some("F7"));
     }
 }
