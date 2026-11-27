@@ -256,6 +256,10 @@ pub(crate) trait WordForm: Clone + Default + PartialEq + Serialize + Deserialize
     fn prepare(&mut self, app: &WordApp) {
         let _ = app;
     }
+    /// Like [`prepare`](Self::prepare), when refreshing a form needs mutable app caches.
+    fn prepare_mut(&mut self, app: &mut WordApp) {
+        self.prepare(app);
+    }
     /// Writes app state the body edits in place back to the app; runs after every pass and on the confirmed form in
     /// the pass the dialog finishes.
     fn write_back(&self, app: &mut WordApp) {
@@ -439,7 +443,7 @@ fn form_hooks<F: WordForm>() -> DialogHooks {
 /// Runs the form's `prepare` on a clone of the host's form and puts it back.
 fn prepare_form<F: WordForm>(app: &mut WordApp, id: DialogId) {
     let Some(mut form) = current::<F>(app, id) else { return };
-    form.prepare(app);
+    form.prepare_mut(app);
     if let Some(host) = app.dialog_host.get_mut_by_id::<FormHost<F>>(id) {
         *host.form_mut() = form;
     }

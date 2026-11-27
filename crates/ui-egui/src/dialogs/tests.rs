@@ -913,6 +913,69 @@ fn font_dialog_formats_a_bullet_and_hands_it_back() {
     }
 }
 
+/// The Font dialog's missing-font notes update when the font in either box changes.
+#[test]
+fn font_dialog_missing_font_note_updates_when_font_changes() {
+    use egui::accesskit::Role;
+
+    // `FontPicker` stays disabled while `Catalog::global()` scans in a fresh nextest process.
+    let catalog = craft::font_manager::Catalog::global();
+    catalog.scan_in_background();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !catalog.is_ready() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(catalog.is_ready(), "font catalog finished scanning");
+
+    let mut app = app_with("Hello 你好");
+    let _ = app.run("select.all", json!({}));
+    let _ = app.run("format.set", json!({"props": {"font": "JetBrains Mono", "fontEa": "JetBrains Mono"}}));
+    let mut h = app_harness(app);
+    h.run_steps(2);
+
+    let id = open_named(&mut h, "font", json!({}));
+    h.run_steps(2);
+    {
+        let form = h.state().dialog_host.get_by_id::<FontHost>(id).expect("font dialog open").form();
+        assert_eq!(form.shown_as(), None, "installed Latin font starts with no note");
+        assert_eq!(form.shown_as_ea(), None, "installed Asian font starts with no note");
+    }
+
+    let commit_box = |h: &mut egui_kittest::Harness<'_, WordApp>, label: &str, value: &str| {
+        h.get_by_role_and_label(Role::ComboBox, label).click();
+        h.step();
+        h.event(egui::Event::Key { key: egui::Key::A, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
+        h.event(egui::Event::Key { key: egui::Key::A, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::COMMAND });
+        h.event(egui::Event::Text(value.into()));
+        h.step();
+        h.event(egui::Event::Key { key: egui::Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+        h.event(egui::Event::Key { key: egui::Key::Tab, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(2);
+    };
+
+    commit_box(&mut h, "Latin text font:", "Wordcraft Dialog Gone");
+    let want_latin = h.state_mut().font_dialog_warning("Wordcraft Dialog Gone");
+    assert!(want_latin.is_some(), "missing Latin font has a substitute");
+    {
+        let form = h.state().dialog_host.get_by_id::<FontHost>(id).expect("font dialog open").form();
+        assert_eq!(form.shown_as(), want_latin.as_deref(), "Latin missing-font note updates when the font changes");
+    }
+
+    commit_box(&mut h, "Asian text font:", "Wordcraft Mincho Gone");
+    let want_ea = h.state_mut().east_asian_font_box_warning("Wordcraft Mincho Gone", "Wordcraft Dialog Gone");
+    assert!(want_ea.is_some(), "missing Asian font has a substitute");
+    {
+        let form = h.state().dialog_host.get_by_id::<FontHost>(id).expect("font dialog open").form();
+        assert_eq!(form.shown_as_ea(), want_ea.as_deref(), "Asian missing-font note updates when the font changes");
+    }
+
+    commit_box(&mut h, "Latin text font:", " JetBrains Mono ");
+    {
+        let form = h.state().dialog_host.get_by_id::<FontHost>(id).expect("font dialog open").form();
+        assert_eq!(form.shown_as(), None, "restoring an installed Latin font clears its note");
+    }
+}
+
 // ---------------------------------------------------------------- Find and Replace
 
 /// #4177: Replace All in the Find and Replace dialog, with Regular expressions on, expands
