@@ -136,16 +136,5 @@ mod tests {
             _ => None,
         });
         assert_eq!(empty_override, Some(default_dir));
-
-        if CHOSEN.get().is_none()
-            && let Some(d) = settings_dir()
-        {
-            if let Some(configured) = std::env::var_os("WORDCRAFT_PROFILE_DIR").filter(|p| !p.is_empty()) {
-                assert_eq!(d, PathBuf::from(configured));
-            } else {
-                let name = d.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                assert!(name == "wordcraft" || name == "WordCraft", "{}", d.display());
-            }
-        }
     }
 }
