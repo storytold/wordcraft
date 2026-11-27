@@ -74,6 +74,9 @@ impl Session {
             typing_word: typing,
             filename: filename.clone(),
             filepath: filepath.clone(),
+            // The editor shows a body page reference as stored until fields are updated.
+            output_page_refs: false,
+            bookmark_error: None,
         };
         let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));
         let [newest, _] = std::mem::take(&mut self.layout);
@@ -155,7 +158,8 @@ impl Session {
         layout.map(|l| (copy.doc, copy.sel, l))
     }
 
-    /// A layout for output (PDF, images, print): no proofing marks, print view.
+    /// A layout for output (PDF, images, print): no proofing marks, print view, and page
+    /// references in the body showing their bookmarks' pages, as Word prints them.
     pub fn export_layout(&self) -> Arc<DocLayout> {
         self.export_layout_with(false)
     }
@@ -164,22 +168,77 @@ impl Session {
     /// area with the comments in balloons. Fields Word fills in for output show their fresh
     /// results ([`crate::cmd::references::output_fields`]).
     pub fn export_layout_with(&self, markup: bool) -> Arc<DocLayout> {
-        let out = crate::cmd::references::output_fields(&self.doc);
-        self.export_layout_of(out.as_ref().unwrap_or(&self.doc), markup)
+        self.output_layout(markup, false)
     }
 
-    /// [`Session::export_layout_with`] of `doc`, this document as it is output.
-    pub(crate) fn export_layout_of(&self, doc: &Document, markup: bool) -> Arc<DocLayout> {
+    /// The layout a print job draws ([`Session::print_pdf`]): with `markup` as
+    /// [`Session::export_layout_with`]; without it the final text, as Word's "No Markup", so tracked
+    /// deletions, which the job doesn't draw, take no space either, whatever Track Changes
+    /// Options say. Page images keep [`Session::export_layout_with`]: they always show markup.
+    pub fn print_layout(&self, markup: bool) -> Arc<DocLayout> {
+        self.output_layout(markup, !markup)
+    }
+
+    /// The print-view layout for output; `final_text` leaves tracked deletions out.
+    fn output_layout(&self, markup: bool, final_text: bool) -> Arc<DocLayout> {
+        let out = crate::cmd::references::output_fields(&self.doc);
+        self.output_layout_of(out.as_ref().unwrap_or(&self.doc), markup, final_text)
+    }
+
+    /// [`Session::output_layout`] of `doc`, this document as it is output; `final_text` leaves tracked deletions out.
+    pub(crate) fn output_layout_of(&self, doc: &Document, markup: bool, final_text: bool) -> Arc<DocLayout> {
         let (fn_name, fn_path) = self.resolved_filenames();
         let opts = LayoutOptions {
             view: ViewMode::Print,
+            hide_deleted: final_text,
             comment_balloons: markup && self.prefs.markup.comments,
+            // Deletions Track Changes Options mark Hidden take no space, as on screen.
+            hide_marked: self.prefs.markup.hidden_deletions(),
             numeral: self.view.numeral.resolve(SYSTEM_LOCALE.get().map(String::as_str)),
             filename: Some(Arc::from(fn_name.as_str())),
             filepath: Some(Arc::from(fn_path.as_str())),
+            output_page_refs: true,
+            bookmark_error: crate::locale::bookmark_error(),
             ..Default::default()
         };
         Arc::new(wordcraft_layout::layout(doc, &mut LayoutCache::new(), &opts))
+    }
+
+    /// How wide a picture put in at `pos` may be, as Word fits an inserted or pasted picture
+    /// (#5428): the room its paragraph's lines have (the width available to its widest laid-out line,
+    /// so the paragraph's indents are already taken out; inside a table cell, the innermost cell's
+    /// text area, nested tables included; a turned cell isn't measured and falls back to the
+    /// column width), never wider than the column it is in, of its own section. The narrowest
+    /// section's text width ([`crate::io::text_width`]) when `pos` isn't laid out. It is measured on the pages, whatever the view: Web Layout and Read Mode reflow the
+    /// text to the window, and a picture put in there keeps the size it gets in the document.
+    pub(crate) fn room_at(&mut self, pos: &wordcraft_doc::Pos) -> f32 {
+        let first = crate::io::text_width(&self.doc);
+        let l =
+            if !self.view.read_mode && self.view.mode == ViewMode::Print { self.layout() } else { self.output_layout_of(&self.doc, false, false) };
+        let Some((caret, page)) = l.caret_on(pos, self.page_hint).and_then(|c| Some((c, l.pages.get(c.page)?))) else { return first };
+        // A page can hold several continuous sections: the body's own comes from the position.
+        let at = match (pos.story, pos.path.0.first()) {
+            (StoryRef::Body, Some(b)) => self.doc.section_index_of(*b as usize),
+            _ => page.section,
+        };
+        let section = self.doc.sections().get(at).map(|(_, sp)| (*sp).clone());
+        let column = match (&section, pos.story) {
+            (Some(sp), StoryRef::Body) => {
+                let boxes = sp.column_boxes();
+                let x = caret.x - page.body.x;
+                boxes.iter().find(|(cx, w)| x >= cx - 0.5 && x <= cx + w + 0.5).map_or_else(|| sp.text_width(), |(_, w)| *w)
+            }
+            (Some(sp), StoryRef::Part(_)) => sp.text_width(),
+            (None, _) => first,
+        };
+        let lines = wordcraft_layout::hit::page_lines(page, pos.story)
+            .iter()
+            .filter(|h| *h.path == pos.path)
+            .map(|h| h.right - h.left)
+            .filter(|w| w.is_finite())
+            .fold(0.0f32, f32::max);
+        let room = if lines >= 1.0 { lines.min(column) } else { column };
+        if room.is_finite() && room >= 1.0 { room } else { first }
     }
 
     /// Invalidate the cached layout (fonts changed etc.).

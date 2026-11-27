@@ -289,13 +289,14 @@ impl NumFormat {
     pub fn from_ooxml(s: &str) -> NumFormat {
         NumFormat::ALL.into_iter().find(|f| f.ooxml() == s).unwrap_or(NumFormat::Decimal)
     }
-    /// Format `n` (1-based). Formats WordCraft doesn't draw yet (Hebrew, Hindi, Thai,
-    /// Vietnamese, text amounts) show decimal, as do values past a sequence's end
-    /// (the 21st item of ①…⑳).
+    /// Format `n` (1-based). Formats WordCraft doesn't draw yet (Hebrew, Hindi, Thai letters
+    /// and counting, Vietnamese, text amounts) show decimal, as do values past a sequence's end
+    /// (the 21st item of ①…⑳). Thai numbers are the decimal number in Thai digits (๑, ๒ … ๑๐).
     pub fn format(self, n: u32) -> String {
         use crate::cjk_numbers as cjk;
         match self {
             NumFormat::DecimalZero => format!("{n:02}"),
+            NumFormat::ThaiNumbers => thai_digits(n),
             NumFormat::UpperRoman => roman(n).to_uppercase(),
             NumFormat::LowerRoman => roman(n),
             NumFormat::UpperLetter => letters(n).to_uppercase(),
@@ -349,12 +350,16 @@ impl NumFormat {
             | NumFormat::HindiNumbers
             | NumFormat::HindiCounting
             | NumFormat::ThaiLetters
-            | NumFormat::ThaiNumbers
             | NumFormat::ThaiCounting
             | NumFormat::BahtText
             | NumFormat::DollarText => n.to_string(),
         }
     }
+}
+
+/// `n` in Thai digits, ๐ (U+0E50) to ๙ (#5757).
+fn thai_digits(n: u32) -> String {
+    n.to_string().chars().filter_map(|c| c.to_digit(10).and_then(|d| char::from_u32(0x0E50 + d))).collect()
 }
 
 /// Chicago Manual of Style note marks: *, †, ‡, §, then doubled (**, ††, …) and so on.
@@ -997,6 +1002,18 @@ mod tests {
             assert!(f == NumFormat::Bullet || f == NumFormat::None || !f.format(u32::MAX).is_empty(), "{f:?}");
         }
         assert_eq!(NumFormat::from_ooxml("klingon"), NumFormat::Decimal, "unknown formats are decimal");
+    }
+
+    /// #5757: Thai numbers are the decimal number in Thai digits, every digit, at any length.
+    #[test]
+    fn thai_numbers_use_thai_digits() {
+        let labels: Vec<String> = [1, 2, 3, 9, 10, 11, 20, 105, 2569].iter().map(|n| NumFormat::ThaiNumbers.format(*n)).collect();
+        assert_eq!(labels.join(" "), "๑ ๒ ๓ ๙ ๑๐ ๑๑ ๒๐ ๑๐๕ ๒๕๖๙");
+        assert_eq!(NumFormat::ThaiNumbers.format(0), "๐");
+        assert_eq!(NumFormat::ThaiNumbers.format(u32::MAX), "๔๒๙๔๙๖๗๒๙๕");
+        assert_eq!(NumFormat::from_ooxml("thaiNumbers"), NumFormat::ThaiNumbers);
+        // Formats not drawn yet still show decimal.
+        assert_eq!(NumFormat::ThaiLetters.format(3), "3");
     }
 
     #[test]

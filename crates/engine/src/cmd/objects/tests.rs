@@ -5,13 +5,112 @@ fn png(w: u32, h: u32) -> Vec<u8> {
     let img = image::RgbaImage::from_fn(w, h, |x, y| {
         if x > 2 && x < w - 3 && y > 2 && y < h - 3 { image::Rgba([200, 30, 30, 255]) } else { image::Rgba([255, 255, 255, 255]) }
     });
-    let mut b = Vec::new();
-    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
-    b
+
+    wordcraft_geom::picture::encode_format(&image::DynamicImage::ImageRgba8(img).clone(), image::ImageFormat::Png).unwrap()
 }
 /// The laid-out area of the only picture or shape (not a text box).
 fn object_area(s: &mut Session) -> wordcraft_layout::hit::ObjectHit {
     s.layout().find_object(0, |o| o.text_box.is_none()).unwrap()
+}
+
+/// #4250: a shape dragged into the middle of a page that only continues a long paragraph
+/// stays there, as in Word: anchored at the line beside it, it's drawn on that page, not
+/// thrown back to the page the paragraph starts on. One undo step puts it back.
+#[test]
+fn a_shape_dropped_on_a_page_a_paragraph_continues_onto_stays_there() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "The quick brown fox jumps over the lazy dog. ".repeat(400)})).unwrap();
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 0, "x": 100, "y": 250, "width": 100, "height": 50})).unwrap();
+    assert!(s.layout().pages.len() > 2);
+    let before = (object_area(&mut s), s.undo_depth());
+    s.run("arrange.bounds", &json!({"page": 1, "x": 100, "y": 275})).unwrap();
+    let o = object_area(&mut s);
+    assert_eq!(o.page, 1, "on the page it was dropped on: {o:?}");
+    assert!((o.rect.x - 100.0).abs() < 0.5 && (o.rect.y - 275.0).abs() < 0.5, "where it was dropped: {:?}", o.rect);
+    assert_eq!(s.undo_depth(), before.1 + 1);
+    s.run("edit.undo", &json!({})).unwrap();
+    let back = object_area(&mut s);
+    assert_eq!((back.page, back.rect), (before.0.page, before.0.rect));
+}
+
+/// #4250: and dragged back onto the page the paragraph starts on, it stays there: its anchor
+/// goes back to the paragraph's start rather than staying on the later page's line.
+#[test]
+fn a_shape_dragged_back_to_the_page_its_paragraph_starts_on_stays_there() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "The quick brown fox jumps over the lazy dog. ".repeat(400)})).unwrap();
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 1, "x": 100, "y": 275, "width": 100, "height": 50})).unwrap();
+    let before = (object_area(&mut s), s.undo_depth());
+    assert!(before.0.page == 1 && before.0.off > 0, "anchored on page 2's line: {:?}", before.0);
+    s.run("arrange.bounds", &json!({"page": 0, "x": 120, "y": 300})).unwrap();
+    let o = object_area(&mut s);
+    assert_eq!((o.page, o.off), (0, 0), "on the page it was dropped on, anchored at the paragraph's start: {o:?}");
+    assert!((o.rect.x - 120.0).abs() < 0.5 && (o.rect.y - 300.0).abs() < 0.5, "where it was dropped: {:?}", o.rect);
+    assert_eq!(s.undo_depth(), before.1 + 1);
+}
+
+/// #4262: dropped beside the first line after a page break inside a paragraph, a shape stays
+/// on the page it was dropped on, anchored in that line.
+#[test]
+fn a_shape_dropped_just_after_a_page_break_in_a_paragraph_stays_there() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let text = "The quick brown fox jumps over the lazy dog. ";
+    s.run("text.insert", &json!({"text": text.repeat(20)})).unwrap();
+    s.run("insert.pageBreak", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": text.repeat(40)})).unwrap();
+    assert_eq!(s.doc.body.len(), 1, "one paragraph");
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 0, "x": 100, "y": 250, "width": 100, "height": 50})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 1, "x": 100, "y": 80})).unwrap();
+    let o = object_area(&mut s);
+    let after_break = text.len() * 20 + wordcraft_doc::para::PAGE_BREAK.len_utf8();
+    assert_eq!((o.page, o.off), (1, after_break), "on the page it was dropped on, anchored right after the break: {o:?}");
+    assert!((o.rect.x - 100.0).abs() < 0.5 && (o.rect.y - 80.0).abs() < 0.5, "where it was dropped: {:?}", o.rect);
+}
+
+/// Leaf #107: wrapping can leave the anchor alone to the left and put the text on the right
+/// of the same physical row. A drop after the break must still stay on the destination page.
+#[test]
+fn a_picture_with_wrap_spacing_dropped_after_a_leading_break_stays_there() {
+    for gap in [0.0, 6.0, 12.0] {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Source\nDestination"));
+        s.run("caret.set", &json!({"pos": Pos::body(1, 0)})).unwrap();
+        s.run("layout.break", &json!({"kind": "page"})).unwrap();
+        s.run("caret.set", &json!({"pos": Pos::body(0, 0)})).unwrap();
+        let data = super::super::insert::base64_encode(&png(20, 10));
+        s.run("insert.picture", &json!({"data": data, "width": 120})).unwrap();
+        s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+        super::select::with_float(&mut s, |f| {
+            f.dist = gap;
+            f.dist_top = gap;
+            f.dist_bottom = gap;
+        })
+        .unwrap();
+        let before = serde_json::to_value(&s.doc.body).unwrap();
+        let depth = s.undo_depth();
+        s.run("arrange.bounds", &json!({"page": 1, "x": 100, "y": 110})).unwrap();
+        let hit = object_area(&mut s);
+        assert_eq!(hit.page, 1, "gap={gap}: {hit:?}");
+        assert!((hit.rect.x - 100.0).abs() < 0.5 && (hit.rect.y - 110.0).abs() < 0.5, "gap={gap}: {:?}", hit.rect);
+        assert_eq!(s.undo_depth(), depth + 1);
+        let after = serde_json::to_value(&s.doc.body).unwrap();
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(serde_json::to_value(&s.doc.body).unwrap(), before);
+        s.run("edit.redo", &json!({})).unwrap();
+        assert_eq!(serde_json::to_value(&s.doc.body).unwrap(), after);
+        let mut copy = Session::new(wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap());
+        let saved = object_area(&mut copy);
+        assert_eq!(saved.page, 1, "DOCX gap={gap}: {saved:?}");
+        assert!((saved.rect.x - hit.rect.x).abs() < 0.5 && (saved.rect.y - hit.rect.y).abs() < 0.5, "saved at the drop position");
+    }
 }
 
 /// What a click and a handle or body drag do in the editor (#142, #82): hit-test the object,
@@ -51,6 +150,111 @@ fn click_resize_and_drag(insert: &str, params: Value) {
     assert_eq!(s.doc.plain_text(StoryRef::Body).replace(wordcraft_doc::para::OBJ, ""), "Some text  more text");
     s.run("edit.undo", &json!({})).unwrap();
     assert_eq!((object_area(&mut s).rect.x, object_area(&mut s).rect.y), (250.0, 300.0), "{insert}");
+}
+
+/// Moving keeps a size it isn't given: a level line (0 high, as Word files store a rule)
+/// moved by its body stays level, though a height given to it is still at least the minimum.
+#[test]
+fn moving_a_level_line_keeps_it_level() {
+    let line = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::Line,
+        w: 200.0,
+        h: 0.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: wordcraft_doc::para::Float { wrap: Wrap::InFrontOfText, x: 50.0, y: 100.0, ..Default::default() },
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.doc.insert_object(&Pos::body(0, 0), line, &Default::default()).unwrap();
+    s.run("select.range", &json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, wordcraft_doc::para::OBJ.len_utf8())})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 0, "x": 150, "y": 300})).unwrap();
+    let o = s.layout().object(&Pos::body(0, 0), 0).unwrap();
+    assert_eq!((o.rect.x, o.rect.y, o.rect.w, o.rect.h), (150.0, 300.0, 200.0, 0.0));
+    s.run("arrange.bounds", &json!({"height": 0})).unwrap();
+    assert_eq!(s.layout().object(&Pos::body(0, 0), 0).unwrap().rect.h, min_size(&selected(&s).unwrap().1));
+}
+
+/// Connect Shapes is offered for the lines and connectors it moves: floating ones in the body
+/// text, not one In Line with Text or in a header.
+#[test]
+fn connect_is_offered_only_for_floating_lines_in_the_body() {
+    use wordcraft_doc::para::ShapeKind;
+    let shape = |kind, wrap| InlineObject::Shape {
+        kind,
+        w: 200.0,
+        h: 0.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: wordcraft_doc::para::Float { wrap, x: 50.0, y: 100.0, ..Default::default() },
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    for kind in [ShapeKind::Line, ShapeKind::StraightConnector] {
+        for (wrap, offered) in [(Wrap::InFrontOfText, true), (Wrap::Inline, false)] {
+            let mut s = Session::new(wordcraft_doc::Document::new());
+            s.doc.insert_object(&Pos::body(0, 0), shape(kind, wrap), &Default::default()).unwrap();
+            s.run("select.range", &json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, wordcraft_doc::para::OBJ.len_utf8())})).unwrap();
+            assert_eq!(s.why_disabled("shape.connect").is_none(), offered, "{kind:?} {wrap:?}");
+            assert_eq!(s.run("shape.connect", &json!({"end": {"x": 300.0, "y": 150.0}})).is_ok(), offered, "{kind:?} {wrap:?}: runs when offered");
+        }
+    }
+}
+
+/// Moving one end of a slanted, flipped line leaves the other where the page shows it: the ends
+/// `shape.connect` reads and writes are the drawn ones (checked on the rendered page).
+#[test]
+fn moving_an_end_of_a_flipped_slanted_line_keeps_the_other() {
+    use wordcraft_doc::para::ShapeKind;
+    // Flipped vertically, a line in the frame (300, 600) 100 × 100 runs from its bottom-left
+    // (300, 700) to its top-right (400, 600), as in Word.
+    let line = InlineObject::Shape {
+        kind: ShapeKind::Line,
+        w: 100.0,
+        h: 100.0,
+        fill: None,
+        stroke: Some(wordcraft_doc::props::Rgb::BLACK),
+        stroke_width: 3.0,
+        float: wordcraft_doc::para::Float {
+            wrap: Wrap::InFrontOfText,
+            h_rel: wordcraft_doc::para::Anchor::Page,
+            v_rel: wordcraft_doc::para::Anchor::Page,
+            x: 300.0,
+            y: 600.0,
+            flip_v: true,
+            ..Default::default()
+        },
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.doc.insert_object(&Pos::body(0, 0), line, &Default::default()).unwrap();
+    s.run("select.range", &json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, wordcraft_doc::para::OBJ.len_utf8())})).unwrap();
+    let inked = |s: &Session, x: f32, y: f32| {
+        let l = s.export_layout();
+        let r = wordcraft_render::render_page(&s.doc, &l.pages[0], 1.0, &Default::default());
+        let dark = |px: i64, py: i64| {
+            let i = ((py * i64::from(r.width) + px) * 4) as usize;
+            r.pixels.get(i..i + 3).is_some_and(|p| p.iter().all(|&c| c < 128))
+        };
+        (-3..=3).any(|dx| (-3..=3).any(|dy| dark(x as i64 + dx, y as i64 + dy)))
+    };
+    assert!(inked(&s, 302.0, 698.0) && inked(&s, 398.0, 602.0), "drawn from bottom-left to top-right");
+    assert!(!inked(&s, 302.0, 602.0), "not from the top-left");
+    // Its end goes to (450, 650): the start stays at (300, 700).
+    s.run("shape.connect", &json!({"end": {"x": 450.0, "y": 650.0}})).unwrap();
+    assert!(inked(&s, 303.0, 699.0), "the start stays where it was drawn");
+    assert!(inked(&s, 447.0, 651.0), "the end is where it was dragged");
+    assert!(!inked(&s, 398.0, 602.0), "the end left its old place");
 }
 
 /// Ctrl+drag: a copy lands where dropped and is selected; the original stays, the clipboard
@@ -351,8 +555,9 @@ fn remove_background_keeps_a_small_stack() {
 /// 1 × 2,000,000 picture Thick Frame asked for about 1.8 TB and aborted the process.
 #[test]
 fn picture_styles_and_borders_check_the_size_they_draw() {
-    let mut thin = Vec::new();
-    image::GrayImage::new(1, 2_000_000).write_to(&mut std::io::Cursor::new(&mut thin), image::ImageFormat::Png).unwrap();
+    let thin =
+        wordcraft_geom::picture::encode_format(&image::DynamicImage::from(image::GrayImage::new(1, 2_000_000).clone()), image::ImageFormat::Png)
+            .unwrap();
     let mut s = Session::new(wordcraft_doc::Document::new());
     s.run("insert.picture", &json!({"data": super::super::insert::base64_encode(&thin)})).unwrap();
     let media = s.doc.media.len();
@@ -426,7 +631,7 @@ fn transparency_is_absolute_from_the_original() {
         let (_, o) = selected(s).unwrap();
         let InlineObject::Image { media, .. } = o else { panic!("a picture") };
         let bytes = s.doc.media.get(&media).cloned().unwrap();
-        image::load_from_memory(&bytes).unwrap().to_rgba8().pixels().map(|p| p.0).collect::<Vec<_>>()
+        wordcraft_geom::picture::decode_memory(&bytes).unwrap().to_rgba8().pixels().map(|p| p.0).collect::<Vec<_>>()
     };
     let alpha = |s: &Session| rgba(s).iter().map(|p| p[3]).collect::<Vec<_>>();
     let orig = rgba(&s);
@@ -479,7 +684,7 @@ fn picture_edits_replace_the_file_corrections() {
         let (_, o) = selected(s).unwrap();
         let InlineObject::Image { media, fx, .. } = o else { panic!("a picture") };
         let bytes = s.doc.media.get(&media).cloned().unwrap();
-        (media, fx, image::load_from_memory(&bytes).unwrap().to_rgba8().pixels().map(|p| p.0).collect::<Vec<_>>())
+        (media, fx, wordcraft_geom::picture::decode_memory(&bytes).unwrap().to_rgba8().pixels().map(|p| p.0).collect::<Vec<_>>())
     };
     let (orig_media, _, orig) = state(&s);
     // Transparency 50%: 50% (not 75%), the file's transparency dropped, its lum kept.
@@ -570,7 +775,7 @@ fn picture_styles_borders_and_effects_replace_the_last_one() {
     let bitmap = |s: &Session| {
         let (_, o) = selected(s).unwrap();
         let InlineObject::Image { media, .. } = o else { panic!("a picture") };
-        image::load_from_memory(&s.doc.media.get(&media).cloned().unwrap()).unwrap().to_rgba8()
+        wordcraft_geom::picture::decode_memory(&s.doc.media.get(&media).cloned().unwrap()).unwrap().to_rgba8()
     };
     let after = |cmds: &[(&str, Value)]| {
         let mut s = picture();
@@ -971,6 +1176,66 @@ fn picture_size_past_the_limit_keeps_the_proportions() {
     }
 }
 
+/// A side the call leaves as it was keeps its size, even outside 1–4000 pt: a straight line's 0
+/// stays 0 when only its length is typed. Sides set in proportion (the original, or a size whose
+/// sides both have a length) fit the limits together; any other side the call sets, on its own.
+#[test]
+fn picture_size_keeps_the_side_it_leaves() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.shape", &json!({"kind": "straightConnector", "width": 100.0, "height": 0.0})).unwrap();
+    let size = |s: &Session| obj_size(&selected(s).unwrap().1);
+    // A side a scale sets on its own: 0 has no length to scale.
+    let scaled = |x: f32, k: f32| if x == 0.0 { 0.0 } else { (x * k).clamp(1.0, 4000.0) };
+    // Sizes with both sides follow each other: they fit 1–4000 pt by the one factor nearest 1, worked out by hand
+    // for the calls `width` locked, `height` locked, `scale` 50 and `scale` 200 with a width (in that order).
+    let states = [
+        ((100.0, 0.0), None),
+        ((0.0, 100.0), None),
+        ((5000.0, 0.0), None),
+        ((0.0, 5000.0), None),
+        ((100.0, 0.5), Some([(200.0, 1.0), (4000.0, 20.0), (200.0, 1.0), (200.0, 1.0)])),
+        ((5000.0, 50.0), Some([(200.0, 2.0), (4000.0, 40.0), (2500.0, 25.0), (200.0, 2.0)])),
+        ((100.0, 50.0), Some([(200.0, 100.0), (400.0, 200.0), (50.0, 25.0), (200.0, 100.0)])),
+    ];
+    for ((w0, h0), together) in states {
+        let follow = |i: usize, alone: (f32, f32)| together.map_or(alone, |t: [(f32, f32); 4]| t[i]);
+        let cases = [
+            (json!({"width": 200.0, "lockAspect": false}), (200.0, h0)),
+            (json!({"height": 200.0, "lockAspect": false}), (w0, 200.0)),
+            (json!({"width": 200.0}), follow(0, (200.0, h0))),
+            (json!({"height": 200.0}), follow(1, (w0, 200.0))),
+            (json!({"scale": 50}), follow(2, (scaled(w0, 0.5), scaled(h0, 0.5)))),
+            (json!({"scale": 200, "width": 200.0}), follow(3, (200.0, scaled(h0, 2.0)))),
+            (json!({"scale": 100}), (w0, h0)),
+            (json!({}), (w0, h0)),
+            // The Size dialog: both sides sent, the height as it was.
+            (json!({"width": 200.0, "height": h0, "lockAspect": false}), (200.0, h0)),
+            (json!({"width": 200.0, "height": 300.0}), (200.0, 300.0)),
+        ];
+        for (v, (ew, eh)) in cases {
+            with_obj(&mut s, |o| o.set_size(w0, h0)).unwrap();
+            s.run("picture.size", &v).unwrap();
+            let (w, h) = size(&s);
+            assert!((w - ew).abs() < 1e-3 && (h - eh).abs() < 1e-3, "{w0}×{h0} {v}: {w}×{h}, not {ew}×{eh}");
+        }
+    }
+    // Both sides of a picture's original size fit together, whatever size it had, even when the
+    // height comes out as it was: 4050×1012.5 pt is 4000×1000, not 4000×1012.5.
+    let data = super::super::insert::base64_encode(&png(400, 100));
+    s.run("insert.picture", &json!({"data": data})).unwrap();
+    for (w0, h0) in [(3000.0, 1012.5), (4050.0, 0.0), (100.0, 100.0)] {
+        with_obj(&mut s, |o| o.set_size(w0, h0)).unwrap();
+        s.run("picture.size", &json!({"original": true, "scale": 1350})).unwrap();
+        let (w, h) = size(&s);
+        assert!((w - 4000.0).abs() < 0.01 && (h - 1000.0).abs() < 0.01, "{w0}×{h0}: {w}×{h}");
+    }
+    // A height the original sets is set, though it is the one the picture had: 300×75 pt at
+    // 5400 % is 16200×4050, so with a width of 200 the height fits to 4000.
+    with_obj(&mut s, |o| o.set_size(100.0, 4050.0)).unwrap();
+    s.run("picture.size", &json!({"original": true, "scale": 5400, "width": 200.0, "lockAspect": false})).unwrap();
+    assert_eq!(size(&s), (200.0, 4000.0));
+}
+
 /// A crop handle drop: `picture.crop` with the new size is one edit, one undo step.
 #[test]
 fn picture_crop_with_size_is_one_undo_step() {
@@ -1094,6 +1359,167 @@ fn header_pictures_can_be_resized_and_dragged() {
     s.run("edit.undo", &json!({})).unwrap();
     let u = s.layout().object(&selected(&s).unwrap().0, 0).expect("laid out");
     assert!((u.rect.x - 200.0).abs() < 1.0 && (u.rect.y - 60.0).abs() < 1.0, "{:?}", u.rect);
+    let float = selected(&s).unwrap().1.frame().unwrap().2.clone();
+    assert_eq!((float.h_rel, float.v_rel), (wordcraft_doc::para::Anchor::Page, wordcraft_doc::para::Anchor::Page));
+    assert_eq!((float.x, float.y), (200.0, 60.0));
+}
+
+/// #5812: arrange.bounds on a header picture (or after moveWithText false) keeps page anchoring
+/// and exports a page-anchored frame in .odt with coordinates relative to the page.
+#[test]
+fn arrange_bounds_on_header_picture_writes_page_anchored_odt_frame() {
+    use wordcraft_doc::para::Anchor;
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.editHeader", &json!({})).unwrap();
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data, "width": 100})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"x": 0.0, "y": 0.0, "page": 0})).unwrap();
+    let float = selected(&s).unwrap().1.frame().unwrap().2.clone();
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Page, Anchor::Page));
+    assert_eq!((float.x, float.y), (0.0, 0.0));
+
+    let _z_bytes = wordcraft_formats::odt::export(&s.doc).unwrap();
+    let mut z = craft_zip::Archive::open(&_z_bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let styles = String::from_utf8(z.read("styles.xml", 16 << 20).unwrap().unwrap()).unwrap();
+    assert!(styles.contains(r#"text:anchor-type="page""#), "frame should be page-anchored: {styles}");
+    assert!(styles.contains(r#"svg:x="0pt""#) && styles.contains(r#"svg:y="0pt""#), "offsets should be 0pt: {styles}");
+    assert!(!styles.contains(r#"text:anchor-type="paragraph""#), "frame should not be paragraph-anchored: {styles}");
+
+    // Also test after arrange.moveWithText false
+    s.run("arrange.moveWithText", &json!({"value": false})).unwrap();
+    s.run("arrange.bounds", &json!({"x": 10.0, "y": 20.0, "page": 0})).unwrap();
+    let float = selected(&s).unwrap().1.frame().unwrap().2.clone();
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Page, Anchor::Page));
+    assert_eq!((float.x, float.y), (10.0, 20.0));
+
+    let _z_bytes = wordcraft_formats::odt::export(&s.doc).unwrap();
+    let mut z = craft_zip::Archive::open(&_z_bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let styles = String::from_utf8(z.read("styles.xml", 16 << 20).unwrap().unwrap()).unwrap();
+    assert!(styles.contains(r#"text:anchor-type="page""#), "{styles}");
+    assert!(styles.contains(r#"svg:x="10pt""#) && styles.contains(r#"svg:y="20pt""#), "{styles}");
+}
+
+/// A body picture set to stay on the page (`moveWithText` off) is still placed by its paragraph
+/// once moved: the move is the placement, and the file keeps no page number to put it back
+/// (#5705). Header and footer pictures stay page-anchored (see above).
+#[test]
+fn a_moved_body_picture_is_placed_by_its_paragraph_even_when_fixed_to_the_page() {
+    use wordcraft_doc::para::Anchor;
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "First line of paragraph.\n"})).unwrap();
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data, "width": 100})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    // Default body float moves with text
+    let (_pos, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Column, Anchor::Column));
+
+    // Turn off moveWithText: fixed on the page until it is moved.
+    s.run("arrange.moveWithText", &json!({"value": false})).unwrap();
+    let (_, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Column, Anchor::Page));
+
+    s.run("arrange.bounds", &json!({"page": 0, "x": 50.0, "y": 80.0})).unwrap();
+    let (pos, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Column, Anchor::Paragraph));
+    assert_eq!(float.page, 0);
+    let hit = s.layout().object(&pos, 0).expect("laid out");
+    assert!((hit.rect.x - 50.0).abs() < 1.0 && (hit.rect.y - 80.0).abs() < 1.0, "dropped: {:?}", hit.rect);
+
+    let _z_bytes = wordcraft_formats::odt::export(&s.doc).unwrap();
+    let mut z = craft_zip::Archive::open(&_z_bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let content = String::from_utf8(z.read("content.xml", 16 << 20).unwrap().unwrap()).unwrap();
+    assert!(content.contains(r#"text:anchor-type="paragraph""#), "body picture should export with paragraph anchor: {content}");
+    assert!(!content.contains("anchor-page-number"), "{content}");
+}
+
+/// Changing `moveWithText` on an object with `h_align` set preserves its horizontal
+/// anchor relation and layout position without displacement.
+#[test]
+fn move_with_text_preserves_horizontal_position_when_h_align_set() {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "First body paragraph with some text.\n"})).unwrap();
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data, "width": 100})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+
+    // Set horizontal alignment to End (right)
+    let (pos, _) = selected(&s).unwrap();
+    super::select::edit_float(&mut s, &pos, |f| {
+        f.h_align = Some(FloatAlign::End);
+        f.h_rel = Anchor::Margin;
+    })
+    .unwrap();
+    s.touch();
+
+    let hit_before = s.layout().object(&pos, 0).unwrap();
+    let x_before = hit_before.rect.x;
+
+    // Toggle moveWithText false
+    s.run("arrange.moveWithText", &json!({"value": false})).unwrap();
+    let (pos, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    assert_eq!(float.v_rel, Anchor::Page);
+    assert_eq!(float.h_align, Some(FloatAlign::End));
+    assert_eq!(float.h_rel, Anchor::Margin);
+    s.touch();
+    let hit_after = s.layout().object(&pos, 0).unwrap();
+    assert!((hit_after.rect.x - x_before).abs() < 0.01, "{:?} vs {:?}", hit_after.rect.x, x_before);
+
+    // Toggle moveWithText true
+    s.run("arrange.moveWithText", &json!({"value": true})).unwrap();
+    let (pos, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    assert_eq!(float.v_rel, Anchor::Paragraph);
+    assert_eq!(float.h_align, Some(FloatAlign::End));
+    assert_eq!(float.h_rel, Anchor::Margin);
+    s.touch();
+    let hit_after2 = s.layout().object(&pos, 0).unwrap();
+    assert!((hit_after2.rect.x - x_before).abs() < 0.01, "{:?} vs {:?}", hit_after2.rect.x, x_before);
+}
+
+/// Toggling `moveWithText` preserves horizontal anchor relations (`Margin`, `RightMargin`,
+/// `Character`, `Column`, `Page`) and offset when the object has no horizontal alignment.
+#[test]
+fn move_with_text_preserves_horizontal_anchor_relations_without_alignment() {
+    use wordcraft_doc::para::Anchor;
+    for rel in [Anchor::Margin, Anchor::RightMargin, Anchor::Character, Anchor::Column, Anchor::Page] {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("text.insert", &json!({"text": "A line of body text.\n"})).unwrap();
+        let data = super::super::insert::base64_encode(&png(20, 10));
+        s.run("insert.picture", &json!({"data": data, "width": 100})).unwrap();
+        s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+
+        let (pos, _) = selected(&s).unwrap();
+        super::select::edit_float(&mut s, &pos, |f| {
+            f.h_align = None;
+            f.h_rel = rel;
+            f.x = 35.0;
+        })
+        .unwrap();
+        s.touch();
+
+        // Toggle moveWithText false
+        s.run("arrange.moveWithText", &json!({"value": false})).unwrap();
+        let (_, obj) = selected(&s).unwrap();
+        let float = obj.frame().unwrap().2;
+        assert_eq!(float.v_rel, Anchor::Page, "expected Page v_rel for {rel:?}");
+        assert_eq!(float.h_rel, rel, "expected {rel:?} preserved on moveWithText false");
+        assert!((float.x - 35.0).abs() < 0.01, "expected x preserved on moveWithText false");
+
+        // Toggle moveWithText true
+        s.run("arrange.moveWithText", &json!({"value": true})).unwrap();
+        let (_, obj) = selected(&s).unwrap();
+        let float = obj.frame().unwrap().2;
+        assert_eq!(float.v_rel, Anchor::Paragraph, "expected Paragraph v_rel for {rel:?}");
+        assert_eq!(float.h_rel, rel, "expected {rel:?} preserved on moveWithText true");
+        assert!((float.x - 35.0).abs() < 0.01, "expected x preserved on moveWithText true");
+    }
 }
 
 /// Shape Format › Text (#369): direction and alignment on the box the caret is in, then
@@ -1285,7 +1711,6 @@ fn mirrored_indents_make_no_extra_column() {
 /// A Word file whose only paragraph holds a group of a rectangle and Word's own ink (with its
 /// picture fallback).
 fn group_with_word_ink() -> Vec<u8> {
-    use std::io::Write;
     let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:wpi="http://schemas.microsoft.com/office/word/2010/wordprocessingInk""#;
     let rect = r#"<wps:wsp><wps:cNvPr id="2" name="Box"/><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr><wps:bodyPr/></wps:wsp>"#;
     let ink = r#"<mc:AlternateContent><mc:Choice Requires="wpi"><w14:contentPart bwMode="auto" r:id="rInk"><w14:nvContentPartPr><w14:cNvPr id="3" name="Ink 3"/><w14:cNvContentPartPr/></w14:nvContentPartPr><w14:xfrm><a:off x="914400" y="0"/><a:ext cx="914400" cy="457200"/></w14:xfrm></w14:contentPart></mc:Choice><mc:Fallback><pic:pic><pic:nvPicPr><pic:cNvPr id="3" name="Ink 3"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rPreview"/></pic:blipFill><pic:spPr><a:xfrm><a:off x="914400" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></mc:Fallback></mc:AlternateContent>"#;
@@ -1305,14 +1730,12 @@ fn group_with_word_ink() -> Vec<u8> {
         ),
         ("word/ink/ink1.xml", r#"<ink xmlns="http://www.w3.org/2003/InkML"><trace>0 0, 1 1</trace></ink>"#.to_string()),
     ];
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, xml) in parts {
-        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(xml.as_bytes()).unwrap();
+        zw.add(name, xml.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    zw.start_file("word/media/preview.png", zip::write::SimpleFileOptions::default()).unwrap();
-    zw.write_all(&png(8, 4)).unwrap();
-    zw.finish().unwrap().into_inner()
+    zw.add("word/media/preview.png", &png(8, 4), craft_zip::Compression::Deflated).unwrap();
+    zw.finish().unwrap()
 }
 
 fn ink_members(doc: &wordcraft_doc::Document) -> usize {
@@ -1332,7 +1755,6 @@ fn ink_members(doc: &wordcraft_doc::Document) -> usize {
 /// yet), so open → Ungroup → save → reopen keeps the ink in the group with its part.
 #[test]
 fn ungroup_refuses_a_group_holding_word_ink_and_the_ink_survives_saving() {
-    use std::io::Read;
     let mut s = Session::new(wordcraft_docx::read(&group_with_word_ink()).unwrap());
     assert_eq!(ink_members(&s.doc), 1, "the fixture's ink is read into the group");
     let pos = Pos::body(0, 0);
@@ -1345,16 +1767,14 @@ fn ungroup_refuses_a_group_holding_word_ink_and_the_ink_survives_saving() {
     let err = ungroup(&mut s, &json!({})).unwrap_err();
     assert!(matches!(err, CmdError::Disabled(_)), "{err:?}");
     let bytes = wordcraft_docx::write(&s.doc).unwrap();
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
-    let mut xml = String::new();
-    z.by_name("word/document.xml").unwrap().read_to_string(&mut xml).unwrap();
+    let mut z = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert_eq!(xml.matches("<w14:contentPart").count(), 1, "{xml}");
     assert!(xml.contains("<mc:Fallback>"), "{xml}");
     assert_eq!(bytes, before, "the refused ungroup leaves the document unchanged");
-    let names: Vec<String> = z.file_names().map(String::from).collect();
+    let names: Vec<String> = z.names().map(|n| n.into_owned()).collect();
     assert_eq!(names.iter().filter(|n| n.starts_with("word/ink/")).count(), 1, "{names:?}");
-    let mut rels = String::new();
-    z.by_name("word/_rels/document.xml.rels").unwrap().read_to_string(&mut rels).unwrap();
+    let rels = String::from_utf8(z.read("word/_rels/document.xml.rels", 16 << 20).unwrap().unwrap()).unwrap();
     assert_eq!(rels.matches("/customXml\"").count(), 1, "one ink relationship: {rels}");
     let back = wordcraft_docx::read(&bytes).unwrap();
     assert_eq!(ink_members(&back), 1);
@@ -1376,4 +1796,452 @@ fn only_ink_members_pin_a_group() {
         }
     }
     assert!(!holds_ink(&group), "a group of charts is not pinned");
+}
+
+/// Issue #5896: shape.outline can remove the frame (color: null), change width without
+/// erasing stroke color, set dash and cap, and acts on a text box while typing inside it.
+#[test]
+fn shape_outline_and_fill_on_text_box() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.textBox", &json!({"text": "A text box with a frame"})).unwrap();
+    // While typing inside the text box:
+    // 1. shape.outline with {"color": null} removes the frame (stroke is None).
+    s.run("shape.outline", &json!({"color": null})).unwrap();
+    let (pos, _id) = text_box_target(&s).unwrap();
+    let o = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+    let InlineObject::Shape { stroke, .. } = o else { panic!("{o:?}") };
+    assert_eq!(*stroke, None, "frame removed");
+
+    // 2. shape.outline can restore the frame with color, width, dash and cap:
+    s.run("shape.outline", &json!({"color": "156082", "width": 1.5, "dash": "dash", "cap": "rnd"})).unwrap();
+    let o = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+    let InlineObject::Shape { stroke, stroke_width, extra, .. } = o else { panic!("{o:?}") };
+    assert_eq!(*stroke, Some(Rgb(0x15, 0x60, 0x82)));
+    assert_eq!(*stroke_width, 1.5);
+    assert_eq!(extra.dash, wordcraft_doc::line_dash::LineDash::Dash);
+    assert_eq!(extra.cap, wordcraft_doc::connector::LineCap::Round);
+
+    // 3. Changing only the width preserves the stroke color:
+    s.run("shape.outline", &json!({"width": 3.0})).unwrap();
+    let o = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+    let InlineObject::Shape { stroke, stroke_width, .. } = o else { panic!("{o:?}") };
+    assert_eq!(*stroke, Some(Rgb(0x15, 0x60, 0x82)), "color kept when width changed");
+    assert_eq!(*stroke_width, 3.0);
+
+    // 4. Malformed non-null colors are rejected before mutation:
+    assert!(matches!(s.run("shape.outline", &json!({"color": 123})), Err(CmdError::Params(_))));
+    assert!(matches!(s.run("shape.outline", &json!({"color": "not-a-hex"})), Err(CmdError::Params(_))));
+    let o = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+    let InlineObject::Shape { stroke, .. } = o else { panic!("{o:?}") };
+    assert_eq!(*stroke, Some(Rgb(0x15, 0x60, 0x82)), "color preserved on error");
+
+    // 5. Unlocked size edits preserve the other dimension:
+    s.run("picture.size", &json!({"width": 100.0, "height": 80.0, "lockAspect": false})).unwrap();
+    s.run("picture.size", &json!({"width": 250.0, "lockAspect": false})).unwrap();
+    let o = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+    let (w, h) = obj_size(o);
+    assert_eq!((w, h), (250.0, 80.0), "height preserved on width edit");
+
+    s.run("picture.size", &json!({"height": 150.0, "lockAspect": false})).unwrap();
+    let o = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+    let (w, h) = obj_size(o);
+    assert_eq!((w, h), (250.0, 150.0), "width preserved on height edit");
+
+    // 6. shape.effects targets the active text box when typing inside it:
+    s.run("shape.effects", &json!({"shadow": "offsetBottomRight"})).unwrap();
+    let o = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+    let InlineObject::Shape { effects, .. } = o else { panic!("{o:?}") };
+    assert!(effects.shadow.is_some(), "shadow applied to text box");
+
+    // 7. arrange.bounds targets the active text box when typing inside it:
+    let caret_sel = s.sel.clone();
+    s.run("arrange.bounds", &json!({"width": 300.0, "height": 180.0})).unwrap();
+    let o = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+    let (w, h) = obj_size(o);
+    assert_eq!((w, h), (300.0, 180.0), "bounds applied to active text box");
+
+    // Restore typing caret inside text box so selected(&s) is None:
+    s.sel = caret_sel.clone();
+    assert!(selected(&s).is_none(), "caret is inside text box, no outer object selected");
+
+    // arrange.moveWithText targets the active text box once it is floating:
+    assert!(s.run("arrange.moveWithText", &json!({"value": true})).is_err(), "inline text box cannot move with text");
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.sel = caret_sel;
+    assert!(selected(&s).is_none(), "caret restored inside text box");
+    s.run("arrange.moveWithText", &json!({"value": false})).unwrap();
+    let o = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+    let (_, _, float) = o.frame().unwrap();
+    assert_eq!(float.v_rel, wordcraft_doc::para::Anchor::Page, "moveWithText targets active floating text box");
+
+    // 8. When a picture is selected, shape.fill, shape.effects, and shape.outline do not target the text box:
+    let data = super::super::insert::base64_encode(&png(10, 10));
+    s.run("insert.picture", &json!({"data": data})).unwrap();
+    assert!(matches!(s.run("shape.fill", &json!({"color": "FF0000"})), Err(CmdError::Disabled(_))));
+    assert!(matches!(s.run("shape.effects", &json!({"shadow": "none"})), Err(CmdError::Disabled(_))));
+    assert!(matches!(s.run("shape.outline", &json!({"color": "FF0000"})), Err(CmdError::Disabled(_))));
+
+    // 9. fit_size normalizes NaN and clamps below 1 pt to 1 pt:
+    assert_eq!(super::picture::fit_size(f32::NAN, 0.0, false), (1.0, 1.0));
+    assert_eq!(super::picture::fit_size(-50.0, 0.0, false), (1.0, 1.0));
+}
+
+/// Issue #5896: `arrange.align` and `arrange.position` use the active text box's own
+/// dimensions when invoked from a typing caret inside it, matching explicit object selection.
+#[test]
+fn arrange_align_and_position_on_active_text_box() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.textBox", &json!({"text": "Sized text box"})).unwrap();
+    let caret_sel = s.sel.clone();
+    let (pos, _) = text_box_target(&s).unwrap();
+    s.run("picture.size", &json!({"width": 250.0, "height": 140.0, "lockAspect": false})).unwrap();
+
+    let float_xy = |s: &Session| {
+        let o = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+        let (_, _, f) = o.frame().unwrap();
+        (f.x, f.y)
+    };
+
+    for value in ["center", "right"] {
+        s.run("select.objects", &json!({"index": 0})).unwrap();
+        s.run("arrange.align", &json!({"value": "left"})).unwrap();
+        s.run("arrange.align", &json!({"value": value})).unwrap();
+        let from_selected = float_xy(&s).0;
+
+        s.sel = caret_sel.clone();
+        assert!(selected(&s).is_none(), "caret inside text box for align {value}");
+        s.run("arrange.align", &json!({"value": "left"})).unwrap();
+        s.run("arrange.align", &json!({"value": value})).unwrap();
+        let from_caret = float_xy(&s).0;
+        assert_eq!(from_caret, from_selected, "align {value} matches explicit selection");
+    }
+
+    for preset in ["middleCenter", "bottomRight"] {
+        s.run("select.objects", &json!({"index": 0})).unwrap();
+        s.run("arrange.position", &json!({"preset": "topLeft"})).unwrap();
+        s.run("arrange.position", &json!({"preset": preset})).unwrap();
+        let from_selected = float_xy(&s);
+
+        s.sel = caret_sel.clone();
+        assert!(selected(&s).is_none(), "caret inside text box for position {preset}");
+        s.run("arrange.position", &json!({"preset": "topLeft"})).unwrap();
+        s.run("arrange.position", &json!({"preset": preset})).unwrap();
+        let from_caret = float_xy(&s);
+        assert_eq!(from_caret, from_selected, "position {preset} matches explicit selection");
+    }
+}
+
+/// Issue #5896 P2: typing inside a canvas text box routes Fill, Outline, Effects, Size, and
+/// Rotation to that text box member (leaving the canvas and siblings untouched), keeps
+/// canvas-owned placement commands disabled, and keeps commands disabled inside a regular group.
+#[test]
+fn typing_in_canvas_text_box_formats_member_not_canvas() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.canvas", &json!({"width": 400, "height": 300, "fill": "FFF2CC", "outline": "1F4E79"})).unwrap();
+    s.run("insert.shape", &json!({"kind": "rectangle", "width": 100, "height": 40})).unwrap();
+    s.run("select.objects", &json!({"index": 0})).unwrap();
+    let tb_res = s.run("insert.textBox", &json!({"text": "Canvas note"})).unwrap();
+    let tb_id = tb_res["story"].as_u64().unwrap() as u32;
+    assert_eq!(s.sel.focus.story, StoryRef::Part(tb_id));
+    assert!(selected(&s).is_none());
+    assert!(crate::cmd::canvas::selected_member(&s).is_none());
+
+    s.run("shape.fill", &json!({"color": "FF0000"})).unwrap();
+    s.run("shape.outline", &json!({"color": null})).unwrap();
+    let canvas_mid = all_objects(&s).into_iter().next().unwrap().1;
+    let InlineObject::Group { children: mid_children, .. } = &canvas_mid else { panic!("{canvas_mid:?}") };
+    assert!(matches!(&mid_children[1].obj, InlineObject::Shape { stroke: None, .. }));
+    assert_eq!(canvas_mid.canvas_style().and_then(|st| st.stroke), Rgb::parse("1F4E79"));
+
+    s.run("shape.outline", &json!({"color": "00AA00", "width": 2.0, "dash": "dash", "cap": "rnd"})).unwrap();
+    s.run("shape.effects", &json!({"shadow": "offsetBottomRight"})).unwrap();
+    s.run("picture.size", &json!({"width": 180.0, "height": 90.0, "lockAspect": false})).unwrap();
+    s.run("arrange.rotation", &json!({"degrees": 15.0})).unwrap();
+
+    let canvas = all_objects(&s).into_iter().next().unwrap().1;
+    let InlineObject::Group { w: cw, h: ch, float: cf, children, canvas: Some(style), .. } = &canvas else {
+        panic!("expected canvas: {canvas:?}");
+    };
+    assert_eq!((*cw, *ch, cf.spin().deg), (400.0, 300.0, 0.0));
+    assert_eq!(style.fill, Rgb::parse("FFF2CC").map(wordcraft_doc::fill::Fill::solid));
+    assert_eq!(style.stroke, Rgb::parse("1F4E79"));
+    assert_eq!(style.stroke_width, 0.75);
+
+    assert_eq!(obj_size(&children[0].obj), (100.0, 40.0), "sibling shape size untouched");
+    let InlineObject::Shape { effects: sib_fx, .. } = &children[0].obj else { panic!() };
+    assert!(sib_fx.shadow.is_none(), "sibling shape effects untouched");
+
+    let InlineObject::Shape { w, h, fill, stroke, stroke_width, float, effects, extra, story, .. } = &children[1].obj else {
+        panic!("expected text box member");
+    };
+    assert_eq!(*story, Some(tb_id));
+    assert_eq!((*w, *h), (180.0, 90.0));
+    assert_eq!(*fill, Rgb::parse("FF0000").map(wordcraft_doc::fill::Fill::solid));
+    assert_eq!(*stroke, Rgb::parse("00AA00"));
+    assert_eq!(*stroke_width, 2.0);
+    assert_eq!(extra.dash, wordcraft_doc::line_dash::LineDash::Dash);
+    assert_eq!(extra.cap, wordcraft_doc::connector::LineCap::Round);
+    assert!(effects.shadow.is_some());
+    assert_eq!(float.spin().deg, 15.0);
+
+    for (cmd, params) in [
+        ("arrange.wrap", json!({"wrap": "square"})),
+        ("arrange.align", json!({"value": "center"})),
+        ("arrange.position", json!({"preset": "middleCenter"})),
+        ("arrange.moveWithText", json!({"value": true})),
+        ("arrange.copyTo", json!({"x": 50.0, "y": 50.0})),
+    ] {
+        assert!(matches!(s.run(cmd, &params), Err(CmdError::Disabled(_))), "{cmd} stays disabled for canvas member");
+    }
+
+    // Regular group: typing inside a grouped text box leaves shape commands disabled without modifying the group.
+    let mut g = Session::new(wordcraft_doc::Document::new());
+    g.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    g.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    g.sel = Selection::caret(g.doc.end_of(StoryRef::Body));
+    let grouped_tb_id = g.run("insert.textBox", &json!({"text": "Grouped note"})).unwrap()["story"].as_u64().unwrap() as u32;
+    g.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    g.run("select.objects", &json!({"index": 0})).unwrap();
+    g.run("select.addObject", &json!({"index": 1})).unwrap();
+    g.run("arrange.group", &json!({})).unwrap();
+    g.sel = Selection::caret(g.doc.end_of(StoryRef::Part(grouped_tb_id)));
+    let before_group = all_objects(&g).into_iter().next().unwrap().1;
+    for (cmd, params) in [
+        ("shape.fill", json!({"color": "FF0000"})),
+        ("shape.outline", json!({"color": null})),
+        ("shape.effects", json!({"shadow": "offsetBottomRight"})),
+        ("picture.size", json!({"width": 180.0, "lockAspect": false})),
+        ("arrange.rotation", json!({"degrees": 15.0})),
+    ] {
+        assert!(matches!(g.run(cmd, &params), Err(CmdError::Disabled(_))), "{cmd} disabled inside regular group");
+    }
+    assert_eq!(all_objects(&g).into_iter().next().unwrap().1, before_group);
+}
+
+/// Issue #5896: `shape.outline` rejects unknown or non-string `dash` and `cap` parameters
+/// instead of silently falling back to Solid / Flat.
+#[test]
+fn shape_outline_rejects_unknown_dash_and_cap() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("shape.outline", &json!({"color": "156082", "width": 2.0, "dash": "dash", "cap": "rnd"})).unwrap();
+
+    for bad in
+        [json!({"cap": "round"}), json!({"dash": "dotted"}), json!({"cap": 42}), json!({"dash": false}), json!({"dash": null}), json!({"cap": null})]
+    {
+        assert!(matches!(s.run("shape.outline", &bad), Err(CmdError::Params(_))), "expected Params error for {bad}");
+    }
+
+    let (_, o) = selected(&s).unwrap();
+    let InlineObject::Shape { stroke, stroke_width, extra, .. } = o else { panic!("{o:?}") };
+    assert_eq!(stroke, Rgb::parse("156082"));
+    assert_eq!(stroke_width, 2.0);
+    assert_eq!(extra.dash, wordcraft_doc::line_dash::LineDash::Dash);
+    assert_eq!(extra.cap, wordcraft_doc::connector::LineCap::Round);
+}
+
+/// Issue #5896: with multiple shapes selected, Line and Layout commands update every selected target.
+#[test]
+fn multi_shape_selection_updates_outline_and_layout_on_all() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let id0 = s.run("insert.textBox", &json!({"text": "First", "width": 120.0, "height": 60.0})).unwrap()["story"].as_u64().unwrap() as u32;
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.sel = Selection::caret(s.doc.end_of(StoryRef::Body));
+    let id1 = s.run("insert.textBox", &json!({"text": "Second", "width": 200.0, "height": 90.0})).unwrap()["story"].as_u64().unwrap() as u32;
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+
+    s.run("select.objects", &json!({"index": 0})).unwrap();
+    s.run("select.addObject", &json!({"index": 1})).unwrap();
+
+    s.run("shape.outline", &json!({"color": "156082", "width": 2.5, "dash": "lgDash", "cap": "sq"})).unwrap();
+    s.run("picture.size", &json!({"width": 160.0, "lockAspect": false})).unwrap();
+    s.run("arrange.rotation", &json!({"degrees": 30.0})).unwrap();
+    s.run("shape.alignText", &json!({"anchor": "ctr"})).unwrap();
+    s.run("shape.textDirection", &json!({"dir": "vert"})).unwrap();
+    assert_eq!(picked_objects(&s).len(), 2, "multi-selection preserved across formatting and layout");
+
+    let objs = all_objects(&s);
+    assert_eq!(objs.len(), 2);
+    for (idx, ((_, o), expected_h)) in objs.iter().zip([60.0, 90.0]).enumerate() {
+        let InlineObject::Shape { w, h, stroke, stroke_width, float, extra, .. } = o else { panic!("{o:?}") };
+        assert_eq!((*w, *h), (160.0, expected_h), "box {idx} kept its own height");
+        assert_eq!(*stroke, Rgb::parse("156082"), "box {idx} stroke");
+        assert_eq!(*stroke_width, 2.5, "box {idx} stroke width");
+        assert_eq!(extra.dash, wordcraft_doc::line_dash::LineDash::LongDash, "box {idx} dash");
+        assert_eq!(extra.cap, wordcraft_doc::connector::LineCap::Square, "box {idx} cap");
+        assert_eq!(float.spin().deg, 30.0, "box {idx} rotation");
+    }
+    for id in [id0, id1] {
+        let body = s.doc.parts.get(&id).unwrap().body;
+        assert_eq!(body.anchor, VAlign::Center);
+        assert_eq!(body.vert, TextVert::Vert);
+    }
+
+    s.run("shape.outline", &json!({"color": null})).unwrap();
+    for (_, o) in all_objects(&s) {
+        let InlineObject::Shape { stroke, .. } = o else { panic!("{o:?}") };
+        assert_eq!(stroke, None);
+    }
+}
+
+/// Issue #5896: "No line", dash preset, and line cap set via `shape.outline` survive a DOCX save/open round trip.
+#[test]
+fn shape_outline_no_line_dash_and_cap_round_trip_docx() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.textBox", &json!({"text": "Borderless"})).unwrap();
+    s.run("shape.outline", &json!({"color": null})).unwrap();
+
+    s.sel = Selection::caret(s.doc.end_of(StoryRef::Body));
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("shape.outline", &json!({"color": "156082", "width": 2.25, "dash": "dashDot", "cap": "rnd"})).unwrap();
+
+    s.sel = Selection::caret(s.doc.end_of(StoryRef::Body));
+    s.run("insert.shape", &json!({"kind": "ellipse"})).unwrap();
+    s.run("shape.outline", &json!({"color": "C00000", "width": 1.5, "dash": "sysDot", "cap": "sq"})).unwrap();
+
+    let bytes = crate::io::save_bytes("out.docx", &s.doc).unwrap();
+    let mut s2 = Session::new(wordcraft_doc::Document::new());
+    s2.run("file.open", &json!({"path": "out.docx", "data": crate::cmd::insert::base64_encode(&bytes)})).unwrap();
+
+    let objs = all_objects(&s2);
+    assert_eq!(objs.len(), 3);
+    let InlineObject::Shape { stroke: tb_stroke, story, .. } = &objs[0].1 else { panic!("{:?}", objs[0]) };
+    assert!(story.is_some());
+    assert_eq!(*tb_stroke, None, "No line preserved through DOCX round trip");
+
+    let InlineObject::Shape { stroke, stroke_width, extra, .. } = &objs[1].1 else { panic!("{:?}", objs[1]) };
+    assert_eq!(*stroke, Rgb::parse("156082"));
+    assert!((*stroke_width - 2.25).abs() < 0.05, "width {stroke_width}");
+    assert_eq!(extra.dash, wordcraft_doc::line_dash::LineDash::DashDot);
+    assert_eq!(extra.cap, wordcraft_doc::connector::LineCap::Round);
+
+    let InlineObject::Shape { stroke, stroke_width, extra, .. } = &objs[2].1 else { panic!("{:?}", objs[2]) };
+    assert_eq!(*stroke, Rgb::parse("C00000"));
+    assert!((*stroke_width - 1.5).abs() < 0.05, "width {stroke_width}");
+    assert_eq!(extra.dash, wordcraft_doc::line_dash::LineDash::SystemDot);
+    assert_eq!(extra.cap, wordcraft_doc::connector::LineCap::Square);
+}
+
+/// Issue #5896: mixed multi-selections enable `shape.fill`, `shape.outline`, `shape.effects`,
+/// `shape.alignText`, and `shape.textDirection` whenever at least one selected target matches.
+#[test]
+fn mixed_object_multi_selection_enables_shape_and_text_box_commands() {
+    // Picture selected first + rectangle added via select.addObject.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let data = super::super::insert::base64_encode(&png(12, 12));
+    s.run("insert.picture", &json!({"data": data, "width": 60})).unwrap();
+    s.sel = Selection::caret(s.doc.end_of(StoryRef::Body));
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("select.objects", &json!({"index": 0})).unwrap();
+    s.run("select.addObject", &json!({"index": 1})).unwrap();
+
+    s.run("shape.fill", &json!({"color": "00AA00"})).unwrap();
+    s.run("shape.outline", &json!({"color": "FF0000", "dash": "dash"})).unwrap();
+    s.run("shape.effects", &json!({"shadow": "offsetBottomRight"})).unwrap();
+    assert!(matches!(s.run("shape.alignText", &json!({"anchor": "b"})), Err(CmdError::Disabled(_))));
+    assert!(matches!(s.run("shape.textDirection", &json!({"dir": "vert"})), Err(CmdError::Disabled(_))));
+
+    let objs = all_objects(&s);
+    assert!(matches!(&objs[0].1, InlineObject::Image { .. }));
+    let InlineObject::Shape { fill, stroke, effects, extra, .. } = &objs[1].1 else { panic!("{:?}", objs[1]) };
+    assert_eq!(*fill, Rgb::parse("00AA00").map(wordcraft_doc::fill::Fill::solid));
+    assert_eq!(*stroke, Rgb::parse("FF0000"));
+    assert_eq!(extra.dash, wordcraft_doc::line_dash::LineDash::Dash);
+    assert!(effects.shadow.is_some());
+
+    // Plain shape selected first + text box added via select.addObject.
+    let mut s2 = Session::new(wordcraft_doc::Document::new());
+    s2.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s2.sel = Selection::caret(s2.doc.end_of(StoryRef::Body));
+    let tb_id = s2.run("insert.textBox", &json!({"text": "Mixed box"})).unwrap()["story"].as_u64().unwrap() as u32;
+    s2.run("select.objects", &json!({"index": 0})).unwrap();
+    s2.run("select.addObject", &json!({"index": 1})).unwrap();
+
+    s2.run("shape.alignText", &json!({"anchor": "b"})).unwrap();
+    s2.run("shape.textDirection", &json!({"dir": "vert270"})).unwrap();
+    let body = s2.doc.parts.get(&tb_id).unwrap().body;
+    assert_eq!(body.anchor, VAlign::Bottom);
+    assert_eq!(body.vert, TextVert::Vert270);
+}
+
+/// Issue #5896: `arrange.align` and `arrange.position` inside an active text box anchored in
+/// a later section use that anchor section's margins rather than section 0's.
+#[test]
+fn arrange_align_and_position_use_text_box_anchor_section() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("layout.margins", &json!({"left": 144.0, "right": 144.0})).unwrap();
+    let sect1_tw = crate::cmd::page::sect(&s).text_width();
+    let sect0_tw = s.doc.sections()[0].1.text_width();
+    assert!(sect1_tw < sect0_tw, "section 1 has narrower text area");
+
+    s.run("insert.textBox", &json!({"text": "Section 1 box", "width": 100.0, "height": 50.0})).unwrap();
+    s.run("arrange.align", &json!({"value": "right"})).unwrap();
+    let (pos, o) = selected_or_text_box(&s).unwrap();
+    let (_, _, f) = o.frame().unwrap();
+    assert!((f.x - (sect1_tw - 100.0)).abs() < 0.01, "aligned to section 1 right margin ({} vs {})", f.x, sect1_tw - 100.0);
+
+    s.run("arrange.position", &json!({"preset": "topRight"})).unwrap();
+    let o2 = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+    let (_, _, f2) = o2.frame().unwrap();
+    assert!((f2.x - (sect1_tw - 100.0)).abs() < 0.01, "positioned to section 1 right margin ({} vs {})", f2.x, sect1_tw - 100.0);
+}
+
+/// Issue #5896: bulk rotation commands stay enabled when a chart is primary selection and a
+/// movable shape is added via `select.addObject`.
+#[test]
+fn chart_primary_with_added_shape_allows_rotation() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.chart", &json!({"type": "column"})).unwrap();
+    s.sel = Selection::caret(s.doc.end_of(StoryRef::Body));
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("select.objects", &json!({"index": 0})).unwrap();
+    s.run("select.addObject", &json!({"index": 1})).unwrap();
+
+    s.run("arrange.rotation", &json!({"degrees": 45.0})).unwrap();
+    s.run("arrange.rotate", &json!({"direction": "right"})).unwrap();
+    let objs = all_objects(&s);
+    let (_, _, chart_f) = objs[0].1.frame().unwrap();
+    let (_, _, shape_f) = objs[1].1.frame().unwrap();
+    assert_eq!(chart_f.spin().deg, 0.0);
+    assert_eq!(shape_f.spin().deg, 135.0);
+}
+
+/// Issue #5896: `shape.size` and `shape.rotation` only change shapes/canvases in a mixed
+/// Picture + Chart + Shape selection, while generic `picture.size` keeps resizing all targets.
+#[test]
+fn shape_size_and_rotation_only_affect_shapes_in_mixed_selection() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let data = super::super::insert::base64_encode(&png(12, 12));
+    s.run("insert.picture", &json!({"data": data})).unwrap();
+    s.run("picture.size", &json!({"width": 60.0, "height": 40.0, "lockAspect": false})).unwrap();
+    s.run("arrange.rotation", &json!({"degrees": 10.0})).unwrap();
+    s.sel = Selection::caret(s.doc.end_of(StoryRef::Body));
+    s.run("insert.chart", &json!({"type": "column"})).unwrap();
+    let (chart_w0, chart_h0, _) = all_objects(&s)[1].1.frame().unwrap();
+    s.sel = Selection::caret(s.doc.end_of(StoryRef::Body));
+    s.run("insert.shape", &json!({"kind": "rectangle", "width": 150.0, "height": 80.0})).unwrap();
+
+    s.run("select.objects", &json!({"index": 0})).unwrap();
+    s.run("select.addObject", &json!({"index": 1})).unwrap();
+    s.run("select.addObject", &json!({"index": 2})).unwrap();
+
+    s.run("shape.size", &json!({"width": 210.0, "lockAspect": false})).unwrap();
+    s.run("shape.rotation", &json!({"degrees": 45.0})).unwrap();
+    assert_eq!(picked_objects(&s).len(), 3, "multi-selection preserved across shape.size and shape.rotation");
+
+    let objs = all_objects(&s);
+    let (pw, ph, pf) = objs[0].1.frame().unwrap();
+    assert_eq!((pw, ph, pf.spin().deg), (60.0, 40.0, 10.0), "picture untouched by shape.size/rotation");
+    let (cw, ch, _) = objs[1].1.frame().unwrap();
+    assert_eq!((cw, ch), (chart_w0, chart_h0), "chart untouched by shape.size");
+    let (sw, sh, sf) = objs[2].1.frame().unwrap();
+    assert_eq!((sw, sh, sf.spin().deg), (210.0, 80.0, 45.0), "shape updated");
+
+    // Generic picture.size continues to resize every sizable object in the selection.
+    s.run("picture.size", &json!({"width": 180.0, "lockAspect": false})).unwrap();
+    let objs2 = all_objects(&s);
+    assert_eq!(objs2[0].1.frame().unwrap().0, 180.0);
+    assert_eq!(objs2[1].1.frame().unwrap().0, 180.0);
+    assert_eq!(objs2[2].1.frame().unwrap().0, 180.0);
 }
