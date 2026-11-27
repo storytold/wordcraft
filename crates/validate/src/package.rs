@@ -96,6 +96,9 @@ pub(crate) struct ContentTypes {
     /// The part is not a certifiable OPC inventory (a second root, a bad declaration, ...). Diagnostics
     /// still use the declarations it delivered, but it cannot certify a standalone package.
     pub inventory_invalid: bool,
+    /// An `Override` without `PartName` or a `Default` without `Extension` was declared. Single-archive
+    /// diagnostics still use the lenient key; only certifying a standalone slice refuses it.
+    pub malformed_declaration: bool,
     defaults: HashMap<String, String>,
     /// Extensions with more than one Default entry (lowercased).
     pub dup_defaults: BTreeSet<String>,
@@ -999,7 +1002,7 @@ struct CentralDirectory<'a> {
 fn check_concatenated_archives(bytes: &[u8], readable: bool, acc: &mut Acc) {
     observation_contract! {
         rules: "PKG-CONCATENATED";
-        collections: "field.entries*4";
+        collections: "field.entries*4,field.first*1";
         scope: "input-budgeted EOCD scan respecting declared comments and at most two candidate archive splits";
         loss: "split budget, an unsupported boundary layout, or incomplete isolated package loading";
         fallback: "report incomplete coverage for unresolved candidate boundaries";
@@ -1025,8 +1028,12 @@ fn check_concatenated_archives(bytes: &[u8], readable: bool, acc: &mut Acc) {
             continue;
         };
         let boundary = footer + 22 + usize::from(comment);
-        // Without a comment the footer cannot anchor anything, and its walk only matters when a local header follows.
-        if comment == 0 && u32_at(bytes, boundary) != Some(0x0403_4B50) {
+        // A trailing archive normally starts with a local header; a supported stub prefix puts other bytes first,
+        // so a later footer-like record that ends the input keeps the boundary in play, as for the first archive.
+        let header_follows = u32_at(bytes, boundary) == Some(0x0403_4B50);
+        let stub_candidate = !header_follows && boundary < bytes.len() && exact_ends.first().is_some_and(|&last| last >= boundary);
+        // Without a comment the footer cannot anchor anything, and its walk only matters when something follows.
+        if comment == 0 && !header_follows && !stub_candidate {
             continue;
         }
         // Only a footer verified as an archive's own may anchor its declared comment. A record stored in
@@ -1046,19 +1053,24 @@ fn check_concatenated_archives(bytes: &[u8], readable: bool, acc: &mut Acc) {
             Footer::Unanchored(count) => Some(count),
             Footer::Rejected => None,
         };
-        if u32_at(bytes, boundary) != Some(0x0403_4B50) {
+        if !header_follows && !stub_candidate {
             continue;
         }
         let (first, second) = bytes.split_at(boundary);
-        // The second archive's own footer is the last exact-end record whose directory is plausible in the
-        // second slice; a lookalike with no plausible directory (inside the comment) must not shadow it.
-        // The candidates are in decreasing offset order, so the first one before the boundary ends the scan.
-        let second_directory = exact_ends
-            .iter()
-            .map_while(|&last| last.checked_sub(boundary))
-            .take_while(|_| walks.charge(1))
-            .find_map(|last| archive_count_at(second, last).map(|count| (last, count)));
-        if first_count.is_none() && second_directory.is_none() {
+        // The second archive's own footer is among the exact-end records whose directory is plausible in the
+        // second slice. A lookalike inside its comment can be plausible too, so every plausible candidate is
+        // tried in decreasing offset order, each attempt charged to the shared budget; the first one before the
+        // boundary ends the list.
+        let plausible = |from: usize, walks: &mut FooterWalks| {
+            exact_ends[from..]
+                .iter()
+                .enumerate()
+                .map_while(|(at, &last)| last.checked_sub(boundary).map(|last| (from + at, last)))
+                .take_while(|_| walks.charge(1))
+                .find_map(|(at, last)| archive_count_at(second, last).map(|count| (at, last, count)))
+        };
+        let mut next = plausible(0, &mut walks);
+        if (first_count.is_none() || !header_follows) && next.is_none() {
             continue;
         }
         if remaining == 0 {
@@ -1075,15 +1087,21 @@ fn check_concatenated_archives(bytes: &[u8], readable: bool, acc: &mut Acc) {
             unresolved = true;
             continue;
         }
-        if let Some((last, count)) = second_directory
-            && count <= acc.limits.entries as u64
-        {
+        while let Some((at, last, count)) = next {
+            next = plausible(at + 1, &mut walks);
+            if count > acc.limits.entries as u64 {
+                continue;
+            }
             // The claim is that the second archive is complete, so its package relationships must have been read
             // cleanly whichever way it was loaded. Identical slices share one load.
             let second_rels = if first == second { first_rels } else { standalone_trailing(second, last, acc.limits, &mut walks) };
             if second_rels == Some(true) {
                 acc.add("PKG-CONCATENATED", None, format!("a second complete OPC archive starts at byte {boundary}"));
                 return;
+            }
+            // Identical slices were just loaded; a refused charge is reported through the spent flag below.
+            if first == second {
+                break;
             }
         }
         unresolved = true;
@@ -1149,6 +1167,10 @@ impl FooterWalks {
         let Some((start, count)) = directory_at(bytes, footer) else {
             return Footer::Rejected;
         };
+        // Checked before the memo: a consistent footer's walk must not vouch for an inconsistent one.
+        if zip32_inconsistent(bytes, footer) {
+            return Footer::Rejected;
+        }
         if count > limit as u64 {
             return Footer::Undecided(count);
         }
@@ -1219,6 +1241,10 @@ fn verify_footer(bytes: &[u8], footer: usize, limit: usize) -> Footer {
     let Some((start, count)) = directory_at(bytes, footer) else {
         return Footer::Rejected;
     };
+    // The reader refuses a ZIP32 footer whose disks or counts disagree, so it cannot anchor its comment.
+    if zip32_inconsistent(bytes, footer) {
+        return Footer::Rejected;
+    }
     if count > limit as u64 {
         return Footer::Undecided(count);
     }
@@ -1421,6 +1447,18 @@ fn archive_count_at(bytes: &[u8], footer: usize) -> Option<u64> {
     directory_at(bytes, footer).map(|(_, count)| count)
 }
 
+/// True when the footer is a ZIP32 record whose this-disk count differs from its total or whose disk numbers
+/// differ: the consistency rule `find_eocd` applies. A footer resolved through a ZIP64 locator keeps its own path.
+fn zip32_inconsistent(bytes: &[u8], footer: usize) -> bool {
+    let (Some(total), Some(start)) = (u16_at(bytes, footer + 10), u32_at(bytes, footer + 16)) else {
+        return false;
+    };
+    if (total == u16::MAX || start == u32::MAX) && footer.checked_sub(20).and_then(|locator| u32_at(bytes, locator)) == Some(0x0706_4B50) {
+        return false;
+    }
+    u16_at(bytes, footer + 8) != Some(total) || u16_at(bytes, footer + 4) != u16_at(bytes, footer + 6)
+}
+
 /// The directory start and record count a footer declares, when the start holds a central header.
 fn directory_at(bytes: &[u8], footer: usize) -> Option<(usize, u64)> {
     let count = u16_at(bytes, footer + 10)?;
@@ -1475,7 +1513,7 @@ fn standalone_trailing(bytes: &[u8], footer: usize, limits: crate::Limits, walks
 fn standalone_opc(bytes: &[u8], footer: usize, limits: crate::Limits) -> Option<bool> {
     observation_contract! {
         rules: "-";
-        collections: "field.content_types*2,field.incomplete*2,field.rels*1";
+        collections: "field.content_types*3,field.incomplete*2,field.rels*1";
         scope: "isolated ZIP slice with its own directory and loadable Word main";
         loss: "unreadable package or incomplete package loading";
         fallback: "do not infer a complete OPC archive";
@@ -1484,7 +1522,7 @@ fn standalone_opc(bytes: &[u8], footer: usize, limits: crate::Limits) -> Option<
 
     let mut probe = Acc::with_limits(limits);
     let pkg = load_archive(bytes, &mut probe, Some(footer))?;
-    if probe.incomplete || !pkg.content_types_present || pkg.content_types.inventory_invalid {
+    if probe.incomplete || !pkg.content_types_present || pkg.content_types.inventory_invalid || pkg.content_types.malformed_declaration {
         return None;
     }
     // A malformed or partly read package-level relationships part does not make the slice incomplete, but it
@@ -2470,6 +2508,7 @@ fn record_content_type(e: &BytesStart, ct: &mut ContentTypes) {
         return;
     }
     let key = attr_plain(e, b"PartName").or_else(|| attr_plain(e, b"Extension"));
+    ct.malformed_declaration |= attr_plain(e, if l == b"Override" { b"PartName" } else { b"Extension" }).is_none();
     let Some(key) = key else { return };
     let Some(value) = attr_plain(e, b"ContentType") else { return };
     let key = key.trim_start_matches('/').to_ascii_lowercase();

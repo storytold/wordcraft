@@ -632,3 +632,86 @@ fn a_lookalike_only_the_shortened_view_can_see_does_not_hide_a_real_concatenatio
     assert!(concatenated(&report), "{report:?}");
     assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
 }
+
+#[test]
+fn a_stub_prefixed_trailing_archive_is_concatenated_like_a_stub_prefixed_first_one() {
+    let ordinary = Doc::minimal().build();
+    for (label, shape) in [("stub", STUBBED), ("stub + zip64", STUBBED_FULL64)] {
+        let trailing = shaped(Doc::minimal(), shape);
+        for (name, first) in [("plain first", ordinary.clone()), ("commented first", with_comment(ordinary.clone(), b"note"))] {
+            let report = pair(&first, &trailing);
+            assert!(concatenated(&report), "{label}, {name}: {report:?}");
+            assert_eq!(report.verdict, Verdict::Fail, "{label}, {name}: {report:?}");
+        }
+    }
+}
+
+/// The footer of `zip` as a comment-sized copy whose record counts are replaced by `count`.
+fn footer_copy_with_count(zip: &[u8], count: u16) -> Vec<u8> {
+    let mut copy = zip[zip.len() - 22..].to_vec();
+    copy[8..10].copy_from_slice(&count.to_le_bytes());
+    copy[10..12].copy_from_slice(&count.to_le_bytes());
+    copy
+}
+
+#[test]
+fn a_footer_copy_in_the_trailing_comment_does_not_shadow_the_real_footer() {
+    let ordinary = Doc::minimal().build();
+    let real = ordinary.len() - 22;
+    let real_count = u16::from_le_bytes(ordinary[real + 10..real + 12].try_into().unwrap());
+    for count in [1, real_count - 1] {
+        assert_ne!(count, real_count);
+        let lookalike = footer_copy_with_count(&ordinary, count);
+        for padding in [0usize, 2] {
+            let comment = [lookalike.clone(), vec![b'p'; padding]].concat();
+            let second = with_comment(ordinary.clone(), &comment);
+            let report = pair(&ordinary, &second);
+            assert!(concatenated(&report), "count {count}, padding {padding}: {report:?}");
+            assert_eq!(report.verdict, Verdict::Fail, "count {count}, padding {padding}: {report:?}");
+        }
+    }
+}
+
+#[test]
+fn archives_in_the_comment_of_a_disk_inconsistent_footer_are_still_probed() {
+    let ordinary = Doc::minimal().build();
+    let inner = [ordinary.as_slice(), ordinary.as_slice()].concat();
+    let control = validate_bytes(&inner);
+    assert!(concatenated(&control), "{control:?}");
+    // (offset in the footer, replacement): disk number, central-directory disk, this-disk record count.
+    let real_count = u16::from_le_bytes(ordinary[ordinary.len() - 12..ordinary.len() - 10].try_into().unwrap());
+    for (label, at, value) in [("disk", 4, 1), ("directory disk", 6, 1), ("this-disk count", 8, real_count + 1)] {
+        let mut outer = ordinary.clone();
+        let footer = outer.len() - 22;
+        outer[footer + at..footer + at + 2].copy_from_slice(&u16::to_le_bytes(value));
+        let report = validate_bytes(&with_comment(outer, &inner));
+        assert!(concatenated(&report), "{label}: {report:?}");
+        assert_eq!(report.verdict, Verdict::Fail, "{label}: {report:?}");
+    }
+    // A consistent footer still owns its comment: what it hides is not a concatenation.
+    let hidden = validate_bytes(&with_comment(ordinary.clone(), &inner));
+    assert!(!concatenated(&hidden), "{hidden:?}");
+}
+
+#[test]
+fn a_content_type_declaration_without_its_key_does_not_certify_a_second_archive() {
+    let valid = valid_content_types();
+    let ordinary = Doc::minimal().build();
+    let keyed_by_extension = valid.replace(r#"<Override PartName="/word/document.xml""#, r#"<Override Extension="/word/document.xml""#);
+    let default_without_extension = valid.replace(r#"<Default Extension="xml" "#, "<Default ");
+    for (label, ct) in [("override without PartName", keyed_by_extension), ("default without Extension", default_without_extension)] {
+        assert_ne!(ct, valid, "{label}");
+        let bad = archive_with_content_types(&ct);
+        for (first, second) in [(&ordinary, &bad), (&bad, &ordinary)] {
+            let report = validate_bytes(&[first.as_slice(), second.as_slice()].concat());
+            assert!(!concatenated(&report), "{label}: {report:?}");
+            assert!(noted(&report), "{label}: {report:?}");
+            assert_eq!(report.verdict, Verdict::Incomplete, "{label}: {report:?}");
+        }
+    }
+    // The shared single-archive reading is unchanged by the stricter certification gate.
+    let alone = validate_bytes(&archive_with_content_types(
+        &valid.replace(r#"<Override PartName="/word/document.xml""#, r#"<Override Extension="/word/document.xml""#),
+    ));
+    assert_eq!(alone.verdict, Verdict::Pass, "{alone:?}");
+}

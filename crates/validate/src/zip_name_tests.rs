@@ -95,7 +95,7 @@ fn footer_walks_are_shared_per_directory_and_bounded_in_total() {
     }
     assert!(distinct.spent);
     // Once spent, no verdict of "verified" is invented for a directory that was not walked.
-    assert!(!matches!(distinct.footer(&bytes, footers[29] + 1, 40), Footer::Verified(_)));
+    assert!(matches!(distinct.footer(&bytes, footers[29], 40), Footer::Unanchored(30)));
 }
 
 /// Offsets that wrap past `usize::MAX` are absent, not a panic in an overflow-checked build.

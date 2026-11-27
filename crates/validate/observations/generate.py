@@ -549,10 +549,12 @@ fn unregistered_read(pkg: &Package) -> usize { (|package_pattern!(items): &Packa
       'R18 fabricated completeness': ('package.rs', lambda s: s.replace('Resolution::discovered(canonical(&pkg.entries, name), !pkg.entries_truncated && !pkg.identity_incomplete)', 'Resolution::discovered(canonical(&pkg.entries, name), true)', 1)),
       'R18 Unknown-or-Absent': ('lib.rs', lambda s: s.replace(
           'Resolution::Absent => true,\n                Resolution::One(_) | Resolution::Unknown(_) | Resolution::Ambiguous(_) => false,',
-          'Resolution::Absent | Resolution::Unknown(_) => true,\n                Resolution::One(_) | Resolution::Ambiguous(_) => false,', 1)),
+          'Resolution::Absent | Resolution::Unknown(_) => true,\n                Resolution::One(_) | Resolution::Ambiguous(_) => false,', 1),
+          'lib.rs::check_typed_targets: absence polarity: package lookup Unknown must have an explicit separate unguarded arm; catch-all/Absent collapse is forbidden'),
       'R18 missing Unknown': ('lib.rs', lambda s: s.replace(
           'Resolution::One(_) | Resolution::Unknown(_) | Resolution::Ambiguous(_) => false,',
-          'Resolution::One(_) | Resolution::Ambiguous(_) => false,', 1)),
+          'Resolution::One(_) | Resolution::Ambiguous(_) => false,', 1),
+          'lib.rs::check_typed_targets: package Resolution match must explicitly cover One, Absent, Unknown and Ambiguous'),
       'R18 direct state deletion': ('lib.rs', lambda s: s.replace('pkg.entries_truncated || pkg.identity_incomplete', 'pkg.identity_incomplete', 1)),
       'R18 direct state negation': ('lib.rs', lambda s: s.replace('pkg.entries_truncated || pkg.identity_incomplete', '!pkg.entries_truncated || pkg.identity_incomplete', 1)),
       'R18 discovery complete deletion': ('lib.rs', lambda s: s.replace('!pkg.entries_truncated\n        && !pkg.identity_incomplete', '!pkg.identity_incomplete', 1)),
@@ -863,7 +865,8 @@ def checked_mutations():
 
 
 def reject_mutation(sources, label, case):
-    name, mutation = case
+    name, mutation, *declared = case
+    expected = declared[0] if declared else None
     changed=dict(sources); changed[name]=mutation(changed[name])
     if changed[name] == sources[name]:
         raise ValueError('mutation did not change source: '+label)
@@ -873,6 +876,8 @@ def reject_mutation(sources, label, case):
         message = str(error).splitlines()[0] if str(error) else ''
         if not message.strip():
             raise ValueError('mutation has no rejection message: '+label)
+        if expected is not None and expected not in message:
+            raise ValueError('mutation rejected for the wrong reason: '+label+': expected '+repr(expected)+', got '+repr(message))
         return dict(label=label, message=message)
     raise ValueError('audit accepted mutation: '+label)
 
