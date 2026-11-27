@@ -163,11 +163,12 @@ const UNDO_ROWS_SHOWN: u16 = 8;
 fn undo_arrow(app: &mut WordApp, ui: &mut Ui, enabled: bool) -> egui::Rect {
     // The small filled triangle of the old toolbar.
     let out = IconButton::new(IconSpec::glyph(&crate::ribbon::common::MENU_ARROW)).label(tl!("Undo History").to_string()).enabled(enabled).show(ui);
-    let labels = undo_list_rows(app);
     let mut open = app.chrome.undo;
     if out.response.clicked() {
         open = !open;
     }
+    // Build the history rows only when the popover is about to show; idle frames skip allocating/localizing them.
+    let labels = if open { undo_list_rows(app) } else { Vec::new() };
     let mut mark = app.chrome.undo_mark;
     let mut picked = None;
     Popover::new(tl!("Undo History").to_string(), Bind::bound(&mut open)).opened_by(&out.response).show(ui, |ui, cx| {
@@ -213,19 +214,17 @@ fn undo_arrow(app: &mut WordApp, ui: &mut Ui, enabled: bool) -> egui::Rect {
 fn qat_menu(app: &mut WordApp, ui: &mut Ui) -> egui::Rect {
     let out =
         IconButton::new(IconId::new("wordcraft.more")).label(tl!("Customize Quick Access Toolbar").to_string()).glyphs(GlyphRole::Tool).show(ui);
-    let shown: Vec<(&'static str, String, bool)> = QAT_MENU
-        .iter()
-        .filter_map(|id| {
-            let label = app.session.registry.get(id).map(|s| tl!(s.label).to_string())?;
-            Some((*id, label, app.session.ribbon.qat().contains(id)))
-        })
-        .collect();
     // No `open` binding: with one the framework leaves the opening to the app, without it the opener opens the menu.
     Menu::new(tl!("Customize Quick Access Toolbar").to_string()).opened_by(&out.response, Trigger::Click).show(ui, |ui, _| {
         MenuItem::heading(tl!("Customize Quick Access Toolbar").to_string()).show(ui);
-        for (id, label, on) in &shown {
-            let key = if *on { "qatRemove" } else { "qatAdd" };
-            MenuItem::command(CommandRef::with_params("tools.customizeRibbon", json!({ key: *id }))).label(label.clone()).check(*on).show(ui);
+        for &id in &QAT_MENU {
+            let Some(spec) = app.session.registry.get(id) else { continue };
+            let on = app.session.ribbon.qat().contains(&id);
+            let key = if on { "qatRemove" } else { "qatAdd" };
+            MenuItem::command(CommandRef::with_params("tools.customizeRibbon", json!({ key: id })))
+                .label(tl!(spec.label).to_string())
+                .check(on)
+                .show(ui);
         }
         Divider::horizontal().show(ui);
         MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "customizeQuickAccess"})))
