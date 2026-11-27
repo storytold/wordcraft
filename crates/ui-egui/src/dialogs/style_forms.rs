@@ -28,9 +28,6 @@ use crate::WordApp;
 const NEW_KEY: &str = "newStyle";
 const MODIFY_KEY: &str = "modifyStyle";
 
-/// The alignment choices on the Paragraph tab of Modify Style.
-const ALIGNS: [(&str, &str); 4] = [("left", "Left"), ("center", "Center"), ("right", "Right"), ("justify", "Justify")];
-
 /// The values of Modify Style.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ModifyStyleForm {
@@ -305,8 +302,9 @@ fn body(ui: &mut Ui, form: &mut ModifyStyleForm, catalog: &Arc<Catalog>, setting
         }
         1 => {
             Field::new(label(tl!("Alignment:"))).show(ui, |ui, _| {
-                let mut entries: Vec<Entry<String>> = ALIGNS.iter().map(|(k, l)| Entry::new((*k).to_string(), label(tl!(l)))).collect();
-                if !ALIGNS.iter().any(|(k, _)| *k == form.align) && !form.align.is_empty() {
+                let aligns = [("left", tl!("Left")), ("center", tl!("Center")), ("right", tl!("Right")), ("justify", tl!("Justify"))];
+                let mut entries: Vec<Entry<String>> = aligns.iter().map(|(k, l)| Entry::new((*k).to_string(), label(l))).collect();
+                if !aligns.iter().any(|(k, _)| *k == form.align) && !form.align.is_empty() {
                     entries.push(Entry::new(form.align.clone(), label(&form.align)));
                 }
                 if let Some(a) = Select::new(label(tl!("Alignment:")), Bind::given(form.align.clone()), &entries).show(ui).value().cloned() {

@@ -235,7 +235,7 @@ fn controls(app: &mut WordApp, ui: &mut Ui, fit: usize) -> Option<egui::Rect> {
                 // No command carries a checked state, so the view is given at the button (S-L415).
                 let out = ToggleButton::new(name.to_string(), Bind::given(on))
                     .command(CommandRef::new(id))
-                    .icon(crate::icons::id(icon))
+                    .icon(crate::icons::spec(icon))
                     .icon_only()
                     .tooltip(TooltipSpec::new(name.to_string()))
                     .show(ui);
