@@ -439,4 +439,28 @@ mod tests {
         a.run("file.new", json!({})).unwrap();
         assert_eq!(titles(&a), ["Document1", "Document2"]);
     }
+
+    /// #7672: a template opened from File › Home after Ctrl+W takes typing without a click on the page. The tile's
+    /// press moves egui focus at the end of its pass, so a focus request made in that pass was lost.
+    #[test]
+    fn a_template_opened_from_home_after_closing_takes_typing() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(app());
+        crate::test_harness::frames(&mut h, 3);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::W);
+        crate::test_harness::frames(&mut h, 4);
+        h.state_mut().run("ui.backstage", json!({"page": "home"})).unwrap();
+        crate::test_harness::frames(&mut h, 4);
+        let at = h.get_by_label("Studio handbook (sample)").rect().center();
+        let button =
+            |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        h.input_mut().events.extend([egui::Event::PointerMoved(at), button(true)]);
+        crate::test_harness::frames(&mut h, 1);
+        h.event(button(false));
+        crate::test_harness::frames(&mut h, 6);
+        assert!(!h.state().ui.backstage, "the tile opened the template");
+        h.event(egui::Event::Text("QQ".into()));
+        crate::test_harness::frames(&mut h, 3);
+        assert!(text(h.state()).contains("QQ"), "the typing reached the page");
+    }
 }

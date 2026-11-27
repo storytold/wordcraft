@@ -254,7 +254,7 @@ impl OrganizerDialog {
                 });
             for event in out.events {
                 match event {
-                    CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+                    CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
                         if let Some(key) = keys.last() {
                             self.left = key.clone();
                         }
@@ -285,7 +285,7 @@ impl OrganizerDialog {
                         ListRow::new(label(n)).lead_text(label(glyph(ty)), label("¶"))
                     });
                 for event in out.events {
-                    if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                    if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                         && let Some(key) = keys.last()
                     {
                         self.right = key.clone();
