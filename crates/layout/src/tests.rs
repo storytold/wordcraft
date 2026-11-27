@@ -16532,6 +16532,7 @@ fn split_frame_keeps_flow_bottom() {
                     text_box: None,
                     wrap,
                     origin: wordcraft_geom::Point::new(3.0, 35.0),
+                    group_boxes: Vec::new(),
                 },
                 Placed::Fill { rect, color: Rgb(200, 0, 0) },
                 Placed::Cell { rect, covered: false, table: Path::top(0), row: 0, cell: 0, story: StoryRef::Body, clip: false },
@@ -16819,6 +16820,7 @@ mod behind_owner {
                     text_box: None,
                     wrap: Wrap::BehindText,
                     origin: Default::default(),
+                    group_boxes: Vec::new(),
                 },
                 Placed::Cell { rect, covered: false, table: Path::top(0), row: 0, cell: 0, story: StoryRef::Body, clip: false },
             ];
