@@ -38,6 +38,7 @@ struct DiffCtx<'a> {
     author: &'a str,
     date: &'a str,
     budget: &'a mut u64,
+    sim_budget: &'a mut u64,
     char_fallbacks: &'a mut usize,
     table_fallbacks: &'a mut usize,
     changes: usize,
@@ -122,6 +123,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Delete, author: author.clone(), date: date.clone(), move_name: None });
     let del = (s.doc.revisions.len() - 1) as u32;
     let mut budget = MAX_COMPARE_CELLS;
+    let mut sim_budget = MAX_SIM_BUDGET;
     let mut char_fallbacks = 0usize;
     let mut table_fallbacks = 0usize;
     let (out, changes) = {
@@ -132,6 +134,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
             author: &author,
             date: &date,
             budget: &mut budget,
+            sim_budget: &mut sim_budget,
             char_fallbacks: &mut char_fallbacks,
             table_fallbacks: &mut table_fallbacks,
             changes: 0,
@@ -379,8 +382,10 @@ fn diff_blocks(doc: &mut Document, old: &[Arc<Block>], new: &[Arc<Block>], ctx: 
                 let inss = run - dels;
                 let old_slice = old.get(i..i + dels).unwrap_or_default();
                 let new_slice = new.get(j..j + inss).unwrap_or_default();
-                let mut run_budget = MAX_RUN_SIM_BUDGET;
+                let run_cap = MAX_RUN_SIM_BUDGET.min(*ctx.sim_budget);
+                let mut run_budget = run_cap;
                 let pairs = align_block_run(old_slice, new_slice, ctx.opts, ctx.plain_revised, &mut run_budget);
+                *ctx.sim_budget = ctx.sim_budget.saturating_sub(run_cap.saturating_sub(run_budget));
                 let added = emit_run_pairs(doc, &pairs, old_slice, new_slice, ctx, &mut out);
                 ctx.changes = ctx.changes.saturating_add(added);
                 i += dels;
@@ -791,8 +796,15 @@ const SINGLE_TOKEN_SIMILARITY_THRESHOLD: u32 = 700;
 const MAX_RUN_ALIGN_CELLS: usize = 1_000_000;
 
 /// Per-run similarity LCS cell allowance so earlier edit runs (e.g. long CJK paragraphs)
-/// cannot exhaust a shared document-wide budget and starve later runs.
+/// cannot exhaust the shared document-wide similarity budget and starve later runs.
 const MAX_RUN_SIM_BUDGET: u64 = 5_000_000;
+
+/// Aggregate document-wide similarity LCS cell budget across all edit runs (including nested
+/// table cells) in a single comparison.
+pub(super) const MAX_SIM_BUDGET: u64 = 25_000_000;
+
+/// Maximum `n * m` pairs scored by the cheap token-bag fallback when `sim_budget` is exhausted.
+const MAX_CHEAP_ALIGN_CELLS: usize = 4_096;
 
 /// Maximum number of word tokens considered per paragraph when computing similarity scores.
 pub(super) const MAX_SIM_WORDS: usize = 500;
@@ -977,9 +989,22 @@ pub(super) fn align_block_run(
 
     let scores = match compute_align_scores(old_blocks, new_blocks, opts, plain_revised, budget) {
         Some(s) => s,
-        None => return positional_fallback(n, m, old_blocks, new_blocks, opts, plain_revised),
+        None => return cheap_bounded_align(old_blocks, new_blocks, opts, plain_revised),
     };
 
+    dp_align_from_scores(&scores, old_blocks, new_blocks, opts, plain_revised)
+}
+
+/// Runs the `n * m` block-alignment DP and backtracks from precomputed pair scores.
+fn dp_align_from_scores(
+    scores: &[u32],
+    old_blocks: &[Arc<Block>],
+    new_blocks: &[Arc<Block>],
+    opts: &CompareOptions,
+    plain_revised: bool,
+) -> Vec<RunPair> {
+    let n = old_blocks.len();
+    let m = new_blocks.len();
     let stride = m.saturating_add(1);
     let total_dp_cells = (n.saturating_add(1)).saturating_mul(stride);
     let mut dp = vec![0u32; total_dp_cells];
@@ -1008,7 +1033,101 @@ pub(super) fn align_block_run(
         return positional_fallback(n, m, old_blocks, new_blocks, opts, plain_revised);
     }
 
-    backtrack_align_dp(&scores, &dp, n, m)
+    backtrack_align_dp(scores, &dp, n, m)
+}
+
+/// Counts multiset intersection size of two sorted slices in `O(a.len() + b.len())`.
+fn sorted_overlap_count<T: Ord>(a: &[T], b: &[T]) -> usize {
+    let (mut i, mut j, mut hits) = (0usize, 0usize, 0usize);
+    while i < a.len() && j < b.len() {
+        match a.get(i).zip(b.get(j)) {
+            Some((va, vb)) => match va.cmp(vb) {
+                std::cmp::Ordering::Less => i += 1,
+                std::cmp::Ordering::Greater => j += 1,
+                std::cmp::Ordering::Equal => {
+                    hits += 1;
+                    i += 1;
+                    j += 1;
+                }
+            },
+            None => break,
+        }
+    }
+    hits
+}
+
+/// Scores two sorted token multisets via Sorensen-Dice without building an LCS DP matrix.
+fn cheap_token_score<T: Ord>(a: &[T], b: &[T], threshold: u32) -> u32 {
+    if a.is_empty() && b.is_empty() {
+        return 1000;
+    }
+    if a.is_empty() || b.is_empty() {
+        return 0;
+    }
+    let total = a.len().saturating_add(b.len());
+    let max_possible = (2000u64 * a.len().min(b.len()) as u64) / total as u64;
+    if max_possible < threshold as u64 {
+        return 0;
+    }
+    let score = ((2000u64 * sorted_overlap_count(a, b) as u64) / total as u64) as u32;
+    if score >= threshold { score } else { 0 }
+}
+
+/// Cheaper bounded pairing fallback used when the similarity LCS budget is exhausted.
+///
+/// Uses sorted token-bag overlap (`O(len_a + len_b)` per pair, no LCS DP table) when
+/// `n * m <= MAX_CHEAP_ALIGN_CELLS`, falling back to [`positional_fallback`] for larger runs.
+fn cheap_bounded_align(old_blocks: &[Arc<Block>], new_blocks: &[Arc<Block>], opts: &CompareOptions, plain_revised: bool) -> Vec<RunPair> {
+    let n = old_blocks.len();
+    let m = new_blocks.len();
+    if n.saturating_mul(m) > MAX_CHEAP_ALIGN_CELLS {
+        return positional_fallback(n, m, old_blocks, new_blocks, opts, plain_revised);
+    }
+
+    let prep = |blocks: &[Arc<Block>]| -> Vec<Option<(String, bool, Vec<String>, Vec<char>)>> {
+        blocks
+            .iter()
+            .map(|b| {
+                let Block::Para(p) = &**b else { return None };
+                let key = opts.key(&p.plain_text());
+                let has_cjk = key.chars().any(wordcraft_fonts::is_cjk);
+                let mut chars = sample_chars(&key, MAX_SIM_CHARS);
+                chars.sort_unstable();
+                let mut words: Vec<String> = sample_words(&key, MAX_SIM_WORDS).into_iter().map(str::to_owned).collect();
+                words.sort_unstable();
+                Some((key, has_cjk, words, chars))
+            })
+            .collect()
+    };
+
+    let old_prep = prep(old_blocks);
+    let new_prep = prep(new_blocks);
+    let mut scores = vec![0u32; n.saturating_mul(m)];
+
+    for (u, (ob, oa)) in old_blocks.iter().zip(&old_prep).enumerate() {
+        let (Block::Para(pa), Some((key_a, cjk_a, w_a, ch_a))) = (&**ob, oa) else { continue };
+        for (v, (nb, nb_p)) in new_blocks.iter().zip(&new_prep).enumerate() {
+            let (Block::Para(pb), Some((key_b, cjk_b, w_b, ch_b))) = (&**nb, nb_p) else { continue };
+            if section_incompatible(pa, pb, opts, plain_revised) {
+                continue;
+            }
+            let score = if key_a == key_b {
+                1000
+            } else if opts.characters || *cjk_a || *cjk_b {
+                cheap_token_score(ch_a, ch_b, SIMILARITY_THRESHOLD).min(999)
+            } else {
+                let ws = cheap_token_score(w_a, w_b, SIMILARITY_THRESHOLD);
+                let s =
+                    if ws == 0 && w_a.len() <= 1 && w_b.len() <= 1 { cheap_token_score(ch_a, ch_b, SINGLE_TOKEN_SIMILARITY_THRESHOLD) } else { ws };
+                s.min(999)
+            };
+            if let Some(cell) = scores.get_mut(u.saturating_mul(m).saturating_add(v)) {
+                *cell = score;
+            }
+        }
+    }
+
+    dp_align_from_scores(&scores, old_blocks, new_blocks, opts, plain_revised)
 }
 
 /// Computes pairwise similarity scores for all block pairs in an edit run.

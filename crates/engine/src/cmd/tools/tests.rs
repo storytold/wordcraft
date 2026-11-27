@@ -2856,6 +2856,74 @@ fn compare_long_cjk_paragraphs_pair_correctly_near_end_of_long_document() {
     assert!(paired_p.runs.iter().any(|r| r.props.ins.is_some()));
 }
 
+/// #5861: Verifies that `align_block_run` uses the cheaper bounded pairing strategy when
+/// similarity budget is exhausted (`budget == 0`), pairing a late edited paragraph after an
+/// inserted paragraph rather than mispairing positionally.
+#[test]
+fn align_block_run_exhausted_budget_pairs_via_cheap_bounded_fallback() {
+    let opts = CompareOptions::default();
+    let target_orig: String = (0..120u32).map(|k| char::from_u32(0x4E00 + (k % 30)).unwrap()).collect();
+    let mut target_rev = target_orig.clone();
+    target_rev.push('新');
+    let inserted_cjk: String = std::iter::repeat_n('界', 120).collect();
+
+    let old_blocks = vec![Arc::new(Block::Para(Paragraph::with_text(&target_orig, CharProps::default())))];
+    let new_blocks = vec![
+        Arc::new(Block::Para(Paragraph::with_text(&inserted_cjk, CharProps::default()))),
+        Arc::new(Block::Para(Paragraph::with_text(&target_rev, CharProps::default()))),
+    ];
+
+    let mut budget = 0u64;
+    let pairs = align_block_run(&old_blocks, &new_blocks, &opts, false, &mut budget);
+    assert_eq!(budget, 0);
+    assert_eq!(pairs, vec![RunPair::Ins(0), RunPair::Diff(0, 1)]);
+}
+
+/// #5861: Verifies that many separated edit runs share a bounded aggregate `sim_budget` while
+/// still pairing late edited CJK paragraphs once the aggregate LCS budget runs out.
+#[test]
+fn compare_many_separated_edit_runs_bound_total_sim_work_and_still_pair_late_cjk() {
+    let make_cjk = |ch: char, len: usize| std::iter::repeat_n(ch, len).collect::<String>();
+    let mut orig_lines = Vec::new();
+    let mut rev_lines = Vec::new();
+
+    // 14 separated 8x8 edit runs of distinct ~300-char CJK paragraphs (each pair ~40k LCS cells
+    // when budget is available, ~2.56M per run, >35M total if unbounded), separated by anchors.
+    let cjk_base: u32 = 0x4E00;
+    for r in 0..14u32 {
+        for i in 0..8u32 {
+            let ch_old = char::from_u32(cjk_base + r * 32 + i).unwrap();
+            let ch_new = char::from_u32(cjk_base + r * 32 + 16 + i).unwrap();
+            orig_lines.push(make_cjk(ch_old, 300));
+            rev_lines.push(make_cjk(ch_new, 300));
+        }
+        orig_lines.push(format!("Anchor section {r}."));
+        rev_lines.push(format!("Anchor section {r}."));
+    }
+
+    // Final run after aggregate sim_budget is exhausted: inserted unrelated CJK + edited CJK.
+    let target_orig: String = (0..300u32).map(|k| char::from_u32(cjk_base + 500 + (k % 40)).unwrap()).collect();
+    let mut target_rev = target_orig.clone();
+    target_rev.push('新');
+    let inserted_cjk = make_cjk('界', 300);
+
+    orig_lines.push(target_orig);
+    rev_lines.push(inserted_cjk.clone());
+    rev_lines.push(target_rev);
+
+    let orig = Document::from_text(&orig_lines.join("\n"));
+    let mut s = Session::new(orig);
+    s.run("review.compare", &json!({"text": rev_lines.join("\n")})).unwrap();
+
+    let n = s.doc.body.len();
+    let ins_p = s.doc.body[n - 2].as_para().unwrap();
+    let paired_p = s.doc.body[n - 1].as_para().unwrap();
+    assert_eq!(ins_p.text, inserted_cjk);
+    assert!(ins_p.runs.iter().all(|r| r.props.ins.is_some() && r.props.del.is_none()));
+    assert!(paired_p.runs.iter().any(|r| r.props.ins.is_none() && r.props.del.is_none()));
+    assert!(paired_p.runs.iter().any(|r| r.props.ins.is_some()));
+}
+
 /// #3518: every run and paragraph mark of a story, as (story, path, lang, noProof) rows.
 fn proofing_rows(s: &Session) -> Vec<(StoryRef, Option<String>, Option<bool>)> {
     let stories = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k)));
