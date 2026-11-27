@@ -228,6 +228,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | 2026-10-31 | trivial | dialogs are dialogs to screen readers, their tabs are tabs, the one shown selected, and colour fields and swatches say their colour |
 | 2026-11-01 | trivial | formatting shortcuts say what they did to screen readers |
 | 2026-10-30 | trivial | the Paste button is named "Paste" for screen readers, without macOS's key on other platforms; the status bar's Go To hint shows the platform's key |
+| 2026-11-17 | trivial | A floating table placed by an offset takes `w:tblInd` before Word 2013 (its first cell's text at the offset moved by the indent) and, from Word 2013, stands half its left border in from the offset with `w:tblInd` ignored, as measured in Word for Windows; no ranked gap changed |
 | 2026-10-30 | trivial | #5: a list item deleted whole under Track Changes shows its number as deleted text, in the deletion's colour and mark, and hides it where deletions are hidden (#4828); estimate unchanged |
 | 2026-11-03 | trivial | A picture inserted or pasted in a table cell fits the cell (a nested cell too), in text columns the column, in another section that section, instead of the first section's text width (#5428); a fix, so no ranked gap changed; readiness estimates unchanged |
 | 2026-10-26 | trivial | Dialog sections improve readability across 13 dialogs; conditional scrolling keeps tall dialogs usable. Ranked gaps and estimates unchanged (#4035, #4038) |
