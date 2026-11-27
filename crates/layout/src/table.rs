@@ -522,11 +522,13 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             let span = cell.span();
             let x0 = colx.get(g).copied().unwrap_or(acc);
             let x1 = colx.get((g + span).min(ncols)).copied().unwrap_or(acc);
-            // Right to left: grid columns run from the right edge, and the start (left) margin
-            // is on the cell's right.
+            // Right to left: grid columns run from the right edge. The margins stay on the sides
+            // they name: Word for Windows keeps a cell's `w:left` (or `w:start`) margin on its
+            // left in a right-to-left table, the cell's and the table's alike, though it draws the
+            // cell's `w:left` border on its right.
             let (x0, x1) = if rtl { ((acc - x1).max(0.0), (acc - x0).max(0.0)) } else { (x0, x1) };
             let m = cell.props.resolved_margins(margins_def);
-            let margins = if rtl { [row_top, m[3], row_bottom, m[1]] } else { [row_top, m[1], row_bottom, m[3]] };
+            let margins = [row_top, m[1], row_bottom, m[3]];
             let cw = (x1 - x0 - margins[1] - margins[3]).max(4.0);
             let region = region_of(t, style.as_ref(), ri, g, span, ncols);
             // Conditional formatting, later parts winning (ECMA-376 §17.7.6): whole table, column
