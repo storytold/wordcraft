@@ -64,13 +64,21 @@ pub fn read_with(bytes: &[u8], opts: &ReadOptions) -> Result<wordcraft_doc::Docu
         craft_docx::ReadOptions { password: opts.password, chunks: opts.chunks.as_ref().map(|_| &bridge_importer as craft_docx::ChunkImporter) };
 
     let shared = craft_docx::read_with(bytes, &shared_opts)?;
-    from_shared_model(shared)
+    from_word(shared)
 }
 
 /// Read a Word XML file (`.xml`).
 pub fn read_xml(bytes: &[u8]) -> Result<wordcraft_doc::Document, DocxError> {
     let shared = craft_docx::read_xml(bytes)?;
-    from_shared_model(shared)
+    from_word(shared)
+}
+
+/// A document read from a Word file: laid out with Word's Thai breaks (see
+/// [`wordcraft_doc::Settings::word_thai_breaks`]).
+fn from_word(shared: craft_wordmodel::Document) -> Result<wordcraft_doc::Document, DocxError> {
+    let mut doc = from_shared_model(shared)?;
+    doc.settings.word_thai_breaks = true;
+    Ok(doc)
 }
 
 /// Write a document as `.docx`.

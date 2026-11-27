@@ -364,6 +364,61 @@ fn a_latin_link_inserted_into_reopened_hebrew_is_saved_left_to_right() {
     assert_eq!(s.typing_props().lang_bidi.as_deref(), Some("he-IL"), "the bidi language stays");
 }
 
+/// Word marks the Thai it types complex script (`w:cs`), where Thai breaks between words, and
+/// leaves Latin, digits and the spaces between them alone: so does typing in WordCraft.
+#[test]
+fn typed_thai_is_marked_complex_script_as_word_marks_it() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    crate::cmd::type_text(&mut s, "Plan แผนงาน 2569 ปี").unwrap();
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(p.text, "Plan แผนงาน 2569 ปี");
+    let is_thai = |c: char| ('\u{0E00}'..='\u{0E7F}').contains(&c);
+    let mut off = 0;
+    let mut thai_runs = 0;
+    for r in &p.runs {
+        let t = &p.text[off..off + r.len];
+        off += r.len;
+        if t.is_empty() {
+            continue;
+        }
+        let thai = t.chars().all(is_thai);
+        assert!(thai || !t.chars().any(is_thai), "a run mixes Thai and other text: {t:?}");
+        assert_eq!(r.props.cs, thai.then_some(true), "{t:?}");
+        thai_runs += usize::from(thai);
+    }
+    assert_eq!(thai_runs, 2);
+}
+
+/// Typed one key at a time, digits and spaces after Thai go with its complex-script run (as with a
+/// Thai keyboard in Word), but Latin letters don't take its mark: they'd be drawn in the
+/// complex-script font and size.
+#[test]
+fn latin_typed_after_thai_is_not_marked_complex_script() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    for part in ["แผนงาน", " 2569 ", "Plan", " ปี"] {
+        crate::cmd::type_text(&mut s, part).unwrap();
+    }
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(p.text, "แผนงาน 2569 Plan ปี");
+    let cs_of = |piece: &str| {
+        let at = p.text.find(piece).unwrap();
+        let mut off = 0;
+        p.runs
+            .iter()
+            .find(|r| {
+                off += r.len;
+                off > at
+            })
+            .unwrap()
+            .props
+            .cs
+    };
+    assert_eq!(cs_of("แผนงาน"), Some(true));
+    assert_eq!(cs_of("2569"), Some(true), "digits go with the Thai run");
+    assert_eq!(cs_of("Plan"), None, "Latin letters aren't complex script");
+    assert_eq!(cs_of("ปี"), Some(true));
+}
+
 /// #4198: inserting a styled table, typing Arabic into the header row with `para.rtl` and
 /// saving as DOCX keeps `w:bCs` beside `w:b` in the table style's header row and first column.
 #[test]

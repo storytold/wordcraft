@@ -32,6 +32,7 @@ pub mod para;
 pub mod styleref;
 mod table;
 mod textbox;
+mod thai_words;
 mod vertical;
 pub mod wordart;
 mod work;

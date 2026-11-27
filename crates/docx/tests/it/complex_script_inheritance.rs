@@ -229,3 +229,12 @@ fn split_runs_add_no_phantom_tracked_formatting() {
         assert_eq!((old.rtl, old.lang_bidi.as_deref()), (run.props.rtl, run.props.lang_bidi.as_deref()));
     }
 }
+
+/// A document read from a Word file breaks Thai as Word does; a new one doesn't need to.
+#[test]
+fn a_document_read_from_a_word_file_breaks_thai_as_word_does() {
+    let d = Document::new();
+    assert!(!d.settings.word_thai_breaks);
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert!(back.settings.word_thai_breaks);
+}

@@ -12,6 +12,7 @@ use super::{
     Arc, COLUMN_BREAK, CharProps, Document, FIELD_SHADING, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, PTabAlign, PTabBase, ParaLayout,
     Paragraph, ResolvedChar, ResolvedPara, TabLeader, field_code_text, field_text_on, reference_link,
 };
+use icu_segmenter::LineSegmenter;
 
 /// A run's formatting resolved in the paragraph's style and table.
 struct Resolver<'a> {
@@ -59,6 +60,7 @@ impl Slot {
             g0: self.g,
             g1: self.g,
             break_after: false,
+            emergency_break_after: false,
             obj_h,
             obj_d,
             dot: false,
@@ -523,13 +525,21 @@ impl<'a> BreakText<'a> {
     fn to_para(&self, i: usize) -> Option<usize> {
         if self.skipped { self.ends.binary_search_by_key(&i, |end| end.0).ok().and_then(|k| self.ends.get(k)).map(|end| end.1) } else { Some(i) }
     }
+
+    fn to_visible(&self, i: usize) -> Option<usize> {
+        if self.skipped { self.ends.binary_search_by_key(&i, |end| end.1).ok().and_then(|k| self.ends.get(k)).map(|end| end.0) } else { Some(i) }
+    }
 }
 
 /// Mark the clusters a line may break after.
 fn mark_break_opportunities(clusters: &mut [Cluster], bt: &BreakText, rp: &ResolvedPara) {
     let opps: std::collections::HashSet<usize> = break_positions(&bt.text, rp).into_iter().filter_map(|i| bt.to_para(i)).collect();
+    let has_thai = !crate::kinsoku::thai_text_runs(&bt.text).is_empty();
     for c in clusters {
         c.break_after = opps.contains(&c.end) || matches!(c.kind, ClKind::Object(_) | ClKind::Tab);
+        c.emergency_break_after = has_thai
+            && matches!(c.kind, ClKind::Text | ClKind::Space)
+            && bt.to_visible(c.end).is_some_and(|i| crate::kinsoku::is_safe_line_break(&bt.text, i));
     }
 }
 
@@ -683,7 +693,12 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut skip = sh.left.clone();
     skip.extend(sh.bare.iter().cloned());
     let bt = BreakText::new(&p.text, skip);
+    let has_thai = !crate::kinsoku::thai_text_runs(&bt.text).is_empty();
     mark_break_opportunities(&mut sh.b.clusters, &bt, &rp);
+    if env.doc.settings.word_thai_breaks {
+        keep_plain_thai_whole(&mut sh.b.clusters, &sh.b.styles, &p.text);
+        keep_plain_stops_with_latin(&mut sh.b.clusters, &sh.b.styles, &p.text);
+    }
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
     let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, check_boxes, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;
@@ -727,7 +742,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let gone = mark_left_out && (p.text.is_empty() || left.first() == Some(&(0..p.text.len())));
     pl.left_out = left;
     keep_graphemes_whole(&mut pl);
-    break_lines(&mut pl, env, mark_style, env.label.as_ref().map(|(_, l)| l));
+    break_lines(&mut pl, env, mark_style, env.label.as_ref().map(|(_, l)| l), has_thai);
     if gone {
         collapse(&mut pl);
     }
@@ -818,6 +833,141 @@ fn break_text<'a>(source: &'a str, skip: &[std::ops::Range<usize>]) -> (std::bor
     }
 }
 
+/// Thai in a run that isn't complex script (no `w:cs` or `w:rtl`) breaks only where spaces and
+/// marks allow, not between its words: measured in Word for Windows (TH SarabunPSK and Tahoma,
+/// widths of 40 to 320 pt), such a run breaks at its spaces and, where a stretch is too long for
+/// the line, anywhere, whatever its language (`w:lang` th-TH, bidi th-TH or none); with `w:cs` it
+/// breaks between words. Files Word saves mark their Thai `w:cs`; files from other tools often
+/// don't. Only for documents read from Word files ([`wordcraft_doc::Settings::word_thai_breaks`]).
+fn keep_plain_thai_whole(clusters: &mut [Cluster], styles: &[super::model::StyleRun], text: &str) {
+    let plain = |c: &Cluster| {
+        text.get(c.start..c.end).and_then(|t| t.chars().next()).is_some_and(|ch| matches!(ch, '\u{0E00}'..='\u{0E7F}'))
+            && styles.get(c.style as usize).is_some_and(|s| !s.rc.cs && !s.rc.rtl)
+    };
+    for k in 1..clusters.len() {
+        if clusters[k - 1].break_after && plain(&clusters[k - 1]) && plain(&clusters[k]) {
+            clusters[k - 1].break_after = false;
+        }
+    }
+}
+
+/// A full stop in a run that isn't complex script keeps a Latin letter or digit after it: measured
+/// in Word for Windows, "พ.ศ" + "." + "2564" (the stop and the year in plain runs) doesn't break
+/// after the stop, while a `w:cs` stop does ("พ.ศ." | "2564"), and a plain stop before Thai does
+/// ("แล้ว." | "ต่อไป"). Only for documents read from Word files.
+fn keep_plain_stops_with_latin(clusters: &mut [Cluster], styles: &[super::model::StyleRun], text: &str) {
+    for c in clusters.iter_mut() {
+        if c.break_after
+            && text.get(c.start..c.end) == Some(".")
+            && styles.get(c.style as usize).is_some_and(|s| !s.rc.cs && !s.rc.rtl)
+            && text.get(c.end..).and_then(|t| t.chars().next()).is_some_and(|n| n.is_alphanumeric() && !matches!(n, '\u{0E00}'..='\u{0E7F}'))
+        {
+            c.break_after = false;
+        }
+    }
+}
+
+/// Where Word breaks around ASCII punctuation next to Thai, which UAX #14 mostly forbids (no
+/// break before `:` `;` `.` `!` `)`, none after one before a letter, none after `(`), so
+/// "เสียชีวิต :รหัสไปรษณีย์" had no break at all. As measured in Word for Windows (TH SarabunPSK,
+/// compatibility mode 15, Thai in `w:cs` runs):
+/// - a break after a mark followed by Thai, or after one Thai comes just before (unless a space
+///   follows it, or it's `;` or `?` before Latin), but never after an opening mark (`(`, `[`,
+///   `{`, or a quote after a space);
+/// - a comma after Thai breaks before it (unless that Thai follows a digit or letter, as in
+///   "4.1ข,") and never after it;
+/// - a break before a mark that follows a space after Thai or that Thai follows;
+/// - a break before an opening mark or a run of two or more dots right after Thai, and after
+///   the spaces that follow such an opening mark;
+/// - none inside an abbreviation ("พ.ศ.", "ม.ค.", "เม.ย."), though a stop before a word
+///   ("นพ." | "สมชาย") or another abbreviation ("รพ." | "ผศ.") is a place to break.
+///
+/// Thai digits don't count as Thai: "๓๙,๖๗๕.๖๐" stays one number.
+fn thai_punctuation_breaks(text: &str, found: &mut Vec<usize>) {
+    // Thai and Lao letters and marks, not their digits.
+    let is_thai_lao = |c: char| matches!(c, '\u{0E00}'..='\u{0EFF}') && !c.is_numeric();
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let at = |k: usize| chars.get(k).map(|&(_, c)| c);
+    let space = |c: char| c.is_whitespace() && !matches!(c, '\u{a0}' | '\u{2007}' | '\u{202f}');
+    let mut drop = Vec::new();
+    for (k, &(i, c)) in chars.iter().enumerate() {
+        if !c.is_ascii_punctuation() {
+            continue;
+        }
+        let prev = k.checked_sub(1).and_then(at);
+        let next = at(k + 1);
+        // A quote after a space (or at the start) opens, as a bracket does.
+        let opening = |c: char| matches!(c, '(' | '[' | '{') || (matches!(c, '"' | '\'') && prev.is_none_or(space));
+        let end = i + c.len_utf8();
+        let thai_next = next.is_some_and(is_thai_lao);
+        let thai_prev = prev.is_some_and(is_thai_lao);
+        // A run of marks ("..", ":-") breaks at its ends: what's before its first mark counts.
+        let mut first = k;
+        while first > 0 && at(first - 1).is_some_and(|p| p.is_ascii_punctuation()) {
+            first -= 1;
+        }
+        let thai_before_run = first.checked_sub(1).and_then(at).is_some_and(is_thai_lao);
+        let mark_next = next.is_some_and(|n| n.is_ascii_punctuation());
+        if opening(c) {
+            if thai_next {
+                drop.push(end);
+            }
+            if thai_prev {
+                found.push(i);
+            }
+            if thai_prev && next.is_some_and(space) {
+                // "เสียชีวิต( รหัส" can also break after the spaces.
+                let mut after = k + 1;
+                while at(after).is_some_and(space) {
+                    after += 1;
+                }
+                found.push(chars.get(after).map_or(text.len(), |&(j, _)| j));
+            }
+            continue;
+        }
+        // A comma after Thai goes to the next line with what follows: a break before it, none after.
+        // Not when the Thai starts right after a digit or letter, as in "[I-4.1ข, ค]".
+        if c == ',' && thai_prev {
+            let mut start = k;
+            while start > 0 && at(start - 1).is_some_and(is_thai_lao) {
+                start -= 1;
+            }
+            if !start.checked_sub(1).and_then(at).is_some_and(char::is_alphanumeric) {
+                found.push(i);
+            }
+            drop.push(end);
+            continue;
+        }
+        // `;` and `?` (which Word never types as complex script) stay with Latin after them.
+        let keeps_latin = matches!(c, ';' | '?') && !thai_next;
+        if keeps_latin && thai_prev && next.is_some_and(char::is_alphanumeric) {
+            drop.push(end);
+        }
+        // Inside an abbreviation ("พ.ศ.", "ม.ค.", "เม.ย.") the stop is followed by one Thai letter
+        // and another stop: Word keeps the abbreviation whole.
+        let in_abbreviation = c == '.' && {
+            let mut j = k + 1;
+            while at(j).is_some_and(is_thai_lao) {
+                j += 1;
+            }
+            j - k - 1 == 1 && at(j) == Some('.')
+        };
+        if !mark_next && !keeps_latin && !in_abbreviation && (thai_next || (thai_before_run && next.is_some_and(|n| !space(n)))) {
+            found.push(end);
+        }
+        // Before the mark: after a space that follows Thai, or with Thai after it.
+        let thai_before_space = k.checked_sub(2).and_then(at).is_some_and(is_thai_lao);
+        if prev.is_some_and(space) && (thai_before_space || thai_next) {
+            found.push(i);
+        }
+        // Before a run of dots ("เลขบัตร.."), not a full stop.
+        if c == '.' && thai_prev && next == Some('.') {
+            found.push(i);
+        }
+    }
+    found.retain(|i| !drop.contains(i));
+}
+
 /// A character that continues a word or a path segment after a slash: a letter, a digit or `_`.
 fn word_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
@@ -881,6 +1031,50 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
     // The breaks added above come after UAX #14's: put them back in order.
     found.sort_unstable();
     found.dedup();
+    // Thai has no spaces between most words. Segment the complete visible paragraph so ICU keeps
+    // context across formatting runs; only dictionary opportunities inside Thai text replace the
+    // Unicode line-break opportunities, leaving other scripts and punctuation to the old rules.
+    let thai_runs = crate::kinsoku::thai_text_runs(text);
+    if !thai_runs.is_empty() {
+        let segmenter = LineSegmenter::new_dictionary(Default::default());
+        let dictionary: Vec<usize> = segmenter.segment_str(text).collect();
+        // Walk the sorted ICU boundaries and Thai runs together. Rescanning the paragraph-wide
+        // boundary list for each run makes paragraphs with many short Thai runs quadratic.
+        let mut boundaries = dictionary.into_iter().peekable();
+        let mut thai_breaks = Vec::new();
+        let mut replaced_runs = Vec::new();
+        for run in &thai_runs {
+            while boundaries.peek().is_some_and(|&i| i <= run.start) {
+                boundaries.next();
+            }
+            let breaks_before_run = thai_breaks.len();
+            while boundaries.peek().is_some_and(|&i| i < run.end) {
+                if let Some(i) = boundaries.next().filter(|&i| crate::kinsoku::is_safe_line_break(text, i)) {
+                    thai_breaks.push(i);
+                }
+            }
+            // Word keeps some compounds whole and splits some of the dictionary's words; a run is
+            // the dictionary's once it gave a break in it, even if a compound then took them all.
+            let dictionary_broke = thai_breaks.len() > breaks_before_run;
+            let mut run_breaks = thai_breaks.split_off(breaks_before_run);
+            crate::thai_words::adjust(text, run, &mut run_breaks, |i| crate::kinsoku::is_safe_line_break(text, i));
+            if dictionary_broke || !run_breaks.is_empty() {
+                replaced_runs.push(run.clone());
+            }
+            thai_breaks.extend(run_breaks);
+        }
+        let mut run_index = 0;
+        found.retain(|&i| {
+            while replaced_runs.get(run_index).is_some_and(|run| i >= run.end) {
+                run_index += 1;
+            }
+            replaced_runs.get(run_index).is_none_or(|run| i <= run.start || i >= run.end)
+        });
+        found.extend(thai_breaks);
+        thai_punctuation_breaks(text, &mut found);
+        found.sort_unstable();
+        found.dedup();
+    }
     // Myanmar has no spaces between words: it wraps between syllables.
     if text.chars().any(|c| matches!(u32::from(c), 0x1000..=0x109F | 0xA9E0..=0xA9FF | 0xAA60..=0xAA7F)) {
         found.extend(wordcraft_doc::cluster::myanmar_breaks(text));
@@ -892,7 +1086,110 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
     found.retain(|&i| !(text.get(..i).is_some_and(|t| t.ends_with('.')) && text.get(i..).is_some_and(|t| t.starts_with('('))));
     // Asian typography: kinsoku and breaking Latin words anywhere.
     crate::kinsoku::apply(text, &mut found, rp.kinsoku, rp.word_wrap);
+    found.retain(|&i| !crate::kinsoku::is_thai_text_boundary(text, i) || crate::kinsoku::is_safe_line_break(text, i));
     found
+}
+
+#[cfg(test)]
+mod break_tests {
+    /// Word's own Thai words over the ICU4X dictionary's ([`crate::thai_words`]): "ฐานข้อมูล" stays
+    /// whole on a line, "หมายเหตุ" breaks after "หมาย", as in Word.
+    #[test]
+    fn thai_words_word_keeps_whole_or_splits_break_as_in_word() {
+        let doc = wordcraft_doc::Document::new();
+        let rp = doc.styles.resolve_para(&wordcraft_doc::props::ParaProps::default());
+        let text = "ฐานข้อมูล หมายเหตุ";
+        let b = super::break_positions(text, &rp);
+        assert!(!b.contains(&"ฐาน".len()), "{b:?}");
+        let note = text.find('ห').unwrap();
+        assert!(b.contains(&(note + "หมาย".len())), "{b:?}");
+    }
+
+    #[test]
+    fn thai_dictionary_and_hyphen_slash_boundaries_coexist() {
+        let doc = wordcraft_doc::Document::new();
+        let rp = doc.styles.resolve_para(&wordcraft_doc::props::ParaProps::default());
+        let text = "word-/Alpha ทรัพยากรบุคคล";
+        let hyphen = text.find('-').unwrap() + 1;
+        let thai_start = text.find('ท').unwrap();
+        let thai_word_end = thai_start + "ทรัพยากร".len();
+        let breaks = super::break_positions(text, &rp);
+        assert!(breaks.contains(&hyphen), "hyphen before slash remains a break: {breaks:?}");
+        assert!(breaks.contains(&thai_word_end), "Thai dictionary word boundary remains a break: {breaks:?}");
+        assert!(!breaks.contains(&(thai_start + 'ท'.len_utf8())), "no break inside the Thai word: {breaks:?}");
+    }
+}
+
+#[cfg(test)]
+mod thai_punctuation_tests {
+    /// The text with a `|` at each place `break_positions` allows a break.
+    fn marked(text: &str) -> String {
+        let rp = wordcraft_doc::Document::new().styles.resolve_para(&Default::default());
+        let breaks = super::break_positions(text, &rp);
+        let mut out = String::new();
+        for (i, c) in text.char_indices() {
+            if i > 0 && breaks.contains(&i) {
+                out.push('|');
+            }
+            out.push(c);
+        }
+        out
+    }
+
+    /// As measured in Word for Windows: a break after a colon before Thai even after a space
+    /// ("เสียชีวิต :" | "รหัสไปรษณีย์"), before a run of dots after Thai ("เลขบัตร" | ".."), before
+    /// but not after an opening bracket, before a comma after Thai and not after it, none inside a
+    /// number in Thai digits, and `;` or `?` kept with Latin after them.
+    #[test]
+    fn thai_breaks_around_punctuation_as_word_does() {
+        let colon = marked("ข้อมูลการเสียชีวิต :รหัสไปรษณีย์");
+        assert!(colon.contains(":|ร"), "{colon}");
+        assert!(colon.contains(" |:"), "{colon}");
+        let dots = marked("สมาชิก/เลขบัตร..");
+        assert!(dots.contains("บัตร|.."), "{dots}");
+        assert!(!dots.contains(".|."), "{dots}");
+        let bracket = marked("ความเร็วสูง(ไฟเบอร์)");
+        assert!(bracket.contains("สูง|("), "{bracket}");
+        assert!(!bracket.contains("(|"), "{bracket}");
+        let number = marked("จำนวนเงิน ๓๙,๖๗๕.๖๐ บาท");
+        assert!(number.contains("๓๙,๖๗๕.๖๐"), "{number}");
+        let comma = marked("ข้อมูลส่วนตัว,ที่อยู่ปัจจุบัน");
+        assert!(comma.contains("ตัว|,ที่"), "{comma}");
+        let item = marked("[I-4.1ข, ค]");
+        assert!(item.contains("ข,"), "{item}");
+        for latin in [marked("การเสียชีวิต;planning"), marked("การเสียชีวิต?planning")] {
+            assert!(latin.contains(";planning") || latin.contains("?planning"), "{latin}");
+        }
+        let spaced = marked("การเสียชีวิต( รหัส");
+        assert!(spaced.contains("วิต|( |รหัส"), "{spaced}");
+        for (text, at) in [("หมายเหตุ:ส่งภายใน", "ตุ:|ส่ง"), ("ร้อยละ%ของงาน", "ละ%|ของ"), ("แบบฟอร์ม)ต่อไป", "ฟอร์ม)|ต่อ")]
+        {
+            let m = marked(text);
+            assert!(m.contains(at), "{m}");
+        }
+    }
+
+    /// As measured in Word for Windows (TH SarabunPSK, widths of 20 to 300 pt): an abbreviation
+    /// such as "พ.ศ.", "ม.ค." or "เม.ย." stays whole, while a stop before a word or another
+    /// abbreviation is a place to break ("แล้ว." | "ต่อไป", "ฯลฯ." | "เพิ่มเติม", "นพ." | "สมชาย",
+    /// "รพ." | "ผศ.").
+    #[test]
+    fn thai_abbreviations_stay_whole_as_in_word() {
+        for (text, whole) in [("ประกาศพ.ศ.2564เรื่องงาน", "พ.ศ."), ("ตั้งแต่ม.ค.ถึงเดือนอื่น", "ม.ค."), ("วันที่เม.ย.62", "เม.ย.")]
+        {
+            let m = marked(text);
+            assert!(m.contains(whole), "{m}");
+        }
+        for (text, at) in [
+            ("จบงานแล้ว.ต่อไปเป็นงานใหม่", "แล้ว.|ต่อ"),
+            ("ระเบียบฯลฯ.เพิ่มเติมอีก", "ฯลฯ.|เพิ่ม"),
+            ("ส่งให้นพ.สมชายด้วย", "นพ.|สม"),
+            ("บริหารงานรพ.ผศ.จำนวน", "รพ.|ผศ."),
+        ] {
+            let m = marked(text);
+            assert!(m.contains(at), "{m}");
+        }
+    }
 }
 
 #[cfg(test)]
