@@ -10,7 +10,7 @@ use craft::ui::display::Divider;
 use craft::ui::layout_components::Stack;
 use craft::ui::list::ThumbAspect;
 use craft::ui::menu::{Menu, MenuItem};
-use craft::ui::primitives::{HAlign, IconSpec, TextRun};
+use craft::ui::primitives::{HAlign, TextRun};
 use craft::ui::tile_grid::{CaptionPlace, Tile, TileGrid};
 use egui::Ui;
 
@@ -125,7 +125,7 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 ] {
                     MenuItem::command(CommandRef::with_params("insert.shape", json!({"kind": kind, "arrow": arrow})))
                         .label(crate::tl!(label))
-                        .icon(crate::icons::id(glyph))
+                        .icon(crate::icons::spec(glyph))
                         .show(ui);
                 }
                 let _ = cx;
@@ -135,7 +135,7 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             for (key, label, id) in
                 [("icons", "Icons", "insert.icon"), ("smartArt", "Diagram", "insert.smartArt"), ("chart", "Chart", "insert.chart")]
             {
-                Button::command(CommandRef::with_params(id, json!({}))).label(crate::tl!(label)).icon(crate::icons::id(key)).show(ui);
+                Button::command(CommandRef::with_params(id, json!({}))).label(crate::tl!(label)).icon(crate::icons::spec(key)).show(ui);
             }
         });
     });
@@ -196,7 +196,7 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         menu_button(
             ui,
             Button::new(crate::tl!("Page\nNumber"))
-                .icon(IconId::new("pageNumber"))
+                .icon(crate::icons::spec("pageNumber"))
                 .tooltip(crate::tl!("Page Number"))
                 .arrangement(Arrangement::Stacked),
             crate::tl!("Page Number"),
@@ -216,10 +216,10 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             },
         );
     });
-    row.group(RibbonGroup::new("Text", crate::tl!("Text"), IconId::new("textBox").into()), |ui| {
+    row.group(RibbonGroup::new("Text", crate::tl!("Text"), crate::icons::spec("textBox")), |ui| {
         Button::command(CommandRef::with_params("insert.textBox", json!({})))
             .label(crate::tl!("Text\nBox"))
-            .icon(IconId::new("textBox"))
+            .icon(crate::icons::spec("textBox"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
@@ -242,7 +242,7 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             );
             menu_button(
                 ui,
-                Button::new(crate::tl!("Decorative Text")).icon(IconId::new("wordArt")).tooltip(crate::tl!("Decorative Text")),
+                Button::new(crate::tl!("Decorative Text")).icon(crate::icons::spec("wordArt")).tooltip(crate::tl!("Decorative Text")),
                 crate::tl!("Decorative Text"),
                 Some("insert.wordArt"),
                 |ui, cx| {
@@ -251,7 +251,7 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             );
             menu_button(
                 ui,
-                Button::new(crate::tl!("Drop Cap")).icon(IconId::new("dropCap")).tooltip(crate::tl!("Drop Cap")),
+                Button::new(crate::tl!("Drop Cap")).icon(crate::icons::spec("dropCap")).tooltip(crate::tl!("Drop Cap")),
                 crate::tl!("Drop Cap"),
                 Some("insert.dropCap"),
                 |ui, _| drop_cap_items(ui, app),
@@ -263,18 +263,18 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 ("dateTime", "Date & Time", "ui.dialog", json!({"name": "dateTime"})),
                 ("object", "Object", "insert.object", json!({})),
             ] {
-                IconButton::command(IconSpec::from(crate::icons::id(key)), CommandRef::with_params(id, params))
+                IconButton::command(crate::icons::spec(key), CommandRef::with_params(id, params))
                     .label(crate::tl!(tip))
                     .tooltip(crate::tl!(tip))
                     .show(ui);
             }
         });
     });
-    row.group(RibbonGroup::new("Symbols", crate::tl!("Symbols"), IconId::new("symbol").into()), |ui| {
+    row.group(RibbonGroup::new("Symbols", crate::tl!("Symbols"), crate::icons::spec("symbol")), |ui| {
         crate::equation_tab::insert_button(ui, app);
         menu_button(
             ui,
-            Button::new(crate::tl!("Symbol")).icon(IconId::new("symbol")).tooltip(crate::tl!("Symbol")).arrangement(Arrangement::Stacked),
+            Button::new(crate::tl!("Symbol")).icon(crate::icons::spec("symbol")).tooltip(crate::tl!("Symbol")).arrangement(Arrangement::Stacked),
             crate::tl!("Symbol"),
             Some("insert.symbol"),
             |ui, cx| {
