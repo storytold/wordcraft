@@ -1038,6 +1038,7 @@ fn check_concatenated_archives(bytes: &[u8], readable: bool, acc: &mut Acc) {
                 unresolved |= comment != 0 && boundary <= bytes.len();
                 Some(count)
             }
+            Footer::Unanchored(count) => Some(count),
             Footer::Rejected => None,
         };
         if u32_at(bytes, boundary) != Some(0x0403_4B50) {
@@ -1090,6 +1091,9 @@ enum Footer {
     Verified(u64),
     /// The directory passes the preflight but is larger than the entry budget, so it was not walked.
     Undecided(u64),
+    /// The records are consistent with the bytes but do not prove the archive's extent (a prepended stub,
+    /// unresolved ZIP64 fields). It can warrant an isolated-load attempt but never skips input.
+    Unanchored(u64),
     Rejected,
 }
 
@@ -1115,7 +1119,8 @@ fn verify_footer(bytes: &[u8], footer: usize, limit: usize) -> Footer {
     }
     // (local offset, end of local record, slack a data descriptor may occupy after it)
     let mut spans: Vec<(usize, usize, usize)> = Vec::new();
-    let mut tiled = true;
+    // Every record's identity was established: its ZIP64 fields (central and local) resolved and compared.
+    let mut identified = true;
     let mut at = start;
     for _ in 0..count {
         let walked = (|| {
@@ -1123,55 +1128,121 @@ fn verify_footer(bytes: &[u8], footer: usize, limit: usize) -> Footer {
                 return None;
             }
             let flags = u16_at(bytes, at + 8)?;
-            let size = u32_at(bytes, at + 20)?;
+            let compressed = u32_at(bytes, at + 20)?;
+            let uncompressed = u32_at(bytes, at + 24)?;
             let name_len = usize::from(u16_at(bytes, at + 28)?);
-            let lengths = name_len + usize::from(u16_at(bytes, at + 30)?) + usize::from(u16_at(bytes, at + 32)?);
-            let local = u32_at(bytes, at + 42)?;
+            let extra_len = usize::from(u16_at(bytes, at + 30)?);
+            let lengths = name_len + extra_len + usize::from(u16_at(bytes, at + 32)?);
+            let offset = u32_at(bytes, at + 42)?;
             let next = at.checked_add(46)?.checked_add(lengths)?;
             if name_len == 0 || next > footer {
                 return None;
             }
-            // A ZIP64 record keeps its size or offset in the extra field; its names are still checked.
-            let wide = local == u32::MAX || size == u32::MAX;
-            let local = usize::try_from(local).ok().filter(|_| !wide).unwrap_or(0);
-            if !wide {
-                let descriptor = flags & 0x8 != 0;
-                if local >= start
-                    || u32_at(bytes, local)? != 0x0403_4B50
-                    || usize::from(u16_at(bytes, local + 26)?) != name_len
-                    || bytes.get(local + 30..local + 30 + name_len)? != bytes.get(at + 46..at + 46 + name_len)?
-                    || (!descriptor && u32_at(bytes, local + 18)? != size)
-                {
-                    return None;
-                }
-                let end = local.checked_add(30 + name_len + usize::from(u16_at(bytes, local + 28)?))?.checked_add(usize::try_from(size).ok()?)?;
-                spans.push((local, end, if descriptor { 24 } else { 0 }));
+            let extra = bytes.get(at + 46 + name_len..at + 46 + name_len + extra_len)?;
+            // A ZIP64 record keeps its sizes or offset in the extra field; without them it proves nothing.
+            let Some((size, local)) = central_fields(extra, uncompressed, compressed, offset) else {
+                return Some((next, false));
+            };
+            let local = usize::try_from(local).ok()?;
+            let descriptor = flags & 0x8 != 0;
+            if local >= start || u32_at(bytes, local)? != 0x0403_4B50 || usize::from(u16_at(bytes, local + 26)?) != name_len {
+                return None;
             }
-            Some((next, wide))
+            if bytes.get(local + 30..local + 30 + name_len)? != bytes.get(at + 46..at + 46 + name_len)? {
+                return None;
+            }
+            let local_extra_len = usize::from(u16_at(bytes, local + 28)?);
+            let local_extra = bytes.get(local + 30 + name_len..local + 30 + name_len + local_extra_len)?;
+            // The local header may use a different size representation than the directory; compare resolved values.
+            let Some(local_size) = local_compressed(local_extra, u32_at(bytes, local + 22)?, u32_at(bytes, local + 18)?) else {
+                return Some((next, false));
+            };
+            if !descriptor && local_size != size {
+                return None;
+            }
+            let end = local.checked_add(30 + name_len + local_extra_len)?.checked_add(usize::try_from(size).ok()?)?;
+            spans.push((local, end, if descriptor { 24 } else { 0 }));
+            Some((next, true))
         })();
         match walked {
-            Some((next, wide)) => {
-                tiled &= !wide;
+            Some((next, known)) => {
+                identified &= known;
                 at = next;
             }
             None => return Footer::Rejected,
         }
     }
-    if tiled {
+    // Entries must abut from offset zero to the directory. Otherwise the records are consistent but the
+    // archive's extent is unproven (a prepended stub, or ZIP64 fields that could not be resolved).
+    if identified {
         spans.sort_unstable();
         let (mut cursor, mut slack) = (0, 0);
         for (local, end, next_slack) in spans {
             if local < cursor || local - cursor > slack {
-                return Footer::Rejected;
+                return Footer::Unanchored(count);
             }
             cursor = end;
             slack = next_slack;
         }
         if start < cursor || start - cursor > slack {
-            return Footer::Rejected;
+            return Footer::Unanchored(count);
         }
+        Footer::Verified(count)
+    } else {
+        Footer::Unanchored(count)
     }
-    Footer::Verified(count)
+}
+
+/// The ZIP64 extended-information body (header id 1) of an extra field, when the field is well formed.
+fn zip64_body(extra: &[u8]) -> Option<&[u8]> {
+    let mut at = 0;
+    while at + 4 <= extra.len() {
+        let id = u16_at(extra, at)?;
+        let len = usize::from(u16_at(extra, at + 2)?);
+        let body = extra.get(at + 4..at + 4 + len)?;
+        if id == 1 {
+            return Some(body);
+        }
+        at += 4 + len;
+    }
+    None
+}
+
+/// Resolve a central record's compressed size and local header offset, reading each saturated field from
+/// the ZIP64 extra in the order uncompressed size, compressed size, offset.
+fn central_fields(extra: &[u8], uncompressed: u32, compressed: u32, offset: u32) -> Option<(u64, u64)> {
+    if uncompressed != u32::MAX && compressed != u32::MAX && offset != u32::MAX {
+        return Some((u64::from(compressed), u64::from(offset)));
+    }
+    let body = zip64_body(extra)?;
+    let mut cursor = 0;
+    let mut take = |saturated: u32| -> Option<u64> {
+        if saturated != u32::MAX {
+            return Some(u64::from(saturated));
+        }
+        let value = u64_at(body, cursor)?;
+        cursor += 8;
+        Some(value)
+    };
+    let _uncompressed = take(uncompressed)?;
+    let compressed = take(compressed)?;
+    let offset = take(offset)?;
+    Some((compressed, offset))
+}
+
+/// Resolve a local header's compressed size independently of the directory's representation. A local
+/// ZIP64 extra carries the uncompressed then the compressed size.
+fn local_compressed(extra: &[u8], uncompressed: u32, compressed: u32) -> Option<u64> {
+    if uncompressed != u32::MAX && compressed != u32::MAX {
+        return Some(u64::from(compressed));
+    }
+    let body = zip64_body(extra)?;
+    if body.len() >= 16 {
+        return u64_at(body, 8);
+    }
+    // A short body holds only the saturated fields, uncompressed first.
+    let compressed_at = if uncompressed == u32::MAX { 8 } else { 0 };
+    if compressed == u32::MAX { u64_at(body, compressed_at) } else { Some(u64::from(compressed)) }
 }
 
 /// Preflight relative directory offsets before asking the package loader to verify a split.
