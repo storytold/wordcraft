@@ -997,7 +997,7 @@ fn check_concatenated_archives(bytes: &[u8], readable: bool, acc: &mut Acc) {
     observation_contract! {
         rules: "PKG-CONCATENATED";
         collections: "field.entries*2";
-        scope: "input-budgeted EOCD scan and at most two candidate archive splits";
+        scope: "input-budgeted EOCD scan respecting declared comments and at most two candidate archive splits";
         loss: "split budget, an unsupported boundary layout, or incomplete isolated package loading";
         fallback: "report incomplete coverage for unresolved candidate boundaries";
         package_loss: "independent";
@@ -1012,19 +1012,25 @@ fn check_concatenated_archives(bytes: &[u8], readable: bool, acc: &mut Acc) {
     }
     let mut remaining = CANDIDATE_LIMIT;
     let mut unresolved = false;
+    let mut comment_end = 0;
     for (footer, byte) in bytes.iter().enumerate() {
-        if *byte != b'P' || u32_at(bytes, footer) != Some(0x0605_4B50) {
+        if footer < comment_end || *byte != b'P' || u32_at(bytes, footer) != Some(0x0605_4B50) {
             continue;
         }
         let Some(comment) = u16_at(bytes, footer + 20) else {
             continue;
         };
         let boundary = footer + 22 + usize::from(comment);
+        // An archive-relative directory anchors the declared comment, even when its end
+        // has no following local header. Never interpret a footer inside that comment.
+        let first_count = archive_count_at(bytes, footer);
+        if comment != 0 && boundary <= bytes.len() && first_count.is_some() {
+            comment_end = boundary;
+        }
         if u32_at(bytes, boundary) != Some(0x0403_4B50) {
             continue;
         }
         let (first, second) = bytes.split_at(boundary);
-        let first_count = archive_count_at(first, footer);
         let second_directory =
             last_footer.and_then(|last| last.checked_sub(boundary)).and_then(|last| archive_count_at(second, last).map(|count| (last, count)));
         if first_count.is_none() && second_directory.is_none() {
@@ -1090,7 +1096,7 @@ fn standalone_opc(bytes: &[u8], footer: usize, limits: crate::Limits) -> bool {
     observation_contract! {
         rules: "-";
         collections: "field.content_types*1,field.incomplete*1";
-        scope: "isolated ZIP slice with its own directory and resolved Word main";
+        scope: "isolated ZIP slice with its own directory and loadable Word main";
         loss: "unreadable package or incomplete package loading";
         fallback: "do not infer a complete OPC archive";
         package_loss: "independent";
@@ -1104,9 +1110,41 @@ fn standalone_opc(bytes: &[u8], footer: usize, limits: crate::Limits) -> bool {
         return false;
     }
     match &pkg.main {
-        Resolution::One(main) => pkg.content_types.of(main).is_some_and(is_main_content_type),
+        Resolution::One(main) => pkg.content_types.of(main).is_some_and(is_main_content_type) && main_xml_loadable(&pkg, main, &mut probe),
         Resolution::Absent | Resolution::Unknown(_) | Resolution::Ambiguous(_) => false,
     }
+}
+
+/// Apply the standalone XML scanner and prolog grading to the isolated main part.
+fn main_xml_loadable(pkg: &Package, main: &str, probe: &mut Acc) -> bool {
+    observation_contract! {
+        rules: "XML-DOCTYPE";
+        collections: "field.findings*1,field.incomplete*1,field.unknown_prefixes*1,lookup.entry_by_name*1";
+        scope: "resolved main entry and its bounded XML scan";
+        loss: "unsupported profile, unreadable XML, syntax errors, or exhausted scan budget";
+        fallback: "leave independent document loadability undecided";
+        package_loss: "independent";
+    }
+
+    if !matches!(entry_point_profile(pkg), Resolution::One(EntryPointProfile::Transitional)) || !crate::owner_roots_supported(pkg, probe) {
+        return false;
+    }
+    let Resolution::One(entry) = entry_by_name(pkg, main) else {
+        return false;
+    };
+    let Some(text) = entry.decoded.as_deref() else {
+        return false;
+    };
+    crate::check_doctypes(pkg, probe);
+    let scan = crate::scan::scan_part(&entry.name, text, crate::scan::PartRole::Main, probe);
+    scan.syntax_complete
+        && scan.unknown_prefixes.is_empty()
+        && crate::scan::invalid_literal_char(text).is_none()
+        && !probe.incomplete
+        && !probe.findings.iter().any(|finding| {
+            finding.part.as_deref() == Some(entry.name.as_str())
+                && (finding.severity == crate::Severity::Corrupt || (finding.rule == "XML-DOCTYPE" && finding.severity == crate::Severity::Error))
+        })
 }
 
 /// Reject disputed directory identities before deriving duplicates or absence from them.
@@ -1121,7 +1159,10 @@ fn reader_checked_directory<'a>(
     let cd = selection.as_ref().and_then(|selected| central_directory(bytes, limit, selected));
     let structural_disagreement = selection.as_ref().is_some_and(|selected| {
         selected.disputed
-            || expected_footer.is_some_and(|footer| selected.footer != footer || cd.as_ref().is_none_or(|dir| dir.end > footer))
+            // The reader can select a later copy of the footer inside the comment.
+            // An undisputed selection still has to describe a directory before the
+            // comment-owning footer of the isolated slice.
+            || expected_footer.is_some_and(|footer| selected.footer < footer || cd.as_ref().is_none_or(|dir| dir.end > footer))
             || (cd.is_none()
                 && selected
                     .directory
