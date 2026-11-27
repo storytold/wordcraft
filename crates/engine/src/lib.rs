@@ -16,6 +16,7 @@ pub mod io;
 mod io_ext;
 pub mod keymap;
 pub(crate) mod locale;
+pub mod malloc_tuning;
 pub mod math_gallery;
 pub mod packs;
 pub(crate) mod prefs;

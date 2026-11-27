@@ -486,6 +486,9 @@ fn main() -> eframe::Result {
     let updates_unsafe = start_over_failed.is_some();
     #[cfg(not(target_os = "linux"))]
     let updates_unsafe = false;
+    // Before any thread or logger starts: re-exec on Linux glibc with MALLOC_TRIM_THRESHOLD_
+    // fixed so large freed document/render buffers return to the OS.
+    wordcraft_engine::malloc_tuning::apply();
     // First, so the panic hook (set once, by this call; the later one only gives it the crash-log
     // folder) and every start-up warning are recorded.
     let logger = logs::install(LogNames::new("wordcraft"));
