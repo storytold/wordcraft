@@ -37,9 +37,6 @@ pub(super) fn language(s: &mut Session, v: &Value) -> CmdResult {
     };
     let no_proof = p::bool(v, "noProof");
     let detect = p::bool(v, "detect");
-    if let Some(d) = detect {
-        s.prefs.detect_language = d;
-    }
     if p::bool(v, "default") == Some(true) {
         let l = lang.clone().ok_or_else(|| CmdError::Params("`default` needs `lang`".into()))?;
         Arc::make_mut(&mut s.doc.styles).default_chr.lang = Some(l.clone());
@@ -49,6 +46,9 @@ pub(super) fn language(s: &mut Session, v: &Value) -> CmdResult {
         {
             n.chr.lang = Some(l);
         }
+    }
+    if let Some(d) = detect {
+        s.prefs.detect_language = d;
     }
     let lang = match (lang, no_proof, detect) {
         (None, None, None) => Some("en-US".to_string()),

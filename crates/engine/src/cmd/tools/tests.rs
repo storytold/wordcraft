@@ -1601,6 +1601,11 @@ fn proofing_language_options() {
     s.run("review.language", &json!({"lang": "de-DE", "default": true})).unwrap();
     assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("de-DE"));
     assert!(s.run("review.language", &json!({"lang": "<script>"})).is_err());
+
+    let e = s.run("review.language", &json!({"default": true, "detect": true})).unwrap_err();
+    assert!(matches!(e, CmdError::Params(message) if message == "`default` needs `lang`"));
+    assert!(!s.prefs.detect_language);
+    assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("de-DE"));
 }
 
 /// #2242: `insert.spreadsheet` fills a table from `values`, with a repeating header and a style.
