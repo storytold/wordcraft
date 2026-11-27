@@ -686,24 +686,24 @@ impl FontDb {
             };
             let stamp = meta.as_ref().ok().and_then(catalog::Stamp::of);
             // What the file holds: as catalogued while it is the same file, else read and checked
-            // now (`fresh`). The catalogue keeps a usable file's faces; a reason to skip a file
-            // isn't kept, so the file is read again at the next start and a repair shows.
-            let (faces, fresh) = match (meta, known.remove(name).filter(|e| stamp == Some(e.stamp))) {
-                (Err(e), _) => (Err(e.to_string()), false),
-                (Ok(_), Some(entry)) => (Ok(entry.faces), false),
+            // now. The catalogue keeps a usable file's faces; a reason to skip a file isn't kept,
+            // so the file is read again at the next start and a repair shows.
+            let faces = match (meta, known.remove(name).filter(|e| stamp == Some(e.stamp))) {
+                (Err(e), _) => Err(e.to_string()),
+                (Ok(_), Some(entry)) => Ok(entry.faces),
                 (Ok(_), None) => match catalog::scan(&p, &self.files) {
                     Ok(faces) => {
                         changed |= faces.is_ok() && stamp.is_some() && catalog::keeps(name);
-                        (faces, true)
+                        faces
                     }
-                    Err(e) => (Err(UserFontError::Unusable(e.to_string()).to_string()), true),
+                    Err(e) => Err(UserFontError::Unusable(e.to_string()).to_string()),
                 },
             };
             if let Err(why) = &faces {
                 log::warn!("skipped the user font {}: {why}", p.display());
                 skipped.push((file.clone(), why.clone()));
             }
-            listed.push(Listed { file, path: p, stamp, faces, fresh });
+            listed.push(Listed { file, path: p, stamp, faces });
         }
         let (loaded, refused) = self.add_catalogued(&listed);
         skipped.extend(refused);
@@ -719,12 +719,12 @@ impl FontDb {
         (loaded, skipped)
     }
 
-    /// Is `face` fit to hand out? A face listed from the catalogue is checked against its file the
-    /// first time one of the file's faces is handed out ([`FontDb::face`], also when it makes a
-    /// style at other axis values from one, and the fallback searches), which reads the file: when
-    /// its faces aren't the ones the catalogue described, they are made again from its bytes (or
-    /// dropped, when it can't be used any more), the catalogue is corrected, and the answer is no,
-    /// so the caller looks again.
+    /// Is `face` fit to hand out? A face of an added font's file, listed from the catalogue or from
+    /// what this start read, is checked against the file the first time one of the file's faces
+    /// is handed out ([`FontDb::face`], also when it makes a style at other axis values from one,
+    /// and the fallback searches), which reads the file: when its faces aren't the ones listed,
+    /// they are made again from its bytes (or dropped, when it can't be used any more), the
+    /// catalogue is corrected, and the answer is no, so the caller looks again.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn checked(&self, face: &super::FontFace) -> bool {
         // Faces made from the bytes (named instances, or faces a check made again) fit them.
@@ -807,7 +807,7 @@ impl FontDb {
         // Indexed: a folder may hold a thousand fonts.
         let key = |family: &str, style: &str| (family.to_ascii_lowercase(), style.to_ascii_lowercase());
         let mut present: std::collections::HashSet<(String, String)> = faces.iter().map(|f| key(&f.family, &f.style)).collect();
-        for Listed { file, path, stamp, faces: records, fresh: scanned } in listed {
+        for Listed { file, path, stamp, faces: records } in listed {
             let Ok(records) = records else { continue };
             let refuse = |e: UserFontError| {
                 log::warn!("skipped the user font {}: {e}", path.display());
@@ -825,10 +825,7 @@ impl FontDb {
                 refused.push(refuse(UserFontError::AlreadyAvailable(families)));
                 continue;
             }
-            // Without a status-change time (Windows), a file this start read that is then rewritten
-            // in place keeping its size and times keeps its stamp: it is checked when first used
-            // too, as a catalogued one is.
-            let shared = Arc::new(catalog::FontFile::new(path.clone(), *stamp, self.files.clone(), *scanned && cfg!(unix)));
+            let shared = Arc::new(catalog::FontFile::new(path.clone(), *stamp, self.files.clone()));
             let added: Vec<Arc<super::FontFace>> = fresh.iter().map(|(r, _)| Arc::new(r.face(&shared))).collect();
             present.extend(fresh.into_iter().map(|(_, k)| k));
             faces.extend(added.iter().cloned());
@@ -865,15 +862,14 @@ impl FontDb {
     }
 }
 
-/// A file in the user font folder, as a start found it: its faces (or why it can't be used), its
-/// stamp, and whether this start read it (`fresh`) or the catalogue described it.
+/// A file in the user font folder, as a start found it: its faces (or why it can't be used), and
+/// its stamp.
 #[cfg(not(target_arch = "wasm32"))]
 struct Listed {
     file: String,
     path: PathBuf,
     stamp: Option<catalog::Stamp>,
     faces: Result<Vec<catalog::FaceRecord>, String>,
-    fresh: bool,
 }
 
 /// `name`, or `name` with `-2`, `-3`… before its extension, the first that `taken` refuses.

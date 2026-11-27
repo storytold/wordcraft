@@ -12,15 +12,16 @@
 //!
 //! The catalogue's first line is a digest of the rest: a damaged or edited catalogue is made again
 //! from the fonts, as it is when WordCraft's version or the catalogue's format changes. A face
-//! listed from it is checked against its file before it is first handed out
-//! ([`FontDb::face`](super::super::FontDb::face), also before a style at other axis values is made
-//! from it, and the fallback searches), so a description that doesn't match the file never reaches
-//! layout: the file's faces are made again from its bytes, and the entry with them. A font list
-//! preview of a font no document uses is drawn from a copy read from the file.
+//! listed from it, or from what this start read of a file, is checked against the file before it
+//! is first handed out ([`FontDb::face`](super::super::FontDb::face), also before a style at other
+//! axis values is made from it, and the fallback searches), so a description that doesn't match
+//! the file never reaches layout: the file's faces are made again from its bytes, and the entry
+//! with them. A font list preview of a font no document uses is drawn from a copy read from the
+//! file.
 //!
 //! A file's bytes are read only while it has the stamp it was listed with: a font whose file is
 //! replaced, removed or made unreadable during a session, before a document uses it, falls back
-//! until the next start, which reads the file as it is then.
+//! and leaves the font list until the next start, which reads the file as it is then.
 //!
 //! Each write goes to a temporary file of its own, renamed over the catalogue once complete, so a
 //! reader finds a whole catalogue, old or new, whatever other writers (other instances of the app)
@@ -407,8 +408,7 @@ pub(crate) struct FontFile {
     stamp: Option<Stamp>,
     /// Its bytes once read; empty when it couldn't be read.
     bytes: OnceLock<Vec<u8>>,
-    /// Were the faces listed for it checked against its bytes (or made from them, by a start that
-    /// read it)?
+    /// Were the faces listed for it checked against its bytes?
     checked: AtomicBool,
     /// The check found them unlike the file: they were replaced by faces made from its bytes.
     unfit: AtomicBool,
@@ -418,13 +418,14 @@ pub(crate) struct FontFile {
 }
 
 impl FontFile {
-    /// `checked`: the faces listed for it were made from what a read of it found at this start.
-    pub(super) fn new(path: PathBuf, stamp: Option<Stamp>, shared: Arc<FileShared>, checked: bool) -> FontFile {
+    /// Its faces are checked against its bytes when one is first handed out, also when this start
+    /// read the file itself: it may be removed or rewritten before then.
+    pub(super) fn new(path: PathBuf, stamp: Option<Stamp>, shared: Arc<FileShared>) -> FontFile {
         FontFile {
             path,
             stamp,
             bytes: OnceLock::new(),
-            checked: AtomicBool::new(checked),
+            checked: AtomicBool::new(false),
             unfit: AtomicBool::new(false),
             checking: Mutex::new(()),
             shared,

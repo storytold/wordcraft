@@ -737,7 +737,8 @@ fn an_added_font_whose_file_is_gone_when_first_used_falls_back() {
     let dir = temp_dir("gone");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("a.ttf"), numbered(1)).unwrap();
-    restart(&dir);
+    // The first start reads the file itself (there is no catalogue yet); the others list it.
+    let (read_it, _, _) = restart(&dir);
     let (db, _, _) = restart(&dir);
     let (previewing, _, _) = restart(&dir);
     std::fs::remove_file(dir.join("a.ttf")).unwrap();
@@ -750,6 +751,9 @@ fn an_added_font_whose_file_is_gone_when_first_used_falls_back() {
     // A font list preview finds the same: no face to draw its name in, and it is no longer listed.
     assert!(previewing.preview_face("Userfont 00001").is_none());
     assert!(previewing.user_fonts().is_empty());
+    // So does a start that read the file itself, rather than handing out what it read then.
+    assert_eq!(read_it.face("Userfont 00001", "Italic").family, super::super::FALLBACK_FAMILY);
+    assert!(read_it.user_fonts().is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
 

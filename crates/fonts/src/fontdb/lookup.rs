@@ -11,8 +11,8 @@ impl FontDb {
     /// Source Sans 3 Regular. `family` is a typographic family ("Roboto") or a face's legacy family
     /// name ("Roboto Light", whose styles are Light and Light Italic). Installed system fonts are
     /// found by name whatever ran before. An exact full or PostScript name selects its face. An
-    /// added font's face listed from its catalogue is checked against the font's file before it is
-    /// first handed out, or before a style at other axis values is made from it.
+    /// added font's face is checked against the font's file before it is first handed out, or
+    /// before a style at other axis values is made from it.
     pub fn face(&self, family: &str, style: &str) -> Arc<FontFace> {
         loop {
             let face = self.resolve(family, style);
