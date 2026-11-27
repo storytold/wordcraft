@@ -31,6 +31,10 @@ Stable releases still come only from `refs/heads/release`.
 Local packaging: `packaging/macos/package.sh --arch universal`, `packaging/windows/package.ps1`,
 `packaging/linux/package.sh` (then `packaging/linux/flatpak-bundle.sh` for the Flatpak), `packaging/web/package.sh`.
 
+Local macOS packaging prefers `xcrun stapler` (staple and validate). Without it, `rcodesign staple` uses the same bounded retries. If neither tool is available, packaging warns that Gatekeeper will fetch the ticket online and still runs the final Gatekeeper assessments.
+
+On GitHub Actions, notarized artifacts still require the native `stapler` to staple and validate the ticket; absence is fatal even if `rcodesign` is installed. The `rcodesign` fallback and missing-tool warning are for local packaging only. A successful online Gatekeeper assessment is not evidence that a ticket was stapled. These paths are covered with synthetic shell mocks, not a new Apple notarization run.
+
 A scheduled dry run runs on `main` nightly at 03:00 UTC. It builds every release target except
 macOS, without signing, entering the `release` environment, pushing Flatpak images or making a
 draft release. Manual dispatch uses the normal release path (`dry-run` is false).
@@ -79,3 +83,9 @@ passes an already-supplied Launcher form (`--launch-profile`, and `--version`/`-
 through, so the ArtCraft Launcher's own root is used and its version check opens no window. The
 remaining activation steps are described in
 [nightly-release-preparation.md](nightly-release-preparation.md).
+
+## Revision history
+
+| Date | Impact | Change |
+|---|---|---|
+| 2026-11-05 | trivial | PR #5268: local macOS packaging may use rcodesign or warn when stapling tools are absent; GitHub Actions releases still require native stapling and ticket validation. Synthetic app/DMG and failure controls; no new Apple notarization run. |
