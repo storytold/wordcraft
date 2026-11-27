@@ -7,12 +7,18 @@
   <project_license>MIT OR Apache-2.0</project_license>
   <name>WordCraft</name>
   <summary>Write and design documents; open and save Word files</summary>
+  <summary xml:lang="ru">Создание и оформление документов; открытие и сохранение файлов Word</summary>
   <developer id="ai.storyteller">
     <name>Learning Machines LLC</name>
   </developer>
   <description>
     <p>
       WordCraft is a fast, open-source word processor with a familiar ribbon: styles, tables, track changes, references, mail merge, and .docx, PDF, ODT, RTF, HTML and Markdown files. It can be driven by AI agents over MCP.
+    </p>
+    <p xml:lang="ru">
+      WordCraft — быстрый открытый текстовый процессор с привычной лентой: стили, таблицы,
+      отслеживание изменений, ссылки, слияние и файлы .docx, PDF, ODT, RTF, HTML и
+      Markdown. Им могут управлять ИИ-агенты по протоколу MCP.
     </p>
   </description>
   <launchable type="desktop-id">ai.storyteller.wordcraft.desktop</launchable>
@@ -28,13 +34,18 @@
   </categories>
   <keywords>
     <keyword>word processor</keyword>
+    <keyword xml:lang="ru">текстовый процессор</keyword>
     <keyword>docx</keyword>
+    <keyword xml:lang="ru">docx</keyword>
     <keyword>document</keyword>
+    <keyword xml:lang="ru">документ</keyword>
     <keyword>writer</keyword>
+    <keyword xml:lang="ru">редактор текста</keyword>
   </keywords>
   <screenshots>
     <screenshot type="default">
       <caption>The Open Studio Handbook sample with the Navigation pane</caption>
+      <caption xml:lang="ru">Образец «Open Studio Handbook» с областью навигации</caption>
       <image>https://raw.githubusercontent.com/storytold/wordcraft/main/docs/images/hero.png</image>
     </screenshot>
   </screenshots>
