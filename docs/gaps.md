@@ -202,6 +202,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | trivial | #29: Left and Right step into an equation next to the caret and leave it on the far side (#4138); right-to-left paragraphs stay open in typing-parity's known gaps; readiness estimates unchanged |
 | 2026-11-21 | trivial | Pagination gap #4: strict column balancing measures kept paragraphs again after moving them to account for wrap areas in the new column (#6821). Readiness estimates unchanged |
 | 2026-11-19 | trivial | Pagination gap #4: strict widow/orphan control releases the wrap area of a float whose anchor moves to another column during balancing (#6821). Readiness estimates unchanged |
 | 2026-11-19 | trivial | #4 narrowed: a narrow Square, Tight or Through logo leaves legacy header lines in place at mode 14. The same lines flow beside the logo at mode 15. Measured in Word for Windows with a synthetic document (#6805). |

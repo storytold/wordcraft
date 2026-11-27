@@ -261,6 +261,11 @@ fn insert_nodes_as_equation(s: &mut Session, nodes: Arg, v: &Value) -> CmdResult
 /// Starts editing the equation at the caret, materializing lazy nodes and clamping the requested
 /// position, and returns the equation and caret.
 fn edit(s: &mut Session, v: &Value) -> CmdResult {
+    edit_at(s, v.get("pos").and_then(|p| serde_json::from_value::<MathPos>(p.clone()).ok()))
+}
+
+/// [`edit`] at `pos` in the equation, or at its end without one.
+pub(super) fn edit_at(s: &mut Session, pos: Option<MathPos>) -> CmdResult {
     let at = equation_at_caret(s).ok_or_else(|| CmdError::Disabled("no equation at the caret".into()))?;
     let nodes = match s.doc.para_at(&at).and_then(|p| p.object_at(at.off)) {
         Some(InlineObject::Equation { math, linear, .. }) => {
@@ -272,8 +277,7 @@ fn edit(s: &mut Session, v: &Value) -> CmdResult {
         }
         _ => return Err(CmdError::Failed("no equation there".into())),
     };
-    let pos =
-        v.get("pos").and_then(|p| serde_json::from_value::<MathPos>(p.clone()).ok()).unwrap_or_else(|| MathPos::new(Vec::new(), me::units(&nodes)));
+    let pos = pos.unwrap_or_else(|| MathPos::new(Vec::new(), me::units(&nodes)));
     let Some(session) = crate::next_math_session() else {
         return Err(CmdError::Failed("no equation editing session available".into()));
     };

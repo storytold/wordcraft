@@ -164,6 +164,7 @@ Windows/Linux keys are given first, macOS second.
 | Alt+numpad code (Windows and Linux; not macOS) | hold Alt, type a decimal code, release Alt: the character appears at the caret as typed text (one undo step). With a leading 0 the code is the ANSI code page — Windows-1252 by default (`0233` → é, `0128` → €); without one, 1–255 is the OEM code page — 437 by default and in US English (`233` → Θ, `1` → ☺, `7` → •), 850 for Western European locales and English outside the US (`155` → ø; `233` is Ú there, per the CP850 mapping file — é is `130` in both). On Windows the system locale picks both pages (`text.typeCode` `ansi`/`oem`): Central European 1250/852 (Polish `0185` and `165` → ą), Cyrillic 1251/866, Greek 1253/737, Turkish 1254/857, and for codes up to 255 the character Windows composes itself replaces ours (it knows every code page, double-byte ones too); Linux keeps 1252 and 437/850. Above 255, with or without the 0, the Unicode character with that decimal value (`8364` → €). Control characters, 0, unassigned bytes and values past Unicode type nothing; auto-repeat of a held digit adds nothing, and switching windows drops a half-typed code. Word counts only keypad digits; egui reports keypad and top-row digits alike, so top-row digits with Alt alone compose codes too. An Alt code never opens KeyTips. A text box (Find what, a dialog's field, the ribbon's boxes) takes the same codes: its character, not the digits (#4403) | `alt_numpad_codes_map_like_word_on_windows`, `alt_numpad_code_types_one_character`, ui-egui `alt_numpad_code_types_its_character_without_keytips`, `alt_code_types_its_character_in_a_text_box` |
 | AltGr (Right Alt on Polish, German, Czech… layouts) | AltGr+letter types the layout's character (AltGr+S → ś, AltGr+L → ł) and a bare AltGr tap does nothing; neither opens KeyTips. On Linux AltGr is the Right Alt key with Level 3 Shift, not Alt, so its modifiers event no longer reads as Alt let go (#2388); on Windows it is Ctrl+Alt. Right Alt on a layout without AltGr (US) is Alt and opens KeyTips like Left Alt | ui-egui `altgr_types_its_characters_without_keytips` |
 | Shift+Right (⇧→) at the end of a cell's text | the whole cell is selected first (its end-of-cell mark); the next Shift+Right selects the next cell with it. In an empty cell the first press selects the cell | `shift_right_at_the_end_of_a_cell_selects_the_cell_first` |
+| Left / Right (← / →) next to an equation | the arrow steps into the equation instead of over it: Right from just before it opens it at its start, Left from just after it opens it at its end. The arrows then move inside it; past its far end the caret leaves on that side, so the same arrow goes on to the text (or, with two equations side by side, steps into the next one: not yet compared with Word). With text selected, the arrow only collapses the selection, as elsewhere; Shift+Left / Right still selects over the equation as one character. **Differs:** not in right-to-left or mixed-direction paragraphs yet (see Known gaps) (#4138) | `left_and_right_keys_step_into_and_out_of_an_equation`, `right_out_of_an_equation_steps_into_the_one_beside_it`; `cmd::equation::tests::left_and_right_step_into_an_equation_next_to_the_caret` |
 
 ## AutoCorrect and AutoFormat as you type
 
@@ -561,6 +562,10 @@ address are checked (`address_after_a_wide_space_is_an_internet_token`, in craft
 
 ## Known gaps
 
+- Left / Right next to an equation in a right-to-left or mixed-direction paragraph still step over
+  it as one character: those paragraphs take the visual caret path, which doesn't open equations
+  (#4138).
+
 - Web (#1480): Chrome has been seen moving the caret of eframe's hidden text field to its
   start after the first non-Latin character. Later letters then go in before what was typed
   since the field was last cleared, so `hello` then `мир` gives `риhelloм`. The text is no
@@ -622,6 +627,7 @@ DOCX and Undo/Redo (Leaf #152). No new Word or native UI comparison was run.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | trivial | Editing keys: Left and Right step into an equation next to the caret, at its start or end, and leave it on the far side; not yet in right-to-left paragraphs (#4138) |
 | 2026-11-17 | trivial | Backspace, then type: the carried formatting is dropped by a paste (whose text never takes it), Find, Go To or a click elsewhere (also one back to the same place), not only by the caret keys; an empty paste or a refused command keeps it; it follows typing and comes back with Undo; with Track Changes on it carries too, as in Word for Windows, and the typed text is a tracked insertion (#6518) |
 | 2026-11-15 | trivial | Enter in a paragraph with a drop cap: the new paragraph gets no drop cap (#6788); synthetic coverage, offset 0 unchanged and not compared with Word |
 | 2026-11-15 | trivial | Paste Formatting row: Ctrl/Cmd+Shift+V pastes the picked-up formatting, else text only; Ctrl/Cmd+Shift+C no longer arms the Format Painter (#1537, #4943); the chord's V release never pastes again (Shift up first); web text paste relies on the browser sending its paired Paste event, and the formatting paste drops that event only within about a second |

@@ -2362,6 +2362,102 @@ fn shift_right_at_the_end_of_a_cell_selects_the_cell_first() {
     assert_eq!(shift_right(&mut s), Some(((1, 1), (0, 0))));
 }
 
+/// Left or Right as the canvas sends it: while an equation is edited the arrows move inside it
+/// (`equation.move`, as ui-egui's `equation_key` does); otherwise they run the command bound to the
+/// key, with Shift extending the selection.
+fn arrow(s: &mut Session, key: &str) {
+    if s.math.is_some() {
+        run(s, "equation.move", json!({"dir": if key == "Left" { "left" } else { "right" }}));
+        return;
+    }
+    let (key, extend) = key.strip_prefix("Shift+").map_or((key, false), |k| (k, true));
+    let id = s.registry.by_shortcut(key).map(|c| c.id).unwrap_or_else(|| panic!("nothing bound to {key}"));
+    run(s, id, if extend { json!({"extend": true}) } else { json!({}) });
+}
+
+/// The equation being edited and the caret in it.
+fn editing(s: &Session) -> Option<(Pos, wordcraft_doc::math_edit::MathPos)> {
+    s.math.as_ref().map(|m| (m.at.clone(), m.pos.clone()))
+}
+
+/// Presses `key` until the caret is out of the equation (at most 10 times).
+fn arrow_out(s: &mut Session, key: &str) {
+    for _ in 0..10 {
+        if s.math.is_none() {
+            return;
+        }
+        arrow(s, key);
+    }
+    panic!("{key} didn't leave the equation");
+}
+
+/// "a", an equation `x+y`, "b"; or with `n` equations side by side.
+fn equations_between_a_and_b(n: usize) -> Session {
+    let mut s = typed("ab");
+    for _ in 0..n {
+        run(&mut s, "caret.set", json!({"pos": Pos::body(0, 1)}));
+        run(&mut s, "insert.equation", json!({"linear": "x+y", "edit": false}));
+    }
+    s
+}
+
+#[test]
+fn left_and_right_keys_step_into_and_out_of_an_equation() {
+    use wordcraft_doc::math_edit::{MathPos, units};
+    let e = wordcraft_doc::para::OBJ.len_utf8();
+    let end = MathPos::new(Vec::new(), units(&wordcraft_doc::math::parse_linear("x+y")));
+    let mut s = equations_between_a_and_b(1);
+    // Right from "a|" opens the equation at its start; leaving it past its end puts the caret
+    // after it, so the next Right goes on over "b".
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 1)}));
+    arrow(&mut s, "Right");
+    assert_eq!(editing(&s), Some((Pos::body(0, 1), MathPos::default())));
+    arrow_out(&mut s, "Right");
+    assert_eq!(s.sel.focus, Pos::body(0, 1 + e));
+    arrow(&mut s, "Right");
+    assert_eq!((editing(&s), s.sel.focus.clone()), (None, Pos::body(0, 2 + e)));
+    // Left over "b", then into the equation at its end; out past its start, then on over "a".
+    arrow(&mut s, "Left");
+    assert_eq!((editing(&s), s.sel.focus.clone()), (None, Pos::body(0, 1 + e)));
+    arrow(&mut s, "Left");
+    assert_eq!(editing(&s), Some((Pos::body(0, 1), end)));
+    arrow_out(&mut s, "Left");
+    assert_eq!(s.sel.focus, Pos::body(0, 1));
+    arrow(&mut s, "Left");
+    assert_eq!((editing(&s), s.sel.focus.clone()), (None, Pos::body(0, 0)));
+    // Shift+Right selects over the equation as one character, as before.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 1)}));
+    arrow(&mut s, "Shift+Right");
+    assert_eq!((editing(&s), s.sel.anchor.clone(), s.sel.focus.clone()), (None, Pos::body(0, 1), Pos::body(0, 1 + e)));
+    // With text selected, Left and Right only collapse the selection, even when its moving end is
+    // next to the equation.
+    arrow(&mut s, "Left");
+    assert_eq!((editing(&s), s.sel.anchor.clone(), s.sel.focus.clone()), (None, Pos::body(0, 1), Pos::body(0, 1)));
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    arrow(&mut s, "Shift+Right");
+    arrow(&mut s, "Right");
+    assert_eq!((editing(&s), s.sel.anchor.clone(), s.sel.focus.clone()), (None, Pos::body(0, 1), Pos::body(0, 1)));
+}
+
+#[test]
+fn right_out_of_an_equation_steps_into_the_one_beside_it() {
+    let e = wordcraft_doc::para::OBJ.len_utf8();
+    let mut s = equations_between_a_and_b(2);
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 1)}));
+    arrow(&mut s, "Right");
+    assert_eq!(editing(&s).map(|(at, _)| at), Some(Pos::body(0, 1)), "into the first one");
+    arrow_out(&mut s, "Right");
+    assert_eq!(s.sel.focus, Pos::body(0, 1 + e), "between the two equations");
+    arrow(&mut s, "Right");
+    assert_eq!(editing(&s), Some((Pos::body(0, 1 + e), wordcraft_doc::math_edit::MathPos::default())), "into the second one");
+    arrow_out(&mut s, "Right");
+    arrow(&mut s, "Left");
+    assert_eq!(editing(&s).map(|(at, _)| at), Some(Pos::body(0, 1 + e)), "Left goes back into the second one");
+    arrow_out(&mut s, "Left");
+    arrow(&mut s, "Left");
+    assert_eq!(editing(&s).map(|(at, _)| at), Some(Pos::body(0, 1)), "then into the first");
+}
+
 #[test]
 fn two_initial_capitals_are_corrected() {
     let s = typed("the WOrd and THe end, not IDs or CDs. TV is fine ");

@@ -31,12 +31,14 @@ struct ElsewhereContext {
 
 impl Session {
     fn leave_math_for_command(&mut self, id: &str) {
+        self.math_left = false;
         if self.math.is_some()
             && (id.starts_with("text.") || id.starts_with("caret.") || id.starts_with("select.") || id.starts_with("edit.paste"))
             && let Some(m) = self.math.take()
         {
             let off = m.at.off + wordcraft_doc::para::OBJ.len_utf8();
             self.sel = Selection::caret(Pos { off, ..m.at });
+            self.math_left = true;
         }
     }
 
