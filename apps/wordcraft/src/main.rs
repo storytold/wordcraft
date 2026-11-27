@@ -27,6 +27,8 @@ mod prefs;
 mod process_identity;
 mod profile_root;
 mod region;
+#[cfg(any(windows, test))]
+mod taskbar_pins;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -477,6 +479,12 @@ fn main() -> eframe::Result {
     {
         std::process::exit(i32::from(result.is_err()));
     }
+    // Windows: the installer runs this right after an install, to mend a taskbar pin of the old
+    // advertised shortcut (`taskbar_pins`).
+    #[cfg(windows)]
+    if std::env::args_os().nth(1).is_some_and(|a| a == "--repair-taskbar-pins") {
+        std::process::exit(i32::from(taskbar_pins::repair().is_err()));
+    }
     // Linux: before anything reads another program's AppImage variables, or a thread starts (#5653).
     #[cfg(target_os = "linux")]
     let start_over_failed = appimage_env::drop_inherited();
@@ -600,6 +608,19 @@ fn main() -> eframe::Result {
             },
             None => logger.stderr_only(),
         }
+    }
+    // Also at every start, in case the installer's run was skipped: one folder listing when there
+    // is nothing to mend. Only from the installed exe: a build run from elsewhere would take the
+    // pin over.
+    #[cfg(windows)]
+    match std::env::current_exe()
+        .is_ok_and(|e| taskbar_pins::is_installed_exe(&e, &taskbar_pins::install_folders()))
+        .then(taskbar_pins::repair)
+        .unwrap_or(Ok(0))
+    {
+        Ok(0) => {}
+        Ok(n) => log::info!("mended {n} taskbar or Start pin(s) of the old WordCraft shortcut"),
+        Err(e) => log::warn!("couldn't mend the taskbar pins of the old WordCraft shortcut: {e}"),
     }
     // A Nightly window always carries its own id; a stable one keeps the Flatpak sandbox's id
     // when it runs inside one (so docks match the flatpak's desktop file).
