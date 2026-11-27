@@ -762,7 +762,10 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     let before = (state.zoom, state.fit);
     if app.canvas.nav_to_caret {
         app.canvas.nav_to_caret = false;
-        let c = layout.caret_on(&preview_sel(app).unwrap_or(app.session.sel_ends()).focus, app.session.page_hint);
+        let c = preview_sel(app).map_or_else(
+            || app.session.caret_geometry(layout, &app.session.sel_ends().focus),
+            |sel| layout.caret_on(&sel.focus, app.session.page_hint),
+        );
         if let Some(c) = c
             && let Some(page) = layout.pages.get(c.page)
         {
@@ -777,7 +780,8 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     let held = hold_scroll_for_preview(app, &mut state.offset);
     let started_at = state.offset.1;
 
-    let caret = layout.caret_on(&preview_sel(app).unwrap_or(app.session.sel_ends()).focus, app.session.page_hint);
+    let caret = preview_sel(app)
+        .map_or_else(|| app.session.caret_geometry(layout, &app.session.sel_ends().focus), |sel| layout.caret_on(&sel.focus, app.session.page_hint));
     if let Some(c) = &caret
         && !app.session.selects_whole_story()
     {
@@ -797,7 +801,8 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     let source = source::WordPages::new(app, layout, dim_body, hidden);
     // The describer owns its snapshot, as the source does, so the page view can hold it while the body edits the app.
     let described = preview_sel(app).unwrap_or(app.session.sel_ends()).clone();
-    let describer = crate::a11y::DocumentDescriber::new(source.doc(), layout.clone(), (described.anchor.clone(), described.focus.clone()));
+    let describer = crate::a11y::DocumentDescriber::new(source.doc(), layout.clone(), (described.anchor.clone(), described.focus.clone()))
+        .with_line_end(preview_sel(app).is_none().then(|| app.session.line_end.clone()).flatten());
     let regions = crate::table_pen::regions(app, layout);
 
     let mut tool_response: Option<ToolHostResponse> = None;
@@ -854,7 +859,10 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
                 caret::paint_caret(app, ui, pass, body, Env::of(ui).motion.mode);
                 // This pass's keys and press have moved the caret: follow it, not the one from before the pass.
                 let fresh = app.session.layout();
-                caret_after = fresh.caret_on(&preview_sel(app).unwrap_or(app.session.sel_ends()).focus, app.session.page_hint);
+                caret_after = preview_sel(app).map_or_else(
+                    || app.session.caret_geometry(&fresh, &app.session.sel_ends().focus),
+                    |sel| fresh.caret_on(&sel.focus, app.session.page_hint),
+                );
                 if app.canvas.scroll_to_caret
                     && !held
                     && let Some(c) = &caret_after

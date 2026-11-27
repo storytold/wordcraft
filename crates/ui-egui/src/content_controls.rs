@@ -64,7 +64,7 @@ fn frames(app: &WordApp, layout: &DocLayout, body: &PageBody<'_>, r: &ControlRan
         }
     }
     if out.is_empty()
-        && let Some(c) = layout.caret_on(&a, app.session.page_hint)
+        && let Some(c) = app.session.caret_geometry(layout, &a)
         && let Some(page) = body.pages.iter().find(|p| p.page == c.page)
     {
         let top = page.to_screen(Point::new(f64::from(c.x), f64::from(c.top)));

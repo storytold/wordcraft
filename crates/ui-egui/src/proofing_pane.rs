@@ -445,4 +445,22 @@ mod tests {
         a.run("file.new", json!({})).unwrap();
         assert!(a.spelling_review.is_none());
     }
+
+    #[test]
+    fn typing_a_replacement_prepares_its_fonts_again() {
+        let mut a = app("");
+        a.spelling_review = Some(SpellingForm::new(&a, json!({"text": "wrod", "suggestions": []})));
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| a);
+        h.run_steps(6);
+        h.get_by_label("Change…").click();
+        h.run_steps(2);
+        assert!(h.state().spelling_review.as_ref().unwrap().manual, "the replacement field is visible");
+        let before = h.ctx.fonts(|f| f.discovered_fonts().len());
+        let supported = wordcraft_fonts::FontDb::global().fallback_for('ខ', u32::MAX).is_some_and(|f| f.data().len() <= 16 << 20);
+        h.state_mut().spelling_review.as_mut().unwrap().replacement = if supported { "\u{1781}" } else { "replacement" }.into();
+        h.run_steps(2);
+        if supported {
+            assert!(h.ctx.fonts(|f| f.discovered_fonts().len()) > before, "the changed replacement discovers its fallback");
+        }
+    }
 }

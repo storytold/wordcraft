@@ -4208,6 +4208,84 @@ fn a_drop_behind_a_modal_dialog_does_nothing() {
     let _ = std::fs::remove_file(&path);
 }
 
+fn document_ui_faces(ctx: &egui::Context) -> usize {
+    ctx.fonts(|f| f.discovered_fonts().iter().filter(|face| face.name.starts_with("wordcraft-document-")).count())
+}
+
+#[test]
+fn khmer_proofing_context_borrows_faces_only_when_shown() {
+    let mut h = harness(app());
+    h.run_steps(6);
+    let before = document_ui_faces(&h.ctx);
+    let supported = wordcraft_fonts::FontDb::global().fallback_for('ភ', u32::MAX).is_some_and(|f| f.data().len() <= 16 << 20);
+    // Without an installed face this host can exercise the lazy Latin path; native acceptance supplies Khmer fonts.
+    if let Some(face) = wordcraft_fonts::FontDb::global().fallback_for('ភ', u32::MAX) {
+        let name = format!("wordcraft-document-{}", face.id());
+        assert!(!h.ctx.fonts(|f| f.discovered_fonts().iter().any(|f| f.name == name)), "Latin windows do not preload the Khmer face");
+    }
+    let word = if supported { "ភាសា" } else { "word" };
+    let form = crate::proofing_pane::SpellingForm::new(h.state(), json!({"text": word, "suggestions": [word]}));
+    h.state_mut().spelling_review = Some(form);
+    h.run_steps(2);
+    if supported {
+        assert!(document_ui_faces(&h.ctx) > before, "visible proofing text borrows its document face");
+    }
+    let count = document_ui_faces(&h.ctx);
+    h.run_steps(2);
+    assert_eq!(document_ui_faces(&h.ctx), count, "unchanged proofing text does not reload faces");
+}
+
+/// A fresh popup's first paint must have fallback glyphs, with no spelling pane opened.
+#[test]
+fn khmer_context_menu_loads_fonts_before_its_first_paint() {
+    if !wordcraft_fonts::FontDb::global().fallback_for('ស', u32::MAX).is_some_and(|f| f.data().len() <= 16 << 20) {
+        return;
+    }
+    let mut h = harness(app());
+    h.run_steps(6);
+    assert!(h.state().spelling_review.is_none());
+    let before = document_ui_faces(&h.ctx);
+    h.state_mut().canvas.context_issue = Some(json!({"message": "អក\u{17d2}ខរាវិរុទ\u{17d2}ធ", "suggestions": ["សម\u{17d2}ដី"]}));
+    h.state_mut().canvas.context_menu_open = true;
+    h.state_mut().canvas.context_menu_at = Some(egui::pos2(300.0, 300.0));
+    h.run_steps(2);
+    assert!(h.query_by_label("សម\u{17d2}ដី").is_some(), "the menu displays its Khmer replacement");
+    assert!(h.query_by_label("អក\u{17d2}ខរាវិរុទ\u{17d2}ធ").is_some(), "the message also has a Khmer font");
+    assert!(h.state().spelling_review.is_none());
+    let count = document_ui_faces(&h.ctx);
+    assert!(count > before, "the popup discovers its fallback without a pane");
+    h.step();
+    assert_eq!(document_ui_faces(&h.ctx), count, "repainting does not reload the face");
+}
+
+#[test]
+fn context_menu_fonts_cover_messages_suggestions_and_synonyms_independently() {
+    let supported = wordcraft_fonts::FontDb::global().fallback_for('ស', u32::MAX).is_some_and(|f| f.data().len() <= 16 << 20);
+    let word = if supported { "សម\u{17d2}ដី" } else { "word" };
+    for (issue, synonyms, label) in [
+        (json!({"message": word, "suggestions": []}), json!([]), word),
+        (json!({"message": "Preferred spelling", "suggestions": [word]}), json!([]), word),
+        (serde_json::Value::Null, json!([word]), "Synonyms"),
+    ] {
+        let mut h = harness(app());
+        h.run_steps(6);
+        h.state_mut().canvas.context_issue = Some(issue);
+        h.state_mut().canvas.context_synonyms = Some(synonyms);
+        h.state_mut().canvas.context_menu_open = true;
+        h.state_mut().canvas.context_menu_at = Some(egui::pos2(300.0, 300.0));
+        h.run_steps(2);
+        assert!(h.query_by_label(label).is_some(), "each context surface is available independently");
+        if label == "Synonyms" {
+            h.get_by_label("Synonyms").click();
+            h.run_steps(2);
+            assert!(h.query_by_label(word).is_some(), "the independent synonyms surface draws its own text");
+        }
+        if supported {
+            assert!(document_ui_faces(&h.ctx) > 0, "the independently visible text has a document fallback");
+        }
+    }
+}
+
 #[test]
 fn format_painter_single_click_formats_the_target_word_and_finishes() {
     let mut a = app();

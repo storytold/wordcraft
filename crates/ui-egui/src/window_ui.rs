@@ -31,6 +31,7 @@ pub(crate) struct WindowUi {
     pub(crate) nav_search_focus: bool,
     pub(crate) escape_free: bool,
     pub(crate) status_counts: (u64, crate::StatusCounts),
+    pub(crate) selected_word_count: crate::chrome::SelectedWordCount,
     /// Per window, as each window shows its own layout: one shared list would be read again
     /// on every frame of every window.
     pub(crate) missing_fonts: chrome::MissingFontsMemo,
@@ -85,6 +86,7 @@ impl WindowUi {
             nav_search_focus: false,
             escape_free: false,
             status_counts: NOT_COUNTED,
+            selected_word_count: Default::default(),
             missing_fonts: Default::default(),
             export_error: String::new(),
             last_autosave: 0.0,
@@ -199,6 +201,7 @@ impl WordApp {
             nav_search_focus,
             escape_free,
             status_counts,
+            selected_word_count,
             missing_fonts,
             export_error,
             last_autosave,
@@ -298,6 +301,7 @@ impl WordApp {
             nav_search_focus,
             escape_free,
             status_counts,
+            selected_word_count,
             missing_fonts,
             export_error,
             last_autosave,

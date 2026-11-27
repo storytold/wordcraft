@@ -80,7 +80,7 @@ fn page_in_view(app: &mut WordApp) -> (usize, usize) {
     } else if app.session.selects_whole_story() {
         app.session.page_hint.min(last) + 1
     } else {
-        l.caret_on(&app.session.sel.focus, app.session.page_hint).map(|c| c.page + 1).unwrap_or(1)
+        app.session.caret_geometry(&l, &app.session.sel.focus).map(|c| c.page + 1).unwrap_or(1)
     };
     (page, l.pages.len())
 }
@@ -126,7 +126,7 @@ fn count(app: &mut WordApp, ui: &mut Ui) {
     let text = if app.session.sel.is_collapsed() || crate::objects::selected(app).is_some() {
         status_count_text(unit, counts.in_unit(unit), None)
     } else {
-        let selected = crate::count_in_unit(&app.session.selected_text(), unit);
+        let selected = app.selected_word_count.get(&app.session, unit);
         status_count_text(unit, counts.in_unit(unit), Some(selected))
     };
     let out = item(ui, text, None);

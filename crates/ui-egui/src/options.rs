@@ -492,6 +492,7 @@ impl PreferencesModel for OptionsModel<'_> {
                             RowKind::Text(prefs.dictionaries_folder.as_deref().unwrap_or("")),
                         )
                         .help(tl!("Hunspell .aff and .dic files here (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) are used before the system's.\nAn installed Language pack is used after this folder.")),
+                        custom("language.khmerStatus", tl!("Khmer")),
                         custom("language.dictionaryFiles", tl!("Dictionary files")),
                     ],
                 ),
@@ -720,6 +721,15 @@ impl PreferencesModel for OptionsModel<'_> {
                 crate::language_packs::your_languages(self.app, ui);
                 false
             }
+            "language.khmerStatus" => {
+                let text = if wordcraft_engine::proof::khmer::data_available() {
+                    tl!("Khmer: built-in Aksara dictionary and preferred-spelling rules (available offline).")
+                } else {
+                    tl!("Khmer proofing data was not included in this build.")
+                };
+                Text::new(text).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
+                false
+            }
             "language.dictionaryFiles" => {
                 dictionary_files(ui);
                 false
@@ -853,7 +863,10 @@ fn language_name(lang: wordcraft_engine::proof::ProofLang) -> &'static str {
         ProofLang::Tr => tl!("Turkish"),
         ProofLang::Ru => tl!("Russian"),
         ProofLang::Cs => tl!("Czech"),
+        ProofLang::Km => tl!("Khmer"),
         ProofLang::Id => tl!("Indonesian"),
+        ProofLang::Gu => tl!("Gujarati"),
+        ProofLang::Hi => tl!("Hindi"),
         ProofLang::Es => tl!("Spanish (Spain)"),
         ProofLang::EsMx => tl!("Spanish (Mexico)"),
         ProofLang::Es419 => tl!("Spanish (Latin America)"),

@@ -33,11 +33,11 @@ wordcraft-pdf = { path = "crates/pdf" }
 # Proofing is craft-libs' craft-proof (it was crates/proof); its Language data is craft-i18n's
 # language-data/, embedded from CRAFT_I18N_DIR (craft-i18n.rev). The package keeps the
 # `wordcraft-proof` name here so `wordcraft_proof::` paths are unchanged.
-# craft-proof is storytold/craft-libs main at 93dac78c. That tree has #590 (ca-ES-valencia
-# reads the ca-valencia pack), #589 (French elision suggestions first), #497 (flag-based
-# compounding), #496 (review follow-ups, en-AU) and the merged #482–#490/#495 stack; the font
-# store's `language-pack` kind is #486 (CP4.1).
-wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "0b8bbaf4c842da2d47de7b3fddd7170ba6115541", version = "=0.1.0" }
+# Khmer support is storytold/craft-libs#551, synchronized with current main.
+# Companion pin remains pending its merge; see docs/khmer-integration.md.
+wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "314997691d8fe6bd05b892d6c654dfcdd6009396", version = "=0.1.0" }
+# Document word counts share the boundary model without proofing packs.
+craft-khmer = { git = "https://github.com/storytold/craft-libs", rev = "314997691d8fe6bd05b892d6c654dfcdd6009396", version = "=0.1.0" }
 craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "0b8bbaf4c842da2d47de7b3fddd7170ba6115541", version = "=0.1.0" }
 craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "0b8bbaf4c842da2d47de7b3fddd7170ba6115541", version = "=0.1.0" }
 craft-ssip = { git = "https://github.com/storytold/craft-libs", rev = "0b8bbaf4c842da2d47de7b3fddd7170ba6115541", version = "=0.1.0" }

@@ -324,7 +324,7 @@ impl WordForm for ManualForm {
 // Language
 
 /// Proofing languages offered, by BCP 47 tag, with their English names (translated for display).
-pub const LANGUAGES: [(&str, &str); 38] = [
+pub const LANGUAGES: [(&str, &str); 39] = [
     ("en-US", "English (United States)"),
     ("en-GB", "English (United Kingdom)"),
     ("en-AU", "English (Australia)"),
@@ -361,6 +361,7 @@ pub const LANGUAGES: [(&str, &str); 38] = [
     ("zh-TW", "Chinese (Traditional)"),
     ("ko-KR", "Korean"),
     ("id-ID", "Indonesian"),
+    ("km-KH", "Khmer"),
     ("ar-SA", "Arabic"),
     ("he-IL", "Hebrew"),
 ];

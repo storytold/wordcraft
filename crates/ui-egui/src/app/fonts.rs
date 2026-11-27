@@ -1,4 +1,3 @@
-#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -21,7 +20,8 @@ pub static CRAFT_FONTS: &[EmbeddedFace] = include!(concat!(env!("OUT_DIR"), "/cr
 pub fn ui_fonts(lang: Lang) -> UiFonts<'static> {
     let codes: Vec<&str> = Lang::all().map(Lang::code).collect();
     let os_locale = wordcraft_engine::system_locale();
-    let fonts = UiFonts::new(&I18nScripts).craft_faces(CRAFT_FONTS).languages(&codes).ui_language(lang.code());
+    let provider = DocumentFontProvider { system: craft::ui::fonts::system_font_provider(os_locale.unwrap_or(lang.code())) };
+    let fonts = UiFonts::new(&I18nScripts).craft_faces(CRAFT_FONTS).languages(&codes).ui_language(lang.code()).system_provider(Arc::new(provider));
     let fonts = match os_locale {
         Some(locale) => fonts.os_locale(locale),
         None => fonts,
@@ -31,11 +31,33 @@ pub fn ui_fonts(lang: Lang) -> UiFonts<'static> {
     fonts
 }
 
+/// Document fonts, including user-loaded faces, remain available to dynamic UI text.
+/// The framework caches discoveries per family/character, and only asks after its own faces miss.
+struct DocumentFontProvider {
+    system: Option<Arc<dyn egui::FontProvider>>,
+}
+impl egui::FontProvider for DocumentFontProvider {
+    fn font_for(&self, request: &egui::FallbackRequest<'_>) -> Option<egui::FontInsert> {
+        let chars: Vec<char> = request.cluster.chars().take(128).collect();
+        let face =
+            wordcraft_fonts::FontDb::global().fallback_for_run(&chars, u32::MAX, false, false).filter(|face| face.data().len() <= MAX_FALLBACK_BYTES);
+        if let Some(face) = face {
+            let mut data = egui::FontData::from_owned(face.data().to_vec());
+            data.index = face.index();
+            return Some(egui::FontInsert::new(
+                &format!("wordcraft-document-{}", face.id()),
+                data,
+                vec![egui::InsertFontFamily { family: request.family.clone(), priority: egui::FontPriority::Lowest }],
+            ));
+        }
+        self.system.as_ref()?.font_for(request)
+    }
+}
+
 #[cfg(test)]
 /// One character of each script the app ships, to find the document fonts that cover it.
 const FALLBACK_SAMPLES: [char; 6] = ['ع', 'א', 'ก', 'ა', 'ա', '汉'];
 
-#[cfg(test)]
 /// The largest document face added to the interface stack.
 const MAX_FALLBACK_BYTES: usize = 16 << 20;
 
@@ -85,6 +107,9 @@ impl WordApp {
             return;
         }
         self.font_generation = generation;
+        // Font providers cache misses as well as faces: a newly added document font
+        // must get a fresh lookup for text that was already on screen.
+        ui_fonts(Lang::from_pref(&self.ui.language)).install(ctx);
         self.session.relayout();
         self.previews.fonts_changed();
         ctx.request_repaint();

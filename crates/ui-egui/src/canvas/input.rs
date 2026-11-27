@@ -145,15 +145,18 @@ impl<'a> PageTextTool<'a> {
                 app.session.page_hint = page;
                 app.canvas.glide.restart(craft::platform::clock::monotonic_ms());
             }
-        } else if let Some(pos) = layout.hit(page, x, y, story)
-            && pos != app.session.sel_ends().focus
-        {
-            // Through the command, so from one table cell into another the drag takes whole cells
-            // (Word); straight to the session, as the app's `run` would scroll on every frame.
-            let pj = serde_json::to_value(&pos).unwrap_or_default();
-            let _ = app.session.run("caret.set", &json!({"pos": pj, "extend": true}));
-            app.session.page_hint = page;
-            app.canvas.glide.restart(craft::platform::clock::monotonic_ms());
+        } else if let Some(pos) = layout.hit(page, x, y, story) {
+            let mid = |c: &wordcraft_layout::hit::Caret| (c.top + c.height / 2.0 - y).abs();
+            let upstream = layout
+                .caret_at_line_end(&pos, page)
+                .filter(|c| c.page == page)
+                .is_some_and(|end| layout.caret_on(&pos, page).is_none_or(|start| start.page != end.page || mid(&end) < mid(&start)));
+            if pos != app.session.sel_ends().focus || upstream != (app.session.line_end.as_ref() == Some(&pos)) {
+                let pj = serde_json::to_value(&pos).unwrap_or_default();
+                let _ = app.session.run("caret.set", &json!({"pos": pj, "extend": true, "page": page, "y": y}));
+                app.session.page_hint = page;
+                app.canvas.glide.restart(craft::platform::clock::monotonic_ms());
+            }
         }
     }
 
@@ -304,13 +307,13 @@ pub(crate) fn handle_secondary_selection(app: &mut WordApp, body: &PageBody<'_>,
             return;
         }
         if let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story) {
-            app.session.set_selection(wordcraft_engine::Selection::caret(pos));
+            let _ = app.run("caret.set", json!({"pos": pos, "page": page, "y": y}));
             app.session.page_hint = page;
         }
     }
     match layout.equation_hit(page, x, y, app.session.sel.focus.story) {
         Some((pos, inner)) => {
-            app.session.set_selection(wordcraft_engine::Selection::caret(pos));
+            let _ = app.run("caret.set", json!({"pos": pos, "page": page, "y": y}));
             let _ = app.run("equation.edit", json!({"pos": serde_json::to_value(&inner).unwrap_or_default()}));
             return;
         }
@@ -334,7 +337,7 @@ pub(crate) fn handle_secondary_selection(app: &mut WordApp, body: &PageBody<'_>,
         }
     }
     if let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story) {
-        app.session.set_selection(wordcraft_engine::Selection::caret(pos));
+        let _ = app.run("caret.set", json!({"pos": pos, "page": page, "y": y}));
         app.session.page_hint = page;
     }
 }
@@ -451,7 +454,7 @@ fn handle_primary_press(
         return true;
     }
     app.canvas.column_drag = None;
-    let _ = app.run("caret.set", json!({"pos": pj, "extend": mods.shift}));
+    let _ = app.run("caret.set", json!({"pos": pj, "extend": mods.shift, "page": page, "y": y}));
     // Double-click selects a word, triple-click a paragraph, Ctrl/⌘+click a sentence; holding
     // the button and dragging then extends by whole units (Word, #549).
     let unit = match clicks {

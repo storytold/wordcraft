@@ -36,6 +36,7 @@ pub(crate) struct DocumentDescriber {
     layout: Arc<DocLayout>,
     /// The anchor and focus the caret is drawn from.
     sel: (Pos, Pos),
+    line_end: Option<Pos>,
     /// The caret and the selection's other end, found while describing: a run's handle exists only once
     /// the builder made it.
     selection: Cell<Option<(AccessPosition, AccessPosition)>>,
@@ -47,7 +48,15 @@ impl DocumentDescriber {
     /// Insert › Table's preview shows (#3931) the pages and caret are drawn from the preview copy, so the caller
     /// passes that copy's document and selection, not the real document the preview's layout does not belong to.
     pub(crate) fn new(doc: Arc<Document>, layout: Arc<DocLayout>, sel: (Pos, Pos)) -> Self {
-        DocumentDescriber { doc, layout, sel, selection: Cell::new(None) }
+        DocumentDescriber { doc, layout, sel, line_end: None, selection: Cell::new(None) }
+    }
+}
+
+impl DocumentDescriber {
+    /// The active caret's visual side of a dictionary wrap; previews pass no affinity.
+    pub(crate) fn with_line_end(mut self, line_end: Option<Pos>) -> Self {
+        self.line_end = line_end;
+        self
     }
 }
 
@@ -75,7 +84,16 @@ impl AccessDescriber for DocumentDescriber {
                 }
             }
         }
-        let at = |p: &Pos| if p.story == StoryRef::Body { walk.position(&p.path, p.off) } else { None };
+        let at = |p: &Pos| {
+            if p.story != StoryRef::Body {
+                return None;
+            }
+            self.line_end
+                .as_ref()
+                .filter(|end| *end == p)
+                .and_then(|_| walk.upstream.get(&(p.path.0.clone(), p.off)).copied())
+                .or_else(|| walk.position(&p.path, p.off))
+        };
         let (anchor, focus) = (at(&self.sel.0), at(&self.sel.1));
         self.selection.set(match (focus, anchor) {
             (Some(focus), Some(anchor)) => Some((focus, anchor)),
@@ -134,6 +152,7 @@ struct Walk<'a, 'o> {
     done: HashSet<(Vec<u32>, usize)>,
     /// Per paragraph: (byte offset, text run, character index) of each cluster, in text order.
     offsets: HashMap<Vec<u32>, Vec<(usize, AccessNode, usize)>>,
+    upstream: HashMap<(Vec<u32>, usize), AccessPosition>,
 }
 
 impl<'a, 'o> Walk<'a, 'o> {
@@ -147,6 +166,7 @@ impl<'a, 'o> Walk<'a, 'o> {
             cells: HashMap::new(),
             done: HashSet::new(),
             offsets: HashMap::new(),
+            upstream: HashMap::new(),
         }
     }
 
@@ -341,6 +361,11 @@ impl<'a, 'o> Walk<'a, 'o> {
                 }
             }
             // Offsets that fell into an empty last run point at the end of the last run.
+            if para.wraps_into(li, line.stop)
+                && let Some(&(node, len)) = nodes.last()
+            {
+                self.upstream.insert((path.0.clone(), line.stop), AccessPosition::new(node, len));
+            }
             let entries = self.offsets.entry(path.0.clone()).or_default();
             for (off, run, idx) in map {
                 if let Some(&(node, len)) = nodes.get(run).or(nodes.last()) {
@@ -445,6 +470,42 @@ mod tests {
                 s
             })
             .collect()
+    }
+
+    #[test]
+    fn accesskit_selection_tracks_the_visible_dictionary_wrap_side() {
+        if !wordcraft_engine::proof::khmer::data_available() {
+            return;
+        }
+        let doc = Document::from_text(&"សិស្សានុសិស្សត្រូវបានលើកទឹកចិត្តឱ្យអានសៀវភៅជារៀងរាល់ថ្ងៃ".repeat(12));
+        let mut session = wordcraft_engine::Session::new(doc);
+        let layout = (*session.layout()).clone();
+        let text = &session.doc.para_at(&Pos::body(0, 0)).unwrap().text;
+        let pos = text
+            .char_indices()
+            .find_map(|(off, _)| {
+                let p = Pos::body(0, off);
+                layout.caret_at_line_end(&p, 0).map(|_| p)
+            })
+            .expect("dictionary wrap");
+        let placed: Vec<_> = layout
+            .pages
+            .iter()
+            .enumerate()
+            .map(|(i, p)| PlacedPage::new(i, Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(p.w, p.h)), 1.0, (0.0, p.h)))
+            .collect();
+        let layout = Arc::new(layout);
+        let doc = Arc::new(session.doc.clone());
+        let describe = |line_end| {
+            let describer = DocumentDescriber::new(doc.clone(), layout.clone(), (pos.clone(), pos.clone())).with_line_end(line_end);
+            let mut out = AccessBuilder::new();
+            describer.describe(&placed, &mut out);
+            describer.selection().expect("described selection")
+        };
+        let start = describe(None);
+        let end = describe(Some(pos.clone()));
+        assert_ne!(start.0, end.0, "the same byte offset has different line-run positions");
+        assert_eq!(end.0, end.1, "the collapsed selection stays at the visible line end");
     }
 
     /// The document's selection as the describer reports it for `app`'s whole layout: the character
