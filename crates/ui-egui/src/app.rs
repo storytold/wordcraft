@@ -17,6 +17,8 @@ mod commands;
 mod control;
 mod files;
 pub(crate) use files::Closing;
+#[cfg(test)]
+pub(crate) use files::suggested_stem;
 pub(crate) mod fonts;
 mod frame;
 mod input;
@@ -78,6 +80,7 @@ impl WordApp {
             dialog_hooks,
             dialog_answers,
             edits,
+            edits_gesture,
             keytips_active,
             options_state,
             print,
@@ -165,6 +168,7 @@ impl WordApp {
             dialog_hooks,
             dialog_answers,
             edits,
+            edits_gesture,
             keytips_active,
             options_state,
             print,
@@ -315,6 +319,7 @@ impl WordApp {
     pub fn logic(&mut self, ctx: &egui::Context) {
         let lang = i18n::Lang::from_pref(&self.ui.language);
         if self.ctx.is_none() {
+            theme::set_dark_text_curve(ctx);
             self.ctx = Some(ctx.clone());
         }
         updates_ui::tick(self, ctx);
