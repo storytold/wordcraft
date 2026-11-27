@@ -571,9 +571,13 @@ impl WordApp {
                 json!({"tab": self.ui.tab})
             }
             "ui.backstage" => {
+                let pg = s("page");
+                if pg == Some("close") && p.get("value").and_then(Value::as_bool) != Some(false) {
+                    return Some(self.close_document(p));
+                }
                 self.ui.backstage = p.get("value").and_then(Value::as_bool).unwrap_or(!self.ui.backstage);
-                if let Some(pg) = s("page") {
-                    self.ui.backstage_page = pg.into();
+                if let Some(pg) = pg.filter(|p| *p != "close") {
+                    crate::backstage::go_to_page(self, pg);
                 }
                 if let Some(pane) = s("pane") {
                     self.ui.options_pane = pane.into();
@@ -1284,6 +1288,9 @@ fn flushes_comment_drafts(id: &str, params: &Value) -> bool {
 /// User commands that close the shown document: Close. New, Open, restoring a recovered copy,
 /// Envelopes, Labels, Finish & Merge and Print Documents open their document beside it (Open and restoring
 /// replace only an untouched blank document, which has nothing to lose).
-pub(crate) fn discards_document(id: &str, _params: &Value) -> bool {
+pub(crate) fn discards_document(id: &str, params: &Value) -> bool {
     id == "file.close"
+        || (id == "ui.backstage"
+            && params.get("page").and_then(Value::as_str) == Some("close")
+            && params.get("value").and_then(Value::as_bool) != Some(false))
 }

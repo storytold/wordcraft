@@ -5,9 +5,10 @@ mod new_page;
 mod pages;
 mod thumbs;
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 
 use craft::behavior::IconId;
+use craft::keymap::CommandRef;
 use craft::theme::Variant;
 use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
@@ -158,7 +159,6 @@ fn activated<K, E>(events: Vec<CollectionEvent<K, E>>) -> Vec<K> {
 /// the menu holds the app.
 #[derive(Default)]
 struct MenuChoice {
-    page: RefCell<Option<&'static str>>,
     about: Cell<bool>,
     discord: Cell<bool>,
 }
@@ -208,9 +208,6 @@ pub(crate) fn show(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
             page_body(ui, app, &current);
         });
     });
-    if let Some(id) = choice.page.take() {
-        go_to_page(app, id);
-    }
     if choice.about.get() {
         let _ = crate::dialogs::open(app, "about", &json!({}));
     }
@@ -268,14 +265,14 @@ fn side_menu(ui: &mut Ui, band: f32, current: &str, has_document: bool, show_dis
             );
         })
         .show(ui, |ui, _| {
-            let _ = inspect::record(ui, egui::Id::unique("wordcraft-backstage-pages"), |ui| {
+            let _ = inspect::record(ui, crate::keytips::backstage_region(), |ui| {
                 // The rows are the side menu place's: production's 38 pt rows of 14 pt names.
                 with_env(
                     ui,
                     |overrides| {
                         overrides.values.set(ControlPlace::SideMenu);
                     },
-                    |ui| page_rows(ui, current, has_document, choice),
+                    |ui| page_rows(ui, current, has_document),
                 );
             });
         });
@@ -303,12 +300,13 @@ fn footer_links(ui: &mut Ui, show_discord: bool, choice: &MenuChoice) {
 }
 
 /// The side menu's page rows, one full-width button per page.
-fn page_rows(ui: &mut Ui, current: &str, has_document: bool, choice: &MenuChoice) {
+fn page_rows(ui: &mut Ui, current: &str, has_document: bool) {
     for (id, name, icon) in PAGES {
         // No document open (#1129): Info, Save, Save As, Print and Export are greyed out.
         let on = has_document || works_without_document(id);
-        let row = Button::new(label(name))
+        let _ = Button::new(label(name))
             .id_salt(("backstage-page", id))
+            .command(CommandRef::with_params("ui.backstage", json!({ "value": true, "page": id })))
             .icon(crate::icons::spec(icon))
             .variant(Variant::GHOST)
             .sizing(Sizing::FillWidth)
@@ -317,9 +315,6 @@ fn page_rows(ui: &mut Ui, current: &str, has_document: bool, choice: &MenuChoice
             .selected(current == id)
             .enabled(on)
             .show(ui);
-        if clicked(&row) {
-            *choice.page.borrow_mut() = Some(id);
-        }
     }
 }
 
@@ -337,21 +332,16 @@ pub(crate) fn go_to_page(app: &mut WordApp, id: &str) {
             app.ui.backstage_page = "saveAs".into();
         }
         "save" => {
-            let r = app.run("file.save", json!({}));
+            let r = if app.user_origin { app.run("file.save", json!({})) } else { app.execute("file.save", json!({})) };
             if r.is_ok_and(|v| v.get("saved").and_then(serde_json::Value::as_bool) == Some(true) || v.get("downloaded").is_some()) {
                 app.ui.backstage = false;
                 app.canvas.focus_page_after_pass();
-            } else {
+            } else if app.user_origin {
                 app.ui.backstage_page = "saveAs".into();
             }
         }
         "saveAs" => {
             app.ui.backstage_page = "saveAs".into();
-        }
-        // Not a page: `file.close` asks Save / Don't Save / Cancel first when there
-        // are unsaved changes, and Cancel leaves the Backstage where it was.
-        "close" => {
-            let _ = app.run("file.close", json!({}));
         }
         _ => app.ui.backstage_page = id.into(),
     }

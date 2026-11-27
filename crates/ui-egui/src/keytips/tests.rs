@@ -450,6 +450,146 @@ fn alt_then_q_opens_search() {
     assert!(h.state().dialog_host.open_dialogs().is_empty(), "Q does not open the Search dialog while Backstage is open");
 }
 
+/// #4960: Alt (or F10), then F opens the Backstage with painted badges on its pages; Alt, F, P
+/// (and the older Alt, F, V alias) open the Print page.
+#[test]
+fn file_keytips_reach_the_backstage_pages() {
+    let fast_harness = |a: WordApp| {
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1024.0, 600.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        crate::test_harness::frame(&mut h);
+        let ctx = h.ctx.clone();
+        h.state_mut().canvas.focus_page(&ctx);
+        crate::test_harness::frame(&mut h);
+        h
+    };
+
+    let activate_and_file = |h: &mut egui_kittest::Harness<'static, WordApp>, use_alt: bool| {
+        if use_alt && !cfg!(target_os = "macos") {
+            let alt = egui::Modifiers { alt: true, ..Default::default() };
+            h.input_mut().events.extend([key_event(egui::Key::AltLeft, true, egui::Modifiers::NONE), egui::Event::ModifiersChanged(alt)]);
+            crate::test_harness::frame(h);
+            h.input_mut().events.extend([key_event(egui::Key::AltLeft, false, alt), egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
+            crate::test_harness::frame(h);
+        } else {
+            h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
+            crate::test_harness::frame(h);
+        }
+        assert!(h.state().keytips_active, "activating keytips shows tab badges");
+
+        h.input_mut().events.extend([key_event(egui::Key::F, true, egui::Modifiers::NONE), egui::Event::Text("f".into())]);
+        crate::test_harness::frames(h, 2);
+        assert!(h.state().ui.backstage, "F opens the Backstage");
+        assert!(h.state().keytips_active, "Backstage keytips activate");
+    };
+
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::held());
+    let host = craft::host::Host::builder(crate::APP).files(files.clone()).build();
+    let mut h = fast_harness(app().with_host(std::sync::Arc::new(host)));
+
+    // Painted badges stay visible while waiting and cover every page in KEYTIPS (without drawing V).
+    activate_and_file(&mut h, true);
+    let badges = painted_texts(&h.output().shapes);
+    for (page, letter) in crate::backstage::KEYTIPS {
+        assert!(badges.iter().any(|text| text == letter), "missing painted badge {letter:?} for {page}: {badges:?}");
+    }
+    assert!(!badges.iter().any(|text| text == "V"), "V alias fires without painting a duplicate Print badge: {badges:?}");
+    crate::test_harness::frame(&mut h);
+    assert!(h.state().keytips_active, "Backstage keytip badges stay active while waiting");
+    assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "F did not type into the document");
+
+    // Unmapped letters do not navigate, type, or dismiss keytips; Escape ends the badges while leaving Backstage open.
+    let page = h.state().ui.backstage_page.clone();
+    h.input_mut().events.extend([key_event(egui::Key::Q, true, egui::Modifiers::NONE), egui::Event::Text("q".into())]);
+    crate::test_harness::frames(&mut h, 2);
+    assert_eq!((h.state().keytips_active, h.state().ui.backstage, h.state().ui.backstage_page.as_str()), (true, true, page.as_str()));
+    assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "unmapped key does not type into the document");
+
+    h.input_mut().events.push(key_event(egui::Key::Escape, true, egui::Modifiers::NONE));
+    crate::test_harness::frames(&mut h, 2);
+    assert_eq!((h.state().keytips_active, h.state().ui.backstage, h.state().ui.backstage_page.as_str()), (false, true, page.as_str()));
+
+    for (second, text, page) in
+        [(egui::Key::P, "p", "print"), (egui::Key::V, "v", "print"), (egui::Key::A, "a", "saveAs"), (egui::Key::T, "t", "options")]
+    {
+        // Leave Backstage before starting the next F10, F sequence.
+        h.state_mut().run("ui.backstage", serde_json::json!({"value": false})).unwrap();
+        assert!(!h.state().ui.backstage);
+
+        activate_and_file(&mut h, false);
+        h.input_mut().events.extend([key_event(second, true, egui::Modifiers::NONE), egui::Event::Text(text.into())]);
+        crate::test_harness::frames(&mut h, 2);
+        assert_eq!((h.state().ui.backstage, h.state().ui.backstage_page.as_str()), (true, page), "{second:?}");
+        assert!(!h.state().keytips_active, "badge letter completes and ends keytips");
+        assert!(files.requests().is_empty(), "no native file picker requested");
+        assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "{second:?} did not type into the document");
+    }
+}
+
+#[test]
+fn backstage_save_and_close_keytips_on_clean_document() {
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::held());
+    let host = craft::host::Host::builder(crate::APP).files(files.clone()).build();
+    let mut h = harness(app().with_host(std::sync::Arc::new(host)));
+
+    let open_file = |h: &mut egui_kittest::Harness<'static, WordApp>| {
+        h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
+        crate::test_harness::frame(h);
+        h.input_mut().events.extend([key_event(egui::Key::F, true, egui::Modifiers::NONE), egui::Event::Text("f".into())]);
+        crate::test_harness::frames(h, 2);
+        assert!(h.state().ui.backstage && h.state().keytips_active);
+    };
+
+    // Unnamed Save (`S`) redirects to saveAs without opening a file dialog.
+    open_file(&mut h);
+    h.input_mut().events.extend([key_event(egui::Key::S, true, egui::Modifiers::NONE), egui::Event::Text("s".into())]);
+    crate::test_harness::frames(&mut h, 2);
+    assert_eq!((h.state().ui.backstage, h.state().ui.backstage_page.as_str()), (true, "saveAs"));
+    assert!(!h.state().keytips_active);
+    assert!(!h.state().file_dialog_open(), "unnamed Save redirects to saveAs without opening a file dialog");
+    assert!(files.requests().is_empty(), "no native file picker requested");
+
+    // Close (`C`) closes a clean document.
+    h.state_mut().run("ui.backstage", serde_json::json!({"value": false})).unwrap();
+    open_file(&mut h);
+    h.input_mut().events.extend([key_event(egui::Key::C, true, egui::Modifiers::NONE), egui::Event::Text("c".into())]);
+    crate::test_harness::frames(&mut h, 2);
+    assert!(!h.state().has_document(), "Alt/F10, F, C closes an untouched document");
+    assert!(!h.state().ui.backstage && !h.state().keytips_active);
+}
+
+#[test]
+fn backstage_close_keytip_prompts_on_unsaved_changes() {
+    let mut dirty = app();
+    dirty.run("text.insert", serde_json::json!({"text": "Draft"})).unwrap();
+    let mut h = harness(dirty);
+    h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
+    crate::test_harness::frame(&mut h);
+    h.input_mut().events.extend([key_event(egui::Key::F, true, egui::Modifiers::NONE), egui::Event::Text("f".into())]);
+    crate::test_harness::frames(&mut h, 2);
+    assert!(h.state().ui.backstage && h.state().keytips_active);
+    h.input_mut().events.extend([key_event(egui::Key::C, true, egui::Modifiers::NONE), egui::Event::Text("c".into())]);
+    crate::test_harness::frames(&mut h, 2);
+    assert!(h.state().closing.is_some(), "Alt/F10, F, C prompts before discarding unsaved changes");
+    assert!(h.state().has_document());
+    assert!(!h.state().keytips_active);
+}
+
+#[test]
+fn backstage_controls_cover_keytips_and_v_alias() {
+    let controls = backstage_controls();
+    for (page, letter) in crate::backstage::KEYTIPS {
+        assert!(controls.iter().any(|c| c.label == page && c.letters == Some(letter)), "missing backstage control for {page} ({letter})");
+    }
+    assert!(controls.iter().any(|c| c.label == "print" && c.letters == Some("V")), "missing V alias for print in backstage_controls");
+}
+
 #[test]
 fn qat_keytips_follow_custom_order_and_skip_disabled_commands() {
     let mut a = app();
@@ -581,4 +721,57 @@ fn keytips_update_controls_when_switching_tabs() {
     press_keytip_seq(&mut h, &bold_badge);
     crate::test_harness::frames(&mut h, 3);
     assert!(bold(&mut h), "Home keytip badge {bold_badge} runs format.bold after switching back from Insert");
+}
+
+#[test]
+fn backstage_programmatic_close_refuses_unsaved_changes() {
+    let mut a = app();
+    a.run("text.insert", serde_json::json!({"text": "Unsaved"})).unwrap();
+    // Programmatic execute refuses unsaved work without force
+    let res = a.execute("ui.backstage", serde_json::json!({"value": true, "page": "close"}));
+    assert!(res.is_err(), "programmatic close must refuse unsaved document without force");
+
+    // Programmatic execute with force: true succeeds
+    let res = a.execute("ui.backstage", serde_json::json!({"value": true, "page": "close", "force": true}));
+    assert!(res.is_ok(), "forced close succeeds: {res:?}");
+}
+
+#[test]
+fn backstage_programmatic_save_on_legacy_word_file_does_not_open_dialog() {
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::held());
+    let host = craft::host::Host::builder(crate::APP).files(files.clone()).build();
+    let mut a = app().with_host(std::sync::Arc::new(host));
+    a.session.path = Some(std::path::PathBuf::from("contract.doc"));
+    let res = a.execute("ui.backstage", serde_json::json!({"value": true, "page": "save"}));
+    assert!(res.is_ok(), "programmatic ui.backstage navigation returns status: {res:?}");
+    assert_eq!(res.unwrap()["backstage"], true);
+    assert_ne!(a.ui.backstage_page, "saveAs", "scripted save must not navigate to saveAs for legacy file");
+    assert!(!a.file_dialog_open(), "scripted navigation must never open modal file picker");
+    assert!(files.requests().is_empty(), "no file dialog was requested");
+}
+
+#[test]
+fn backstage_user_save_on_legacy_word_file_opens_save_as_picker() {
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::held());
+    let host = craft::host::Host::builder(crate::APP).files(files.clone()).build();
+    let mut a = app().with_host(std::sync::Arc::new(host));
+    a.session.path = Some(std::path::PathBuf::from("contract.doc"));
+    let res = a.run("ui.backstage", serde_json::json!({"value": true, "page": "save"}));
+    assert!(res.is_ok());
+    assert_eq!(a.ui.backstage_page, "saveAs", "user Save on legacy file navigates to saveAs");
+    assert!(a.file_dialog_open(), "user Save on legacy file opens Save As file dialog");
+    assert_eq!(files.requests().len(), 1, "exactly one save file dialog was requested");
+}
+
+#[test]
+fn backstage_unnamed_save_navigates_to_save_as_without_dialog() {
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::held());
+    let host = craft::host::Host::builder(crate::APP).files(files.clone()).build();
+    let mut a = app().with_host(std::sync::Arc::new(host));
+    assert!(a.session.path.is_none());
+    let res = a.execute("ui.backstage", serde_json::json!({"value": true, "page": "save"}));
+    assert!(res.is_ok());
+    assert_eq!(a.ui.backstage_page, "saveAs", "unnamed document falls back to saveAs page");
+    assert!(!a.file_dialog_open(), "unnamed fallback must not open file dialog");
+    assert!(files.requests().is_empty(), "no file dialog requested for unnamed save");
 }

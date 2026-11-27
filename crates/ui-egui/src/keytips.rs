@@ -516,8 +516,13 @@ fn backstage_controls() -> &'static [KeytipControl<'static>] {
         crate::backstage::KEYTIPS
             .iter()
             .map(|(page, letter)| {
-                KeytipControl::new(CommandRef::with_params("ui.backstage", serde_json::json!({ "page": page })), page, Some(letter))
+                KeytipControl::new(CommandRef::with_params("ui.backstage", serde_json::json!({ "value": true, "page": page })), page, Some(letter))
             })
+            .chain(std::iter::once(KeytipControl::new(
+                CommandRef::with_params("ui.backstage", serde_json::json!({ "value": true, "page": "print" })),
+                "print",
+                Some("V"),
+            )))
             .collect()
     })
 }

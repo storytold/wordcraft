@@ -19,14 +19,7 @@ fn app_with_files(files: &Arc<ScriptedFiles>) -> WordApp {
 
 /// The app in a window of `size`, run until it settles.
 fn harness(a: WordApp, size: egui::Vec2) -> egui_kittest::Harness<'static, WordApp> {
-    let mut h = crate::test_harness::builder().with_size(size).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
+    let mut h = crate::test_harness::builder().with_size(size).build_eframe(move |_| a);
     h.run_steps(4);
     h
 }
@@ -107,21 +100,59 @@ fn recovery_app() -> (WordApp, std::path::PathBuf) {
     (app, root)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+struct GateApp {
+    app: WordApp,
+    poll: std::rc::Rc<std::cell::Cell<bool>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl std::borrow::Borrow<WordApp> for GateApp {
+    fn borrow(&self) -> &WordApp {
+        &self.app
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl std::ops::Deref for GateApp {
+    type Target = WordApp;
+
+    fn deref(&self) -> &Self::Target {
+        &self.app
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl std::ops::DerefMut for GateApp {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.app
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl eframe::App for GateApp {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, _raw: &mut egui::RawInput) {
+        craft::ui::shell::embed::before_input(ctx, |out| self.app.frame_input(out));
+    }
+
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.poll.get() {
+            crate::test_harness::logic(ctx, &mut self.app);
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.app.ui(ui);
+    }
+}
+
 /// Hold discovery polling until the accessible control has dispatched its command.
 /// Warming up first keeps font installation independent of worker timing.
 #[cfg(not(target_arch = "wasm32"))]
-fn pending_recovery_harness(app: WordApp, root: &std::path::Path) -> (egui_kittest::Harness<'static, WordApp>, std::rc::Rc<std::cell::Cell<bool>>) {
+fn pending_recovery_harness(app: WordApp, root: &std::path::Path) -> (egui_kittest::Harness<'static, GateApp>, std::rc::Rc<std::cell::Cell<bool>>) {
     let poll = std::rc::Rc::new(std::cell::Cell::new(true));
     let gate = poll.clone();
-    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        move |ui, app: &mut WordApp| {
-            if gate.get() {
-                app.logic(&ui.ctx().clone());
-            }
-            app.ui(ui);
-        },
-        app,
-    );
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(move |_| GateApp { app, poll: gate });
     h.run_steps(4);
     poll.set(false);
     h.state_mut().session.enable_recovery(root.to_path_buf(), std::sync::Arc::new(|| {})).unwrap();
@@ -131,22 +162,16 @@ fn pending_recovery_harness(app: WordApp, root: &std::path::Path) -> (egui_kitte
 
 #[cfg(not(target_arch = "wasm32"))]
 fn recovery_harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
-    crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        app,
-    )
+    crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(move |_| app)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn settle_recovery(h: &mut egui_kittest::Harness<'_, WordApp>) {
+fn settle_recovery<S: std::borrow::Borrow<WordApp>>(h: &mut egui_kittest::Harness<'_, S>) {
     let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         h.run_steps(2);
-        if h.state().session.recovery_ready() && !h.state().session.recovery_busy() {
+        let session = &h.state().borrow().session;
+        if session.recovery_ready() && !session.recovery_busy() {
             break;
         }
         assert!(std::time::Instant::now() < end);
@@ -614,7 +639,7 @@ fn backstage_save_navigates_to_save_as_when_unnamed() {
     // Close, clean.
     let mut h = file_page(new_app(), "home");
     h.get_by_label("Close").click();
-    h.run_steps(1);
+    h.run_steps(2);
     assert!(h.state().closing.is_none(), "no prompt");
     assert!(!h.state().has_document() && !h.state().quit_requested);
 
