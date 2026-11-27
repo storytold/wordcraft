@@ -244,6 +244,13 @@ and path strokes in the screen renderer and PDF export. Missing or unknown caps 
 Raster endpoint/corner probes and uncompressed PDF content checks cover preset lines and
 connectors. VML end caps, including shapetype inheritance, are kept when saved as DrawingML.
 Native Word screenshot comparison and theme-inherited caps remain unverified.
+
+Dashed outlines with square or round caps keep the caps inside each dash, as Word does: a
+`sysDot` line with round caps (as WPS writes the dotted rules of Thai memos) shows round dots one
+width long and one width apart, where the painters' caps used to close the gaps. Word for Windows,
+measured on lines it drew at 2 and 4 pt: `dot` with square or round caps paints 1 width on and 3
+off, as with flat ends; flat-ended dashes are unchanged. `render::tests::capped_dotted_lines_keep_their_gaps`
+covers preset lines and connectors with each cap. `dash`, `dashDot` and the other dashes with square or round caps take the same rule but weren't measured in Word.
 When content exceeds a preferred column width, AutoFit donors lose equal widths until they reach their content minima. Original synthetic Word probes cover donor reductions; cached field refresh and wrapping remain separate gaps.
 
 Behind-text pictures in table cells participate in centre and bottom vertical alignment without increasing row flow height.
@@ -378,6 +385,7 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 | 2026-10-25 | trivial | Justified and distributed lines no longer stretch the spaces before a line's first character: Thai official letters indent paragraphs with ~20 spaces, and their first line moved right by up to the line's slack (86 pt in a measured case). Measured in Word with synthetic documents: left, `both`, `distribute` and `thaiDistribute` put the first character at the same place, for Thai and Latin text, at the paragraph start, after a line break and after a tab. A distributed line no longer counts the space it wrapped at, or the manual line break it ends with, so its text reaches the margin as in Word |
 | 2026-11-01 | trivial | #2437: Preserve finite paragraph-border flow extents and terminal-break keep preflight with current-main changes. Recursive terminal-successor lookahead remains outside scope. Source checks only; primary qualification pending. |
 | 2026-10-31 | trivial | Percentage cell widths size their columns whichever rows give them, as measured in Word: rows that disagree giving each column its largest and a merged cell's percentage shared by the columns under it; a header row of percentages over rows without cell widths, autofit or fixed, scaled to the table's width, the text width or a fixed table's grid width, and past 100% the columns taking their shares left to right until the width runs out (the ones after it 2 pt and clipped in a fixed table); conflicting percentages, unsized columns, spans and absolute widths keep the grid |
+| 2026-10-27 | trivial | Dashed outlines with square or round caps keep the caps inside each dash, as in Word: round-capped dotted rules keep their gaps (`render::tests::capped_dotted_lines_keep_their_gaps`) |
 | 2026-10-30 | trivial | Keep with next: a kept heading before a three-line paragraph under widow/orphan control needs room for all three lines, since that paragraph can only move over whole; with room for two, the heading goes to the next page with it instead of staying alone at the bottom, as in Word for Mac 16.93. `layout::tests::keep_with_next_carries_the_heading_when_a_three_line_paragraph_moves_whole` |
 | 2026-10-28 | trivial | Connector object lookups retain the typed column-selection inputs on current main (#3631); readiness estimates unchanged |
 | 2026-10-27 | trivial | Connector rerouting indexes laid-out object positions once per batch, preserving page hints, first-match order and same-page glue; synthetic equivalence, geometry and scaling regressions (#3631); routing policy and readiness estimates unchanged |
