@@ -184,6 +184,7 @@ impl WordApp {
             clipboard_published: _,
             // Per document: the shown document's, swapped with `parked` on a document switch.
             autosave_path: _,
+            last_copy: _,
             parked: _,
             // Per window.
             ui,

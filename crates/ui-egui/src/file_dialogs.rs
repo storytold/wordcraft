@@ -421,17 +421,28 @@ impl WordApp {
 
     /// Ask where to save, save there, then do `after`.
     pub(crate) fn save_as(&mut self, after: AfterSave) -> Asked {
-        let name = self.default_save_name();
+        let req = self.save_as_request();
+        self.ask_file(req, AfterPick::SaveAs { after, document: self.session.document_id() })
+    }
+
+    /// What Save As offers: the name, its save types and the folder to start in. Browse… and
+    /// `ui.fileBrowser` with `purpose="save"` ask the same.
+    pub(crate) fn save_as_request(&self) -> PickRequest {
+        // A document saved only as a copy (plain text, say) is offered that copy's name and type
+        // again, in its folder (#7772); one with a file of its own goes on from that file.
+        let copy = self.last_copy.as_deref().filter(|_| self.session.path.is_none());
+        let copy_name = copy.and_then(std::path::Path::file_name).map(|n| n.to_string_lossy().into_owned());
+        let name = copy_name.unwrap_or_else(|| self.default_save_name());
         let mut req = PickRequest::save("document").file_name(name.clone()).save_as(true);
         req.filters = crate::save_types::save_filters(&name);
-        // Start in the open file's folder (#4143); a document never saved starts in the
-        // remembered one. A path opened as `one.docx` has an empty parent, so it's made absolute
-        // first.
-        let opened = self.session.path.as_deref().and_then(|p| std::path::absolute(p).ok());
+        // Start in the open file's folder (#4143), or the copy's; a document never saved starts
+        // in the remembered one. A path opened as `one.docx` has an empty parent, so it's made
+        // absolute first.
+        let opened = self.session.path.as_deref().or(copy).and_then(|p| std::path::absolute(p).ok());
         if let Some(dir) = opened.as_deref().and_then(std::path::Path::parent) {
             req = req.directory(dir);
         }
-        self.ask_file(req, AfterPick::SaveAs { after, document: self.session.document_id() })
+        req
     }
 
     /// The user templates folder (#2852): the one File › Options names, else the app's own.

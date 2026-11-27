@@ -20,6 +20,8 @@ use crate::{WordApp, panes};
 pub(crate) struct Parked {
     /// [`WordApp`]'s `autosave_path`: the file AutoSave writes this document to.
     autosave_path: Option<std::path::PathBuf>,
+    /// [`WordApp`]'s `last_copy`: the file the last save wrote a copy of this document to.
+    last_copy: Option<std::path::PathBuf>,
     /// The comment panel's selection and the comment and reply text typed in this document and not
     /// yet written to it.
     comments: craft::review::ui::CommentsPanelState,
@@ -105,7 +107,11 @@ impl WordApp {
         if from == to {
             return false;
         }
-        let leaving = Parked { autosave_path: self.autosave_path.take(), comments: std::mem::take(&mut self.canvas.comments) };
+        let leaving = Parked {
+            autosave_path: self.autosave_path.take(),
+            last_copy: self.last_copy.take(),
+            comments: std::mem::take(&mut self.canvas.comments),
+        };
         if self.session.is_open(from) {
             self.parked.insert(from, leaving);
         }
@@ -113,6 +119,7 @@ impl WordApp {
         let seen = back.is_some();
         let back = back.unwrap_or_default();
         self.autosave_path = back.autosave_path;
+        self.last_copy = back.last_copy;
         self.canvas.comments = back.comments;
         let session = &self.session;
         self.parked.retain(|d, _| session.is_open(*d));

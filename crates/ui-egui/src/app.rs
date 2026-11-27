@@ -131,6 +131,7 @@ impl WordApp {
             user_origin: false,
             read_aloud_error: None,
             autosave_path: None,
+            last_copy: None,
             saves_in_flight: Vec::new(),
             fallback_chooser: false,
             font_generation: wordcraft_fonts::FontDb::global().generation(),

@@ -281,6 +281,15 @@ impl WordApp {
         {
             self.autosave_path = self.session.path.clone();
         }
+        // A save the document didn't follow wrote a copy: the next Save As starts from it (#7772).
+        // A save to the document's own file forgets it.
+        if let Ok(v) = &r
+            && matches!(id, "file.save" | "file.saveAs")
+            && v.get("saved").and_then(Value::as_bool) == Some(true)
+        {
+            let written = v.get("path").and_then(Value::as_str).map(std::path::PathBuf::from);
+            self.last_copy = written.filter(|path| self.session.path.as_deref() != Some(path.as_path()));
+        }
         // A Markdown file edited in the formatted view was written out again, not kept as it was.
         if let Ok(v) = &r
             && matches!(id, "file.save" | "file.saveAs")
@@ -298,6 +307,10 @@ impl WordApp {
             }
             let old = old.to_string_lossy();
             self.ui.recent.retain(|r| *r != old);
+        }
+        // A name given since the copy was written is the one Save As offers.
+        if r.is_ok() && id == "file.rename" {
+            self.last_copy = None;
         }
         if let Ok(v) = &r {
             self.keep_web_font(id, &params, v);
@@ -1006,11 +1019,8 @@ impl WordApp {
             "picture" => (PickRequest::open("picture"), file_dialogs::AfterPick::Picture),
             "recipients" => (Self::recipients_request(), file_dialogs::AfterPick::Recipients),
             "save" => {
-                // The same request as Browse…, with the save types of the name.
-                let name = self.default_save_name();
-                let mut request = PickRequest::save("document").file_name(name.clone()).save_as(true);
-                request.filters = crate::save_types::save_filters(&name);
-                (request, file_dialogs::AfterPick::SaveAs { after: file_dialogs::AfterSave::Nothing, document })
+                // The same request as Browse… (a `folder` given here still wins, below).
+                (self.save_as_request(), file_dialogs::AfterPick::SaveAs { after: file_dialogs::AfterSave::Nothing, document })
             }
             "export" => {
                 let ext = pending.unwrap_or_else(|| "pdf".into());
