@@ -122,7 +122,7 @@ pub fn list_templates(dir: &str) -> Result<Listing, CmdError> {
     }
     for folder in folders {
         let Some(category) = folder.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
-        if crate::file_access::check_read(&folder.to_string_lossy()).is_err() {
+        if !crate::file_access::may_read(&folder.to_string_lossy()) {
             continue;
         }
         let (files, _, cut) = entries(&folder);

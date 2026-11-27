@@ -116,7 +116,7 @@ pub fn wrong_password(err: &str) -> bool {
 /// can't be read: opening it says why.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn is_empty_file(path: &std::path::Path) -> bool {
-    crate::file_access::check_read(&path.to_string_lossy()).is_ok() && std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() == 0)
+    crate::file_access::may_read(&path.to_string_lossy()) && std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() == 0)
 }
 
 /// [`is_empty_file`]: on the web files come through the browser, never by path.
@@ -129,7 +129,7 @@ pub fn is_empty_file(_path: &std::path::Path) -> bool {
 /// spellings name one file; `None` when it can't be resolved or is outside the readable roots.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn canonical(path: &std::path::Path) -> Option<std::path::PathBuf> {
-    crate::file_access::check_read(&path.to_string_lossy()).ok()?;
+    crate::file_access::may_read(&path.to_string_lossy()).then_some(())?;
     std::fs::canonicalize(path).ok()
 }
 
@@ -611,9 +611,9 @@ impl LocalImages {
         // Canonical paths have `..` and symlinks resolved, so this keeps both inside the folder.
         let path = std::fs::canonicalize(dir.join(rel)).ok()?;
         // The folder is the one the HTML path names, which may be a link from outside the
-        // automation read root; the picture itself must be inside it (#3736).
-        crate::file_access::check_read(&path.to_string_lossy()).ok()?;
-        path.starts_with(dir).then_some(path)
+        // automation read root; the picture itself must be inside it (#3736). Skipped quietly, so
+        // one open never logs a line per picture (#4396).
+        (crate::file_access::may_read(&path.to_string_lossy()) && path.starts_with(dir)).then_some(path)
     }
 }
 
@@ -847,7 +847,7 @@ pub fn list_dir(path: &std::path::Path, max: usize) -> Result<(Vec<DirEntry>, bo
         }
         let Ok(entry) = entry else { continue };
         let path = entry.path();
-        if crate::file_access::check_read(&path.to_string_lossy()).is_err() {
+        if !crate::file_access::may_read(&path.to_string_lossy()) {
             continue;
         }
         let Ok(meta) = std::fs::metadata(&path) else { continue };

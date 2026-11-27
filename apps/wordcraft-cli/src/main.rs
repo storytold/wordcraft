@@ -220,6 +220,52 @@ fn set_author(s: &mut Session, name: &str) -> Result<(), String> {
     s.run("file.setAuthor", &json!({"name": name})).map(|_| ()).map_err(|e| escape_text(&format!("--author: {e}"), false))
 }
 
+/// The MCP server's log of paths the automation roots refuse (#4396), on standard error, which MCP
+/// clients keep as the server's log (stdout carries the protocol). Only the engine's `automation`
+/// records: other warnings quote document content and stay unlogged here, as before.
+struct StderrLog;
+
+impl log::Log for StderrLog {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.target() == "automation" && metadata.level() <= log::Level::Warn
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            let line = log_line(&record.args().to_string());
+            // Not `eprintln!`, which panics when standard error is gone.
+            let _ = writeln!(std::io::stderr().lock(), "wordcraft-cli: {line}");
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+/// Sends refused automation paths to standard error; a logger already installed is kept.
+fn install_refusal_log() {
+    if log::set_logger(&StderrLog).is_ok() {
+        log::set_max_level(log::LevelFilter::Warn);
+    }
+}
+
+/// The most a logged line may take, escapes included, before the note on what was cut: a path
+/// can be as long as the agent likes.
+const MAX_LOG_LINE: usize = 4096;
+
+/// A refusal as one terminal line: the path comes from the agent, so it must not end the line or
+/// drive the terminal, and a huge one is cut short.
+fn log_line(message: &str) -> String {
+    let mut line = String::new();
+    for (i, c) in message.char_indices() {
+        let shown = escape_text(c.encode_utf8(&mut [0; 4]), false);
+        if line.len() + shown.len() > MAX_LOG_LINE {
+            return format!("{line}… ({} more bytes)", message.len() - i);
+        }
+        line.push_str(&shown);
+    }
+    line
+}
+
 /// `mcp`'s headless backend: a session confined to `roots`, its author `author` when given. The caller confines the
 /// process to the same roots first (`confine_process`), which a test must not do.
 fn headless_mcp(
@@ -739,6 +785,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
         }
         "validate" => run_validate(file.as_deref(), &rest),
         "mcp" => {
+            install_refusal_log();
             let (roots, rest) = automation_roots("mcp", &rest)?;
             // Refused with or without a value, before the option check, so `--connect=…` gets this refusal rather than
             // "unknown option": a bare trailing `--connect` must not slip past either.

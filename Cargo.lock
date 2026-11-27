@@ -9039,6 +9039,7 @@ version = "0.18.1"
 dependencies = [
  "craft-zip",
  "image",
+ "log",
  "serde_json",
  "sys-locale",
  "wordcraft-doc",

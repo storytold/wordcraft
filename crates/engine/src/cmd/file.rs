@@ -466,6 +466,10 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
 /// Does `path` hold a Word 2003 XML Document already (so a plain save keeps that format)?
 #[cfg(not(target_arch = "wasm32"))]
 fn is_word_2003_file(path: &std::path::Path) -> bool {
+    // A probe, not a read the agent asked for: a path outside the read root logs nothing (#4396).
+    if !crate::file_access::may_read(&path.to_string_lossy()) {
+        return false;
+    }
     // The root element and its namespaces come first.
     let Ok(head) = crate::io::read_file_head(&path.to_string_lossy(), 64 * 1024) else { return false };
     wordcraft_docx::sniff_xml(&head) == wordcraft_docx::XmlKind::WordMl2003
