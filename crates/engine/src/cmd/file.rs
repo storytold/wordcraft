@@ -20,7 +20,7 @@ pub const MAX_AUTHOR_CHARS: usize = 255;
 /// carry an author.
 pub fn normalize_author(name: &str) -> Result<String, CmdError> {
     let name: String = name.trim().chars().filter(|c| !c.is_control()).take(MAX_AUTHOR_CHARS).collect();
-    let name = name.trim_end();
+    let name = name.trim();
     if name.is_empty() {
         return Err(CmdError::Params("`name` must not be blank".into()));
     }
