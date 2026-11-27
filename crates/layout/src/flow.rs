@@ -457,7 +457,8 @@ impl<'a> Flow<'a> {
         // A paragraph closing a section that the next one starts on a new page keeps with
         // nothing: what follows is not on this page (Word ignores Keep with next there; measured for a next-page break, odd and even by analogy).
         let closes_page = pb.next_starts_page && self.p.section.is_some();
-        let need = if rp.keep_next && !closes_page {
+        // Nor does the document's last paragraph: its last line may hang as any other's.
+        let need = if rp.keep_next && !closes_page && ctx.doc.body.get(self.block + 1).is_some() {
             let after = space_after_kept(ctx, self.block, rp, self.label.is_some());
             height + next_first_line(ctx, self.block, self.laid_width, (after, room), 0, pb.next_starts_page, &mut ctx.counters.clone())
         } else {
@@ -1264,8 +1265,9 @@ fn next_first_line(
             let before = space_before_kept(ctx, block, &pl.rp, listed);
             let between = if ctx.doc.settings.sum_paragraph_spacing { after + before } else { after.max(before) };
             // The paragraph closing the section, when the next section starts a new page, keeps
-            // with nothing on this page (Word ignores its Keep with next).
-            if pl.rp.keep_next && depth < 8 && !(new_page && p.section.is_some()) {
+            // with nothing on this page (Word ignores its Keep with next), nor does the document's
+            // last paragraph.
+            if pl.rp.keep_next && depth < 8 && !(new_page && p.section.is_some()) && ctx.doc.body.get(block + 2).is_some() {
                 // Its footnotes go on the page with it: nothing after them hangs there.
                 let room = if footnote_before(ctx.doc, &notes, usize::MAX) { 0.0 } else { hang_room };
                 let after = space_after_kept(ctx, block + 1, &pl.rp, listed);

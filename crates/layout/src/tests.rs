@@ -14450,6 +14450,47 @@ fn multiple_spacing_leading_hangs_into_the_bottom_margin() {
     assert_eq!(on_page_one(&lay(&doc(r + 0.75 * h))), k as usize - 1);
 }
 
+/// A paragraph kept with the next with nothing after it (the document's last) fits like any
+/// other: its last line's leading may hang into the bottom margin. So may the last of a chain of
+/// paragraphs kept with the next: the first of them doesn't move on for it.
+#[test]
+fn a_last_paragraph_kept_with_the_next_may_hang_into_the_bottom_margin() {
+    use wordcraft_doc::props::LineSpacing;
+    let doc = |first_before: f32, chained: bool| {
+        let para = |text: &str, before: f32, keep_next: bool, spacing: f32| {
+            let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+            p.props = ParaProps {
+                line_spacing: Some(LineSpacing::Multiple(spacing)),
+                space_before: Some(before),
+                space_after: Some(0.0),
+                keep_next: Some(keep_next),
+                ..Default::default()
+            };
+            wordcraft_doc::para_block(p)
+        };
+        let mut d = Document::from_text("");
+        d.body = vec![para("First", first_before, false, 1.0), para("Kept", 0.0, chained, 1.0), para("Last", 0.0, true, 2.0)];
+        d
+    };
+    let heights = |l: &DocLayout| -> Vec<(f32, f32)> {
+        l.pages[0]
+            .items
+            .iter()
+            .filter_map(
+                |i| if let Placed::Lines { para, story: StoryRef::Body, .. } = i { para.lines.first().map(|l| (l.height, l.hang)) } else { None },
+            )
+            .collect()
+    };
+    let probe = heights(&lay(&doc(0.0, false)));
+    let ((h1, _), (h2, hang)) = (probe[0], probe[2]);
+    assert!(hang > 0.4 * h2, "a double-spaced line: height {h2}, hang {hang}");
+    for chained in [false, true] {
+        // The last line's box ends a quarter line past the margin: its text still fits.
+        let l = lay(&doc(648.0 - 2.0 * h1 - 0.75 * h2, chained));
+        assert_eq!((l.pages.len(), line_tops(&l).len()), (1, 3), "chained: {chained}");
+    }
+}
+
 /// Horizontal rules (a paragraph's top, bottom and between borders) on every page: (page, y).
 fn horizontal_rules(l: &DocLayout) -> Vec<(usize, f32)> {
     l.pages
