@@ -66,22 +66,59 @@ pub fn credits() -> Credits {
 }
 
 /// The About tab's contents: name, blurb, version and build, and the project links in the old About's order (site,
-/// Discord, source), one to a line.
+/// Discord, source), one to a line. A Nightly window names its channel, its exact feed version
+/// and commit, and offers a link to report a problem.
 pub fn about_info() -> AboutInfo {
-    let build = option_env!("WORDCRAFT_BUILD_SHA").map(|s| s.get(..8).unwrap_or(s)).unwrap_or(tl!("development build"));
-    // The dialog's own "Version {version}" words the line, so this is the number and the build only.
-    let version = crate::i18n::fmt(tl!("{version} ({build})"), &[("version", env!("CARGO_PKG_VERSION")), ("build", build)]);
-    AboutInfo::new(
-        tl!("WordCraft").to_string(),
-        tl!("A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.").to_string(),
-        version.to_string(),
-    )
-    .links([
-        AboutLink::new(tl!("getartcraft.com/apps/wordcraft").to_string(), "https://getartcraft.com/apps/wordcraft"),
-        AboutLink::new(tl!("Join us on Discord: discord.gg/artcraft").to_string(), "https://discord.gg/artcraft"),
-        AboutLink::new(tl!("Source code: github.com/storytold/wordcraft").to_string(), "https://github.com/storytold/wordcraft"),
-    ])
-    .built_with(tl!("MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.").to_string())
+    about_info_for(crate::os_window::identity(), option_env!("WORDCRAFT_BUILD_SHA"))
+}
+
+/// The About tab's three lines for `identity`: (name, blurb, version line). A Nightly window's
+/// are English only: they are not one of the stable catalogs' strings.
+fn about_text(identity: crate::os_window::LaunchIdentity, commit: Option<&str>) -> (String, String, String) {
+    match identity {
+        crate::os_window::LaunchIdentity::NightlyV1 => {
+            let version = option_env!("WORDCRAFT_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"));
+            let commit = commit.filter(|value| !value.is_empty()).unwrap_or("unavailable");
+            (
+                crate::os_window::name_for(identity).to_string(),
+                "A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.".to_string(),
+                format!("{version}\nCommit: {commit}"),
+            )
+        }
+        crate::os_window::LaunchIdentity::Stable => {
+            let build = commit.map(|s| s.get(..8).unwrap_or(s)).unwrap_or(tl!("development build"));
+            // The dialog's own "Version {version}" words the line, so this is the number and the build only.
+            let version = crate::i18n::fmt(tl!("{version} ({build})"), &[("version", env!("CARGO_PKG_VERSION")), ("build", build)]);
+            (
+                tl!("WordCraft").to_string(),
+                tl!("A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.")
+                    .to_string(),
+                version.to_string(),
+            )
+        }
+    }
+}
+
+fn about_info_for(identity: crate::os_window::LaunchIdentity, commit: Option<&str>) -> AboutInfo {
+    let (name, blurb, version) = about_text(identity, commit);
+    if identity == crate::os_window::LaunchIdentity::NightlyV1 {
+        return AboutInfo::new(name, blurb, version)
+            .links([
+                AboutLink::new("getartcraft.com/apps/wordcraft".to_string(), "https://getartcraft.com/apps/wordcraft"),
+                AboutLink::new("Join us on Discord: discord.gg/artcraft".to_string(), "https://discord.gg/artcraft"),
+                AboutLink::new("Source code: github.com/storytold/wordcraft".to_string(), "https://github.com/storytold/wordcraft"),
+                // Opens only after a click; nothing is collected or sent automatically.
+                AboutLink::new("Report a problem".to_string(), "https://github.com/storytold/wordcraft/issues"),
+            ])
+            .built_with("MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.".to_string());
+    }
+    AboutInfo::new(name, blurb, version)
+        .links([
+            AboutLink::new(tl!("getartcraft.com/apps/wordcraft").to_string(), "https://getartcraft.com/apps/wordcraft"),
+            AboutLink::new(tl!("Join us on Discord: discord.gg/artcraft").to_string(), "https://discord.gg/artcraft"),
+            AboutLink::new(tl!("Source code: github.com/storytold/wordcraft").to_string(), "https://github.com/storytold/wordcraft"),
+        ])
+        .built_with(tl!("MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.").to_string())
 }
 
 /// The About dialog opened on `tab`, with the Language data tab after Models (`AboutTab::App(0)`). The name
@@ -89,4 +126,95 @@ pub fn about_info() -> AboutInfo {
 pub(crate) fn about(tab: AboutTab) -> HostedAbout {
     // PLAN: assumed `HostedAbout::layout(self, AboutLayout) -> Self` (look-dialogs-b framework fix)
     HostedAbout::new(about_info(), credits()).app_tab(language_data_tab()).tab(tab).layout(AboutLayout::Listed)
+}
+
+/// A Nightly window's About names its channel, keeps the full feed version and commit, invents
+/// nothing when the commit is missing, and adds the report link the stable About does not have.
+#[cfg(test)]
+mod nightly_about_tests {
+    use crate::os_window::LaunchIdentity;
+
+    const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    #[test]
+    fn nightly_about_names_the_channel_and_keeps_the_full_version_and_commit() {
+        let (name, blurb, version) = super::about_text(LaunchIdentity::NightlyV1, Some(COMMIT));
+        assert_eq!(name, "WordCraft Nightly");
+        assert!(blurb.contains("word processor"));
+        let package = option_env!("WORDCRAFT_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"));
+        assert_eq!(version, format!("{package}\nCommit: {COMMIT}"));
+    }
+
+    #[test]
+    fn nightly_about_invents_no_provenance_when_the_commit_is_missing() {
+        for commit in [None, Some("")] {
+            let (_, _, version) = super::about_text(LaunchIdentity::NightlyV1, commit);
+            assert!(version.ends_with("\nCommit: unavailable"), "{version}");
+        }
+    }
+
+    #[test]
+    fn only_the_nightly_about_offers_the_report_link_and_the_stable_name_is_unchanged() {
+        let nightly = super::about_info_for(LaunchIdentity::NightlyV1, Some(COMMIT));
+        assert!(nightly.links.iter().any(|link| link.url == "https://github.com/storytold/wordcraft/issues"));
+        let stable = super::about_info_for(LaunchIdentity::Stable, Some(COMMIT));
+        assert!(!stable.links.iter().any(|link| link.url == "https://github.com/storytold/wordcraft/issues"));
+        let (name, _, _) = super::about_text(LaunchIdentity::Stable, Some(COMMIT));
+        assert_eq!(name, "WordCraft");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use craft::ui::contract::Role;
+    use craft::ui::dialog::DialogHost;
+    use craft::ui::testing::Fixture;
+
+    use super::*;
+
+    fn column_header(fixture: &Fixture, label: &str) -> egui::Rect {
+        fixture
+            .by_role(Role::COLUMN_HEADER)
+            .into_iter()
+            .find(|cell| fixture.tree().name_of(cell.node) == Some(label))
+            .unwrap_or_else(|| panic!("missing column header {label:?}"))
+            .rect
+    }
+
+    fn table_rect(fixture: &Fixture) -> egui::Rect {
+        fixture.by_role(Role::TABLE).first().expect("the credits table shows").rect
+    }
+
+    /// Verifies that WordCraft's `about(AboutTab::Models)` (`AboutLayout::Listed` with the baked
+    /// `MODELS` table) fits within the dialog and refits its `Company` column when narrowed.
+    /// The original drag-then-content-change refit check (#5588) belongs in `craft-libs` and is
+    /// tracked in `storytold/craft-libs#3372`.
+    #[test]
+    fn models_table_refits_to_narrower_window() {
+        let wide = egui::vec2(1400.0, 800.0);
+        let narrow = egui::vec2(660.0, 800.0);
+
+        let host = Rc::new(RefCell::new(DialogHost::new()));
+        let shown_host = Rc::clone(&host);
+        let mut fixture = Fixture::new(move |ui| shown_host.borrow_mut().run(ui));
+        fixture.room(wide);
+        host.borrow_mut().open(about(AboutTab::Models));
+        fixture.settle();
+
+        let wide_table = table_rect(&fixture);
+        let wide_company = column_header(&fixture, "Company");
+        let wide_last = column_header(&fixture, "Lines +/\u{2212}");
+        assert!(wide_last.right() <= wide_table.right() + 1.0, "the table opens fitted to the dialog: {wide_last:?} in {wide_table:?}");
+
+        fixture.room(narrow).settle();
+        let slim_table = table_rect(&fixture);
+        let slim_company = column_header(&fixture, "Company");
+        let slim_last = column_header(&fixture, "Lines +/\u{2212}");
+        assert!(slim_table.width() < wide_table.width() - 1.0, "hosted About shrinks with window: {slim_table:?} vs {wide_table:?}");
+        assert!(slim_company.width() < wide_company.width() - 1.0, "hosted About refits its Company column: {slim_company:?} vs {wide_company:?}");
+        assert!(slim_last.right() <= slim_table.right() + 1.0, "the narrower table still fits its last column: {slim_last:?} in {slim_table:?}");
+    }
 }
