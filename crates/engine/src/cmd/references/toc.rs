@@ -79,15 +79,13 @@ pub fn toc_instr(v: &Value) -> String {
     s
 }
 
-/// A TOC entry: the paragraph it points at, its level (0-based), its text, the leading page
-/// breaks of that paragraph (its page is where the text after them lands), and, for a number
-/// followed by a tab, how far the heading's text starts after where its number starts.
+/// A TOC entry: the paragraph it points at, its level (0-based), its text, and the leading page
+/// breaks of that paragraph (its page is where the text after them lands).
 struct TocEntry {
     path: Path,
     level: u8,
     text: String,
     lead: usize,
-    number_gap: Option<f32>,
 }
 
 /// The headings of the body, in document order, as (body block, level 1–9, text, leading page
@@ -131,13 +129,9 @@ fn toc_entries(s: &Session, f: &FieldCode) -> Vec<TocEntry> {
             .and_then(|n| counters.next_label(&s.doc.numbering, n.num, n.level))
             .filter(|(label, def)| !label.is_empty() && !matches!(def.format, NumFormat::Bullet | NumFormat::None))
             .map(|(label, def)| match def.suffix {
-                LevelSuffix::Tab => {
-                    let start = def.indent - def.hanging;
-                    let gap = def.tab.filter(|t| *t > start).unwrap_or(def.indent) - start;
-                    (format!("{label}\t"), Some(gap).filter(|g| g.is_finite() && *g > 0.0))
-                }
-                LevelSuffix::Space => (format!("{label} "), None),
-                LevelSuffix::Nothing => (label, None),
+                LevelSuffix::Tab => format!("{label}\t"),
+                LevelSuffix::Space => format!("{label} "),
+                LevelSuffix::Nothing => label,
             });
         let style = p.props.style.as_deref().unwrap_or("Normal");
         if style.starts_with("TOC") {
@@ -162,9 +156,8 @@ fn toc_entries(s: &Session, f: &FieldCode) -> Vec<TocEntry> {
         if let Some(l) = by_style.or(by_outline).or(if hidden { None } else { by_heading }) {
             let t = p.plain_text().replace(['\u{000C}', '\n', '\t'], " ").trim().to_string();
             if !t.is_empty() {
-                let text = number.as_ref().map_or_else(|| t.clone(), |(n, _)| format!("{n}{t}"));
-                let number_gap = number.as_ref().and_then(|(_, g)| *g);
-                v.push(TocEntry { path: path.clone(), level: l - 1, text, lead, number_gap });
+                let text = number.map_or_else(|| t.clone(), |n| format!("{n}{t}"));
+                v.push(TocEntry { path: path.clone(), level: l - 1, text, lead });
             }
         }
         if let Some(id) = &tc {
@@ -178,7 +171,7 @@ fn toc_entries(s: &Session, f: &FieldCode) -> Vec<TocEntry> {
                 let l = c.arg('l').and_then(|l| l.trim().parse::<u8>().ok()).unwrap_or(1).clamp(1, 9);
                 let text = c.args.first().map(|t| t.trim().to_string()).unwrap_or_default();
                 if (id.is_empty() || *id == kind) && (tc_levels.0..=tc_levels.1).contains(&l) && !text.is_empty() {
-                    v.push(TocEntry { path: path.clone(), level: l - 1, text, lead: off, number_gap: None });
+                    v.push(TocEntry { path: path.clone(), level: l - 1, text, lead: off });
                 }
             }
         }
@@ -542,13 +535,12 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
         p.touch();
     }
     let f = FieldCode::parse(&instr);
+    // The page numbers' leader, from the first entry with a right stop: a level without page
+    // numbers (`\n`) ends with its number's left stop instead.
     let leader = leader.unwrap_or_else(|| {
-        s.doc
-            .body
-            .get(start + 1)
-            .filter(|_| end > start)
-            .and_then(|b| b.as_para())
-            .and_then(|p| p.props.tabs.as_ref()?.last().map(|t| t.leader))
+        (start + 1..=end)
+            .filter_map(|i| s.doc.body.get(i)?.as_para())
+            .find_map(|p| p.props.tabs.as_ref()?.iter().rev().find(|t| matches!(t.align, TabAlign::Right)).map(|t| t.leader))
             .unwrap_or(TabLeader::Dot)
     });
     for i in (start + 1..=end).rev() {
@@ -615,17 +607,8 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
             }
             para.mark = CharProps::default();
             if e.text.contains('\t') {
-                para.props.tabs = tabs.iter().find(|(style, _)| Some(style) == para.props.style.as_ref()).map(|(_, tabs)| tabs.clone());
-                // Without a stop for the number (LibreOffice's Contents styles have only the page
-                // number's right stop), its tab would run to the page number: the entry gets a
-                // left stop as far after its indent as the heading's text is after its number.
-                let style = s.doc.styles.resolve_para(&para.props);
-                let has_stop =
-                    style.tabs.iter().any(|t| t.pos < width - 1.0 && matches!(t.align, TabAlign::Left | TabAlign::Center | TabAlign::Decimal));
-                if let (None, false, Some(gap)) = (&para.props.tabs, has_stop, e.number_gap) {
-                    let pos = style.indent_left.max(0.0) + gap;
-                    para.props.tabs = (pos < width - 1.0).then(|| vec![TabStop { pos, align: TabAlign::Left, leader: TabLeader::None }]);
-                }
+                let cached = tabs.iter().find(|(style, _)| Some(style) == para.props.style.as_ref()).map(|(_, tabs)| tabs.clone());
+                para.props.tabs = number_tab(s, &para.props, cached.as_deref().unwrap_or_default(), &e.text, width - 0.5).or(cached);
             }
             if show_page && sep.contains('\t') {
                 let right = TabStop { pos: width - 0.5, align: TabAlign::Right, leader };
@@ -636,6 +619,41 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
     }
     s.touch();
     Ok(())
+}
+
+/// The tab stops of a numbered entry (`1.1<tab>Title`) whose number's tab has no stop to go to
+/// before the page-number stop at `limit`, neither in `direct` (the cached entry's stops) nor in
+/// its style, nor a hanging indent past the number: `direct` and a left stop 11 pt past the
+/// number. Without one the title goes to the page-number stop and the page number wraps
+/// (#4185). The 11 pt is
+/// measured from a Word-written TOC (a bench fixture): its 50 numbered level-2 entries have a
+/// left stop at indent + number width + 220 twips, one per number width ("4.1" and "4.10" each
+/// get their own), with the number in 10 pt Arial, so the gap is not an em of the number's font.
+fn number_tab(s: &Session, props: &wordcraft_doc::ParaProps, direct: &[TabStop], text: &str, limit: f32) -> Option<Vec<TabStop>> {
+    // Resolved with `direct`, as layout resolves the entry: a direct stop (a Clear too) replaces
+    // the style's stop at its place, and Clear stops are gone.
+    let para = wordcraft_doc::ParaProps { style: props.style.clone(), tabs: Some(direct.to_vec()), ..Default::default() };
+    let style = s.doc.styles.resolve_para(&para);
+    let number = text.split('\t').next()?;
+    let c = s.doc.styles.resolve_char(props.style.as_deref(), &CharProps::default());
+    let face = wordcraft_fonts::word::resolve(&c.font, c.bold, c.italic).face;
+    // As layout measures it: kerned only when the run's kerning covers its size, advances at the
+    // character scale, plus the character spacing after every character.
+    let kern_off = [wordcraft_fonts::feature_value(b"kern", 0)];
+    let features = if c.kerned() { &[][..] } else { &kern_off[..] };
+    let k = c.size / face.upem.max(1.0) as f32 * c.scale / 100.0;
+    let advances: f32 = wordcraft_fonts::shape(&face, number, features, |c| c).iter().map(|g| g.x_advance as f32 * k).sum();
+    let spacing = c.spacing * wordcraft_doc::cluster::cluster_starts(number).len() as f32;
+    let end = style.indent_left + style.indent_first + advances + spacing;
+    let usable = |t: &TabStop| matches!(t.align, TabAlign::Left | TabAlign::Center | TabAlign::Decimal) && t.pos > end && t.pos < limit;
+    // A hanging indent's implicit stop serves while the number ends before it.
+    let hanging = (style.indent_first < 0.0).then_some(TabStop { pos: style.indent_left, align: TabAlign::Left, leader: TabLeader::None });
+    if style.tabs.iter().chain(&hanging).any(usable) {
+        return None;
+    }
+    let mut tabs = direct.to_vec();
+    tabs.push(TabStop { pos: end + 11.0, align: TabAlign::Left, leader: TabLeader::None });
+    Some(tabs)
 }
 
 /// The tab stops of a TOC entry: the right-aligned stop for its page number, and, when the
