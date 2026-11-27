@@ -767,6 +767,10 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                 return Err(missing_argument());
             };
             let command = wordcraft_zotero::Command::from_name(name).ok_or_else(|| format!("unknown Zotero command `{name}`\n\n{USAGE}"))?;
+            let mut opts = wordcraft_zotero::client::Options::default();
+            if let Some(p) = arg_value(&rest, "--port") {
+                opts.addr.set_port(p.parse().map_err(|_| format!("bad port `{p}`"))?);
+            }
             let mut s = open(file, None)?;
             for spec in rest.iter().zip(rest.iter().skip(1)).filter(|(a, _)| *a == "--cmd").map(|(_, v)| v) {
                 let (id, params) = match spec.split_once('=') {
@@ -776,10 +780,6 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                     None => (spec.clone(), json!({})),
                 };
                 s.run(&id, &params).map_err(|e| engine_error(format!("{id}: {e}")))?;
-            }
-            let mut opts = wordcraft_zotero::client::Options::default();
-            if let Some(p) = arg_value(&rest, "--port") {
-                opts.addr.set_port(p.parse().map_err(|_| format!("bad port `{p}`"))?);
             }
             let trace = rest.iter().any(|a| a == "--trace");
             let mut bridge = wordcraft_zotero::Bridge::new();

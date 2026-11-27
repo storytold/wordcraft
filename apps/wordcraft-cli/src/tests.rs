@@ -93,6 +93,14 @@ fn unknown_options_are_rejected_before_file_access() {
 }
 
 #[test]
+fn zotero_rejects_invalid_ports_before_file_access() {
+    for port in ["oops", "65536"] {
+        let err = format!("bad port `{port}`");
+        assert_eq!(run(&args(&["zotero", "refresh", "missing.docx", "--port", port])), Err(err.into()));
+    }
+}
+
+#[test]
 fn convert_rejects_malformed_format_options_before_file_access() {
     for (options, error) in [
         (vec!["--format"], "convert: --format requires a value"),
