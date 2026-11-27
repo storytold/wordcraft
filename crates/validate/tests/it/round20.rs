@@ -161,7 +161,10 @@ fn h6_p1_p7_p13_decoded_and_raw_note_duplicates_both_orders_and_path() {
             std::fs::write(&path, zipit(&all)).unwrap();
             let report = validate_path(&path).unwrap();
             std::fs::remove_file(path).unwrap();
-            stable(&report, &reports[usize::from(reverse)]);
+            let mut expected = reports[usize::from(reverse)].clone();
+            let index = expected.checks_run.iter().position(|check| *check == "CT-UNDECLARED").unwrap();
+            expected.checks_run.insert(index, "CT-FILENAME-MAIN-TYPE");
+            stable(&report, &expected);
             exact_rules(&report, &["PKG-DUP-ENTRY"]);
         }
     }

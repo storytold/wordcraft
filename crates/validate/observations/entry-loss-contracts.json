@@ -11,7 +11,7 @@
   "lib.rs::ownership_discovery_complete": [
     "! pkg . entries_truncated && ! pkg . identity_incomplete && ! pkg . content_types . incomplete && ! (match package :: content_unavailable (pkg , \"[Content_Types].xml\") { Resolution :: One (unavailable) => unavailable , Resolution :: Absent => false , Resolution :: Unknown (_) => true , Resolution :: Ambiguous (_) => true , }) && ! pkg . rels . iter () . any (| rp | rp . incomplete)"
   ],
-  "package.rs::load": [
+  "package.rs::load_archive": [
     "producer entries_truncated = zip . len () > limits . entries",
     "entries_truncated",
     "producer mut unknown_unreadable = false",

@@ -257,9 +257,20 @@ pub(crate) struct Package {
     pub identity_incomplete: bool,
 }
 
-/// Load a zip into the package model. Returns `None` only when the input is not a readable zip
-/// (after a `PKG-NOT-ZIP` finding): every other problem becomes a finding or a coverage note.
+/// Load a zip into the package model, recording unreadable or disputed archives in the report.
 pub(crate) fn load(bytes: &[u8], acc: &mut Acc) -> Option<Package> {
+    load_archive(bytes, acc, None)
+}
+
+fn open_archive<'a>(bytes: &'a [u8], inspect_boundary: bool, acc: &mut Acc) -> zip::result::ZipResult<zip::ZipArchive<Cursor<&'a [u8]>>> {
+    let archive = zip::ZipArchive::new(Cursor::new(bytes));
+    if inspect_boundary {
+        check_concatenated_archives(bytes, archive.is_ok(), acc);
+    }
+    archive
+}
+
+fn load_archive(bytes: &[u8], acc: &mut Acc, expected_footer: Option<usize>) -> Option<Package> {
     observation_contract! {
         rules: "PKG-NO-CONTENT-TYPES,PKG-NO-MAIN,PKG-NOT-ZIP";
         collections: "field.bytes*1,field.entries*6,field.incomplete*5,field.rels*1,parser.parse_content_types*1,type.Vec*2";
@@ -270,7 +281,7 @@ pub(crate) fn load(bytes: &[u8], acc: &mut Acc) -> Option<Package> {
     }
 
     acc.ran("PKG-NOT-ZIP");
-    let Ok(mut zip) = zip::ZipArchive::new(Cursor::new(bytes)) else {
+    let Ok(mut zip) = open_archive(bytes, expected_footer.is_none(), acc) else {
         acc.add("PKG-NOT-ZIP", None, "the input is not a readable zip archive".to_string());
         return None;
     };
@@ -368,7 +379,7 @@ pub(crate) fn load(bytes: &[u8], acc: &mut Acc) -> Option<Package> {
         }
     }
 
-    let (cd, directory_disagreement) = reader_checked_directory(bytes, &zip, acc.limits.entries, acc);
+    let (cd, directory_disagreement) = reader_checked_directory(bytes, &zip, acc.limits.entries, expected_footer, acc);
     unknown_unreadable |= directory_disagreement;
     if directory_disagreement {
         // The reader may have retained an arbitrary decoded-name twin. Even a
@@ -966,6 +977,8 @@ fn u64_at(b: &[u8], i: usize) -> Option<u64> {
 struct CentralDirectory<'a> {
     /// Absolute byte offset actually used by the bounded parser (archive offset zero).
     start: u64,
+    /// End of the walked directory records. Isolated archive proof requires it to precede the footer.
+    end: usize,
     /// The selected footer's disk and count fields are consistent.
     consistent: bool,
     /// The raw entry names examined, in stored order, including duplicate names.
@@ -979,17 +992,136 @@ struct CentralDirectory<'a> {
     truncated: bool,
 }
 
+/// Look for an EOCD whose comment ends immediately before another local header.
+fn check_concatenated_archives(bytes: &[u8], readable: bool, acc: &mut Acc) {
+    observation_contract! {
+        rules: "PKG-CONCATENATED";
+        collections: "field.entries*2";
+        scope: "input-budgeted EOCD scan and at most two candidate archive splits";
+        loss: "split budget, an unsupported boundary layout, or incomplete isolated package loading";
+        fallback: "report incomplete coverage for unresolved candidate boundaries";
+        package_loss: "independent";
+    }
+
+    const CANDIDATE_LIMIT: usize = 2;
+    let last_footer = exact_end_footer(bytes);
+    if readable {
+        acc.ran("PKG-CONCATENATED");
+    } else if last_footer.is_none() {
+        return;
+    }
+    let mut remaining = CANDIDATE_LIMIT;
+    let mut unresolved = false;
+    for (footer, byte) in bytes.iter().enumerate() {
+        if *byte != b'P' || u32_at(bytes, footer) != Some(0x0605_4B50) {
+            continue;
+        }
+        let Some(comment) = u16_at(bytes, footer + 20) else {
+            continue;
+        };
+        let boundary = footer + 22 + usize::from(comment);
+        if u32_at(bytes, boundary) != Some(0x0403_4B50) {
+            continue;
+        }
+        let (first, second) = bytes.split_at(boundary);
+        let first_count = archive_count_at(first, footer);
+        let second_directory =
+            last_footer.and_then(|last| last.checked_sub(boundary)).and_then(|last| archive_count_at(second, last).map(|count| (last, count)));
+        if first_count.is_none() && second_directory.is_none() {
+            continue;
+        }
+        if remaining == 0 {
+            unresolved = true;
+            break;
+        }
+        if !readable && remaining == CANDIDATE_LIMIT {
+            acc.ran("PKG-CONCATENATED");
+        }
+        remaining -= 1;
+        if first_count.is_none_or(|count| count > acc.limits.entries as u64) || !standalone_opc(first, footer, acc.limits) {
+            unresolved = true;
+            continue;
+        }
+        if let Some((last, count)) = second_directory
+            && count <= acc.limits.entries as u64
+            && (first == second || standalone_opc(second, last, acc.limits))
+        {
+            acc.add("PKG-CONCATENATED", None, format!("a second complete OPC archive starts at byte {boundary}"));
+            return;
+        }
+        unresolved = true;
+    }
+    if unresolved {
+        acc.note("concatenated archive checking could not resolve a candidate boundary within the ZIP layout and examination limits".to_string());
+        acc.set_incomplete();
+    }
+}
+
+/// Find an EOCD with a comment ending exactly at EOF, within its 16-bit comment window.
+fn exact_end_footer(bytes: &[u8]) -> Option<usize> {
+    let last = bytes.len().checked_sub(22)?;
+    (last.saturating_sub(0xFFFF)..=last).rev().find(|&footer| {
+        u32_at(bytes, footer) == Some(0x0605_4B50)
+            && u16_at(bytes, footer + 20).is_some_and(|comment| footer + 22 + usize::from(comment) == bytes.len())
+    })
+}
+
+/// Preflight relative directory offsets before asking the package loader to verify a split.
+/// Size is deliberately ignored, matching the existing directory walk's count-driven policy.
+fn archive_count_at(bytes: &[u8], footer: usize) -> Option<u64> {
+    let count = u16_at(bytes, footer + 10)?;
+    let start = u32_at(bytes, footer + 16)?;
+    let (start, count) =
+        if (count == u16::MAX || start == u32::MAX) && footer.checked_sub(20).and_then(|locator| u32_at(bytes, locator)) == Some(0x0706_4B50) {
+            let directory = zip64_directory(bytes, footer)?;
+            (directory.start, directory.count)
+        } else {
+            (u64::from(start), u64::from(count))
+        };
+    let start = usize::try_from(start).ok()?;
+    if count == 0 || start >= footer || count > ((footer - start) / 46) as u64 || u32_at(bytes, start) != Some(0x0201_4B50) {
+        return None;
+    }
+    Some(count)
+}
+
+/// Isolated loading reuses the normal entry, decompression and XML budgets.
+fn standalone_opc(bytes: &[u8], footer: usize, limits: crate::Limits) -> bool {
+    observation_contract! {
+        rules: "-";
+        collections: "field.content_types*1,field.incomplete*1";
+        scope: "isolated ZIP slice with its own directory and resolved Word main";
+        loss: "unreadable package or incomplete package loading";
+        fallback: "do not infer a complete OPC archive";
+        package_loss: "independent";
+    }
+
+    let mut probe = Acc::with_limits(limits);
+    let Some(pkg) = load_archive(bytes, &mut probe, Some(footer)) else {
+        return false;
+    };
+    if probe.incomplete || !pkg.content_types_present {
+        return false;
+    }
+    match &pkg.main {
+        Resolution::One(main) => pkg.content_types.of(main).is_some_and(is_main_content_type),
+        Resolution::Absent | Resolution::Unknown(_) | Resolution::Ambiguous(_) => false,
+    }
+}
+
 /// Reject disputed directory identities before deriving duplicates or absence from them.
 fn reader_checked_directory<'a>(
     bytes: &'a [u8],
     zip: &zip::ZipArchive<Cursor<&[u8]>>,
     limit: usize,
+    expected_footer: Option<usize>,
     acc: &mut Acc,
 ) -> (Option<CentralDirectory<'a>>, bool) {
     let selection = find_eocd(bytes);
     let cd = selection.as_ref().and_then(|selected| central_directory(bytes, limit, selected));
     let structural_disagreement = selection.as_ref().is_some_and(|selected| {
         selected.disputed
+            || expected_footer.is_some_and(|footer| selected.footer != footer || cd.as_ref().is_none_or(|dir| dir.end > footer))
             || (cd.is_none()
                 && selected
                     .directory
@@ -1093,7 +1225,7 @@ fn central_directory<'a>(bytes: &'a [u8], limit: usize, selected: &EocdSelection
     // Only the declared count selects records: directory size and bytes before the
     // footer do not bound the reader's walk. A capped prefix keeps its duplicate policy.
     let consistent = directory.footer_consistent && (truncated || u64::try_from(names.len()).ok()? == count);
-    Some(CentralDirectory { start: cd_off, consistent, names, decoded_names, total: count, truncated })
+    Some(CentralDirectory { start: cd_off, end: i, consistent, names, decoded_names, total: count, truncated })
 }
 
 /// A footer's count-driven directory selection. Size is not a reader selection parameter.
@@ -1110,6 +1242,7 @@ impl DirectoryView {
 }
 
 struct EocdSelection {
+    footer: usize,
     directory: Option<DirectoryView>,
     disputed: bool,
 }
@@ -1201,7 +1334,7 @@ fn find_eocd(bytes: &[u8]) -> Option<EocdSelection> {
                 first.disputed = true;
             }
         } else {
-            selected = Some(EocdSelection { directory, disputed: false });
+            selected = Some(EocdSelection { footer: i, directory, disputed: false });
         }
     }
     if exact_end { selected } else { None }

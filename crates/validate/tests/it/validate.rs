@@ -20,10 +20,11 @@ const W15_NS: &str = "http://schemas.microsoft.com/office/word/2012/wordml";
 const W16CID_NS: &str = "http://schemas.microsoft.com/office/word/2016/wordml/cid";
 const DS_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/customXml";
 
-/// Every rule id a minimal, fully checkable package runs, in the documented order.
+/// Every rule id a minimal, fully checkable in-memory package runs, in the documented order.
 /// `COMMENTEX-LINK` is absent: it only runs when commentsExtended.xml exists.
 const ALL_CHECKS: &[&str] = &[
     "PKG-NOT-ZIP",
+    "PKG-CONCATENATED",
     "PKG-DUP-ENTRY",
     "PKG-CASE-COLLISION",
     "PKG-NO-CONTENT-TYPES",
@@ -280,12 +281,85 @@ fn ct_main_type() {
     assert_finding(&report, "CT-MAIN-TYPE", Some("word/document.xml"));
 }
 
+#[test]
+fn complete_archives_concatenated_at_eof() {
+    let ordinary = Doc::minimal().build();
+    let mut repeated = Doc::minimal();
+    repeated.set_document(&"<w:p><w:r><w:t>Repeated paragraph</w:t></w:r></w:p>".repeat(200));
+    let repeated = repeated.build();
+
+    for single in [&ordinary, &repeated] {
+        assert_eq!(validate_bytes(single).verdict, Verdict::Pass);
+    }
+    for second in [&ordinary, &repeated] {
+        let report = validate_bytes(&[ordinary.as_slice(), second.as_slice()].concat());
+        assert_eq!(report.verdict, Verdict::Fail);
+        assert_finding(&report, "PKG-CONCATENATED", None);
+    }
+}
+
+#[test]
+fn archive_comment_is_part_of_the_archive_boundary() {
+    let ordinary = Doc::minimal().build();
+    let mut commented = ordinary.clone();
+    let footer = commented.len() - 22;
+    let comment = b"PK\x03\x04 ZIP signature inside a comment";
+    commented[footer + 20..].copy_from_slice(&(comment.len() as u16).to_le_bytes());
+    commented.extend_from_slice(comment);
+    assert_eq!(validate_bytes(&commented).verdict, Verdict::Pass);
+
+    let mut zip_in_comment = ordinary.clone();
+    zip_in_comment[footer + 20..].copy_from_slice(&(ordinary.len() as u16).to_le_bytes());
+    zip_in_comment.extend_from_slice(&ordinary);
+    assert!(!has(&validate_bytes(&zip_in_comment), "PKG-CONCATENATED"));
+
+    let report = validate_bytes(&[commented.as_slice(), ordinary.as_slice()].concat());
+    assert_eq!(report.verdict, Verdict::Fail);
+    assert_finding(&report, "PKG-CONCATENATED", None);
+}
+
+#[test]
+fn supplied_filename_agrees_with_main_type() {
+    for (main_type, extension) in [(CT_MAIN, "docx"), (CT_TEMPLATE_MAIN, "dotx"), (CT_MACRO_MAIN, "docm"), (CT_MACRO_TEMPLATE_MAIN, "dotm")] {
+        let bytes = doc_typed_as(main_type).build();
+        let in_memory = validate_bytes(&bytes);
+        assert_eq!(in_memory.verdict, Verdict::Pass);
+        assert!(in_memory.findings.is_empty());
+        assert_eq!(in_memory.checks_run, ALL_CHECKS);
+
+        for ext in [extension, "docx", "DOCX"] {
+            let path = std::env::temp_dir().join(format!("wordcraft-validate-filename-{}-{extension}.{ext}", std::process::id()));
+            std::fs::write(&path, &bytes).unwrap();
+            let result = wordcraft_validate::validate_path(&path);
+            std::fs::remove_file(path).unwrap();
+            let report = result.unwrap();
+            if ext.eq_ignore_ascii_case("docx") && matches!(main_type, CT_TEMPLATE_MAIN | CT_MACRO_MAIN) {
+                assert_eq!(report.verdict, Verdict::Fail);
+                assert_eq!(report.findings.len(), 1);
+                assert_finding(&report, "CT-FILENAME-MAIN-TYPE", Some("word/document.xml"));
+            } else {
+                assert_eq!(report.verdict, Verdict::Pass);
+            }
+            let mut expected_checks = ALL_CHECKS.to_vec();
+            if ext.eq_ignore_ascii_case("docx") {
+                let index = expected_checks.iter().position(|check| *check == "CT-UNDECLARED").unwrap();
+                expected_checks.insert(index, "CT-FILENAME-MAIN-TYPE");
+            }
+            assert_eq!(report.checks_run, expected_checks);
+        }
+    }
+}
+
 /// A minimal package whose main part carries `main_ct` instead of the ordinary document type.
-fn main_typed_as(main_ct: &str) -> Report {
+fn doc_typed_as(main_ct: &str) -> Doc {
     let mut d = Doc::minimal();
     let ct = String::from_utf8(content_types_xml(&[], &[])).unwrap().replace(CT_MAIN, main_ct);
     d.set("[Content_Types].xml", ct);
-    validate(&d)
+    d
+}
+
+fn main_typed_as(main_ct: &str) -> Report {
+    validate(&doc_typed_as(main_ct))
 }
 
 /// A template (`.dotx`) is a valid package: its main part's template content type is one of the

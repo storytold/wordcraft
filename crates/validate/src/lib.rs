@@ -205,6 +205,8 @@ pub(crate) struct RuleSpec {
 
 /// `PKG-NOT-ZIP`: the input is not a readable zip archive.
 pub(crate) const PKG_NOT_ZIP: RuleSpec = RuleSpec { id: "PKG-NOT-ZIP", severity: Severity::Corrupt, evidence: Evidence::ByConstruction };
+/// Two complete OPC packages occupy consecutive archive ranges.
+pub(crate) const PKG_CONCATENATED: RuleSpec = RuleSpec { id: "PKG-CONCATENATED", severity: Severity::Error, evidence: Evidence::Observed };
 /// `PKG-DUP-ENTRY`: the same entry name appears twice. Observed: Word web shows the view-only
 /// corruption banner.
 pub(crate) const PKG_DUP_ENTRY: RuleSpec = RuleSpec { id: "PKG-DUP-ENTRY", severity: Severity::Error, evidence: Evidence::Observed };
@@ -218,6 +220,9 @@ pub(crate) const PKG_NO_CONTENT_TYPES: RuleSpec =
 pub(crate) const PKG_NO_MAIN: RuleSpec = RuleSpec { id: "PKG-NO-MAIN", severity: Severity::Error, evidence: Evidence::Observed };
 /// `CT-UNDECLARED`: a part has no effective content type. Observed: view-only corruption banner.
 pub(crate) const CT_UNDECLARED: RuleSpec = RuleSpec { id: "CT-UNDECLARED", severity: Severity::Error, evidence: Evidence::Observed };
+/// A .docx filename supplies a document format that disagrees with the main part's type.
+pub(crate) const CT_FILENAME_MAIN_TYPE: RuleSpec = RuleSpec { id: "CT-FILENAME-MAIN-TYPE", severity: Severity::Error, evidence: Evidence::Observed };
+
 /// `CT-MAIN-TYPE`: the main part's effective content type is not one of the WordprocessingML main
 /// types (document, template, or a macro-enabled variant).
 /// Observed: Word web refuses.
@@ -494,10 +499,12 @@ pub(crate) const MEDIA_MAGIC: RuleSpec = RuleSpec { id: "MEDIA-MAGIC", severity:
 /// Every rule, in the documented order; [`Acc::add`] grades findings from this table.
 pub(crate) const RULES: &[RuleSpec] = &[
     PKG_NOT_ZIP,
+    PKG_CONCATENATED,
     PKG_DUP_ENTRY,
     PKG_CASE_COLLISION,
     PKG_NO_CONTENT_TYPES,
     PKG_NO_MAIN,
+    CT_FILENAME_MAIN_TYPE,
     CT_UNDECLARED,
     CT_MAIN_TYPE,
     CT_DUP_MAIN,
@@ -770,6 +777,10 @@ pub fn validate_bytes(bytes: &[u8]) -> Report {
 
 /// [`validate_bytes`] with explicit [`Limits`] (used by the budget tests).
 pub(crate) fn validate_bytes_limited(bytes: &[u8], limits: Limits) -> Report {
+    validate_input(bytes, limits, None)
+}
+
+fn validate_input(bytes: &[u8], limits: Limits, path: Option<&Path>) -> Report {
     let mut acc = Acc::with_limits(limits);
     if bytes.len() > limits.input_bytes {
         acc.note(format!("the input is {} bytes, over the {}-byte examination limit; it was not examined", bytes.len(), limits.input_bytes));
@@ -780,6 +791,9 @@ pub(crate) fn validate_bytes_limited(bytes: &[u8], limits: Limits) -> Report {
         return acc.finish();
     };
     check_doctypes(&pkg, &mut acc);
+    if path.and_then(Path::extension).is_some_and(|ext| ext.eq_ignore_ascii_case("docx")) {
+        check_filename_main_type(&pkg, &mut acc);
+    }
     check_document(&pkg, &mut acc);
     acc.finish()
 }
@@ -1044,7 +1058,40 @@ pub fn validate_path(path: &Path) -> std::io::Result<Report> {
         acc.set_incomplete();
         return Ok(acc.finish());
     }
-    Ok(validate_bytes_limited(&bytes, limits))
+    Ok(validate_input(&bytes, limits, Some(path)))
+}
+
+/// Check the measured filename/type disagreements for a supplied .docx path.
+fn check_filename_main_type(pkg: &Package, acc: &mut Acc) {
+    observation_contract! {
+        rules: "CT-FILENAME-MAIN-TYPE";
+        collections: "field.content_types*2,field.incomplete*1";
+        scope: "supplied .docx filename and resolved package main";
+        loss: "unresolved main or incomplete content type declarations";
+        fallback: "retain existing package coverage and skip the comparison";
+        package_loss: "independent";
+    }
+
+    let Resolution::One(main) = &pkg.main else {
+        return;
+    };
+    if pkg.content_types.incomplete {
+        return;
+    }
+    let Some(content_type) = pkg.content_types.of(main) else {
+        return;
+    };
+    acc.ran("CT-FILENAME-MAIN-TYPE");
+    let expected = match content_type {
+        package::TEMPLATE_MAIN_CONTENT_TYPE => ".dotx",
+        package::MACRO_MAIN_CONTENT_TYPE => ".docm",
+        _ => return,
+    };
+    acc.add(
+        "CT-FILENAME-MAIN-TYPE",
+        Some(main.clone()),
+        format!("main part {main} has content type {content_type} ({expected}), which disagrees with the supplied .docx filename"),
+    );
 }
 
 /// Validate `[Content_Types].xml` integrity: undeclared parts, duplicate main parts, and duplicate overrides/defaults.
@@ -6013,6 +6060,16 @@ mod budget_tests {
         assert!(matches!(decode_alternate_image(Format::WebP, &webp, budget, &mut remaining), Ok(AlternateAssessment::Usable)));
         assert_eq!(remaining, 0);
         assert!(matches!(decode_alternate_image(Format::WebP, &webp, budget, &mut remaining), Err(CodecError::LimitExceeded(_))));
+    }
+
+    #[test]
+    fn concatenated_archive_boundary_respects_entry_budget() {
+        let single = tiny_zip(&[("[Content_Types].xml", content_types()), ("_rels/.rels", package_rels()), ("word/document.xml", document())]);
+        let double = [single.as_slice(), single.as_slice()].concat();
+        let report = validate_bytes_limited(&double, Limits { entries: 1, ..Limits::default() });
+        assert_eq!(report.verdict, Verdict::Incomplete);
+        assert!(report.coverage_notes.iter().any(|note| note.contains("could not resolve a candidate boundary")));
+        assert!(!report.findings.iter().any(|finding| finding.rule == "PKG-CONCATENATED"));
     }
 
     #[test]

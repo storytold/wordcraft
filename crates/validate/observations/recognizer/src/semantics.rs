@@ -461,7 +461,7 @@ impl<'ast> Visit<'ast> for Flow {
                     } else if accessor(&name) {
                         self.accessors.push(name);
                     } else if name == "canonical"
-                        && !(self.file == "package.rs" && matches!(self.function.as_str(), "load" | "glossary_part" | "canonical_entry"))
+                        && !(self.file == "package.rs" && matches!(self.function.as_str(), "load_archive" | "glossary_part" | "canonical_entry"))
                     {
                         self.issue("canonical is an internal presence-only helper; calls outside the contracted package lookup/assembly implementations are forbidden");
                     }
@@ -469,7 +469,7 @@ impl<'ast> Visit<'ast> for Flow {
                 if let Expr::Path(p) = c.func.as_ref()
                     && last(&self.path(p)) == "discovered"
                 {
-                    if (self.file != "package.rs" || self.function != "load")
+                    if (self.file != "package.rs" || self.function != "load_archive")
                         && matches!(c.args.iter().nth(1), Some(Expr::Lit(ExprLit {lit: Lit::Bool(b), ..})) if b.value)
                     {
                         self.issue("literal true is not package completeness evidence");
