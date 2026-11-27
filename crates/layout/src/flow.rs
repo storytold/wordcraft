@@ -467,8 +467,9 @@ impl<'a> Flow<'a> {
         // (Against the whole column: balanced columns grow to hold it.)
         // With the 0.01 pt of slack the other fit checks take. Balancing from Word 2013's layout
         // keeps the lines and the next paragraph together at the top of a column too (#6821).
-        // There it starts its border group anew, with its own top border (`lone`).
-        let there = need + rooms.lone.top - rooms.head.top;
+        // There it starts its border group anew, with its own top border, also when it goes on
+        // from a line it shares here (`unjoin`: there it shares none).
+        let there = need + Edges::grouped(&self.pl, false, rooms.below).top - rooms.head.top;
         if pb.y + need > pb.bottom + 0.01 && (!pb.fresh() || Self::strict_widow_control(ctx, pb)) && there <= pb.next_room(self.body_top) {
             pb.advance(self.block, self.body_top);
             rooms.head = rooms.lone;

@@ -14491,6 +14491,44 @@ fn a_last_paragraph_kept_with_the_next_may_hang_into_the_bottom_margin() {
     }
 }
 
+/// A paragraph going on from the line of one whose mark is hidden (#3986) takes no room for its
+/// top border there; moved on to the next page it shares no line and draws it. Kept together, it
+/// moves on only when it fits there with that border: lines filling all but 64pt of the page and
+/// a 64pt band don't, so it splits here instead of over two more pages.
+#[test]
+fn keep_lines_counts_the_top_border_a_shared_line_paragraph_takes_on_the_next_page() {
+    use wordcraft_doc::para_block;
+    let rule = Some(Border { style: BorderStyle::Single, width: 0.5, color: None, space: 63.5 });
+    let kept = |lines: usize| {
+        let text = (0..lines).map(|i| format!("w{i}")).collect::<Vec<_>>().join("\n");
+        let mut p = ruled_para(&text, Some(Borders { top: rule, ..Default::default() }));
+        p.props.keep_lines = Some(true);
+        p.props.widow_control = Some(false);
+        p
+    };
+    let probe = {
+        let mut d = Document::from_text("");
+        d.body = vec![para_block(kept(2))];
+        lay(&d)
+    };
+    let tops = line_tops(&probe);
+    let Some(Placed::Lines { para, .. }) = probe.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { story: StoryRef::Body, .. })) else {
+        panic!("no body line")
+    };
+    assert_eq!(para.lines.len(), 2, "setup: one line a line break, {tops:?}");
+    let h = para.lines[1].top - para.lines[0].top;
+    let n = (648.0 / h).floor() as usize;
+    let mut filler = ruled_para("Filler", None);
+    filler.props.space_before = Some(20.0);
+    let mut alpha = ruled_para("A", None);
+    alpha.mark.hidden = Some(true);
+    let mut d = Document::from_text("");
+    d.body = vec![para_block(filler), para_block(alpha), para_block(kept(n))];
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 2, "{n} lines of {h}pt");
+    assert_eq!(line_tops(&l).len(), 3, "the kept paragraph starts on the first page");
+}
+
 /// Horizontal rules (a paragraph's top, bottom and between borders) on every page: (page, y).
 fn horizontal_rules(l: &DocLayout) -> Vec<(usize, f32)> {
     l.pages
