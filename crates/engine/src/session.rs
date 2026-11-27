@@ -108,6 +108,10 @@ pub struct Session {
     pub new_header_parts: Vec<u32>,
     /// The body selection a command left for a header or footer: `insert.closeHeader` puts it back.
     pub hf_return: Option<Selection>,
+    /// The section of the page whose header or footer is open, which section commands act on
+    /// (#5855). Kept apart from `page_hint`, which stops naming that section once a taller footer
+    /// repaginates the pages, and from `hf_return`, which stays the body position to go back to.
+    pub(crate) hf_section: Option<usize>,
     /// The style-definition change Next / Previous Change selected, for the Accept or Reject that
     /// follows (`cmd::review`). It names its document and selection, so it is shared by the open
     /// documents and stops counting once either changes.
@@ -292,5 +296,21 @@ impl Session {
             self.findings = Some((stamp, crate::cmd::accessibility::check(&self.doc)));
         }
         self.findings.as_ref().map_or(&[], |(_, findings)| findings.as_slice())
+    }
+
+    /// Update `page_hint` and, when editing a header or footer, keep `hf_section` aligned
+    /// with the section of `page` if that section displays the active part.
+    pub fn set_page_hint(&mut self, page: usize) {
+        self.page_hint = page;
+        if let StoryRef::Part(id) = self.sel.focus.story
+            && self.doc.parts.get(&id).is_some_and(|p| matches!(p.kind, wordcraft_doc::PartKind::Header | wordcraft_doc::PartKind::Footer))
+            && let Some(sec) = self.cached_layout().and_then(|l| l.pages.get(page)).map(|pg| pg.section)
+        {
+            let sections = self.doc.sections();
+            let sec = sec.min(sections.len().saturating_sub(1));
+            if crate::cmd::page::section_uses_hf_part(&sections, sec, id) {
+                self.hf_section = Some(sec);
+            }
+        }
     }
 }

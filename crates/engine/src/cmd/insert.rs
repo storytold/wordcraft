@@ -86,6 +86,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("insert.closeHeader", "Close Header and Footer", "Header & Footer", |s, _| {
             // Back where the caret was in the body, as Word does, not on page 1.
             let back = s.hf_return.take().filter(|_| s.in_header_footer());
+            s.hf_section = None;
             if !new_empty_headers(s).is_empty() {
                 // Its own undo step; a protected document keeps it, and the caret still leaves.
                 let _ = s.run("insert.removeEmptyHeaders", &json!({}));

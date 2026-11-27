@@ -229,7 +229,7 @@ fn vert(s: &mut Session, v: &Value, dir: i32) -> CmdResult {
         }
     };
     if let Some(c) = l.caret_on(&to, s.page_hint) {
-        s.page_hint = c.page;
+        s.set_page_hint(c.page);
     }
     let gx = s.goal_x;
     apply(s, to, ext);
@@ -277,7 +277,7 @@ fn page(s: &mut Session, v: &Value, dir: i32) -> CmdResult {
     let Some(c) = l.caret_on(&from, s.page_hint) else { return sel_result(s) };
     let np = if dir < 0 { c.page.saturating_sub(1) } else { (c.page + 1).min(l.pages.len().saturating_sub(1)) };
     let to = l.hit(np, c.x, c.top + 1.0, from.story).unwrap_or(from);
-    s.page_hint = np;
+    s.set_page_hint(np);
     apply(s, to, ext);
     sel_result(s)
 }
@@ -300,7 +300,7 @@ fn set(s: &mut Session, v: &Value) -> CmdResult {
         let story = super::story_param(s, v);
         let l = s.layout();
         let page = usize::try_from(pg).unwrap_or(usize::MAX);
-        s.page_hint = page;
+        s.set_page_hint(page);
         l.hit(page, x, y, story).ok_or_else(|| CmdError::Params("no text on that page".into()))?
     } else {
         return Err(CmdError::Params("`pos` or `page`/`x`/`y` required".into()));

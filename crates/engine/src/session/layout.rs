@@ -11,6 +11,11 @@ impl Session {
         self.layout_with(typing)
     }
 
+    /// Most recently computed layout for the current document revision, if any.
+    pub(crate) fn cached_layout(&self) -> Option<&DocLayout> {
+        self.layout.iter().flatten().find(|e| e.0.0 == self.rev).map(|e| &*e.5)
+    }
+
     /// [`Session::layout`] with `typing` as the word being typed.
     fn layout_with(&mut self, typing: Option<wordcraft_layout::TypingWord>) -> Arc<DocLayout> {
         let mode = if self.view.read_mode { ViewMode::Read } else { self.view.mode };
@@ -138,6 +143,8 @@ impl Session {
         copy.column = self.column.clone();
         copy.widened = self.widened.clone();
         copy.view = self.view.clone();
+        copy.page_hint = self.page_hint;
+        copy.hf_section = self.hf_section;
         copy.prefs = self.prefs.clone();
         copy.path = self.path.clone();
         copy.file_name = self.file_name.clone();

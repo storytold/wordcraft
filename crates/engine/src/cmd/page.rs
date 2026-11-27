@@ -224,8 +224,51 @@ fn manual_hyphenation(s: &mut Session, v: &Value) -> CmdResult {
     Ok(best.map(|(_, v)| v).unwrap_or_else(|| json!({"done": true})))
 }
 
+/// Whether `sec` displays header/footer part `id` (directly or inherited from an earlier section).
+pub(crate) fn section_uses_hf_part(sections: &[(usize, &SectionProps)], sec: usize, id: u32) -> bool {
+    let slice = sections.get(..=sec).unwrap_or(sections);
+    [
+        slice.iter().rev().find_map(|(_, sp)| sp.headers.default),
+        slice.iter().rev().find_map(|(_, sp)| sp.headers.first),
+        slice.iter().rev().find_map(|(_, sp)| sp.headers.even),
+        slice.iter().rev().find_map(|(_, sp)| sp.footers.default),
+        slice.iter().rev().find_map(|(_, sp)| sp.footers.first),
+        slice.iter().rev().find_map(|(_, sp)| sp.footers.even),
+    ]
+    .contains(&Some(id))
+}
+
+/// Resolve the section index associated with a header, footer, or note part `id`.
 pub(crate) fn section_of_part(s: &Session, id: u32) -> usize {
     let sections = s.doc.sections();
+    if s.doc.parts.get(&id).is_some_and(|p| matches!(p.kind, wordcraft_doc::PartKind::Header | wordcraft_doc::PartKind::Footer)) {
+        let uses_hf = |sec: usize| section_uses_hf_part(&sections, sec, id);
+        // The section of the page whose header or footer was opened decides: a footer inherited from
+        // an earlier section still belongs to the later section that shows it. It is kept apart
+        // from the page hint because a taller footer can repaginate the pages under it.
+        if let Some(sec) = s.hf_section.map(|sec| sec.min(sections.len().saturating_sub(1)))
+            && uses_hf(sec)
+        {
+            return sec;
+        }
+        // Entered without a page (Insert › Header, a page number): the page the hint names.
+        if let Some(pg) = s.cached_layout().and_then(|l| l.pages.get(s.page_hint)) {
+            let sec = pg.section.min(sections.len().saturating_sub(1));
+            if uses_hf(sec) {
+                return sec;
+            }
+        }
+        // Neither names a section that uses it (a stale page hint): the body position the header
+        // was entered from.
+        if let Some(ret) = &s.hf_return
+            && ret.focus.story == wordcraft_doc::StoryRef::Body
+        {
+            let sec = s.doc.section_index_of(ret.focus.path.0.first().copied().unwrap_or(0) as usize);
+            if uses_hf(sec) {
+                return sec;
+            }
+        }
+    }
     for (i, (_, sp)) in sections.iter().enumerate() {
         if [sp.headers.default, sp.headers.first, sp.headers.even, sp.footers.default, sp.footers.first, sp.footers.even].contains(&Some(id)) {
             return i;
@@ -269,8 +312,15 @@ fn selected_section_ends(s: &Session) -> Vec<usize> {
     (first..=last).map(|k| ends.get(k).copied().unwrap_or(0)).collect()
 }
 
-/// Apply to the section(s) of the selection.
+/// Apply a mutation to each section touched by the current selection.
+///
+/// When the caret or selection is outside the body (such as in a header, footer, or note),
+/// refreshes the layout so the section resolved from the cached layout reflects the current
+/// document state before mutating section properties.
 pub(crate) fn with_sect(s: &mut Session, f: impl Fn(&mut SectionProps)) -> CmdResult {
+    if s.sel.focus.story != wordcraft_doc::StoryRef::Body {
+        let _ = s.layout();
+    }
     for block in selected_section_ends(s) {
         f(s.doc.section_mut(block));
     }
@@ -494,6 +544,9 @@ fn border_sides_mut(b: &mut Borders) -> impl Iterator<Item = &mut Border> {
 
 fn margins(s: &mut Session, v: &Value) -> CmdResult {
     let preset = p::str(v, "preset");
+    if s.sel.focus.story != wordcraft_doc::StoryRef::Body {
+        let _ = s.layout();
+    }
     let (t, b, l, r) = match preset {
         Some(x) => match MARGIN_PRESETS.iter().find(|(id, _)| *id == x) {
             Some((_, [t, b, l, r])) => (*t, *b, *l, *r),
@@ -549,6 +602,7 @@ pub fn margins_fit(page: (f32, f32), (t, b, l, r): (f32, f32, f32, f32), gutter:
 pub const MIN_PAGE_SIDE: f32 = 7.2;
 pub const MAX_PAGE_SIDE: f32 = 1584.0;
 
+/// Change paper size of the selected section(s) to the given dimensions or preset name.
 fn size(s: &mut Session, v: &Value) -> CmdResult {
     let (w, h) = if let Some(n) = p::str(v, "name") {
         let (_, w, h) = wordcraft_geom::PAPER_SIZES
@@ -563,6 +617,9 @@ fn size(s: &mut Session, v: &Value) -> CmdResult {
     let (w, h) = (w.clamp(MIN_PAGE_SIDE, MAX_PAGE_SIDE), h.clamp(MIN_PAGE_SIDE, MAX_PAGE_SIDE));
     // Each section keeps its orientation: the long side across in landscape, down in portrait.
     let oriented = |x: &SectionProps| if x.landscape { (w.max(h), w.min(h)) } else { (w.min(h), w.max(h)) };
+    if s.sel.focus.story != wordcraft_doc::StoryRef::Body {
+        let _ = s.layout();
+    }
     let sections = s.doc.sections();
     let fits = |block: usize| {
         sections

@@ -142,7 +142,7 @@ impl<'a> PageTextTool<'a> {
                 d.last = pos.clone();
                 let params = json!({"unit": d.unit, "start": d.start, "end": d.end, "pos": pos});
                 let _ = app.run("select.dragUnit", params);
-                app.session.page_hint = page;
+                app.session.set_page_hint(page);
                 app.canvas.glide.restart(craft::platform::clock::monotonic_ms());
             }
         } else if let Some(pos) = layout.hit(page, x, y, story)
@@ -152,7 +152,7 @@ impl<'a> PageTextTool<'a> {
             // (Word); straight to the session, as the app's `run` would scroll on every frame.
             let pj = serde_json::to_value(&pos).unwrap_or_default();
             let _ = app.session.run("caret.set", &json!({"pos": pj, "extend": true}));
-            app.session.page_hint = page;
+            app.session.set_page_hint(page);
             app.canvas.glide.restart(craft::platform::clock::monotonic_ms());
         }
     }
@@ -305,7 +305,7 @@ pub(crate) fn handle_secondary_selection(app: &mut WordApp, body: &PageBody<'_>,
         }
         if let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story) {
             app.session.set_selection(wordcraft_engine::Selection::caret(pos));
-            app.session.page_hint = page;
+            app.session.set_page_hint(page);
         }
     }
     match layout.equation_hit(page, x, y, app.session.sel.focus.story) {
@@ -335,7 +335,7 @@ pub(crate) fn handle_secondary_selection(app: &mut WordApp, body: &PageBody<'_>,
     }
     if let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story) {
         app.session.set_selection(wordcraft_engine::Selection::caret(pos));
-        app.session.page_hint = page;
+        app.session.set_page_hint(page);
     }
 }
 
@@ -374,7 +374,7 @@ fn handle_primary_press(
             if let Some(pos) = app.session.layout().hit(page, x, y, to) {
                 app.session.set_selection(wordcraft_engine::Selection::caret(pos));
             }
-            app.session.page_hint = page;
+            app.session.set_page_hint(page);
         }
         return true;
     }
@@ -390,7 +390,7 @@ fn handle_primary_press(
     {
         app.session.set_selection(wordcraft_engine::Selection::caret(at));
         let _ = app.run("equation.edit", json!({"pos": serde_json::to_value(&inner).unwrap_or_default()}));
-        app.session.page_hint = page;
+        app.session.set_page_hint(page);
         return true;
     }
     if app.session.math.is_some() {
@@ -404,7 +404,7 @@ fn handle_primary_press(
         && let Some(line) = layout.selection_bar_at(page, x, y)
     {
         app.canvas.column_drag = None;
-        app.session.page_hint = page;
+        app.session.set_page_hint(page);
         let lj = serde_json::to_value(&line).unwrap_or_default();
         let (unit, start, end) = if mods.shift {
             let anchor = app.session.sel.anchor.clone();
@@ -445,7 +445,7 @@ fn handle_primary_press(
     // Alt+drag selects a column (block) of text.
     if mods.alt && !mods.shift && !mods.command {
         let _ = app.run("caret.set", json!({"pos": pj}));
-        app.session.page_hint = page;
+        app.session.set_page_hint(page);
         app.canvas.column_drag = Some(((page, x, y), (page, x, y)));
         app.canvas.dragging = true;
         return true;
@@ -466,7 +466,7 @@ fn handle_primary_press(
         let (start, end) = app.session.sel.ordered();
         app.canvas.unit_drag = Some(UnitDrag { unit, clicks, start, end, last: pos });
     }
-    app.session.page_hint = page;
+    app.session.set_page_hint(page);
     app.canvas.dragging = true;
     // Format painter applies on mouse up
     false
@@ -566,7 +566,7 @@ fn skip_equation_or_outline(app: &mut WordApp, pointer: &PagePointer<'_>) -> boo
             let _ = app.run("outline.toggle", json!({ "block": block }));
         } else {
             let _ = app.run("outline.selectSubtree", json!({ "block": block }));
-            app.session.page_hint = page;
+            app.session.set_page_hint(page);
         }
         return true;
     }
