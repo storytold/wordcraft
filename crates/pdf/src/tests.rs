@@ -3423,3 +3423,57 @@ fn chart_and_equation_text_keep_their_pdf_bytes() {
         ["B", "o", "d", "y", " ", "t", "e", "x", "R", "v", "n", "u", "2", "0", "4", "+", "1", equation_x].into_iter().map(String::from).collect();
     assert_eq!(shown, expected, "math face: {}", math_face.family);
 }
+
+#[test]
+fn tables_are_tagged_with_table_tr_th_and_td() {
+    use wordcraft_doc::{Cell, Row, Table, props::RowProps};
+    let mut d = Document::from_text("A table.");
+    let header = Row {
+        props: RowProps { header: true, ..Default::default() },
+        cells: vec![Cell::with_text("Head"), Cell::with_text("Col2")],
+        ..Default::default()
+    };
+    let body = Row { cells: vec![Cell::with_text("Cell10"), Cell::with_text("Cell11")], ..Default::default() };
+    let t = Table { grid: vec![120.0, 120.0], rows: vec![header, body], ..Default::default() };
+    d.body.push(Arc::new(wordcraft_doc::Block::Table(t)));
+    let raw = String::from_utf8_lossy(&export(&d, &PdfOptions { tagged: true, compress: false, ..Default::default() }).unwrap()).into_owned();
+    assert!(raw.contains("/S/Table") || raw.contains("/S /Table"), "missing /S /Table in:\n{raw}");
+    assert!(raw.contains("/S/TR") || raw.contains("/S /TR"), "missing /S /TR in:\n{raw}");
+    assert!(raw.contains("/S/TH") || raw.contains("/S /TH"), "missing /S /TH in:\n{raw}");
+    assert!(raw.contains("/S/TD") || raw.contains("/S /TD"), "missing /S /TD in:\n{raw}");
+    assert!(raw.contains("/Scope/Column") || raw.contains("/Scope /Column"), "missing /Scope /Column on TH");
+}
+
+/// A blank cell still gets its TD or TH, so a filled cell after it keeps its column.
+#[test]
+fn blank_table_cells_keep_their_td_and_th() {
+    use wordcraft_doc::{Cell, Row, Table, props::RowProps};
+    let mut d = Document::from_text("A table.");
+    let header = Row {
+        props: RowProps { header: true, ..Default::default() },
+        cells: vec![Cell::with_text(""), Cell::with_text("Col2")],
+        ..Default::default()
+    };
+    let body = Row { cells: vec![Cell::with_text(""), Cell::with_text("Cell11")], ..Default::default() };
+    let t = Table { grid: vec![120.0, 120.0], rows: vec![header, body], ..Default::default() };
+    d.body.push(Arc::new(wordcraft_doc::Block::Table(t)));
+    let raw = String::from_utf8_lossy(&export(&d, &PdfOptions { tagged: true, compress: false, ..Default::default() }).unwrap()).into_owned();
+    let count = |tag: &str| raw.matches(&format!("/S/{tag}")).count() + raw.matches(&format!("/S /{tag}")).count();
+    assert_eq!(count("TH"), 2, "both header cells, including the blank one");
+    assert_eq!(count("TD"), 2, "both body cells, including the blank one");
+}
+
+/// A row whose cells are all blank is still a row: its TR and its cells are in the tree.
+#[test]
+fn an_all_blank_row_keeps_its_cells() {
+    use wordcraft_doc::{Cell, Row, Table};
+    let mut d = Document::from_text("A table.");
+    let blank = Row { cells: vec![Cell::with_text(""), Cell::with_text("")], ..Default::default() };
+    let filled = Row { cells: vec![Cell::with_text("A"), Cell::with_text("B")], ..Default::default() };
+    let t = Table { grid: vec![120.0, 120.0], rows: vec![blank, filled], ..Default::default() };
+    d.body.push(Arc::new(wordcraft_doc::Block::Table(t)));
+    let raw = String::from_utf8_lossy(&export(&d, &PdfOptions { tagged: true, compress: false, ..Default::default() }).unwrap()).into_owned();
+    let count = |tag: &str| raw.matches(&format!("/S/{tag}")).count() + raw.matches(&format!("/S /{tag}")).count();
+    assert_eq!(count("TR"), 2, "both rows, including the all-blank one");
+    assert_eq!(count("TD"), 4, "every body cell");
+}
