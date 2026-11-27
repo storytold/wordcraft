@@ -451,6 +451,113 @@ fn alt_then_q_opens_search() {
 }
 
 #[test]
+fn legacy_hint_only_shows_for_legacy_sequence_prefixes() {
+    assert!(!should_show_legacy_hint("J", legacy()));
+    assert!(should_show_legacy_hint("V", legacy()));
+}
+
+fn open_table_keytips(h: &mut egui_kittest::Harness<'static, WordApp>, use_alt: bool) {
+    if use_alt && !cfg!(target_os = "macos") {
+        let alt = egui::Modifiers { alt: true, ..Default::default() };
+        h.input_mut().events.extend([key_event(egui::Key::AltLeft, true, egui::Modifiers::NONE), egui::Event::ModifiersChanged(alt)]);
+        crate::test_harness::frame(h);
+        h.input_mut().events.extend([key_event(egui::Key::AltLeft, false, alt), egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
+        crate::test_harness::frame(h);
+    } else {
+        h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
+        crate::test_harness::frame(h);
+    }
+}
+
+fn cancel_table_keytips(h: &mut egui_kittest::Harness<'static, WordApp>) {
+    h.input_mut().events.push(key_event(egui::Key::Escape, true, egui::Modifiers::NONE));
+    crate::test_harness::frame(h);
+    assert!(!h.state().keytips_active, "Escape ends keytips");
+}
+
+/// #1183: outside a table, JT/JL do not appear and J does not enter a table-tab prefix; inside a
+/// table, J hides non-J tabs without showing the legacy hint and an unclaimed letter waits.
+#[test]
+fn table_keytips_ignore_outside_table_and_unclaimed_j_prefix() {
+    use egui_kittest::kittest::{By, Queryable as _};
+
+    // Outside a table there is no J tab: JT/JL are absent, J does not enter a table-tab prefix, and Escape ends keytips.
+    let mut h = harness(app());
+    open_table_keytips(&mut h, false);
+    assert!(h.state().keytips_active);
+    let outside = painted_texts(&h.output().shapes);
+    assert!(!outside.iter().any(|t| t == "JT" || t == "JL"), "JT/JL do not show outside a table: {outside:?}");
+    h.input_mut().events.extend([key_event(egui::Key::J, true, egui::Modifiers::NONE), egui::Event::Text("j".into())]);
+    crate::test_harness::frame(&mut h);
+    assert_eq!(h.state().ui.tab, "Home");
+    assert!(h.query_all(By::new().label_contains("Old menu keys")).next().is_none());
+    h.input_mut().events.extend([key_event(egui::Key::L, true, egui::Modifiers::NONE), egui::Event::Text("l".into())]);
+    crate::test_harness::frame(&mut h);
+    assert_eq!(h.state().ui.tab, "Home", "J, L outside a table must not open Table Layout");
+    assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "letters do not type while keytips are active");
+    cancel_table_keytips(&mut h);
+
+    // Insert a table on the same harness to keep setup to a single WordApp instance.
+    h.state_mut().run("insert.table", serde_json::json!({"rows": 2, "cols": 2})).unwrap();
+    crate::test_harness::frame(&mut h);
+    assert!(crate::ribbon::in_table_public(h.state()));
+    let initial_text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+
+    // J then a letter no table tab uses leaves keytips waiting without switching tabs or typing, and Escape cancels.
+    open_table_keytips(&mut h, false);
+    assert!(h.state().keytips_active, "keytips activate inside a table");
+    let after_open = painted_texts(&h.output().shapes);
+    assert!(after_open.iter().any(|t| t == "JT"), "Table Design badge JT shows: {after_open:?}");
+    assert!(after_open.iter().any(|t| t == "JL"), "Table Layout badge JL shows: {after_open:?}");
+
+    h.input_mut().events.extend([key_event(egui::Key::J, true, egui::Modifiers::NONE), egui::Event::Text("j".into())]);
+    crate::test_harness::frame(&mut h);
+    assert_eq!(h.state().ui.tab, "Home", "J waits for the second letter");
+    assert!(h.state().keytips_active, "still waiting for second badge letter");
+    assert!(h.query_all(By::new().label_contains("Old menu keys")).next().is_none(), "J prefix for JT/JL must not show the legacy menu keys hint");
+    let after_j = painted_texts(&h.output().shapes);
+    assert!(after_j.iter().any(|t| t == "JT") && after_j.iter().any(|t| t == "JL"), "JT and JL stay painted after J: {after_j:?}");
+    assert!(!after_j.iter().any(|t| t == "H" || t == "N"), "non-J tab badges hide after J: {after_j:?}");
+
+    h.input_mut().events.extend([key_event(egui::Key::X, true, egui::Modifiers::NONE), egui::Event::Text("x".into())]);
+    crate::test_harness::frame(&mut h);
+    assert_eq!(h.state().ui.tab, "Home", "J then unused X does not switch tabs");
+    assert!(h.state().keytips_active, "unclaimed X leaves keytips active");
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), initial_text, "X does not type into the table");
+    cancel_table_keytips(&mut h);
+}
+
+/// #1183: Alt (or F10), then J, then T or L switches to the contextual table tabs when inside a table.
+#[test]
+fn alt_j_t_and_alt_j_l_open_the_table_tabs() {
+    let mut a = app();
+    a.run("insert.table", serde_json::json!({"rows": 2, "cols": 2})).unwrap();
+    let mut h = harness(a);
+    assert!(crate::ribbon::in_table_public(h.state()));
+    let initial_text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+
+    for (second, text, tab, badge, use_alt) in
+        [(egui::Key::T, "t", "Table Design", "P", false), (egui::Key::L, "l", "Table Layout", "V", !cfg!(target_os = "macos"))]
+    {
+        if h.state().ui.tab != "Home" {
+            h.state_mut().run("ui.tab", serde_json::json!({"tab": "Home"})).unwrap();
+        }
+        open_table_keytips(&mut h, use_alt);
+        h.input_mut().events.extend([key_event(egui::Key::J, true, egui::Modifiers::NONE), egui::Event::Text("j".into())]);
+        crate::test_harness::frame(&mut h);
+        h.input_mut().events.extend([key_event(second, true, egui::Modifiers::NONE), egui::Event::Text(text.into())]);
+        crate::test_harness::frames(&mut h, 2);
+        assert_eq!(h.state().ui.tab, tab, "J then {second:?} selects {tab}");
+        assert!(h.state().keytips_active, "{tab} stays in command keytips phase");
+        let after_second = painted_texts(&h.output().shapes);
+        assert!(!after_second.iter().any(|t| t == "JT" || t == "JL"), "tab badges clear after selecting {tab}");
+        assert!(after_second.iter().any(|t| t == badge), "{tab} paints its control badges (expected {badge}): {after_second:?}");
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), initial_text, "keytip letters never type into the table");
+        cancel_table_keytips(&mut h);
+    }
+}
+
+#[test]
 fn qat_keytips_follow_custom_order_and_skip_disabled_commands() {
     let mut a = app();
     a.run("tools.customizeRibbon", serde_json::json!({"qatAdd": "format.bold"})).unwrap();
