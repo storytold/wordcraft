@@ -1,12 +1,15 @@
 use craft::behavior::{ColumnWidth, IconId};
 use craft::keymap::CommandRef;
 use craft::menu::ribbon::{RibbonGroup, RibbonRow};
+use craft::theme::ControlSize;
 use craft::ui::buttons::{Arrangement, Button, IconButton, ToggleButton};
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _};
+use craft::ui::display::Text;
 use craft::ui::layout::{GridFit, empty_cell};
 use craft::ui::layout_components::{Grid, Row, Stack};
 use craft::ui::menu::MenuItem;
+use craft::ui::style::TypeRole;
 use craft::ui::text::NumberField;
 
 use super::common::menu_button;
@@ -68,7 +71,7 @@ pub(super) fn table_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             let _ = menu_button(
                 ui,
-                Button::new(tl!("Styles").to_string()).icon(IconId::new("styles")),
+                Button::new(tl!("Styles").to_string()).icon(crate::icons::spec("styles")),
                 tl!("Styles").to_string(),
                 Some("table.style"),
                 |ui, _| {
@@ -142,14 +145,20 @@ fn cell_size_boxes(ui: &mut Ui, app: &mut WordApp) {
     let w0 = laid.map(|x| x.w).or(stored_w).unwrap_or(0.0);
     let exact = row.height_rule == wordcraft_doc::props::HeightRule::Exact;
     let (height_units, width_units) = (crate::options::lengths(app.session.units()), crate::options::lengths(app.session.units()));
-    Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-        let out = NumberField::length(tl!("Height:").to_string(), Bind::given(Some(f64::from(h0))), height_units).range(CELL_SIZE_RANGE).show(ui);
+    // As the old ribbon and Layout › Paragraph: a visible label beside each field, two decimals ("0.20").
+    let caption = |label: &'static str| Text::new(tl!(label)).role(TypeRole::Caption);
+    Grid::new(&[ColumnWidth::Content; 2]).gap(Gap::Tight).show(ui, |ui, _| {
+        caption("Height:").show(ui);
+        let field = NumberField::length(tl!("Height:").to_string(), Bind::given(Some(f64::from(h0))), height_units).range(CELL_SIZE_RANGE);
+        let out = field.fixed_decimals(2).size(ControlSize::Sm).show(ui);
         apply_edits(app, out.edit.events, |app, v| {
             if let Some(h) = v {
                 let _ = app.run("table.rowHeight", json!({"height": h, "rule": if exact { "exact" } else { "atLeast" }}));
             }
         });
-        let out = NumberField::length(tl!("Width:").to_string(), Bind::given(Some(f64::from(w0))), width_units).range(CELL_SIZE_RANGE).show(ui);
+        caption("Width:").show(ui);
+        let field = NumberField::length(tl!("Width:").to_string(), Bind::given(Some(f64::from(w0))), width_units).range(CELL_SIZE_RANGE);
+        let out = field.fixed_decimals(2).size(ControlSize::Sm).show(ui);
         apply_edits(app, out.edit.events, |app, v| {
             if let Some(w) = v {
                 let _ = app.run("table.columnWidth", json!({"width": w}));
@@ -270,7 +279,7 @@ pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         });
         Button::command(CommandRef::new("table.textDirection"))
             .label(tl!("Text\nDirection").to_string())
-            .icon(IconId::new("textDirection"))
+            .icon(crate::icons::spec("textDirection"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
         Button::command(CommandRef::new("table.cellMargins"))
@@ -279,10 +288,10 @@ pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .arrangement(Arrangement::Stacked)
             .show(ui);
     });
-    row.group(RibbonGroup::new("data", tl!("Data").to_string(), IconId::new("sort").into()), |ui| {
+    row.group(RibbonGroup::new("data", tl!("Data").to_string(), crate::icons::spec("sort")), |ui| {
         Button::command(CommandRef::new("table.sort"))
             .label(tl!("Sort").to_string())
-            .icon(IconId::new("sort"))
+            .icon(crate::icons::spec("sort"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
@@ -291,7 +300,7 @@ pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 .icon(IconId::new("repeatHeader"))
                 .show(ui);
             Button::command(CommandRef::new("table.toText")).label(tl!("Convert to Text").to_string()).icon(IconId::new("toText")).show(ui);
-            Button::command(CommandRef::new("table.formula")).label(tl!("Formula").to_string()).icon(IconId::new("formula")).show(ui);
+            Button::command(CommandRef::new("table.formula")).label(tl!("Formula").to_string()).icon(crate::icons::spec("formula")).show(ui);
         });
     });
 }
