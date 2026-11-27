@@ -479,8 +479,10 @@ fn inline_picture_in_rtl_text_sits_in_its_place() {
 }
 
 /// A right-to-left table (`w:bidiVisual`, #362): the first logical column stands at the right
-/// edge, the table is start-aligned against the right margin, and each cell's start (left)
-/// margin and border are drawn on its right. Clicks find cells by where they are drawn.
+/// edge, the table is start-aligned against the right margin, and each cell's start (left) border
+/// is drawn on its right. Its text insets aren't mirrored: measured in Word for Windows, with
+/// 10 pt left and 2 pt right cell margins a cell's text starts 10 pt in from its left edge in a
+/// right-to-left table too. Clicks find cells by where they are drawn.
 #[test]
 fn rtl_table_lays_its_columns_out_right_to_left() {
     crate::test_fonts();
@@ -508,10 +510,10 @@ fn rtl_table_lays_its_columns_out_right_to_left() {
     assert!(c0.x > c1.x && c1.x > c2.x, "{c0:?} {c1:?} {c2:?}");
     assert!((c1.right() - c0.x).abs() < 0.01 && (c2.right() - c1.x).abs() < 0.01);
     assert!((c2.x - (right - 300.0)).abs() < 2.0, "{c2:?}");
-    // The first cell's text sits its end margin (2pt) in from the cell's left edge.
+    // The first cell's text sits its left margin (10pt) in from the cell's left edge, as in Word.
     let text_x =
         items.iter().find_map(|i| if let Placed::Lines { path, x, .. } = i { (path.0 == [1, 0, 0, 0]).then_some(*x) } else { None }).unwrap();
-    assert!((text_x - (c0.x + 2.0)).abs() < 0.5, "text at {text_x}, cell {c0:?}");
+    assert!((text_x - (c0.x + 10.0)).abs() < 0.5, "text at {text_x}, cell {c0:?}");
     // The thick start border is drawn on the cell's right edge.
     let thick: Vec<f32> = items
         .iter()
