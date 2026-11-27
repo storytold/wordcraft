@@ -29,6 +29,14 @@ pub(crate) fn comment_time(c: &wordcraft_doc::Comment) -> String {
     stamp(&c.date, c.date_utc.as_deref(), offset_minutes)
 }
 
+/// A tracked change's time for its hover tip, read as [`comment_time`] reads a comment with no
+/// UTC time beside it: a revision has none (`w:date` only), Word writes local time there with a
+/// `Z` it doesn't mean and shows it as written, so it shows as written here too; a time with an
+/// offset (`±HH:MM`) is converted. Empty when it isn't a date.
+pub(crate) fn revision_time(r: &wordcraft_doc::Revision) -> String {
+    stamp(&r.date, None, offset_minutes)
+}
+
 fn stamp(date: &str, date_utc: Option<&str>, offset: impl Fn(i64) -> i32) -> String {
     let utc = date_utc.and_then(parse).filter(|t| t.timed).map(|t| Time { zone: Some(t.zone.unwrap_or(0)), ..t });
     let local_date = || parse(date).map(|t| if date.trim_end().ends_with(['Z', 'z']) { Time { zone: None, ..t } } else { t });
@@ -183,6 +191,15 @@ mod tests {
         // A date alone stays a date.
         assert_eq!(stamp("2026-10-12", None, berlin), "2026-10-12");
         assert_eq!(stamp("2026-10-12Z", Some("2026-10-12"), |_| -4 * 60), "2026-10-12");
+    }
+
+    /// A tracked change has only its `w:date` (#7887): shown as written, `Z` or not, as Word shows it.
+    #[test]
+    fn revision_times_show_as_written() {
+        let at = |date: &str| revision_time(&wordcraft_doc::Revision::new(wordcraft_doc::RevisionKind::Insert, "Ada", date));
+        assert_eq!(at("2026-11-20T14:05:00Z"), "2026-11-20 14:05");
+        assert_eq!(at("2026-11-20"), "2026-11-20");
+        assert_eq!(at("not a date"), "");
     }
 
     /// Whatever a file holds, a stamp is a date or nothing, never a panic.

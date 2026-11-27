@@ -9,6 +9,7 @@ use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPoint
 use craft::ui::primitives::Draw;
 
 use super::links::{field_showing_code, follow_link, is_generated_bookmark_link, link_under};
+use super::revision_tip::revision_under;
 use super::story::{enters_header_footer, in_text_box, part_kind, text_box_host};
 use super::{CanvasState, DocLayout, PartKind, Pos, Pos2, StoryRef, WordApp, json};
 use crate::objects::ObjectGesture;
@@ -169,6 +170,14 @@ impl<'a> PageTextTool<'a> {
         let target = if is_generated_bookmark_link(&link) { tl!("Current Document").to_string() } else { link };
         Some(format!("{target}\n{}", crate::i18n::fmt(tl!("{key}+Click to follow link"), &[("key", self.link_key)])))
     }
+
+    /// The tip for the tracked change under `pos`: its kind, author and time (#7887).
+    fn revision_tip(&self, pos: Pos2) -> Option<String> {
+        let (page, x, y) = page_of(self.body.pages, pos)?;
+        let layout = &*self.layout;
+        let at = layout.hit(page, x, y, self.app.session.sel.focus.story)?;
+        revision_under(&*self.app, layout, page, x, y, &at)
+    }
 }
 
 impl CanvasTool for PageTextTool<'_> {
@@ -245,7 +254,8 @@ impl CanvasTool for PageTextTool<'_> {
 
     fn hover(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         // PLAN: assumed `ToolContext::tip(&mut self, tip: impl Into<Tooltip>)` (canvas-w1, S-L238).
-        if let Some(tip) = self.link_tip(pointer.pos) {
+        // A link's tip comes first: following the link is what a click there can do.
+        if let Some(tip) = self.link_tip(pointer.pos).or_else(|| self.revision_tip(pointer.pos)) {
             cx.tip(tip);
         }
     }
