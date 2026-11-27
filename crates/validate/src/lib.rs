@@ -2547,7 +2547,7 @@ fn part_rel_ids(pkg: &Package, part: &str) -> HashSet<RelId> {
 fn check_typed_targets(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
     observation_contract! {
         rules: "REL-DANGLING,REL-TYPED";
-        collections: "field.content_types*1,field.rels*3,lookup.canonical_entry*1,type.Vec*1";
+        collections: "field.content_types*1,field.entries*1,field.rels*3,lookup.canonical_entry*1,type.Vec*1";
         scope: "Missing targets package-wide and declared header, footer and image types for the selected main story; first-bound XML references";
         loss: "Unknown archive identity, declaration cap, or incomplete picture substitution";
         fallback: "Only an established missing entry dangles; emit dangling Errors before bounded Warnings; suppress a choice image mismatch only with a usable local fallback";
@@ -2564,6 +2564,10 @@ fn check_typed_targets(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
     let mut warnings = Vec::new();
     for rp in &pkg.rels {
         let source = relationship_source(xml, rp);
+        // The part whose scan decides use: a scanned owner, else an XML owner present but never scanned (undecodable).
+        let owner_entry = rels_owner_name(&rp.name).and_then(|owner| pkg.entries.iter().find(|e| !e.is_dir && e.name.eq_ignore_ascii_case(&owner)));
+        let unscanned_owner = source.is_none() && owner_entry.is_some_and(|e| package::is_xml_part(pkg, &e.name));
+        let owner_name = source.map(|s| s.name.as_str()).or(owner_entry.map(|e| e.name.as_str())).unwrap_or(rp.name.as_str());
         let mut consumers = None;
         let bindings = package::relationship_bindings(rp);
         let is_main = main_rels.as_ref().is_some_and(|main| main.eq_ignore_ascii_case(&rp.name));
@@ -2574,7 +2578,7 @@ fn check_typed_targets(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
                 if !bindings.is_first(rel) {
                     return Consumption::Unused;
                 }
-                source.map_or(Consumption::Unused, |source| {
+                source.map_or(if unscanned_owner { Consumption::Undecided } else { Consumption::Unused }, |source| {
                     consumers.get_or_insert_with(|| Consumers::new(&source.usage, source.syntax == Completeness::Complete)).consumption(
                         &rel.id,
                         &bindings,
@@ -2590,12 +2594,15 @@ fn check_typed_targets(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
                 let assessed =
                     !implicit_relationship(pkg, rp, rel) && !matches!(kind, Some("numbering")) && !(kind == Some("hyperlink") && rel.fragment_only);
                 if assessed && source.is_some_and(|source| source.usage.capped) {
-                    acc.note(format!("{} exceeded the relationship consumption fact budget; some missing targets were not assessed", rp.name));
+                    acc.note(format!(
+                        "{owner_name} (owner of {}) exceeded the relationship consumption fact budget; some missing targets were not assessed",
+                        rp.name
+                    ));
                     acc.set_incomplete();
                 } else if assessed && consumption == Consumption::Undecided {
                     acc.note(format!(
-                        "{} was not scanned to its end, so whether relationship {} (missing target {target}) is used was not decided; its dangling target was not assessed",
-                        rp.name, rel.id
+                        "{owner_name} was not scanned to its end, so whether relationship {} in {} (missing target {target}) is used was not decided; its dangling target was not assessed",
+                        rel.id, rp.name
                     ));
                     acc.set_incomplete();
                 }
@@ -8474,6 +8481,51 @@ mod round5_completeness_tests {
     }
 
     #[test]
+    fn undecodable_owner_leaves_the_dangling_check_recorded_as_unassessed() {
+        let rels = rel("hyperlink", "missing.docx");
+        let base = package(vec![], &rels);
+        let body =
+            format!(r#"<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}"><w:body><w:p><w:hyperlink r:id="missing.docx"/></w:p></w:body></w:document>"#);
+        let owners: Vec<Vec<u8>> = vec![
+            format!(r#"<?xml version="1.0" encoding="x-unknown-encoding"?>{body}"#).into_bytes(),
+            [b"<w:document \xff\xfe".as_slice(), body.as_bytes()].concat(),
+            b"<?xml version=\"1.0\"".to_vec(),
+        ];
+        for owner in owners {
+            let report = validate_bytes(&replace_part_bytes(&base, "word/document.xml", &owner));
+            let note = report.coverage_notes.iter().find(|n| n.contains("missing.docx") && n.contains("not decided"));
+            assert!(note.is_some(), "{:?}: {report:?}", String::from_utf8_lossy(&owner));
+            assert!(note.is_some_and(|n| n.starts_with("word/document.xml ")), "{note:?}");
+            assert!(report.verdict != Verdict::Pass, "{report:?}");
+        }
+    }
+
+    #[test]
+    fn early_stop_note_names_the_truncated_owner_not_its_relationships_part() {
+        let reference = r#"<w:p><w:hyperlink r:id="missing.docx"/></w:p>"#;
+        let rels = rel("hyperlink", "missing.docx");
+        let build = |body: &str| {
+            let document = format!(r#"<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}"><w:body>{body}</w:body></w:document>"#);
+            replace_part(&package(vec![], &rels), "word/document.xml", &document)
+        };
+        let padding = "<w:p/>".repeat(100);
+        let nesting = format!("{}{}", "<w:sdt>".repeat(20), "</w:sdt>".repeat(20));
+        let events = Limits { events: 60, ..Limits::default() };
+        let depth = Limits { depth: 8, ..Limits::default() };
+        let cases = [
+            (format!("{padding}{reference}"), events),
+            (format!("{nesting}{reference}"), depth),
+            (format!("<w:p></w:q>{reference}"), Limits::default()),
+        ];
+        for (body, limits) in cases {
+            let report = validate_bytes_limited(&build(&body), limits);
+            let note = report.coverage_notes.iter().find(|n| n.contains("not decided")).unwrap_or_else(|| panic!("{report:?}"));
+            assert!(note.starts_with("word/document.xml was not scanned"), "{note}");
+            assert!(!note.starts_with("word/_rels/"), "{note}");
+        }
+    }
+
+    #[test]
     fn dangling_relationship_budget_keeps_structural_error_after_picture_warnings() {
         let limits = Limits { findings_per_rule: 1, ..Limits::default() };
         for picture_count in [1, 2, 16] {
@@ -8950,6 +9002,10 @@ mod round5_completeness_tests {
 
     /// Repack one synthetic part while preserving archive ordering and all other payloads.
     fn replace_part(bytes: &[u8], target: &str, text: &str) -> Vec<u8> {
+        replace_part_bytes(bytes, target, text.as_bytes())
+    }
+
+    fn replace_part_bytes(bytes: &[u8], target: &str, text: &[u8]) -> Vec<u8> {
         use std::io::Read;
         let mut input = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
         let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
@@ -8958,7 +9014,7 @@ mod round5_completeness_tests {
             let mut data = Vec::new();
             entry.read_to_end(&mut data).unwrap();
             output.start_file(entry.name(), zip::write::SimpleFileOptions::default()).unwrap();
-            output.write_all(if entry.name() == target { text.as_bytes() } else { &data }).unwrap();
+            output.write_all(if entry.name() == target { text } else { &data }).unwrap();
         }
         output.finish().unwrap().into_inner()
     }
