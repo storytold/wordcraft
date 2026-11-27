@@ -45,7 +45,7 @@ fn para_issues(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> Vec<
     let runs = wordcraft_layout::para::proof_runs(&s.doc, p, None);
     wordcraft_layout::para::paragraph_issues(p, &runs, &s.prefs.spelling(), true, wordcraft_layout::para::is_list_item(&s.doc, p))
         .into_iter()
-        .map(|i| (Pos { story, path: path.clone(), off: i.start }, Pos { story, path: path.clone(), off: i.end }, i))
+        .map(|i| (Pos::new(story, path.clone(), i.start), Pos::new(story, path.clone(), i.end), i))
         .collect()
 }
 

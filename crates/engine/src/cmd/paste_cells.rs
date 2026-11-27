@@ -212,7 +212,7 @@ fn apply_plan(s: &mut Session, src: &Table, story: StoryRef, tp: &Path, row0: us
     super::table::touch_cells(s, tp)?;
     let mut path = tp.0.clone();
     path.extend([first.0 as u32, first.1 as u32, 0]);
-    s.sel = Selection::caret(Pos { story, path: Path(path), off: 0 });
+    s.sel = Selection::caret(Pos::new(story, Path(path), 0));
     Ok(())
 }
 

@@ -157,7 +157,7 @@ fn find(s: &Session, text: &str) -> (wordcraft_doc::Path, usize) {
 }
 
 fn add_mark(s: &mut Session, path: &wordcraft_doc::Path, off: usize, obj: InlineObject) {
-    let at = wordcraft_doc::Pos { story: StoryRef::Body, path: path.clone(), off };
+    let at = wordcraft_doc::Pos::new(StoryRef::Body, path.clone(), off);
     s.doc.insert_object(&at, obj, &wordcraft_doc::CharProps::default()).unwrap();
 }
 

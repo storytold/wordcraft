@@ -170,7 +170,7 @@ fn remove_piece(doc: &mut Document, h: &Hidden) -> Result<(), CmdError> {
     }
     if !h.range.is_empty() {
         if has_control {
-            let at = |off| Pos { story: h.story, path: h.path.clone(), off };
+            let at = |off| Pos::new(h.story, h.path.clone(), off);
             doc.delete_range(&at(h.range.start), &at(h.range.end))?;
         } else {
             doc.para_mut(h.story, &h.path)?.delete(h.range.start, h.range.end)?;

@@ -87,7 +87,7 @@ pub(crate) fn select_range(s: &mut Session, story: StoryRef, tp: &Path, rows: (u
         .filter(|q| in_picked(q))
         .map(|q| {
             let len = s.doc.para(story, &q).map_or(0, Paragraph::len);
-            (Pos { story, path: q.clone(), off: 0 }, Pos { story, path: q, off: len })
+            (Pos::new(story, q.clone(), 0), Pos::new(story, q, len))
         })
         .collect();
     let (Some(first), Some(last)) = (segments.first(), segments.last()) else {

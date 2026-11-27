@@ -112,7 +112,7 @@ fn empty_paragraph_merges_work_in_a_header_and_a_table_cell() {
             let id = d.add_part(wordcraft_doc::PartKind::Header, d.body.clone());
             (StoryRef::Part(id), Path::top(0), Path::top(1))
         };
-        d.delete_range(&Pos { story, path: a.clone(), off: 0 }, &Pos { story, path: b, off: 0 }).unwrap();
+        d.delete_range(&Pos::new(story, a.clone(), 0), &Pos::new(story, b, 0)).unwrap();
         assert_format(d.para(story, &a).unwrap(), &expected);
     }
 }

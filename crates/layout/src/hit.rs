@@ -110,7 +110,7 @@ pub struct ColumnSelection<'a> {
 impl ObjectHit {
     /// The object's position (its U+FFFC).
     pub fn pos(&self) -> Pos {
-        Pos { story: self.story, path: self.path.clone(), off: self.off }
+        Pos::new(self.story, self.path.clone(), self.off)
     }
     pub fn floating(&self) -> bool {
         self.wrap != Wrap::Inline
@@ -396,7 +396,8 @@ fn turned_hit(page: &Page, story: StoryRef, x: f32, y: f32, skip: &dyn Fn(&Path)
             .filter_map(|li| para.lines.get(li).map(|l| (li, l.top - first.top, l.height)))
             .min_by(|a, b| band_dist(v, a.1, a.2).total_cmp(&band_dist(v, b.1, b.2)))?
             .0;
-        Some(Pos { story: *s, path: path.clone(), off: para.off_at_x(li, u) })
+        let off = para.off_at_x(li, u);
+        Some(Pos::with_affinity(*s, path.clone(), off, para.continuation_affinity(li, off)))
     })
 }
 
@@ -416,7 +417,8 @@ fn nearest_turned(page: &Page, story: StoryRef, x: f32, y: f32, skip: &dyn Fn(&P
         .filter_map(|li| para.lines.get(li).map(|l| (li, l.top - first.top, l.height)))
         .min_by(|a, b| band_dist(v, a.1, a.2).total_cmp(&band_dist(v, b.1, b.2)))?
         .0;
-    Some(Pos { story, path: path.clone(), off: para.off_at_x(li, u) })
+    let off = para.off_at_x(li, u);
+    Some(Pos::with_affinity(story, path.clone(), off, para.continuation_affinity(li, off)))
 }
 
 /// The body line on `page` whose band is nearest height `y` (the leftmost on a tie, so in
@@ -476,7 +478,10 @@ impl DocLayout {
         }
         let lines = page_lines(p, story);
         let nearest = |a: &&LineHit, b: &&LineHit| score(a, x, y).total_cmp(&score(b, x, y));
-        let at = |l: &LineHit| Pos { story: l.story, path: l.path.clone(), off: l.para.off_at_x(l.li, x - l.x) };
+        let at = |l: &LineHit| {
+            let off = l.para.off_at_x(l.li, x - l.x);
+            Pos::with_affinity(l.story, l.path.clone(), off, l.para.continuation_affinity(l.li, off))
+        };
         if let Some((table, row, col)) = cell {
             if let Some(best) = lines.iter().filter(|l| in_cell(l.path, table, row, col)).min_by(nearest) {
                 return Some(at(best));
@@ -489,6 +494,7 @@ impl DocLayout {
             // A page of turned text (a vertical section): the nearest turned line.
             return nearest_turned(p, story, x, y, &away).or_else(|| nearest_turned(p, story, x, y, &|_: &Path| false));
         }
+
         if let Some(best) = lines.iter().filter(|l| !away(l.path)).min_by(nearest) {
             return Some(at(best));
         }
@@ -742,7 +748,7 @@ impl DocLayout {
     pub fn caret_on(&self, pos: &Pos, page_hint: usize) -> Option<Caret> {
         for (pi, it) in self.pieces(pos.story, &pos.path, page_hint) {
             let Placed::Lines { para, l0, l1, x, y, turn, .. } = it else { continue };
-            let li = para.line_of(pos.off);
+            let li = para.line_for(pos);
             if li < *l0 || li >= *l1 {
                 continue;
             }
@@ -770,7 +776,7 @@ impl DocLayout {
     pub fn typing_style(&self, pos: &Pos, page_hint: usize) -> Option<(StyleRun, f32)> {
         for (_, it) in self.pieces(pos.story, &pos.path, page_hint) {
             let Placed::Lines { para, l0, l1, y, turn, .. } = it else { continue };
-            let li = para.line_of(pos.off);
+            let li = para.line_for(pos);
             if li < *l0 || li >= *l1 {
                 continue;
             }
@@ -809,17 +815,19 @@ impl DocLayout {
             }
             None => in_row(&cands, gx, dir),
         };
-        if let Some(l) = target {
+        let line_pos_x = |l: &LineHit| -> (Pos, f32) {
             let off = l.para.off_at_x(l.li, gx - l.x);
-            return Some((Pos { story: l.story, path: l.path.clone(), off }, gx));
+            (Pos::with_affinity(l.story, l.path.clone(), off, l.para.continuation_affinity(l.li, off)), gx)
+        };
+        if let Some(l) = target {
+            return Some(line_pos_x(l));
         }
         // Next/previous page.
         let np = if dir < 0 { c.page.checked_sub(1)? } else { c.page + 1 };
         let p = self.pages.get(np)?;
         let lines = page_lines(p, pos.story);
         let l = if dir < 0 { lines.iter().max_by(|a, b| a.top.total_cmp(&b.top))? } else { lines.iter().min_by(|a, b| a.top.total_cmp(&b.top))? };
-        let off = l.para.off_at_x(l.li, gx - l.x);
-        Some((Pos { story: l.story, path: l.path.clone(), off }, gx))
+        Some(line_pos_x(l))
     }
 
     /// Page Up (`dir < 0`) or Page Down within the caret's page: of the lines above (or below)
@@ -834,29 +842,31 @@ impl DocLayout {
         let dx = |l: &LineHit| (l.left - x).max(x - l.right).max(0.0);
         let l = lines.iter().filter(|l| beyond(l, &c, dir)).min_by(|a, b| dy(a).total_cmp(&dy(b)).then(dx(a).total_cmp(&dx(b))))?;
         let off = l.para.off_at_x(l.li, x - l.x);
-        Some(Pos { story: l.story, path: l.path.clone(), off })
+        Some(Pos::with_affinity(l.story, l.path.clone(), off, l.para.continuation_affinity(l.li, off)))
     }
 
     /// Start and end of the visual line holding `pos` (Home / End).
     pub fn line_bounds(&self, pos: &Pos, page_hint: usize) -> Option<(Pos, Pos)> {
         for (_, it) in self.pieces(pos.story, &pos.path, page_hint) {
             let Placed::Lines { para, l0, l1, .. } = it else { continue };
-            let li = para.line_of(pos.off);
+            let li = para.line_for(pos);
             if li < *l0 || li >= *l1 {
                 continue;
             }
             let l = para.lines.get(li)?;
+            let offsets = para.line_offsets(li);
+            let start = if para.is_line_continuation(li) { offsets.iter().copied().min().unwrap_or(l.start) } else { l.start };
             let mut end = l.stop;
             // Don't put the caret after a trailing break on that line, nor past wrap spaces.
-            if matches!(l.end, crate::LineEnd::LineBreak | crate::LineEnd::PageBreak | crate::LineEnd::ColumnBreak) && end > l.start {
+            if matches!(l.end, crate::LineEnd::LineBreak | crate::LineEnd::PageBreak | crate::LineEnd::ColumnBreak) && end > start {
                 end = para.clusters.get(l.c1.saturating_sub(1)).map(|c| c.start).unwrap_or(end);
             } else if l.end == crate::LineEnd::Wrap {
                 // Before the wrapped line's trailing space: its last reachable offset, in logical
                 // order (the far edge is the left one in right-to-left text).
-                end = para.line_offsets(li).into_iter().max().unwrap_or(end);
+                end = offsets.iter().copied().max().unwrap_or(end);
             }
-            let mk = |off| Pos { story: pos.story, path: pos.path.clone(), off };
-            return Some((mk(l.start), mk(end)));
+            let mk = |off| Pos::with_affinity(pos.story, pos.path.clone(), off, para.continuation_affinity(li, off));
+            return Some((mk(start), mk(end)));
         }
         None
     }
@@ -881,7 +891,7 @@ impl DocLayout {
         if l.path.0.len() > 1 || line.rtl == left || hangs {
             return None;
         }
-        Some(Pos { story: StoryRef::Body, path: l.path.clone(), off: line.start })
+        l.para.line_start_pos(StoryRef::Body, l.path.clone(), l.li)
     }
 
     /// The start of the top-level body line nearest height `y` on `page` (dragging in the
@@ -892,7 +902,7 @@ impl DocLayout {
             return None;
         }
         let l = nearest_line_at(p, y, true)?;
-        Some(Pos { story: StoryRef::Body, path: l.path.clone(), off: l.para.lines.get(l.li)?.start })
+        l.para.line_start_pos(StoryRef::Body, l.path.clone(), l.li)
     }
 
     /// The whole visual line holding `pos`, trailing spaces and break included: (start, end,
@@ -900,14 +910,15 @@ impl DocLayout {
     pub fn line_span(&self, pos: &Pos, page_hint: usize) -> Option<(Pos, Pos, bool)> {
         for (_, it) in self.pieces(pos.story, &pos.path, page_hint) {
             let Placed::Lines { para, l0, l1, .. } = it else { continue };
-            let li = para.line_of(pos.off);
+            let li = para.line_for(pos);
             if li < *l0 || li >= *l1 {
                 continue;
             }
             let l = para.lines.get(li)?;
-            let next = para.lines.get(li.saturating_add(1));
-            let end = next.map_or(l.stop, |n| n.start).max(l.start);
-            let mk = |off| Pos { story: pos.story, path: pos.path.clone(), off };
+            let next_li = li.saturating_add(1);
+            let next = para.lines.get(next_li);
+            let end = if para.is_line_continuation(next_li) { l.stop } else { next.map_or(l.stop, |n| n.start) }.max(l.start);
+            let mk = |off| Pos::new(pos.story, pos.path.clone(), off);
             return Some((mk(l.start), mk(end), next.is_none()));
         }
         None
@@ -929,8 +940,15 @@ impl DocLayout {
         for path in doc.paths_between(a, b) {
             for (_, it) in self.pieces_in(&mut pages, &path, page_hint) {
                 let Placed::Lines { para, l0, l1, x, .. } = it else { continue };
-                let first = if path == a.path { para.line_of(a.off) } else { 0 };
-                let last = if path == b.path { para.line_of(b.off) } else { usize::MAX };
+                let (first, last) = match (path == a.path, path == b.path) {
+                    (true, true) => {
+                        let (la, lb) = (para.line_for(a), para.line_for(b));
+                        (la.min(lb), la.max(lb))
+                    }
+                    (true, false) => (para.line_for(a), usize::MAX),
+                    (false, true) => (0, para.line_for(b)),
+                    (false, false) => (0, usize::MAX),
+                };
                 for li in *l0..*l1 {
                     if li < first || li > last {
                         continue;
@@ -941,7 +959,7 @@ impl DocLayout {
                     let o0 = para.off_at_x(li, left - x);
                     let o1 = para.off_at_x(li, right - x);
                     let (o0, o1) = if o0 <= o1 { (o0, o1) } else { (o1, o0) };
-                    let mk = |off| Pos { story: a.story, path: path.clone(), off };
+                    let mk = |off| Pos::new(a.story, path.clone(), off);
                     out.push((mk(o0), mk(o1)));
                 }
             }
@@ -1013,7 +1031,7 @@ impl DocLayout {
     pub fn visual_step(&self, pos: &Pos, left: bool, page_hint: usize) -> Option<VisualStep> {
         for (_, it) in self.pieces(pos.story, &pos.path, page_hint) {
             let Placed::Lines { para, l0, l1, .. } = it else { continue };
-            let li = para.line_of(pos.off);
+            let li = para.line_for(pos);
             if li < *l0 || li >= *l1 {
                 continue;
             }
@@ -1029,7 +1047,7 @@ impl DocLayout {
                 }
             }
             return Some(match best {
-                Some((off, _)) => VisualStep::Moved(Pos { story: pos.story, path: pos.path.clone(), off }),
+                Some((off, _)) => VisualStep::Moved(Pos::with_affinity(pos.story, pos.path.clone(), off, para.continuation_affinity(li, off))),
                 None => VisualStep::Edge { start: l.start, stop: l.stop, last_line: li + 1 == para.lines.len(), rtl: l.rtl },
             });
         }
@@ -1048,7 +1066,7 @@ impl DocLayout {
         for (pi, it) in self.pieces(pos.story, &pos.path, page_hint) {
             // Equations in turned text aren't edited in place.
             let Placed::Lines { para, l0, l1, x, y, turn: TextDirection::Horizontal, .. } = it else { continue };
-            let li = para.line_of(pos.off);
+            let li = para.line_for(pos);
             if li < *l0 || li >= *l1 {
                 continue;
             }
@@ -1089,7 +1107,7 @@ impl DocLayout {
                     continue;
                 }
                 let slot = ml.hit(x - x0, base - y)?;
-                let pos = Pos { story: l.story, path: l.path.clone(), off: c.start };
+                let pos = Pos::new(l.story, l.path.clone(), c.start);
                 return Some((pos, wordcraft_doc::math_edit::MathPos { path: slot.path.clone(), off: slot.off }));
             }
         }

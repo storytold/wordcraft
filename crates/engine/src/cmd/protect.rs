@@ -673,7 +673,7 @@ pub(crate) fn typing_pos(s: &Session, p: &Pos) -> Pos {
         off += w;
     }
     if off > p.off {
-        return Pos { off, ..p.clone() };
+        return p.at(off);
     }
     if let Some(objects) = para.objects.get(..index) {
         for (ch, object) in before.chars().rev().zip(objects.iter().rev()) {
@@ -683,7 +683,7 @@ pub(crate) fn typing_pos(s: &Session, p: &Pos) -> Pos {
             off -= w;
         }
     }
-    Pos { off, ..p.clone() }
+    if off == p.off { p.clone() } else { p.at(off) }
 }
 
 /// The first position in an editable range after `from` (wrapping round), for Find Next Region

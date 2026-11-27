@@ -607,9 +607,9 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
             }
             if sg.mark && x > sg.hay {
                 let path = paths.get(sg.para)?;
-                return Some(Pos { story, path: path.with_last(path.last() + 1), off: 0 });
+                return Some(Pos::new(story, path.with_last(path.last() + 1), 0));
             }
-            Some(Pos { story, path: paths.get(sg.para)?.clone(), off: sg.raw + (x - sg.hay) })
+            Some(Pos::new(story, paths.get(sg.para)?.clone(), sg.raw + (x - sg.hay)))
         };
         cuts.push(hay.len());
         let mut from = 0;
@@ -839,7 +839,7 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
         let target = l.pages.get(idx).and_then(|page| {
             page.items.iter().find_map(|it| match it {
                 wordcraft_layout::Placed::Lines { story, path, para, l0, .. } if *story == StoryRef::Body => {
-                    para.lines.get(*l0).map(|ln| Pos { story: *story, path: path.clone(), off: ln.start })
+                    para.line_start_pos(*story, path.clone(), *l0)
                 }
                 _ => None,
             })
@@ -865,7 +865,7 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(n) = p::u64(v, "paragraph") {
         let paths = s.doc.para_paths(StoryRef::Body);
         if let Some(path) = paths.get((n.max(1) - 1) as usize) {
-            s.sel = Selection::caret(Pos { story: StoryRef::Body, path: path.clone(), off: 0 });
+            s.sel = Selection::caret(Pos::new(StoryRef::Body, path.clone(), 0));
         }
         return sel_result(s);
     }

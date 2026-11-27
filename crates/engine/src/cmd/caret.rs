@@ -64,7 +64,14 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("select.collapse", "Collapse Selection", "Navigation", |s, v| {
             let to_end = p::bool(v, "end").unwrap_or(false);
             let (a, b) = s.sel.ordered();
-            s.sel = Selection::caret(if to_end { b } else { a });
+            let at = if s.sel.is_collapsed() {
+                s.sel.focus.clone()
+            } else if to_end {
+                b
+            } else {
+                a
+            };
+            s.sel = Selection::caret(at);
             sel_result(s)
         })
         .key("Escape")
@@ -112,7 +119,8 @@ fn lr(s: &mut Session, v: &Value, is_left: bool) -> CmdResult {
         let (a, b) = s.sel.ordered();
         // The left edge of a selection in right-to-left text is its logical end.
         let to_start = is_left != rtl_para(s);
-        s.sel = Selection::caret(if to_start { a } else { b });
+        let at = if to_start { a } else { b };
+        s.sel = Selection::caret(at.at(at.off));
         s.goal_x = None;
         return sel_result(s);
     }
@@ -133,7 +141,7 @@ fn visual_lr(s: &mut Session, v: &Value, is_left: bool) -> CmdResult {
     let to = match l.visual_step(&from, is_left, s.page_hint) {
         Some(wordcraft_layout::VisualStep::Moved(p)) => p,
         Some(wordcraft_layout::VisualStep::Edge { start, stop, last_line, rtl }) => {
-            let at = |off| Pos { off, ..from.clone() };
+            let at = |off| from.at(off);
             if is_left != rtl {
                 match s.doc.para_at(&from) {
                     Some(para) if start > 0 => at(para.prev_boundary(start)),
@@ -157,14 +165,14 @@ fn left(s: &mut Session, p: &Pos) -> Pos {
     if let Some(para) = s.doc.para_at(p)
         && p.off > 0
     {
-        return Pos { off: para.prev_boundary(p.off), ..p.clone() };
+        return p.at(para.prev_boundary(p.off));
     }
     match s.doc.prev_para(p.story, &p.path) {
         Some(q) => {
             let off = s.doc.para(p.story, &q).map(|x| x.len()).unwrap_or(0);
-            Pos { story: p.story, path: q, off }
+            Pos::new(p.story, q, off)
         }
-        None => p.clone(),
+        None => p.at(p.off),
     }
 }
 
@@ -172,44 +180,44 @@ fn right(s: &mut Session, p: &Pos) -> Pos {
     if let Some(para) = s.doc.para_at(p)
         && p.off < para.len()
     {
-        return Pos { off: para.next_boundary(p.off), ..p.clone() };
+        return p.at(para.next_boundary(p.off));
     }
     match s.doc.next_para(p.story, &p.path) {
-        Some(q) => Pos { story: p.story, path: q, off: 0 },
-        None => p.clone(),
+        Some(q) => Pos::new(p.story, q, 0),
+        None => p.at(p.off),
     }
 }
 
 fn word_left(s: &mut Session, p: &Pos) -> Pos {
     match s.doc.para_at(p) {
-        Some(para) if p.off > 0 => Pos { off: para.word_start(p.off), ..p.clone() },
+        Some(para) if p.off > 0 => p.at(para.word_start(p.off)),
         _ => left(s, p),
     }
 }
 
 fn word_right(s: &mut Session, p: &Pos) -> Pos {
     match s.doc.para_at(p) {
-        Some(para) if p.off < para.len() => Pos { off: para.word_end(p.off), ..p.clone() },
+        Some(para) if p.off < para.len() => p.at(para.word_end(p.off)),
         _ => right(s, p),
     }
 }
 
 fn para_up(s: &mut Session, p: &Pos) -> Pos {
     if p.off > 0 {
-        return Pos { off: 0, ..p.clone() };
+        return p.at(0);
     }
     match s.doc.prev_para(p.story, &p.path) {
-        Some(q) => Pos { story: p.story, path: q, off: 0 },
-        None => p.clone(),
+        Some(q) => Pos::new(p.story, q, 0),
+        None => p.at(p.off),
     }
 }
 
 fn para_down(s: &mut Session, p: &Pos) -> Pos {
     match s.doc.next_para(p.story, &p.path) {
-        Some(q) => Pos { story: p.story, path: q, off: 0 },
+        Some(q) => Pos::new(p.story, q, 0),
         None => {
             let off = s.doc.para_at(p).map(|x| x.len()).unwrap_or(0);
-            Pos { off, ..p.clone() }
+            p.at(off)
         }
     }
 }
@@ -249,7 +257,7 @@ fn line(s: &mut Session, v: &Value, home: bool) -> CmdResult {
                 b
             }
         }
-        None => from,
+        None => from.at(from.off),
     };
     s.goal_x = None;
     apply(s, to, ext);
@@ -367,27 +375,27 @@ impl Unit {
 /// includes its mark (it ends at the start of the next paragraph in the same container, when
 /// there is one), and so does its last line.
 pub fn unit_range(s: &mut Session, at: &Pos, unit: Unit) -> (Pos, Pos) {
-    let Some(p) = s.doc.para_at(at) else { return (at.clone(), at.clone()) };
+    let Some(p) = s.doc.para_at(at) else { return (at.at(at.off), at.at(at.off)) };
     let len = p.len();
     let mark_end = |s: &Session| match s.doc.next_para(at.story, &at.path) {
-        Some(q) if q.parent() == at.path.parent() => Pos { story: at.story, path: q, off: 0 },
-        _ => Pos { off: len, ..at.clone() },
+        Some(q) if q.parent() == at.path.parent() => Pos::new(at.story, q, 0),
+        _ => at.at(len),
     };
     let (a, b) = match unit {
         Unit::Word => p.word_at(at.off),
         Unit::Sentence => p.sentence_at(at.off),
-        Unit::Paragraph => return (Pos { off: 0, ..at.clone() }, mark_end(s)),
+        Unit::Paragraph => return (at.at(0), mark_end(s)),
         Unit::Document => return (s.doc.start_of(at.story), s.doc.end_of(at.story)),
         Unit::Line => {
             let hint = s.page_hint;
             return match s.layout().line_span(at, hint) {
                 Some((a, _, true)) => (a, mark_end(s)),
                 Some((a, b, false)) => (a, b),
-                None => (at.clone(), at.clone()),
+                None => (at.at(at.off), at.at(at.off)),
             };
         }
     };
-    (Pos { off: a, ..at.clone() }, Pos { off: b, ..at.clone() })
+    (at.at(a), at.at(b))
 }
 
 fn select_unit(s: &mut Session, unit: Unit) -> CmdResult {
@@ -488,8 +496,7 @@ fn select_text(s: &mut Session, v: &Value) -> CmdResult {
         for (i, _) in p.text.match_indices(needle) {
             count += 1;
             if count == n {
-                s.sel =
-                    Selection { anchor: Pos { story, path: path.clone(), off: i }, focus: Pos { story, path: path.clone(), off: i + needle.len() } };
+                s.sel = Selection { anchor: Pos::new(story, path.clone(), i), focus: Pos::new(story, path.clone(), i + needle.len()) };
                 // Formatting picked for the old caret doesn't carry over (as `select.word`): what
                 // replaces the selection takes its formatting.
                 s.pending = None;

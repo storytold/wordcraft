@@ -333,7 +333,7 @@ pub fn ink_on(s: &Session, layout: &DocLayout, page: usize) -> Vec<PlacedInk> {
         .iter()
         .filter_map(|it| match it {
             Placed::Object { rect, spin, story, path, off, .. } => {
-                let pos = Pos { story: *story, path: path.clone(), off: *off };
+                let pos = Pos::new(*story, path.clone(), *off);
                 match objects.get(&pos) {
                     Some(InlineObject::Shape { freeform: Some(f), stroke_width, stroke, .. }) if f.is_ink() => {
                         Some(PlacedInk { pos, rect: *rect, spin: *spin, freeform: f.clone(), color: *stroke, width: *stroke_width })
@@ -492,7 +492,7 @@ fn stroke(s: &mut Session, v: &Value) -> CmdResult {
 /// page, to the nearest line and positioned on the page. Returns where its character went.
 fn place(s: &mut Session, layout: &DocLayout, obj: InlineObject, page: usize, (x, y): (f32, f32), anchor: (f32, f32)) -> Result<Pos, CmdError> {
     let (at, on_page) = match super::objects::anchor_paragraph(&s.doc, layout, page, anchor, StoryRef::Body) {
-        Some(path) => (Pos { story: StoryRef::Body, path, off: 0 }, false),
+        Some(path) => (Pos::new(StoryRef::Body, path, 0), false),
         None => (
             super::objects::nearest_line(layout, page, anchor.1, StoryRef::Body)
                 .ok_or_else(|| CmdError::Params("no text on that page to anchor to".into()))?,
@@ -584,7 +584,7 @@ fn lasso(s: &mut Session, v: &Value) -> CmdResult {
     let mut objects = PageObjects::new(&s.doc);
     for it in &pg.items {
         let Placed::Object { rect, spin, story, path, off, .. } = it else { continue };
-        let pos = Pos { story: *story, path: path.clone(), off: *off };
+        let pos = Pos::new(*story, path.clone(), *off);
         let Some(obj) = objects.get(&pos) else { continue };
         let picked = match obj.ink() {
             Some(_) if s.view.hide_ink => false,
@@ -779,7 +779,7 @@ fn arrow_pieces(s: &Session, layout: &DocLayout, page: usize, keep: impl Fn(&Pos
     let mut objects = PageObjects::new(&s.doc);
     for it in &pg.items {
         let Placed::Object { rect, spin, story, path, off, .. } = it else { continue };
-        let pos = Pos { story: *story, path: path.clone(), off: *off };
+        let pos = Pos::new(*story, path.clone(), *off);
         if !spin.is_identity() || !keep(&pos, rect) {
             continue;
         }

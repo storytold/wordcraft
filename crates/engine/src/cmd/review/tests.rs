@@ -1034,7 +1034,7 @@ fn comment_list_skips_comment_text() {
     s.run("select.all", &json!({})).unwrap();
     let id = s.run("review.newComment", &json!({"text": "note"})).unwrap()["id"].as_u64().unwrap() as u32;
     let part = s.doc.comments.get(&id).unwrap().part;
-    let at = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Part(part), path: wordcraft_doc::Path::top(0), off: 0 };
+    let at = wordcraft_doc::Pos::new(wordcraft_doc::StoryRef::Part(part), wordcraft_doc::Path::top(0), 0);
     s.doc.insert_object(&at, wordcraft_doc::InlineObject::CommentStart { id }, &Default::default()).unwrap();
     let list = super::comment_list(&s);
     assert_eq!(list.iter().filter(|(x, _)| *x == id).count(), 1);
@@ -1190,8 +1190,8 @@ fn preexisting_table_with_redlined_cell_content_preserves_table_shell() {
         // Whole-table selection Accept / Reject.
         let mut s_tbl = Session::new(doc.clone());
         s_tbl.sel = crate::Selection {
-            anchor: Pos { story: StoryRef::Body, path: Path(vec![0, 0, 0, 0]), off: 0 },
-            focus: Pos { story: StoryRef::Body, path: Path(vec![0, 0, 1, 0]), off: 0 },
+            anchor: Pos::new(StoryRef::Body, Path(vec![0, 0, 0, 0]), 0),
+            focus: Pos::new(StoryRef::Body, Path(vec![0, 0, 1, 0]), 0),
         };
         s_tbl.run(sel_cmd, &json!({})).unwrap();
         assert_shell_preserved(&s_tbl.doc, &format!("{label} (whole-table sel)"));

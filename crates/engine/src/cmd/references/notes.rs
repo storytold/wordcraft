@@ -133,7 +133,7 @@ pub(super) fn note_refs(s: &Session, kind: Option<NoteKind>) -> Vec<Pos> {
             if let Some(InlineObject::NoteRef { kind: k, .. }) = p.object_at(o)
                 && (kind.is_none() || kind == Some(*k))
             {
-                v.push(Pos { story: StoryRef::Body, path: path.clone(), off: o });
+                v.push(Pos::new(StoryRef::Body, path.clone(), o));
             }
         }
     }

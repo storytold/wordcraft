@@ -1788,7 +1788,7 @@ fn replacing_a_symbol_with_text_gives_the_text_no_symbol_font() {
 }
 
 fn bold_at(s: &Session, block: usize, off: usize) -> bool {
-    let pos = Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(block), off };
+    let pos = Pos::body(block, off);
     s.doc.para_at(&pos).and_then(|p| p.props_of_char(off).bold).unwrap_or(false)
 }
 
@@ -1830,7 +1830,7 @@ fn pasted_rtf_tracked_changes_point_at_their_own_revisions() {
     run(&mut s, "caret.docEnd", json!({}));
     let rtf = r"{\rtf1{\*\revtbl {Unknown;}{Alice;}}{\revised\revauth1 added}\par}";
     run(&mut s, "edit.pasteSpecial", json!({"as": "rtf", "rtf": rtf}));
-    let pos = Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 2 };
+    let pos = Pos::body(0, 2);
     let ins = s.doc.para_at(&pos).and_then(|p| p.props_of_char(2).ins);
     let rev = ins.and_then(|i| s.doc.revisions.get(i as usize));
     assert_eq!(rev.map(|r| (r.kind, r.author.as_str())), Some((wordcraft_doc::RevisionKind::Insert, "Alice")), "{:?}", s.doc.revisions);
@@ -1838,7 +1838,7 @@ fn pasted_rtf_tracked_changes_point_at_their_own_revisions() {
 
 /// Insertion and deletion revision kinds at body paragraph 0, offset `off`.
 fn rev_kinds_at(s: &Session, off: usize) -> (Option<wordcraft_doc::RevisionKind>, Option<wordcraft_doc::RevisionKind>) {
-    let pos = Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off };
+    let pos = Pos::body(0, off);
     let cp = s.doc.para_at(&pos).map(|p| p.props_of_char(off).clone()).unwrap_or_default();
     let kind = |i: Option<u32>| i.and_then(|i| s.doc.revisions.get(i as usize)).map(|r| r.kind);
     (kind(cp.ins), kind(cp.del))
@@ -2000,7 +2000,7 @@ fn paste_special_respects_track_changes_and_brings_lists() {
 
 /// Character formatting at a body offset of the first paragraph.
 fn props_at(s: &Session, off: usize) -> wordcraft_doc::CharProps {
-    let pos = Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off };
+    let pos = Pos::body(0, off);
     s.doc.para_at(&pos).map(|p| p.props_of_char(off).clone()).unwrap_or_default()
 }
 
@@ -2664,8 +2664,8 @@ fn cut_and_spike_across_table_cells_preserves_every_removed_character() {
         // Set linear text range across non-corner cells: (0, 1) off 1 ("0C1") through (1, 1) off 3 ("R1C").
         // Traversed in linear document order: (0, 1) "0C1", (0, 2) "R0C2", (1, 0) "R1C0", (1, 1) "R1C".
         s.sel = crate::Selection {
-            anchor: wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 1, 0]), off: 1 },
-            focus: wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path(vec![0, 1, 1, 0]), off: 3 },
+            anchor: wordcraft_doc::Pos::new(wordcraft_doc::StoryRef::Body, wordcraft_doc::Path(vec![0, 0, 1, 0]), 1),
+            focus: wordcraft_doc::Pos::new(wordcraft_doc::StoryRef::Body, wordcraft_doc::Path(vec![0, 1, 1, 0]), 3),
         };
         s.column = None;
 
@@ -2705,8 +2705,8 @@ fn cut_and_spike_across_table_cells_preserves_every_removed_character() {
         }
 
         s.sel = crate::Selection {
-            anchor: wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 1, 0]), off: 1 },
-            focus: wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path(vec![0, 1, 1, 0]), off: 3 },
+            anchor: wordcraft_doc::Pos::new(wordcraft_doc::StoryRef::Body, wordcraft_doc::Path(vec![0, 0, 1, 0]), 1),
+            focus: wordcraft_doc::Pos::new(wordcraft_doc::StoryRef::Body, wordcraft_doc::Path(vec![0, 1, 1, 0]), 3),
         };
         s.column = None;
 
@@ -5987,7 +5987,7 @@ fn text_box_insert_puts_the_caret_inside() {
     assert_eq!(text(&s), "Before ");
     // Given text: the caret ends after it.
     let id = run(&mut s, "insert.textBox", json!({"text": "Note"}))["story"].as_u64().unwrap() as u32;
-    assert_eq!(s.sel.focus, Pos { story: StoryRef::Part(id), path: wordcraft_doc::Path::top(0), off: 4 });
+    assert_eq!(s.sel.focus, Pos::new(StoryRef::Part(id), wordcraft_doc::Path::top(0), 4));
 }
 
 #[test]
@@ -6166,7 +6166,7 @@ fn copy_paste_text_box_makes_an_independent_copy() {
     let copy = stories[1];
     assert_ne!(copy, id);
     // Typing in the copy leaves the original alone.
-    run(&mut s, "caret.set", json!({"pos": Pos { story: StoryRef::Part(copy), path: wordcraft_doc::Path::top(0), off: 0 }}));
+    run(&mut s, "caret.set", json!({"pos": Pos::new(StoryRef::Part(copy), wordcraft_doc::Path::top(0), 0)}));
     run(&mut s, "text.insert", json!({"text": "Copy of "}));
     assert_eq!(s.doc.plain_text(StoryRef::Part(copy)), "Copy of Original");
     assert_eq!(s.doc.plain_text(StoryRef::Part(id)), "Original");
@@ -10475,11 +10475,11 @@ fn convert_to_text_keeps_formatting_and_nested_tables() {
     run(&mut s, "select.range", json!({"anchor": first, "focus": end}));
     run(&mut s, "format.bold", json!({}));
     // A table nested in the second cell, after its text.
-    s.sel = crate::Selection::caret(wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![t, 0, 1, 0]), off: 1 });
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos::new(StoryRef::Body, wordcraft_doc::Path(vec![t, 0, 1, 0]), 1));
     run(&mut s, "text.newParagraph", json!({}));
     run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
     run(&mut s, "text.insert", json!({"text": "Inner"}));
-    s.sel = crate::Selection::caret(wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![t, 0, 0, 0]), off: 0 });
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos::new(StoryRef::Body, wordcraft_doc::Path(vec![t, 0, 0, 0]), 0));
     run(&mut s, "table.toText", json!({}));
     let at = t as usize;
     let line = s.doc.body[at].as_para().unwrap();
@@ -10493,12 +10493,12 @@ fn convert_to_text_keeps_formatting_and_nested_tables() {
     // text, not back into the table above.
     let mut s = typed_table(2, &["A", "B", "", "D"]);
     let t = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap() as u32;
-    s.sel = crate::Selection::caret(wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![t, 1, 0, 0]), off: 0 });
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos::new(StoryRef::Body, wordcraft_doc::Path(vec![t, 1, 0, 0]), 0));
     run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
     let row = &s.doc.body[t as usize].as_table().unwrap().rows[1];
     assert!(row.cells[0].blocks.first().is_some_and(|b| b.as_table().is_some()), "the cell starts with the nested table");
     run(&mut s, "select.range", json!({"anchor": cell_at(t, 1, 1), "focus": cell_at(t, 1, 1)}));
-    s.sel.anchor = wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![t, 1, 0, 1]), off: 0 };
+    s.sel.anchor = wordcraft_doc::Pos::new(StoryRef::Body, wordcraft_doc::Path(vec![t, 1, 0, 1]), 0);
     run(&mut s, "table.toText", json!({}));
     let at = t as usize;
     assert_eq!(body_outline(&s).get(at..at + 3), Some(&["T", "T", "\tD"].map(String::from)[..]), "{:?}", body_outline(&s));
@@ -11677,7 +11677,7 @@ fn select_graphic(s: &mut Session) {
             Some((wordcraft_doc::Path(vec![b]), off))
         })
         .expect("a graphic");
-    let at = Pos { story: StoryRef::Body, path, off };
+    let at = Pos::new(StoryRef::Body, path, off);
     let end = Pos { off: off + wordcraft_doc::para::OBJ.len_utf8(), ..at.clone() };
     s.sel = crate::Selection { anchor: at, focus: end };
 }

@@ -218,7 +218,7 @@ pub fn comment_list(s: &Session) -> Vec<(u32, Option<Pos>)> {
             let Some(p) = s.doc.para(story, &path) else { continue };
             for o in p.object_offsets() {
                 if let Some(InlineObject::CommentStart { id }) = p.object_at(o) {
-                    found.push((*id, Some(Pos { story, path: path.clone(), off: o })));
+                    found.push((*id, Some(Pos::new(story, path.clone(), o))));
                 }
             }
         }

@@ -182,17 +182,24 @@ fn manual_hyphenation(s: &mut Session, v: &Value) -> CmdResult {
             if *story != StoryRef::Body {
                 continue;
             }
-            let Some(text) = s.doc.para_at(&Pos { story: *story, path: path.clone(), off: 0 }).map(|p| p.text.clone()) else { continue };
+            let Some(text) = s.doc.para_at(&Pos::new(*story, path.clone(), 0)).map(|p| p.text.clone()) else {
+                continue;
+            };
             for li in (*l0).max(1)..*l1 {
                 let (Some(prev), Some(line)) = (para.lines.get(li - 1), para.lines.get(li)) else { continue };
                 if prev.end != wordcraft_layout::LineEnd::Wrap || prev.hyphen.is_some() {
                     continue;
                 }
-                let at = Pos { story: *story, path: path.clone(), off: line.start };
+                let Some(line_pos) = para.line_start_pos(*story, path.clone(), li) else { continue };
+                let start = line_pos.off;
+                if !para.line_has_start(li, start) {
+                    continue;
+                }
+                let at = line_pos.at(start);
                 if at < from || best.as_ref().is_some_and(|(b, _)| *b <= at) {
                     continue;
                 }
-                let Some(rest) = text.get(line.start..) else { continue };
+                let Some(rest) = text.get(start..) else { continue };
                 let len = rest.char_indices().find(|(_, c)| !(c.is_alphabetic() || *c == '\'' || *c == '\u{2019}')).map_or(rest.len(), |(i, _)| i);
                 let Some(word) = rest.get(..len) else { continue };
                 // A word with an optional hyphen already breaks where its author said.
@@ -203,18 +210,23 @@ fn manual_hyphenation(s: &mut Session, v: &Value) -> CmdResult {
                     continue;
                 }
                 let points = wordcraft_proof::hyphen::hyphen_points(word, &lim);
-                // The room left at the end of the line above, and the width of each first part.
-                let room = prev.right - prev.end_x();
-                let hyphen_w = para
-                    .x_of(li, line.start)
-                    .zip(para.x_of(li, line.start + word.chars().next().map_or(0, char::len_utf8)))
-                    .map_or(6.0, |(a, b)| (b - a) * 0.6);
+                // The room left at the end of the line above (in its reading direction), and the
+                // advance of each first part (including any field continuation on this line that
+                // must move up with the word).
+                let room = if prev.rtl { prev.end_x() - prev.left } else { prev.right - prev.end_x() };
+                let first_end = start + word.chars().next().map_or(0, char::len_utf8);
+                let hyphen_w = (line.c0..line.c1)
+                    .filter_map(|k| para.clusters.get(k))
+                    .find(|c| c.start >= start && c.start < first_end)
+                    .map_or(6.0, |c| c.adv * 0.6);
                 let fits = |pt: usize| {
                     let bytes = word.char_indices().nth(pt).map_or(word.len(), |(i, _)| i);
-                    match (para.x_of(li, line.start), para.x_of(li, line.start + bytes)) {
-                        (Some(a), Some(b)) => (b - a) + hyphen_w <= room,
-                        _ => false,
+                    let prefix_end = start + bytes;
+                    if prefix_end > line.stop {
+                        return false;
                     }
+                    let moved_w: f32 = (line.c0..line.c1).filter_map(|k| para.clusters.get(k)).filter(|c| c.start < prefix_end).map(|c| c.adv).sum();
+                    moved_w + hyphen_w <= room
                 };
                 let Some(suggest) = points.iter().copied().filter(|pt| fits(*pt)).max() else { continue };
                 best = Some((at.clone(), json!({"word": word, "pos": super::pos_json(&at), "points": points, "suggest": suggest})));
