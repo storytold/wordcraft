@@ -572,7 +572,7 @@ fn pictures_too_large_for_the_cache_are_kept_smaller() {
     assert!(bytes <= CACHE_BYTES / 2, "{} x {}", small.width(), small.height());
     assert!(small.width() >= 3000 && small.width() == small.height(), "aspect kept");
     assert!(small.data().iter().all(|p| (p.r, p.g, p.b, p.a) == (40, 80, 120, 200)), "flat stays flat");
-    let mut cache = MediaCache { map: HashMap::new(), bytes: 0 };
+    let mut cache = MediaCache::default();
     // A source file larger than the whole cache (an uncompressed BMP, say) doesn't count against it.
     let src = Arc::new(vec![0u8; CACHE_BYTES + 1]);
     cache.insert("big", &src, Some(Arc::new(small)), bytes);
@@ -1237,7 +1237,7 @@ fn heavy_geometry_still_leaves_the_bitmaps_a_cacheable_size() {
     assert!(size + geometry <= CACHE_BYTES, "{size} bytes");
     // The shrunk picture is accepted by the cache and hit again.
     let src = Arc::new(vec![0u8; 1]);
-    let mut c: MediaCache<u8> = MediaCache { map: Default::default(), bytes: 0 };
+    let mut c: MediaCache<u8> = MediaCache::default();
     c.insert("heavy", &src, 7, size + geometry);
     assert_eq!(c.get("heavy", &src), Some(7));
     // Just under and just over the eighth: both shrink the bitmap to a positive size, none to nothing.

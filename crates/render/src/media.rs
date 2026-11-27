@@ -17,22 +17,56 @@ const CACHE_ENTRIES: usize = 256;
 pub(crate) struct MediaCache<T> {
     pub(crate) map: HashMap<String, Entry<T>>,
     pub(crate) bytes: usize,
+    clock: u64,
+}
+
+impl<T> Default for MediaCache<T> {
+    fn default() -> Self {
+        Self { map: HashMap::new(), bytes: 0, clock: 0 }
+    }
 }
 
 pub(crate) struct Entry<T> {
     src: Weak<Vec<u8>>,
     val: T,
     size: usize,
+    stamp: u64,
 }
 
 impl<T: Clone> MediaCache<T> {
-    pub(crate) fn get(&self, key: &str, src: &Arc<Vec<u8>>) -> Option<T> {
-        let e = self.map.get(key)?;
-        std::ptr::eq(e.src.as_ptr(), Arc::as_ptr(src)).then(|| e.val.clone())
+    pub(crate) fn get(&mut self, key: &str, src: &Arc<Vec<u8>>) -> Option<T> {
+        let hit = self.map.get(key).is_some_and(|e| std::ptr::eq(e.src.as_ptr(), Arc::as_ptr(src)));
+        if hit {
+            self.clock = self.clock.wrapping_add(1);
+            let stamp = self.clock;
+            if let Some(e) = self.map.get_mut(key) {
+                e.stamp = stamp;
+                return Some(e.val.clone());
+            }
+        }
+        // Reclaim dead entry immediately if its source document/allocation is gone.
+        if self.map.get(key).is_some_and(|e| e.src.strong_count() == 0)
+            && let Some(dead) = self.map.remove(key)
+        {
+            self.bytes = self.bytes.saturating_sub(dead.size);
+        }
+        None
     }
 
-    /// Stores `val` (about `size` bytes) for `src`. Clears the cache first when the budget or entry
-    /// cap is hit; an entry larger than the whole budget is not kept.
+    /// Reclaims decoded media whose source allocations have already been dropped.
+    fn prune_dead(&mut self) {
+        let bytes = &mut self.bytes;
+        self.map.retain(|_, e| {
+            let alive = e.src.strong_count() > 0;
+            if !alive {
+                *bytes = bytes.saturating_sub(e.size);
+            }
+            alive
+        });
+    }
+
+    /// Stores `val` (about `size` bytes) for `src`, reclaiming dropped sources and evicting
+    /// least-recently-used entries incrementally within the entry and byte caps.
     pub(crate) fn insert(&mut self, key: &str, src: &Arc<Vec<u8>>, val: T, size: usize) {
         if size > CACHE_BYTES {
             return;
@@ -41,10 +75,22 @@ impl<T: Clone> MediaCache<T> {
             self.bytes = self.bytes.saturating_sub(old.size);
         }
         if self.map.len() >= CACHE_ENTRIES || self.bytes.saturating_add(size) > CACHE_BYTES {
-            self.map.clear();
-            self.bytes = 0;
+            self.prune_dead();
         }
-        self.map.insert(key.to_string(), Entry { src: Arc::downgrade(src), val, size });
+        while self.map.len() >= CACHE_ENTRIES || self.bytes.saturating_add(size) > CACHE_BYTES {
+            let Some(oldest) = self.map.iter().min_by_key(|(_, e)| e.stamp).map(|(k, _)| k.clone()) else {
+                break;
+            };
+            if let Some(removed) = self.map.remove(&oldest) {
+                self.bytes = self.bytes.saturating_sub(removed.size);
+            }
+        }
+        if self.map.capacity() > self.map.len().saturating_mul(4).max(32) {
+            self.map.shrink_to(self.map.len().saturating_mul(2).max(16));
+        }
+        self.clock = self.clock.wrapping_add(1);
+        let stamp = self.clock;
+        self.map.insert(key.to_string(), Entry { src: Arc::downgrade(src), val, size, stamp });
         self.bytes = self.bytes.saturating_add(size);
     }
 }
@@ -58,12 +104,12 @@ pub(crate) type Decoded = Result<Arc<Pixmap>, Refusal>;
 
 fn images() -> &'static Mutex<MediaCache<Decoded>> {
     static C: std::sync::OnceLock<Mutex<MediaCache<Decoded>>> = std::sync::OnceLock::new();
-    C.get_or_init(|| Mutex::new(MediaCache { map: HashMap::new(), bytes: 0 }))
+    C.get_or_init(|| Mutex::new(MediaCache::default()))
 }
 
 fn vectors() -> &'static Mutex<MediaCache<Option<Arc<Vector>>>> {
     static C: std::sync::OnceLock<Mutex<MediaCache<Option<Arc<Vector>>>>> = std::sync::OnceLock::new();
-    C.get_or_init(|| Mutex::new(MediaCache { map: HashMap::new(), bytes: 0 }))
+    C.get_or_init(|| Mutex::new(MediaCache::default()))
 }
 
 /// Largest side (pixels) a document picture may decode to: what a `Pixmap` can hold (`u16`

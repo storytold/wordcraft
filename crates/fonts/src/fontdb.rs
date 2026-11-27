@@ -42,14 +42,52 @@ pub(crate) use names::{last_resort_face, legacy_family};
 
 static GLOBAL: std::sync::OnceLock<FontDb> = std::sync::OnceLock::new();
 
+/// Fixed-capacity FIFO cache shared by outline and hinting tables so old zoom/script entries evict
+/// incrementally instead of wiping the whole table at once.
+pub(super) struct BoundedCache<K, V> {
+    map: HashMap<K, V>,
+    order: std::collections::VecDeque<K>,
+    cap: usize,
+}
+
+impl<K: Eq + std::hash::Hash + Clone, V> BoundedCache<K, V> {
+    pub(super) fn new(cap: usize) -> Self {
+        Self { map: HashMap::new(), order: std::collections::VecDeque::new(), cap: cap.max(1) }
+    }
+
+    pub(super) fn get(&self, key: &K) -> Option<&V> {
+        self.map.get(key)
+    }
+
+    pub(super) fn insert(&mut self, key: K, val: V) {
+        if let Some(existing) = self.map.get_mut(&key) {
+            *existing = val;
+            return;
+        }
+        while self.map.len() >= self.cap {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            self.map.remove(&oldest);
+        }
+        self.order.push_back(key.clone());
+        self.map.insert(key, val);
+    }
+
+    #[cfg(test)]
+    pub(super) fn len(&self) -> usize {
+        self.map.len()
+    }
+}
+
 /// Process-wide font database.
 pub struct FontDb {
     faces: RwLock<Vec<Arc<FontFace>>>,
-    outlines: Mutex<HashMap<(u32, u32), Arc<BezPath>>>,
+    outlines: Mutex<BoundedCache<(u32, u32), Arc<BezPath>>>,
     /// Screen-hinted outlines per (face, glyph, ppem bits); `None` where the face can't be hinted.
-    hinted: Mutex<HashMap<(u32, u32, u32), Option<Arc<BezPath>>>>,
+    hinted: Mutex<BoundedCache<(u32, u32, u32), Option<Arc<BezPath>>>>,
     /// Light hinting instances per (face, ppem bits); `None` where the face can't be hinted.
-    hinters: Mutex<HashMap<(u32, u32), Option<Arc<HintingInstance>>>>,
+    hinters: Mutex<BoundedCache<(u32, u32), Option<Arc<HintingInstance>>>>,
     /// Fallback faces found per (character, excluded face), valid while the face count is the
     /// one stored (faces are only ever added). Layout asks once per uncovered character, and the
     /// search sorts every loaded face, so without this text in a script the requested font lacks
@@ -121,9 +159,9 @@ impl FontDb {
         }
         Self {
             faces: RwLock::new(faces),
-            outlines: Mutex::new(HashMap::new()),
-            hinted: Mutex::new(HashMap::new()),
-            hinters: Mutex::new(HashMap::new()),
+            outlines: Mutex::new(BoundedCache::new(face::OUTLINE_CACHE_MAX)),
+            hinted: Mutex::new(BoundedCache::new(face::HINTED_CACHE_MAX)),
+            hinters: Mutex::new(BoundedCache::new(face::HINTER_CACHE_MAX)),
             fallbacks: RwLock::new(FallbackCache::default()),
             run_fallbacks: RwLock::new(RunFallbackCache::default()),
             diagram_fallbacks: RwLock::new(DiagramFallbackCache::default()),

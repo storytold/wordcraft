@@ -1,6 +1,5 @@
 //! Decoded-media cache: hits need the same allocation, and the byte budget bounds what is kept.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use wordcraft_doc::Document;
@@ -11,7 +10,7 @@ use super::{CACHE_BYTES, MediaCache, RenderOptions, render_items, wave_path};
 
 #[test]
 fn media_cache_only_hits_the_same_allocation() {
-    let mut c: MediaCache<u32> = MediaCache { map: HashMap::new(), bytes: 0 };
+    let mut c: MediaCache<u32> = MediaCache::default();
     let a = Arc::new(vec![1u8, 2, 3]);
     let b = Arc::new(vec![1u8, 2, 3]);
     c.insert("pic", &a, 7, 3);
@@ -22,22 +21,26 @@ fn media_cache_only_hits_the_same_allocation() {
 }
 
 #[test]
-fn media_cache_is_bounded_by_bytes() {
-    let mut c: MediaCache<u32> = MediaCache { map: HashMap::new(), bytes: 0 };
+fn media_cache_is_bounded_by_bytes_and_evicts_lru() {
+    let mut c: MediaCache<u32> = MediaCache::default();
     let src = Arc::new(vec![0u8]);
-    let big = CACHE_BYTES / 2 + 1;
-    c.insert("a", &src, 1, big);
-    c.insert("b", &src, 2, big);
-    assert_eq!(c.get("a", &src), None, "the first entry is evicted to make room");
-    assert_eq!(c.get("b", &src), Some(2));
+    let third = CACHE_BYTES / 3;
+    c.insert("a", &src, 1, third);
+    c.insert("b", &src, 2, third);
+    // Touch "a" so "b" becomes the least recently used entry.
+    assert_eq!(c.get("a", &src), Some(1));
+    c.insert("c", &src, 3, CACHE_BYTES / 2);
+    assert_eq!(c.get("a", &src), Some(1), "recently used entry stays cached");
+    assert_eq!(c.get("b", &src), None, "least recently used entry is evicted to make room");
+    assert_eq!(c.get("c", &src), Some(3));
     assert!(c.bytes <= CACHE_BYTES);
-    c.insert("huge", &src, 3, CACHE_BYTES + 1);
+    c.insert("huge", &src, 4, CACHE_BYTES + 1);
     assert_eq!(c.get("huge", &src), None, "a value over the whole budget is not kept");
 }
 
 #[test]
-fn media_cache_counts_what_it_keeps_and_lets_sources_go() {
-    let mut c: MediaCache<Option<u32>> = MediaCache { map: HashMap::new(), bytes: 0 };
+fn media_cache_prunes_dropped_sources_and_lets_sources_go() {
+    let mut c: MediaCache<Option<u32>> = MediaCache::default();
     let src = Arc::new(vec![0u8; 1000]);
     c.insert("broken", &src, None, 0);
     c.insert("pic", &src, Some(1), 24);
@@ -49,6 +52,17 @@ fn media_cache_counts_what_it_keeps_and_lets_sources_go() {
     c.insert("huge", &huge, None, 0);
     assert_eq!(c.get("huge", &huge), Some(None));
     assert_eq!(CACHE_BYTES * 2, 256 * 1024 * 1024, "the image and vector caches share about 256 MB");
+
+    let live = Arc::new(vec![1u8]);
+    let dead = Arc::new(vec![2u8]);
+    let half = CACHE_BYTES / 2 + 1;
+    c.insert("live", &live, Some(2), half);
+    c.insert("dead", &dead, Some(3), half / 2);
+    drop(dead);
+    // Inserting another half-budget entry prunes the dropped source without evicting "live".
+    c.insert("live2", &live, Some(4), half / 2);
+    assert_eq!(c.get("live", &live), Some(Some(2)), "live entry kept when dropped source is reclaimed");
+    assert_eq!(c.get("live2", &live), Some(Some(4)));
 }
 
 /// A wave stroke starting around 1e20 never advanced (`x + step == x`), pushing curves until memory ran out.

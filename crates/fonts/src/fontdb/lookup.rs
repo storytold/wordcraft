@@ -1,4 +1,4 @@
-use super::face::{FALLBACK_FAMILY, FontBytes, FontFace, HINT_PPEM, HINTER_CACHE_MAX, OUTLINE_CACHE_MAX};
+use super::face::{FALLBACK_FAMILY, FontBytes, FontFace, HINT_PPEM};
 #[cfg(not(target_arch = "wasm32"))]
 use super::fallback_data::read_fallback_file;
 #[cfg(not(target_arch = "wasm32"))]
@@ -220,11 +220,7 @@ impl FontDb {
             return p.clone();
         }
         let p = Arc::new(face.glyph_outline(gid));
-        let mut cache = self.outlines.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if cache.len() >= OUTLINE_CACHE_MAX {
-            cache.clear();
-        }
-        cache.insert(key, p.clone());
+        self.outlines.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key, p.clone());
         p
     }
 
@@ -247,21 +243,13 @@ impl FontDb {
                 None => {
                     // Built outside the lock: running a font's hinting programs takes a while.
                     let h = face.screen_hinter(ppem).map(Arc::new);
-                    let mut cache = self.hinters.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                    if cache.len() >= HINTER_CACHE_MAX {
-                        cache.clear();
-                    }
-                    cache.insert(hkey, h.clone());
+                    self.hinters.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(hkey, h.clone());
                     h
                 }
             }
         };
         let p = hinter.and_then(|h| face.hinted_glyph_outline(gid, &h)).map(Arc::new);
-        let mut cache = self.hinted.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if cache.len() >= OUTLINE_CACHE_MAX {
-            cache.clear();
-        }
-        cache.insert(key, p.clone());
+        self.hinted.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key, p.clone());
         p
     }
 }
