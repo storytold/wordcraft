@@ -774,55 +774,32 @@ pub fn c32(c: wordcraft_doc::Rgb) -> Color32 {
 mod tests {
     use std::collections::BTreeSet;
 
-    /// Ink of a line of interface text at 1.45x (a 145 % desktop) in `appearance`, drawn in the
-    /// palette's text colour extremes (black on white, white on black) so the two compare.
-    #[cfg(all(unix, not(target_os = "macos")))]
-    fn interface_text_ink(appearance: super::Appearance) -> u64 {
-        let dark = matches!(appearance, super::Appearance::Dark);
-        let (fg, bg) = if dark { (egui::Color32::WHITE, egui::Color32::BLACK) } else { (egui::Color32::BLACK, egui::Color32::WHITE) };
-        let mut h = crate::test_harness::builder().with_size(egui::vec2(560.0, 40.0)).with_pixels_per_point(1.45).wgpu().build_ui_state(
-            move |ui, set: &mut bool| {
-                if !*set {
-                    super::apply(ui.ctx(), appearance);
-                    ui.ctx().set_fonts(super::font_definitions());
-                    *set = true;
-                }
-                egui::Frame::new().fill(bg).inner_margin(8.0).show(ui, |ui| {
-                    ui.label(egui::RichText::new("Every Thursday evening the old print shop").font(egui::FontId::proportional(12.5)).color(fg));
-                });
-            },
-            false,
-        );
-        // Give the craft runtime the test's mode (#3589 keeps the curve `super::apply` set on that mode's style).
-        let mode = if dark { craft::theme::ModeChoice::Dark } else { craft::theme::ModeChoice::Light };
-        craft::ui::shell::embed::before_input(&h.ctx, |_| {
-            craft::ui::runtime::frame::FrameInput::new(craft::ui::runtime::env::RootEnv::new().mode(mode))
-        });
-        h.step();
-        h.run();
-        let img = h.render().unwrap();
-        // Ink: how far each pixel, laid over the background (the window outside the frame is
-        // transparent), is from the background.
-        let back = u64::from(bg.r());
-        img.pixels()
-            .map(|p| {
-                let (v, a) = (u64::from(p.0[0]), u64::from(p.0[3]));
-                let shown = (v * a + back * (255 - a)) / 255;
-                shown.abs_diff(back)
-            })
-            .sum()
-    }
-
     #[test]
     #[cfg(all(unix, not(target_os = "macos")))]
     fn dark_interface_text_is_only_a_little_heavier_than_light_interface_text() {
-        // egui's dark default added about a fifth more ink than FreeType gives the same text in
-        // Firefox on Linux (semi-bold); plain coverage, Firefox's weight, looked soft on the dark
-        // tab row. The light boost chosen side by side adds about 7 %.
-        let (light, dark) = (interface_text_ink(super::Appearance::Light), interface_text_ink(super::Appearance::Dark));
-        assert!(light > 0);
-        let ratio = dark as f64 / light as f64;
-        assert!((1.03..1.12).contains(&ratio), "light {light}, dark {dark}: {ratio:.3}");
+        use egui::epaint::FontColorTransferFunction;
+        // What `apply` installs, read back without rendering (CI runners have no GPU adapter).
+        let ctx = egui::Context::default();
+        super::apply(&ctx, super::Appearance::System);
+        let transfer = |theme| ctx.style_of(theme).visuals.text_options.color_transfer_function;
+        // Light text keeps egui's plain coverage.
+        assert_eq!(transfer(egui::Theme::Light), FontColorTransferFunction::LIGHT_MODE_DEFAULT);
+        // Dark text: every partly covered pixel gets more ink than plain coverage (FreeType's
+        // weight in Firefox, which looked soft on the dark tab row). From 9/255 coverage up it
+        // also gets less than egui's dark default (which looked semi-bold); on the faintest edge
+        // pixels below that, the boost may be a little steeper, but by less than 1.5/255.
+        let dark = transfer(egui::Theme::Dark);
+        for level in 1..255u8 {
+            let coverage = f32::from(level) / 255.0;
+            let ink = dark.alpha_from_coverage(coverage);
+            let egui_dark = FontColorTransferFunction::DARK_MODE_DEFAULT.alpha_from_coverage(coverage);
+            assert!(coverage < ink, "coverage {level}/255: {ink}");
+            if level < 9 {
+                assert!(ink < egui_dark + 1.5 / 255.0, "coverage {level}/255: {ink} vs egui's {egui_dark}");
+            } else {
+                assert!(ink < egui_dark, "coverage {level}/255: {ink} vs egui's {egui_dark}");
+            }
+        }
     }
 
     /// WCAG contrast ratio between two opaque colours.
