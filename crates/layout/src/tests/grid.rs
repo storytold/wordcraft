@@ -42,6 +42,7 @@ fn lines(l: &DocLayout) -> (usize, Vec<f32>) {
 
 #[test]
 fn line_grid_snaps_line_heights_and_fixes_lines_per_page() {
+    crate::test_fonts();
     let text = vec!["Grid line"; 80].join("\n");
     let d = with_grid(&text, DocGridType::Lines, 0);
     let (first, hs) = lines(&lay(&d));
@@ -65,6 +66,7 @@ fn line_grid_snaps_line_heights_and_fixes_lines_per_page() {
 
 #[test]
 fn character_grid_places_east_asian_text_on_the_pitch() {
+    crate::test_fonts();
     let text = "日本語の文書abc";
     // The default font size plus 2.5 pt: a pitch unlike any font's advance.
     let lines = wordcraft_doc::SectionProps { doc_grid: Some(DocGrid { kind: DocGridType::Lines, ..Default::default() }), ..Default::default() };
@@ -114,17 +116,13 @@ fn multiple_spacing_follows_word_on_an_18_point_grid() {
     assert_eq!(para::Grid::default().multiple_height(21.0, 1.5), 31.5);
 }
 
-/// A top-and-bottom shape whose top lies just under the first grid line of 18 pt text at 3×
-/// (54 pt tall, measured). The float check estimates the line before measuring it: with the
-/// estimate at the plain `natural × 3` (over 63 pt) the line would be taken to meet the shape and
-/// pushed below it, although it ends above the shape's top at 55 pt.
-#[test]
-fn grid_multiple_spacing_estimates_the_line_the_float_check_meets() {
+/// Lays out a 3× grid-aligned line against a page-anchored top-and-bottom shape.
+fn grid_multiple_line_with_float(font_size: f32, float_top: f32) -> (f32, f32, f32) {
     use wordcraft_doc::para::{Anchor, Float, InlineObject, ShapeKind, Wrap};
     use wordcraft_doc::{CharProps, Paragraph, Pos};
     let mut d = Document::new();
     d.last_section.doc_grid = Some(DocGrid { kind: DocGridType::Lines, line_pitch: 18.0, char_space: 0 });
-    let ch = CharProps { font: Some("Source Sans 3".into()), size: Some(18.0), ..Default::default() };
+    let ch = CharProps { font: Some("Source Sans 3".into()), size: Some(font_size), ..Default::default() };
     d.body = (1..=3)
         .map(|n| {
             let mut p = Paragraph::with_text(&format!("P{n}"), ch.clone());
@@ -146,7 +144,7 @@ fn grid_multiple_spacing_estimates_the_line_the_float_check_meets() {
         fill: None,
         stroke: None,
         stroke_width: 0.0,
-        float: Float { wrap: Wrap::TopAndBottom, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 72.0, y: 72.0 + 55.0, ..Default::default() },
+        float: Float { wrap: Wrap::TopAndBottom, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 72.0, y: 72.0 + float_top, ..Default::default() },
         story: None,
         effects: Default::default(),
         freeform: None,
@@ -158,10 +156,32 @@ fn grid_multiple_spacing_estimates_the_line_the_float_check_meets() {
         .items
         .iter()
         .find_map(|it| match it {
-            Placed::Lines { path, y, para, story: StoryRef::Body, .. } if path.0.len() == 1 => Some((*y, para.lines[0].height)),
+            Placed::Lines { path, y, para, story: StoryRef::Body, .. } if path.0.len() == 1 => {
+                let line = para.lines.first()?;
+                let style = para.styles.first()?;
+                Some((*y, line.height, style.ascent + style.descent))
+            }
             _ => None,
         })
         .expect("first paragraph's lines");
-    assert!((first.1 - 54.0).abs() < 0.01, "a 3x line on an 18 pt grid is 3 pitches: {first:?}");
-    assert!((first.0 - 72.0).abs() < 0.01, "the line ends above the shape at 127 pt, so it stays at the top: {first:?}");
+    first
+}
+
+/// A 55 pt offset leaves the measured 54 pt line above the shape; the old `natural × 3` estimate
+/// was over 63 pt and moved it below the shape unnecessarily.
+#[test]
+fn grid_multiple_spacing_estimates_the_line_the_float_check_meets() {
+    let (y, height, _) = grid_multiple_line_with_float(18.0, 55.0);
+    assert!((height - 54.0).abs() < 0.01, "a 3× line on an 18 pt grid is 3 pitches: {height}");
+    assert!((y - 72.0).abs() < 0.01, "the line ends above the shape, so it stays at the top: {y}");
+}
+
+/// At 11 pt the old `natural × 3` estimate is below 45 pt, but the grid line measures 54 pt and
+/// overlaps a shape starting at 45 pt. The line must move below the shape.
+#[test]
+fn grid_multiple_spacing_does_not_underestimate_float_overlap() {
+    let (y, height, natural) = grid_multiple_line_with_float(11.0, 45.0);
+    assert!(natural * 3.0 < 45.0, "fixture must exercise the underestimate case: {natural}");
+    assert!((height - 54.0).abs() < 0.01, "a 3× line on an 18 pt grid is 3 pitches: {height}");
+    assert!(y >= 137.0, "line must start below the shape at 137 pt: {y}");
 }

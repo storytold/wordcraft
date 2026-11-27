@@ -326,16 +326,8 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 let uy = base - st.shift + st.size * 0.12;
                 let ucolor = rc.underline_color.unwrap_or(color);
                 if underline == Underline::Words {
-                    for kk in run_start..end_k {
-                        let Some(c) = pl.clusters.get(kk) else { continue };
-                        if c.kind != ClKind::Text {
-                            continue;
-                        }
-                        let a = x + line.cl_left(kk).unwrap_or(0.0);
-                        let b = x + line.cl_right(kk).unwrap_or(a - x);
-                        if a < x0 - 0.01 || b > x1 + 0.01 {
-                            continue; // drawn with its own span
-                        }
+                    let words = word_spans(pl, line, (run_start, end_k), x, (x0, x1));
+                    for (a, b) in words {
                         out.push(Draw::Line { x0: a, y0: uy, x1: b, y1: uy, width: thick, color: ucolor, stroke: Stroke::Solid, alpha, text_bg });
                     }
                 } else {
@@ -401,6 +393,38 @@ fn emphasis_mark(mark: wordcraft_doc::props::EmphasisMark, cx: f32, base: f32, s
         },
         _ => disc(r, true),
     }
+}
+
+/// The words among clusters `k0..k1` that lie inside `(x0, x1)`, as their left and right edges:
+/// a Words underline draws one line per word, since flat-ended lines per letter would show seams
+/// where they meet.
+fn word_spans(pl: &ParaLayout, line: &crate::para::Line, (k0, k1): (usize, usize), x: f32, (x0, x1): (f32, f32)) -> Vec<(f32, f32)> {
+    let mut words: Vec<(f32, f32)> = Vec::new();
+    // A space ends a word even when condensed spacing leaves it no width.
+    let mut apart = true;
+    for k in k0..k1 {
+        let Some(c) = pl.clusters.get(k) else { continue };
+        // A bookmark or comment anchor inside a word takes no room and doesn't part it.
+        if c.kind == ClKind::Marker {
+            continue;
+        }
+        if c.kind != ClKind::Text {
+            apart = true;
+            continue;
+        }
+        let a = x + line.cl_left(k).unwrap_or(0.0);
+        let b = x + line.cl_right(k).unwrap_or(a - x);
+        if a < x0 - 0.01 || b > x1 + 0.01 {
+            apart = true;
+            continue; // drawn with its own span
+        }
+        match words.last_mut() {
+            Some(w) if !apart && a <= w.1 + 0.01 && b >= w.0 - 0.01 => *w = (w.0.min(a), w.1.max(b)),
+            _ => words.push((a, b)),
+        }
+        apart = false;
+    }
+    words
 }
 
 fn comment_backgrounds(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
@@ -470,12 +494,41 @@ fn character_backgrounds(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
 }
 
 fn draw_label_and_hyphen(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
+    // A list number goes with its paragraph mark: when the mark is a tracked deletion the number
+    // is drawn as deleted text is, in the deletion's colour and with its mark (struck through by
+    // default, a caret, #s, bold…), and not at all where deletions aren't shown (#4828). Only
+    // when the item is deleted whole, its text too: a deleted mark alone joins the item to the
+    // next one, and its text and number stay as they are.
+    let m = &ctx.opts.revisions;
+    let whole = ctx.para.is_some_and(|p| p.runs.iter().all(|r| r.len == 0 || r.props.del.is_some()));
+    let mark_del = ctx.para.filter(|_| whole).and_then(|p| p.mark.del);
+    let moved = mark_del.is_some() && ctx.doc.move_name(mark_del).is_some();
+    let hidden = mark_del.is_some() && (!ctx.opts.markup || m.hides_deletion(moved));
+    let deleted = mark_del.filter(|_| ctx.opts.markup && m.insertions_deletions);
+    let del_mark = deleted.map(|_| if moved { m.move_from_mark } else { m.delete_mark });
+    // Moved-away text marked (none) is plain text, and so is its number.
+    let plain_move = moved && del_mark == Some(DeleteMark::None);
+    let del_color =
+        deleted.filter(|_| !plain_move).map(|r| if moved { m.move_from_color } else { m.delete_color }.unwrap_or_else(|| ctx.authors.color(r)));
     if ctx.li == ctx.pl.label_line()
+        && !hidden
         && let Some(label) = &ctx.pl.label
     {
         let gx = ctx.x + label.x;
+        let first = label.runs.first().and_then(|r| ctx.pl.styles.get(r.style as usize));
+        if let (Some(DeleteMark::Caret), Some(color), Some(style)) = (del_mark, del_color, first) {
+            // A caret where the number was, instead of the number.
+            let (h, w, y) = (style.size * 0.3, (style.size / 18.0).max(0.6), ctx.base + 1.0);
+            for (x0, y0, x1, y1) in [(gx - h * 0.6, y, gx, y - h), (gx, y - h, gx + h * 0.6, y)] {
+                out.push(Draw::Line { x0, y0, x1, y1, width: w, color, stroke: Stroke::Solid, alpha: ctx.alpha, text_bg: None });
+            }
+            return draw_hyphen(ctx, out);
+        }
         for run in &label.runs {
             let Some(style) = ctx.pl.styles.get(run.style as usize) else { continue };
+            let color = del_color.unwrap_or_else(|| ctx.ink(&style.rc.color, None));
+            // Each deleted character shows as #.
+            let hash = (del_mark == Some(DeleteMark::Hash)).then(|| style.face.glyph_for('#'));
             out.push(Draw::Glyphs {
                 face: style.face,
                 size: style.size,
@@ -484,12 +537,12 @@ fn draw_label_and_hyphen(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                     .get(run.glyphs.clone())
                     .into_iter()
                     .flatten()
-                    .map(|g| (g.gid, gx + g.dx, ctx.base - style.shift - g.dy))
+                    .map(|g| (hash.unwrap_or(g.gid), gx + g.dx, ctx.base - style.shift - g.dy))
                     .collect(),
-                color: ctx.ink(&style.rc.color, None),
+                color,
                 alpha: ctx.alpha,
-                synth_bold: style.synth_bold,
-                synth_italic: style.synth_italic,
+                synth_bold: style.synth_bold || del_mark == Some(DeleteMark::Bold),
+                synth_italic: style.synth_italic || del_mark == Some(DeleteMark::Italic),
                 text: run.text.clone(),
                 link: None,
                 ranges: Vec::new(),
@@ -497,7 +550,27 @@ fn draw_label_and_hyphen(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 x_scale: 1.0,
             });
         }
+        // Struck through or underlined once, across the whole number, in its first run's size.
+        if let (Some(color), Some(mark), Some(style)) = (del_color, del_mark, first) {
+            let strike_y = ctx.base - style.shift - style.size * 0.28;
+            let under_y = ctx.base - style.shift + style.size * 0.12;
+            let line = match mark {
+                DeleteMark::Strikethrough => Some((strike_y, Stroke::Solid)),
+                DeleteMark::DoubleStrikethrough => Some((strike_y, Stroke::Double)),
+                DeleteMark::Underline => Some((under_y, Stroke::Solid)),
+                DeleteMark::DoubleUnderline => Some((under_y, stroke_of(Underline::Double))),
+                _ => None,
+            };
+            if let Some((y, stroke)) = line {
+                let width = (style.size / 18.0).max(0.5);
+                out.push(Draw::Line { x0: gx, y0: y, x1: gx + label.width, y1: y, width, color, stroke, alpha: ctx.alpha, text_bg: None });
+            }
+        }
     }
+    draw_hyphen(ctx, out);
+}
+
+fn draw_hyphen(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
     if let Some((style_index, glyph, advance)) = ctx.line.hyphen
         && let Some(style) = ctx.pl.styles.get(style_index as usize)
     {
@@ -637,9 +710,20 @@ fn inline_objects(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         }
         let cx = x + line.cl_left(k).unwrap_or(0.0);
         let obj = para.and_then(|p| p.objects.get(oi));
-        let rect = inline_rect(obj, cx, base, c.adv, (c.obj_h, c.obj_d), pl.rule_room(line, k));
+        let modern = doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT;
+        let rect = inline_rect(obj, cx, base, c.adv, (c.obj_h, c.obj_d), pl.rule_room(line, k), modern);
         let spin = obj.and_then(InlineObject::frame).map(|(_, _, f)| f.spin()).unwrap_or_default();
         match obj {
+            // A turn its line keeps no room for overhangs the line; Word cuts it at the line's top
+            // and bottom, not at its sides.
+            Some(o @ (InlineObject::Image { .. } | InlineObject::Shape { .. } | InlineObject::Group { .. }))
+                if o.frame().is_some_and(|(w, h, f)| f.is_bare_turn() && f.spin_pad(w, h).1 > f.line_pad(w, h, modern).1 + 0.01) =>
+            {
+                let mut items = Vec::new();
+                object_draws(o, rect, Spin::default(), alpha, opts, &mut items);
+                let band = Rect::new(rect.x - 4000.0, ctx.top, rect.w + 8000.0, (ctx.bottom - ctx.top).max(0.0));
+                out.push(Draw::Clip { rect: band, items });
+            }
             Some(o @ (InlineObject::Image { .. } | InlineObject::Shape { .. } | InlineObject::Group { .. })) => {
                 object_draws(o, rect, Spin::default(), alpha, opts, out)
             }
@@ -656,7 +740,7 @@ fn inline_objects(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             Some(o @ InlineObject::Field { .. }) => {
                 if let Some(wordcraft_doc::legacy_form::LegacyForm::CheckBox { checked, .. }) = o.legacy_form() {
                     let color = pl.styles.get(c.style as usize).map_or(Rgb::BLACK, |st| text_color(&st.rc.color, None));
-                    let frame = Rect::new(cx, base - c.obj_h, c.adv, c.obj_h + c.obj_d);
+                    let frame = Rect::new(cx, base - c.obj_h.max(0.0), c.adv, c.obj_h + c.obj_d);
                     check_box(frame, checked, color, alpha, out);
                 }
             }
@@ -804,6 +888,8 @@ pub fn section_break_label(start: SectionStart) -> &'static str {
 
 /// Width of a [`Draw::MarkText`] label.
 pub fn mark_text_width(text: &str, size: f32) -> f32 {
+    #[cfg(test)]
+    crate::test_fonts();
     let face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
     let k = size / face.upem.max(1.0) as f32;
     text.chars().map(|c| face.advance(face.glyph_for(c)) as f32 * k).sum()
@@ -835,7 +921,7 @@ fn section_break_mark(start: SectionStart, x0: f32, x1: f32, base: f32, size: f3
 fn equation(items: &[MItem], x: f32, base: f32, alpha: f32, screen: bool, out: &mut Vec<Draw>) {
     for it in items {
         match it {
-            MItem::Glyphs { face, size, color, synth_bold, synth_italic, glyphs, text } => out.push(Draw::Glyphs {
+            MItem::Glyphs { face, size, color, synth_bold, synth_italic, glyphs, text, ranges } => out.push(Draw::Glyphs {
                 face: *face,
                 size: *size,
                 glyphs: glyphs.iter().map(|(g, gx, gy)| (*g, x + gx, base - gy)).collect(),
@@ -845,8 +931,7 @@ fn equation(items: &[MItem], x: f32, base: f32, alpha: f32, screen: bool, out: &
                 synth_italic: *synth_italic,
                 text: text.clone(),
                 link: None,
-                // Equation text maps back through the font (no per-glyph ranges from the math layout).
-                ranges: Vec::new(),
+                ranges: ranges.clone(),
                 text_bg: None,
                 x_scale: 1.0,
             }),

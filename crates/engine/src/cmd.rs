@@ -24,6 +24,7 @@ pub mod insert;
 pub mod inspector;
 pub mod lists;
 pub mod mailings;
+pub mod md_source;
 pub mod moves;
 pub mod objects;
 pub mod options;
@@ -32,6 +33,7 @@ pub mod packs;
 pub mod page;
 pub mod para;
 pub mod paste;
+pub mod paste_cells;
 pub mod phonetic;
 pub mod protect;
 pub mod references;
@@ -73,6 +75,7 @@ pub fn registry() -> Registry {
     v.extend(lists::specs());
     v.extend(inspector::specs());
     v.extend(view::specs());
+    v.extend(md_source::specs());
     v.extend(outline::specs());
     v.extend(insert::specs());
     v.extend(equation::specs());
@@ -169,6 +172,9 @@ pub(crate) fn delete_selection_effect(s: &mut Session) -> Result<SelectionDelete
     if a == b {
         return Ok(SelectionDelete { at: a, content_changed: false, state_changed: false });
     }
+    if canvas::selected_member(s).is_some() {
+        return Err(CmdError::Disabled("a shape inside a drawing canvas is selected".into()));
+    }
     controls::check_delete(s, &a, &b)?;
     let effect = if s.doc.settings.track_changes {
         if !track_delete_would_change(s, &a, &b) {
@@ -186,7 +192,9 @@ pub(crate) fn delete_selection_effect(s: &mut Session) -> Result<SelectionDelete
     Ok(effect)
 }
 
-/// Delete the selection (respecting track changes); returns the collapsed position.
+/// Delete the selection (respecting track changes); returns the collapsed position. With a
+/// Drawing Canvas member picked (#2637) the selection is the whole canvas, which a command that
+/// replaces the selection (Insert › Table, Equation, Symbol, Field…) would take away: refused.
 pub fn delete_selection(s: &mut Session) -> Result<Pos, CmdError> {
     delete_selection_effect(s).map(|e| e.at)
 }
@@ -342,19 +350,24 @@ pub(crate) struct InsertEffect {
 
 /// Insert typed text at the caret (replacing the selection), with pending formatting and track changes.
 pub fn type_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
-    insert_text(s, text, true).map(|_| ())
+    insert_text(s, text, true, None).map(|_| ())
 }
 
 /// [`type_text`] with the effect the insertion had.
 pub(crate) fn type_text_effect(s: &mut Session, text: &str) -> Result<InsertEffect, CmdError> {
-    insert_text(s, text, true)
+    insert_text(s, text, true, None)
 }
 
 /// Insert pasted plain text like [`type_text`], except that its paragraph separators are text
 /// being transferred, not Enter key presses: an empty list item between them stays (Enter on
 /// one would end the list).
 pub fn paste_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
-    insert_text(s, text, false).map(|_| ())
+    insert_text(s, text, false, None).map(|_| ())
+}
+
+/// Insert typed text in a chosen language without losing caret formatting or tracked changes.
+pub fn type_text_with_lang(s: &mut Session, text: &str, language: Option<&str>) -> Result<(), CmdError> {
+    insert_text(s, text, true, language).map(|_| ())
 }
 
 /// Inserts typed or pasted text at the caret: resolves field ends and content-control placeholders,
@@ -363,7 +376,13 @@ pub fn paste_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
 /// text; a one-line control suppresses typed breaks only. It gives an otherwise undirected paragraph
 /// right-to-left direction when its first strong letter is RTL, and returns whether content or state
 /// changed.
-fn insert_text(s: &mut Session, text: &str, enter: bool) -> Result<InsertEffect, CmdError> {
+fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>) -> Result<InsertEffect, CmdError> {
+    // Formatting Backspace carried over is for typing at the place it was deleted (#6518).
+    if enter {
+        s.drop_stale_carried();
+    } else {
+        s.forget_carried();
+    }
     let mut props = s.typing_props();
     if s.sel.is_collapsed() {
         s.sel = crate::Selection::caret(s.doc.past_field_ends(&s.sel.focus));
@@ -377,6 +396,9 @@ fn insert_text(s: &mut Session, text: &str, enter: bool) -> Result<InsertEffect,
     // Pasted text is text: pending properties left by AutoCorrect don't give it a symbol's font (#2036).
     if !enter {
         props = props.without_symbol();
+    }
+    if let Some(language) = language {
+        props.lang = Some(language.to_string());
     }
     let deletion = delete_selection_effect(s)?;
     // Typed text is new: never deleted, and not a formatting change of the text around it.
@@ -421,6 +443,10 @@ fn insert_text(s: &mut Session, text: &str, enter: bool) -> Result<InsertEffect,
                 p.touch();
             }
         }
+    }
+    // Formatting Backspace carried over goes on applying to the text typed after this (#6518).
+    if s.pending_at.is_some() {
+        s.pending_at = Some(at.clone());
     }
     s.sel = crate::Selection::caret(at);
     s.goal_x = None;

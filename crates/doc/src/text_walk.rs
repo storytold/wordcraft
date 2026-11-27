@@ -35,8 +35,20 @@ fn is_cjk_word(c: char) -> bool {
     ) && c.is_alphanumeric()
 }
 
+/// Characters in `s`, as the Word Count dialog counts them ("Characters (with spaces)"):
+/// paragraph breaks aren't characters (#2797).
+pub fn count_chars(s: &str) -> usize {
+    s.chars().filter(|c| *c != '\n' && *c != '\r').count()
+}
+
+/// Characters in `s` ignoring every whitespace character, as the Word Count dialog counts them
+/// ("Characters (no spaces)"; #2797).
+pub fn count_chars_no_spaces(s: &str) -> usize {
+    s.chars().filter(|c| !c.is_whitespace()).count()
+}
+
 /// How deep in nested tables [`Document::para_paths`] goes: cells below this are skipped.
-pub(crate) const PARA_WALK_DEPTH: usize = 16;
+pub const PARA_WALK_DEPTH: usize = 16;
 
 /// The note and text box stories an object shows, for `Document::reachable`.
 pub(crate) fn notes_and_boxes(o: &InlineObject) -> Vec<(u32, &'static [PartKind])> {
