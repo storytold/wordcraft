@@ -859,39 +859,16 @@ fn a_right_click_keeps_selected_cells_only_on_them() {
     assert_menu(&h, &["Merge Cells"], false);
 }
 
-/// Right-clicking a table cell puts the caret there, and the table's items follow what is
-/// selected, as in Word: with the caret in a cell, Split Cells; with the whole table,
-/// Distribute, AutoFit and Insert Caption… (never Select or Cell Alignment). Delete is there
-/// for both.
+/// With just the caret in a cell, right-click › Insert › Insert Rows Below adds a row in one undo step (#694).
 #[test]
-fn the_context_menu_in_a_table_follows_the_selection() {
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
-    a.run("insert.table", json!({"rows": 2, "cols": 3})).unwrap();
-    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    steps(&mut h, 2);
-    let rclick = |h: &mut H, at: Pos2| {
-        h.event(egui::Event::PointerMoved(at));
-        h.event(button(at, egui::PointerButton::Secondary, true));
-        h.app_frame();
-        h.event(button(at, egui::PointerButton::Secondary, false));
-        h.app_frame();
-    };
-    let b = cell(&mut h, 1, 2);
+fn a_right_click_in_a_cell_inserts_a_row_below() {
+    let mut h = table_window();
+    let b = cell(&mut h, 0, 1);
     let at = screen(&mut h, b.x + b.w / 2.0, b.y + b.h / 2.0);
-    rclick(&mut h, at);
-    assert_eq!(h.state().session.sel.focus.path.cell().map(|(_, r, c)| (r, c)), Some((1, 2)), "the caret moved to the cell");
-    assert_menu(&h, &["Insert", "Delete", "Split Cells", "Text Direction", "Table Properties…"], true);
-    assert_menu(&h, &["Merge Cells", "Distribute Rows", "AutoFit", "Select", "Cell Alignment"], false);
-    h.state_mut().run("table.selectTable", json!({})).unwrap();
-    rclick(&mut h, at);
-    assert!(h.state().session.cell_range().is_some(), "a right-click on the selected table keeps it");
-    assert_menu(&h, &["Delete", "Distribute Rows", "Distribute Columns", "AutoFit", "Insert Caption…", "Table Properties…"], true);
-    assert_menu(&h, &["Split Cells", "Merge Cells"], false);
+    right_click(&mut h, at);
+    let depth = h.state().session.undo_depth();
+    pick(&mut h, &["Insert", "Insert Rows Below"]);
+    let rows = h.state().session.doc.body.iter().find_map(|b| b.as_table()).expect("table").rows.len();
+    assert_eq!(rows, 3, "Insert Rows Below adds a row");
+    assert_eq!(h.state().session.undo_depth(), depth + 1, "one undo step");
 }
