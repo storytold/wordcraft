@@ -1,6 +1,6 @@
 use super::glyphs::{Authors, upright_east_asian};
 use super::lines::{LineRender, lines};
-use super::objects::{ShapeLook, effects_in, graphic_draws, object_draws, shape_draws, spun};
+use super::objects::{ShapeLook, effects_in, graphic_draws, image_fx, object_draws, shape_draws, spun};
 use super::options::{DisplayOptions, Hidden, MarkupOptions};
 use super::paint::Stroke;
 use super::{
@@ -456,10 +456,11 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
         Placed::Rule { x0, y0, x1, y1, border } => out.push(rule(*x0, *y0, *x1, *y1, border, alpha)),
         Placed::Image { rect, media, crop, spin, fx, .. } => {
             let alpha = alpha * fx.opacity();
+            let fx = image_fx(*fx, spin.within(outer), alpha);
             spun(
                 *spin,
                 *rect,
-                vec![Draw::Image { rect: *rect, media: media.clone(), crop: *crop, alpha, alt: String::new(), fx: *fx, decorative: false }],
+                vec![Draw::Image { rect: *rect, media: media.clone(), crop: *crop, alpha, alt: String::new(), fx, decorative: false }],
                 out,
             )
         }

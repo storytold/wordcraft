@@ -7,6 +7,12 @@ use super::names::{base_style, last_resort_face, make_face, norm, style_italic, 
 use super::{Arc, BezPath, FontDb, MetadataProvider};
 
 impl FontDb {
+    /// Snapshot the faces already resolved for this document, for vector image text.
+    /// The shared allocations remain valid if the database changes while drawing.
+    pub fn loaded_faces(&self) -> Vec<Arc<super::FontFace>> {
+        self.read_faces().clone()
+    }
+
     /// Resolve a family + style to a face, falling back to the closest style of the family, then to
     /// Source Sans 3 Regular. `family` is a typographic family ("Roboto") or a face's legacy family
     /// name ("Roboto Light", whose styles are Light and Light Italic). Installed system fonts are

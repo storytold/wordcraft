@@ -873,14 +873,34 @@ fn draw_image(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
     let Draw::Image { rect, media, crop, alpha, fx, .. } = it else { return };
     let (doc, view) = (fr.doc, fr.view);
     let r = kurbo_rect(rect);
-    if !r.overlaps(*fr.visible) {
+    let effects = fx.shape_effects();
+    let reach = effects.glow.map_or(0.0, |g| g.size) + effects.shadow.map_or(0.0, |s| s.blur + s.distance) + 1.0;
+    if !r.inflate(f64::from(reach), f64::from(reach)).overlaps(*fr.visible) {
         return;
+    }
+    for (frame, pm) in media::effect_pixmaps_for(doc, media, rect.w, rect.h, *crop, *fx) {
+        let (x, y) = wordcraft_layout::display::picture_effect_origin(rect.x, rect.y, frame.x, frame.y);
+        let area = kurbo::Rect::new(f64::from(x), f64::from(y), f64::from(x + frame.w), f64::from(y + frame.h));
+        let (sx, sy) = (f64::from(frame.w) / f64::from(pm.width()), f64::from(frame.h) / f64::from(pm.height()));
+        ctx.set_transform(view);
+        ctx.set_paint(vello_cpu::Image {
+            image: vello_cpu::ImageSource::Pixmap(pm),
+            sampler: peniko::ImageSampler::default().with_quality(peniko::ImageQuality::Medium),
+        });
+        ctx.set_paint_transform(Affine::translate((area.x0, area.y0)) * Affine::scale_non_uniform(sx, sy));
+        ctx.fill_rect(&area);
+        ctx.reset_paint_transform();
     }
     if let Some(v) = vector_for(doc, media) {
         draw_vector(ctx, &v, &r, crop, *alpha, view);
         return;
     }
-    let pm = match pixmap_for(doc, media, *fx) {
+    let [_, _, vis_w, vis_h] = wordcraft_layout::crop_window(*crop);
+    let device = view.transform_rect_bbox(r);
+    let svg = (fx.bright == 0 && fx.contrast == 0)
+        .then(|| media::svg_pixmap_for(doc, media, (device.width() / vis_w).ceil() as u32, (device.height() / vis_h).ceil() as u32))
+        .flatten();
+    let pm = match svg.map(Ok).unwrap_or_else(|| pixmap_for(doc, media, *fx)) {
         Ok(pm) => pm,
         Err(refusal) => {
             ctx.set_transform(view);

@@ -26,6 +26,24 @@ fn part(bytes: &[u8], name: &str) -> String {
 }
 
 #[test]
+fn percentage_character_shading_survives_save_as_a_visible_background() {
+    use wordcraft_doc::{Pos, StoryRef, props::Rgb};
+    for (pattern, fill, color, expected) in [
+        ("pct10", "auto", "auto", Rgb(229, 229, 229)),
+        ("pct25", "FFFFFF", "0000FF", Rgb(191, 191, 255)),
+        ("pct12", "FFFFFF", "000000", Rgb(223, 223, 223)),
+    ] {
+        let body = format!(r#"<w:p><w:r><w:rPr><w:shd w:val="{pattern}" w:fill="{fill}" w:color="{color}"/></w:rPr><w:t>code</w:t></w:r></w:p>"#);
+        let mut d = wordcraft_docx::read(&docx(&body, "")).unwrap();
+        for _ in 0..3 {
+            assert_eq!(d.para_at(&Pos::body(0, 0)).unwrap().props_of_char(0).shading, Some(expected));
+            assert_eq!(d.plain_text(StoryRef::Body), "code");
+            d = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        }
+    }
+}
+
+#[test]
 fn paragraph_adjust_right_indent_inherits_from_style() {
     let styles =
         r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:pPr><w:adjustRightInd/></w:pPr></w:style>"#;

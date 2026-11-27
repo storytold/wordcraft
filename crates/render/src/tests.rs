@@ -5,6 +5,47 @@ use wordcraft_layout::{LayoutCache, LayoutOptions, layout};
 
 mod color_glyphs;
 
+#[test]
+fn picture_decorations_extend_beyond_the_pixels_without_recolouring_them() {
+    use wordcraft_doc::effects::{Glow, Shadow, ShapeEffects};
+    use wordcraft_doc::picfx::PicFx;
+    use wordcraft_geom::Rect;
+    let mut d = Document::new();
+    let png = wordcraft_geom::picture::encode_format(
+        &image::DynamicImage::from(image::RgbaImage::from_pixel(8, 8, image::Rgba([20, 180, 60, 255]))),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
+    d.media.insert("picture.png".into(), Arc::new(png));
+    let raster = |effects| {
+        let item = Draw::Image {
+            rect: Rect::new(20.0, 20.0, 40.0, 40.0),
+            media: "picture.png".into(),
+            crop: [0.0; 4],
+            alpha: 1.0,
+            alt: String::new(),
+            fx: PicFx::default().with_shape_effects(effects),
+            decorative: false,
+        };
+        render_items(&d, &[item], Rect::new(0.0, 0.0, 80.0, 80.0), 2.0, &RenderOptions::default())
+    };
+    let plain = raster(ShapeEffects::default());
+    let decorated = raster(ShapeEffects {
+        glow: Some(Glow { color: Rgb(240, 80, 10), size: 6.0, transparency: 30.0 }),
+        shadow: Some(Shadow { distance: 10.0, blur: 4.0, angle: 90.0, ..Default::default() }),
+        ..Default::default()
+    });
+    let pixel = |img: &Rendered, x: usize, y: usize| {
+        let i = (y * img.width as usize + x) * 4;
+        img.pixels[i..i + 4].to_vec()
+    };
+    assert_eq!(pixel(&plain, 80, 80), pixel(&decorated, 80, 80), "opaque source pixels cover their decorations");
+    let glow = pixel(&decorated, 36, 80);
+    assert!(glow[3] > pixel(&plain, 36, 80)[3] && glow[0] > glow[1], "a coloured glow outside the left edge");
+    assert!(pixel(&decorated, 80, 136)[3] > pixel(&plain, 80, 136)[3], "the shadow extends below the picture");
+    assert_eq!(pixel(&decorated, 5, 5)[3], 0, "distant pixels remain transparent");
+}
+
 /// The first and last pixel rows with ink in a black-on-white [`render_text_line`] raster.
 fn ink_rows(img: &Rendered) -> Option<(usize, usize)> {
     let w = img.width as usize * 4;
@@ -2268,4 +2309,42 @@ fn a_picture_too_large_to_decode_says_so_in_its_box() {
     let grid = placeholder_pixels(b"\x89PNG\r\n\x1a\njunk".to_vec());
     assert!(grid.iter().flatten().any(|p| *p == Some(false)), "a damaged picture keeps its grey placeholder");
     assert!(!grid.iter().flatten().any(|p| *p == Some(true)), "with no size message");
+}
+
+#[test]
+fn svg_alternatives_are_drawn_at_display_resolution_and_invalidate_on_replacement() {
+    let mut d = Document::new();
+    let png = wordcraft_geom::picture::encode_format(
+        &image::DynamicImage::from(image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 255, 255]))),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
+    let fallback = d.add_media(png, "png");
+    let vector =
+        d.add_media(br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><path d="M0 0H10V10H0Z" fill="red"/></svg>"#.to_vec(), "svg");
+    let media = d.add_svg_picture(&fallback, &vector).unwrap();
+    let item = Draw::Image {
+        rect: wordcraft_geom::Rect::new(0.0, 0.0, 10.0, 10.0),
+        media,
+        crop: [0.0; 4],
+        alpha: 0.5,
+        alt: String::new(),
+        fx: Default::default(),
+        decorative: false,
+    };
+    for scale in [1.0, 3.0] {
+        let rendered =
+            render_items(&d, std::slice::from_ref(&item), wordcraft_geom::Rect::new(0.0, 0.0, 10.0, 10.0), scale, &RenderOptions::default());
+        let centre = ((rendered.height / 2 * rendered.width + rendered.width / 2) * 4) as usize;
+        assert!(rendered.pixels[centre] > rendered.pixels[centre + 2], "the red SVG takes precedence over the blue PNG");
+    }
+    d.media.insert(
+        vector.clone(),
+        Arc::new(br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><path d="M0 0H10V10H0Z" fill="lime"/></svg>"#.to_vec()),
+    );
+    let rendered = render_items(&d, &[item], wordcraft_geom::Rect::new(0.0, 0.0, 10.0, 10.0), 1.0, &RenderOptions::default());
+    assert!(
+        rendered.pixels[5 * 10 * 4 + 5 * 4 + 1] > rendered.pixels[5 * 10 * 4 + 5 * 4],
+        "changing the source allocation invalidates cached SVG pixels"
+    );
 }

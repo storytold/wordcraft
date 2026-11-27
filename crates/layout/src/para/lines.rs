@@ -34,6 +34,8 @@ struct Breaker<'e> {
     expand_break: bool,
     /// Hyphenation Options: the zone, and how many lines in a row may end with a hyphen.
     zone: f32,
+    /// Explicit optional hyphens are usable regardless of the legacy zone.
+    manual_hyphens: Vec<u32>,
     hyph_limit: usize,
     /// The width of every word, measured once: the word beside a float is measured again for
     /// every row it is tried on, and measuring it again costs a lookup rather than another pass
@@ -153,11 +155,11 @@ fn mirrored_exclusions(exclusions: &[Exclusion], width: f32) -> Vec<Exclusion> {
 
 /// Break a paragraph into lines, measure each line, apply the paragraph's alignment and place
 /// the list label. Fills `pl.lines`, `pl.height` and the label's position.
-pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Option<&Level>) {
+pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, text: &str, mark_style: u32, level: Option<&Level>) {
     let width = env.width.max(MIN_LINE_WIDTH);
     let mirrored = pl.rp.bidi.then(|| mirrored_exclusions(env.exclusions, width));
     let exclusions = mirrored.as_deref().unwrap_or(env.exclusions);
-    let mut bk = Breaker::new(pl, (env, exclusions), mark_style, level);
+    let mut bk = Breaker::new(pl, (env, exclusions), text, mark_style, level);
     loop {
         let mut sc = bk.begin_line(pl);
         sc.scan(&mut bk, pl);
@@ -174,7 +176,7 @@ pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, l
 }
 
 impl<'e> Breaker<'e> {
-    fn new(pl: &ParaLayout, (env, exclusions): (&'e ParaEnv<'e>, &'e [Exclusion]), mark_style: u32, level: Option<&'e Level>) -> Self {
+    fn new(pl: &ParaLayout, (env, exclusions): (&'e ParaEnv<'e>, &'e [Exclusion]), text: &str, mark_style: u32, level: Option<&'e Level>) -> Self {
         let rp = pl.rp.clone();
         let width = env.width.max(MIN_LINE_WIDTH);
         let settings = &env.doc.settings;
@@ -206,8 +208,21 @@ impl<'e> Breaker<'e> {
                 // them over the letter.
                 && pl.drop_cap.is_none(),
             expand_break: !settings.do_not_expand_shift_return,
-            zone: Some(settings.hyphenation_zone).filter(|z| z.is_finite() && *z >= 0.0).unwrap_or(HYPHENATION_ZONE).min(1584.0),
+            // Word's modern layout ignores the legacy hyphenation zone, even
+            // when a saved document still contains w:hyphenationZone.
+            zone: if settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT {
+                0.0
+            } else {
+                Some(settings.hyphenation_zone).filter(|z| z.is_finite() && *z >= 0.0).unwrap_or(HYPHENATION_ZONE).min(1584.0)
+            },
             hyph_limit: settings.consecutive_hyphen_limit as usize,
+            manual_hyphens: pl
+                .clusters
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| text.get(c.start..c.end).is_some_and(|s| s.ends_with(super::SOFT_HYPHEN)))
+                .map(|(k, _)| k as u32)
+                .collect(),
             widths: word_widths(&pl.clusters, &pl.hyph_after),
             rtl_para: rp.bidi,
             grid: Some(env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid),
@@ -421,9 +436,10 @@ impl<'e> Breaker<'e> {
             sc.xs.push(if sc.xs.is_empty() { sc.line_start_x } else { last + adv });
         }
         sc.xs.truncate(c1 - c0);
-        let hyphen = (sc.end == LineEnd::Wrap && c1 > c0 && pl.hyph_after.binary_search(&((c1 - 1) as u32)).is_ok())
-            .then(|| pl.clusters.get(c1 - 1).map(|c| hyphen_glyph(pl, c.style, &mut self.hcache)))
-            .flatten();
+        let hyphen =
+            (sc.end == LineEnd::Wrap && c1 > c0 && pl.hyph_after.binary_search(&((c1 - 1) as u32)).is_ok() && self.hyphen_allowed(pl, c0, c1 - 1))
+                .then(|| pl.clusters.get(c1 - 1).map(|c| hyphen_glyph(pl, c.style, &mut self.hcache)))
+                .flatten();
         let end_x = match (sc.xs.last(), c1.checked_sub(1).and_then(|k| pl.clusters.get(k))) {
             (Some(lx), Some(c)) => lx + c.adv + hyphen.map_or(0.0, |h| h.2),
             _ => sc.line_start_x,
@@ -432,11 +448,23 @@ impl<'e> Breaker<'e> {
         (c1, j, hyphen)
     }
 
+    /// Automatic hyphenation follows the proofing state of the word fragment's
+    /// first character, not the character at the candidate cut. A forced break
+    /// can expose a checked continuation of an initially unchecked word.
+    fn hyphen_allowed(&self, pl: &ParaLayout, c0: usize, at: usize) -> bool {
+        if self.manual_hyphens.binary_search(&(at as u32)).is_ok() {
+            return true;
+        }
+        let k = pl.hyph_words.partition_point(|word| word.end <= at);
+        let start = pl.hyph_words.get(k).filter(|word| word.start <= at).map_or(c0, |word| word.start.max(c0));
+        !pl.clusters.get(start).and_then(|c| pl.styles.get(c.style as usize)).is_some_and(|s| s.rc.no_proof)
+    }
+
     /// The line's ascent and descent over its baseline from the clusters `c0..c1`, and the
     /// tallest picture on it (which sits on the baseline).
     fn extents(&self, pl: &ParaLayout, (c0, c1): (usize, usize)) -> Extents {
         let rp = &self.rp;
-        let mut ex = Extents { asc: 0.0, desc: 0.0, obj_asc: 0.0, obj_desc: 0.0, text: false };
+        let mut ex = Extents { asc: 0.0, desc: 0.0, run_height: 0.0, obj_asc: 0.0, obj_desc: 0.0, text: false };
         let mut any = false;
         let dropped = pl.drop_cap.map_or(0, |d| d.0);
         for (k, c) in pl.clusters.get(c0..c1).into_iter().flatten().enumerate() {
@@ -480,6 +508,7 @@ impl<'e> Breaker<'e> {
             };
             ex.asc = ex.asc.max(a);
             ex.desc = ex.desc.max(d);
+            ex.run_height = ex.run_height.max(a + d);
             any = true;
             // Text needs its descent below the line; so do inline math (an object with its own
             // descent) and a check box. A line break ending the line is no text.
@@ -490,6 +519,7 @@ impl<'e> Breaker<'e> {
         {
             ex.asc = st.ascent;
             ex.desc = st.descent;
+            ex.run_height = ex.asc + ex.desc;
         }
         ex
     }
@@ -497,8 +527,12 @@ impl<'e> Breaker<'e> {
     /// The line's height, baseline and text extent.
     fn measure(&self, pl: &ParaLayout, range: (usize, usize)) -> Measure {
         let rp = &self.rp;
-        let Extents { mut asc, mut desc, obj_asc, obj_desc, text } = self.extents(pl, range);
-        let mut text_natural = asc + desc;
+        let Extents { mut asc, mut desc, run_height, obj_asc, obj_desc, text } = self.extents(pl, range);
+        // With mixed fonts the tallest ascent and descent can belong to different
+        // runs. Word multiplies the tallest run's own height, then adds that
+        // cross-font overflow once: it is not extra interline leading.
+        let mut text_natural = run_height;
+        let mut mixed_extra = (asc + desc - run_height).max(0.0);
         let font_desc = desc;
         desc = desc.max(obj_desc);
         let (text_asc, text_desc) = (asc.max(obj_asc), desc);
@@ -534,6 +568,7 @@ impl<'e> Breaker<'e> {
                     let styles = lab.runs.iter().filter_map(|r| pl.styles.get(r.style as usize));
                     let (a, d) = styles.fold((asc, font_desc), |(a, d), st| (a.max(st.ascent), d.max(st.descent)));
                     text_natural = a + d;
+                    mixed_extra = 0.0;
                     label_extra = 0.0;
                 }
             } else {
@@ -551,7 +586,9 @@ impl<'e> Breaker<'e> {
         let (height, centred) = match (rp.line_spacing, grid) {
             (LineSpacing::Multiple(m), Some(g)) => ((g.snap_height(natural) * m).max(g.snap_height(pictures)), true),
             (LineSpacing::AtLeast(v), Some(g)) => (g.snap_height(natural.max(pictures)).max(v), true),
-            (LineSpacing::Multiple(m), None) => ((text_natural * m + label_extra).max(text_pictures + (m - 1.0).max(0.0) * text_natural), false),
+            (LineSpacing::Multiple(m), None) => {
+                ((text_natural * m + mixed_extra + label_extra).max(text_pictures + (m - 1.0).max(0.0) * text_natural), false)
+            }
             (LineSpacing::AtLeast(v), None) => (natural.max(text_pictures).max(v), false),
             (LineSpacing::Exactly(v), _) => (v, false),
         };
@@ -723,6 +760,8 @@ impl<'e> Breaker<'e> {
 struct Extents {
     asc: f32,
     desc: f32,
+    /// The tallest single run, before combining different fonts' extents.
+    run_height: f32,
     obj_asc: f32,
     /// How far its lowest picture reaches below the baseline.
     obj_desc: f32,
@@ -1014,11 +1053,16 @@ impl Scan {
             self.last_break = Some(j);
             self.last_plain = Some((j, self.x));
             self.word_from = if c.kind == ClKind::Space { self.x - c.adv } else { self.x };
-        } else if self.hyph_ok
-            && !pl.clusters.get(j + 1).is_some_and(|n| n.kind == ClKind::Text && n.g1 <= n.g0)
-            && self.x + hyphen_glyph(pl, c.style, &mut bk.hcache).2 <= self.right_edge + shrink + 0.01
+        } else if self.hyph_ok && bk.hyphen_allowed(pl, self.c0, j) && !pl.clusters.get(j + 1).is_some_and(|n| n.kind == ClKind::Text && n.g1 <= n.g0)
         {
-            self.last_break = Some(j);
+            let hyphen = hyphen_glyph(pl, c.style, &mut bk.hcache).2;
+            // Word's prefix budget is smaller than whole-word compression.
+            // Sweeps with Arial and Courier at two sizes put its cap near
+            // 3/8 em, independently of the hyphen's own advance.
+            let prefix_room = pl.styles.get(c.style as usize).map_or(0.0, |s| s.size * s.rc.scale / 100.0 * 0.375);
+            if self.x + hyphen <= self.right_edge + shrink.min(prefix_room) + 0.01 {
+                self.last_break = Some(j);
+            }
         }
     }
 
@@ -1031,6 +1075,7 @@ impl Scan {
             && pj >= c0
             && pj < bk_i
             && pl.hyph_after.binary_search(&(bk_i as u32)).is_ok()
+            && bk.manual_hyphens.binary_search(&(bk_i as u32)).is_err()
             && self.right_edge - px <= bk.zone
         {
             self.last_break = Some(pj);

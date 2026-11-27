@@ -373,7 +373,7 @@ impl<'a> Shaped<'a> {
     fn drawing(&mut self, cx: &Cx, (k, o): (usize, &InlineObject), slot: Slot, raise: f32) {
         let env = cx.env;
         // A hidden one takes no room, and with no height its line doesn't draw it.
-        if let Some((w, saved_h, float)) = o.frame()
+        if let Some((w, saved_h, float)) = crate::drawing::frame(o)
             && float.wrap == wordcraft_doc::para::Wrap::Inline
             && !float.hidden
         {
@@ -452,7 +452,11 @@ impl<'a> Shaped<'a> {
             None => {
                 let (t, page_dep) = field_text_on(instr, result, cx.env.fields, cx.env.fields.page_at(start));
                 self.has_page_fields |= page_dep;
-                self.b.shape_atomic(&t, start, end, &linked(rc, instr));
+                if crate::fields::field_name(instr) == "FILENAME" {
+                    self.b.shape_filename(&t, start, end, &linked(rc, instr), &break_positions(&t, cx.rp));
+                } else {
+                    self.b.shape_atomic(&t, start, end, &linked(rc, instr));
+                }
             }
         }
     }
@@ -663,6 +667,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         clusters: Vec::new(),
         levels,
         shown: Vec::new(),
+        result_breaks: Vec::new(),
         substituted: Vec::new(),
     };
     let mut cx =
@@ -684,6 +689,11 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     skip.extend(sh.bare.iter().cloned());
     let bt = BreakText::new(&p.text, skip);
     mark_break_opportunities(&mut sh.b.clusters, &bt, &rp);
+    for &(k, allowed) in &sh.b.result_breaks {
+        if let Some(c) = sh.b.clusters.get_mut(k) {
+            c.break_after = allowed;
+        }
+    }
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
     let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, check_boxes, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;
@@ -704,6 +714,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         issues: env.proofing.map(|o| proof_issues(p, &runs, &o, env.typing_word, is_list_item(doc, p))).unwrap_or_default(),
         drop_cap,
         hyph_after: Vec::new(),
+        hyph_words: Vec::new(),
         bidi_levels: b.levels,
         drop_cap_w,
         maths,
@@ -718,7 +729,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         row_est: 0.0,
     };
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
-    pl.hyph_after = hyphenation_points(&bt.text, |i| bt.to_para(i), &pl, auto, env.doc.settings.hyphenate_caps, &runs);
+    (pl.hyph_after, pl.hyph_words) = hyphenation_points(&bt.text, |i| bt.to_para(i), &pl, auto, env.doc.settings.hyphenate_caps, &runs);
     // A paragraph whose text and mark are all a deletion the layout leaves out (a deleted
     // paragraph in the final text, or moved-away text marked Hidden) is gone: it takes no room.
     // So is one whose mark is hidden and whose text is empty or hidden too: Word shows nothing of
@@ -727,7 +738,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let gone = mark_left_out && (p.text.is_empty() || left.first() == Some(&(0..p.text.len())));
     pl.left_out = left;
     keep_graphemes_whole(&mut pl);
-    break_lines(&mut pl, env, mark_style, env.label.as_ref().map(|(_, l)| l));
+    break_lines(&mut pl, env, &p.text, mark_style, env.label.as_ref().map(|(_, l)| l));
     if gone {
         collapse(&mut pl);
     }
@@ -826,17 +837,22 @@ fn word_char(c: char) -> bool {
 fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec<usize> {
     let mut found = Vec::new();
     for (i, o) in unicode_linebreak::linebreaks(text) {
-        // Word keeps "and/or" and web addresses whole: no break right after a slash before a letter,
+        // Word keeps "and/or", paths and web addresses whole: no break on either
+        // side of an internal slash or backslash before a letter,
         // digit or underscore ("/_back"), nor after the question mark of a query ("/?type="), which
         // takes an ASCII one (a question mark in CJK text keeps its break). A word too long for
         // the line still breaks anywhere.
         let next = text.get(i..).and_then(|t| t.chars().next());
-        let after_slash = match text.get(..i).and_then(|t| t.chars().next_back()) {
-            Some('/') => next.is_some_and(word_char),
+        let previous = text.get(..i).and_then(|t| t.chars().next_back());
+        let after_slash = match previous {
+            Some('/' | '\\') => next.is_some_and(word_char),
             Some('?') => next.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_'),
             _ => false,
         };
-        if (o == unicode_linebreak::BreakOpportunity::Allowed || i < text.len()) && !after_slash {
+        let before_slash = matches!(next, Some('/' | '\\'))
+            && previous.is_some_and(|c| word_char(c) || matches!(c, '%' | ']'))
+            && text.get(i + 1..).and_then(|t| t.chars().next()).is_some_and(word_char);
+        if (o == unicode_linebreak::BreakOpportunity::Allowed || i < text.len()) && !after_slash && !before_slash {
             found.push(i);
         }
     }

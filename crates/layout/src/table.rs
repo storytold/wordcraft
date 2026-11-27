@@ -834,7 +834,12 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             }
             let content = items.len();
             for mut it in cell_items {
-                it.translate(0.0, dy);
+                // A page-relative image confined to a header/footer cell uses the
+                // cell's frame, but does not follow its vertically aligned text.
+                let fixed_image = ctx.pin.as_ref().is_some_and(|pin| pin.story == story) && cell_page_image(ctx.doc, &it);
+                if !fixed_image {
+                    it.translate(0.0, dy);
+                }
                 items.push(it);
             }
             let align = (dy > 0.0).then_some(CellAlign { content: content..items.len(), valign: c.valign, dy, height: align_h });
@@ -881,6 +886,16 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
         });
     }
     TableLayout { x, width: total, rows: out }
+}
+
+fn cell_page_image(doc: &wordcraft_doc::Document, item: &Placed) -> bool {
+    let (story, path, off) = match item {
+        Placed::Image { story, path, off, .. } | Placed::Object { story, path, off, .. } => (*story, path, *off),
+        _ => return false,
+    };
+    let Some(wordcraft_doc::para::InlineObject::Image { float, .. }) = doc.para(story, path).and_then(|p| p.object_at(off)) else { return false };
+    float.v_rel == wordcraft_doc::para::Anchor::Page
+        && matches!(float.wrap, wordcraft_doc::para::Wrap::BehindText | wordcraft_doc::para::Wrap::InFrontOfText)
 }
 
 /// Split a row at `cut` (points below the row's top) so the part above fits on this page.

@@ -98,6 +98,19 @@ fn unjoin(ctx: &mut Ctx, p: &Paragraph) {
 /// A closing mark before a continuous section takes no room after content. An otherwise empty
 /// section starting a new page retains its paragraph line.
 fn place_para_alone(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, body_top: f32) {
+    // A closing section mark after a trailing page break belongs to the preceding
+    // page. Do not consume the empty break page before start_section_page can reuse it.
+    if !pb.web
+        && pb.next_starts_page
+        && pb.after_break_mark
+        && pb.at_top()
+        && p.section.is_some()
+        && p.text.is_empty()
+        && p.objects.is_empty()
+        && !ctx.has_label(p)
+    {
+        return;
+    }
     if !pb.web && ctx.quiet_marks.binary_search(&block).is_ok() {
         let follows_section = block.checked_sub(1).and_then(|i| ctx.doc.body.get(i)).and_then(|b| b.as_para()).is_some_and(|p| p.section.is_some());
         let section = pb.sect_idx;
@@ -529,7 +542,7 @@ impl<'a> Flow<'a> {
             let line_notes = notes_on_line(ctx, pb, l, notes, &fit.notes);
             let limit = notes_limit(pb, &fit.notes, &line_notes);
             let free = pb.notes.is_empty() && fit.notes.is_empty() && line_notes.is_empty();
-            let bottom = pb.y + lead + (l.top + fit_height(pb, l, &pl.rp, free) - first_top);
+            let bottom = pb.y + lead + (l.top + fit_height(l, &pl.rp, free) - first_top);
             // On a page with footnotes the paragraph's last line keeps its space after clear of
             // the separator (Word): if the space doesn't fit, the line goes to the next page (and,
             // with widow control, one more with it). Without notes the space after may run past
@@ -883,13 +896,13 @@ fn notes_limit(pb: &PageBuilder, new_notes: &[NoteBox], line_notes: &[NoteBox]) 
 /// the text (see `baseline_offset`), and Word lets that leading of a page's last line run into the
 /// bottom margin: only the text has to fit (observed: a double-spaced 12pt line stays on the page
 /// while its text ends above the margin, about half a line lower than when the whole line must
-/// fit). Only the bottom margin takes that leading: a footer taller than the margin, or
-/// footnotes (`free` is false), keep the whole line clear of them.
-fn fit_height(pb: &PageBuilder, l: &para::Line, rp: &wordcraft_doc::resolve::ResolvedPara, free: bool) -> f32 {
-    let at_margin = pb.bottom >= pb.sect.page_h - pb.sect.margin_bottom - 0.01;
+/// fit). A footer that extends into the body takes the same fit check: the last line's text
+/// must stay clear of it, while the extra leading may extend below that text. Footnotes
+/// (`free` is false) still keep the whole line clear.
+fn fit_height(l: &para::Line, rp: &wordcraft_doc::resolve::ResolvedPara, free: bool) -> f32 {
     match rp.line_spacing {
         // `baseline` is from the paragraph's top; the text ends a descent below it.
-        wordcraft_doc::props::LineSpacing::Multiple(m) if m > 1.0 && at_margin && free => (l.baseline - l.top + l.text_desc).clamp(0.0, l.height),
+        wordcraft_doc::props::LineSpacing::Multiple(m) if m > 1.0 && free => (l.baseline - l.top + l.text_desc).clamp(0.0, l.height),
         _ => l.height,
     }
 }

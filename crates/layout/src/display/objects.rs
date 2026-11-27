@@ -506,12 +506,18 @@ pub(super) fn spun(spin: Spin, rect: Rect, items: Vec<Draw>, out: &mut Vec<Draw>
 /// the rect's centre; a group's members are turned inside it. `outer` is the spin it is already
 /// drawn inside (its group's). Nothing for anything else.
 pub(super) fn object_draws(o: &InlineObject, rect: Rect, outer: Spin, alpha: f32, opts: &DisplayOptions, out: &mut Vec<Draw>) {
+    object_draws_in(o, rect, outer, alpha, opts, out, true);
+}
+
+fn object_draws_in(o: &InlineObject, rect: Rect, outer: Spin, alpha: f32, opts: &DisplayOptions, out: &mut Vec<Draw>, root: bool) {
     let own = o.frame().map(|(_, _, f)| f.spin()).unwrap_or_default();
     match o {
         InlineObject::Image { media, crop, alt, fx, .. } => {
             let alpha = alpha * fx.opacity();
             let decorative = o.is_decorative();
-            spun(own, rect, vec![Draw::Image { rect, media: media.clone(), crop: *crop, alpha, alt: alt.clone(), fx: *fx, decorative }], out)
+            let fx = image_fx(*fx, own.within(outer), alpha);
+            let picture = if root { crate::drawing::picture_rect(o, rect) } else { rect };
+            spun(own, rect, vec![Draw::Image { rect: picture, media: media.clone(), crop: *crop, alpha, alt: alt.clone(), fx, decorative }], out)
         }
         InlineObject::Shape { kind, fill, stroke, stroke_width, effects, freeform, extra, .. } => {
             let effects = effects_in(*effects, own.within(outer));
@@ -546,7 +552,7 @@ pub(super) fn object_draws(o: &InlineObject, rect: Rect, outer: Spin, alpha: f32
                 if c.frame().is_some_and(|(_, _, f)| f.hidden) {
                     continue;
                 }
-                object_draws(c, Rect::new(x, y, w, h), own.within(outer), alpha, opts, &mut members);
+                object_draws_in(c, Rect::new(x, y, w, h), own.within(outer), alpha, opts, &mut members, false);
             }
             match o.canvas_style() {
                 // A Drawing Canvas: its background and outline, then its members clipped to its
@@ -593,6 +599,20 @@ pub(crate) fn effects_in(effects: wordcraft_doc::effects::ShapeEffects, spin: Sp
     e
 }
 
+/// Pictures carry their own decoration, which follows the same page-relative
+/// lighting and header/footer fading as shapes.
+pub(super) fn image_fx(fx: wordcraft_doc::picfx::PicFx, spin: Spin, alpha: f32) -> wordcraft_doc::picfx::PicFx {
+    let mut effects = effects_in(fx.shape_effects(), spin);
+    let alpha = if alpha.is_finite() { alpha.clamp(0.0, 1.0) } else { 1.0 };
+    if let Some(s) = effects.shadow.as_mut() {
+        s.transparency = 100.0 - (100.0 - s.transparency) * alpha;
+    }
+    if let Some(g) = effects.glow.as_mut() {
+        g.transparency = 100.0 - (100.0 - g.transparency) * alpha;
+    }
+    fx.with_shape_effects(effects)
+}
+
 /// Where inline object `obj` is drawn, given its cluster's box (`adv` wide at `cx`, reaching
 /// `obj_h` above the baseline and `obj_d` below it): inside the room kept for its effects.
 /// A rotated one's unrotated frame, centred in that room.
@@ -600,7 +620,7 @@ pub(crate) fn effects_in(effects: wordcraft_doc::effects::ShapeEffects, spin: Sp
 /// `line` is the room a horizontal rule is placed in, from `cx`; `modern`: Word 2013+ layout
 /// (see [`wordcraft_doc::para::Float::line_pad`]).
 pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f32, (obj_h, obj_d): (f32, f32), line: f32, modern: bool) -> Rect {
-    let frame = obj.and_then(InlineObject::frame);
+    let frame = obj.and_then(crate::drawing::frame);
     let [l, t, r, b] = frame.map_or([0.0; 4], |(_, _, float)| float.effect_extent());
     // Lowered further than its height, it is drawn with its top on the baseline (Word).
     let room = Rect::new(cx + l, base - obj_h.max(0.0) + t, (adv - l - r).max(0.0), (obj_h + obj_d - t - b).max(0.0));

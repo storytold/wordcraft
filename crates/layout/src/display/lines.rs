@@ -290,7 +290,7 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         if !glyphs.is_empty() {
             out.push(Draw::Glyphs {
                 face: st.face,
-                size: st.size,
+                size: font_ink_size(st.size),
                 glyphs,
                 color,
                 alpha: if has_art { 0.0 } else { alpha },
@@ -531,7 +531,7 @@ fn draw_label_and_hyphen(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             let hash = (del_mark == Some(DeleteMark::Hash)).then(|| style.face.glyph_for('#'));
             out.push(Draw::Glyphs {
                 face: style.face,
-                size: style.size,
+                size: font_ink_size(style.size),
                 glyphs: label
                     .glyphs
                     .get(run.glyphs.clone())
@@ -577,7 +577,7 @@ fn draw_hyphen(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         let hx = ctx.x + ctx.line.hyphen_x(advance);
         out.push(Draw::Glyphs {
             face: style.face,
-            size: style.size,
+            size: font_ink_size(style.size),
             glyphs: vec![(glyph, hx, ctx.base - style.shift)],
             color: ctx.ink(&style.rc.color, None),
             alpha: ctx.alpha,
@@ -679,7 +679,7 @@ fn draw_rubies(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             let Some(st) = pl.styles.get(style as usize) else { continue };
             out.push(Draw::Glyphs {
                 face: st.face,
-                size: st.size,
+                size: font_ink_size(st.size),
                 glyphs: run.iter().map(|(_, g)| (g.gid, cx + g.dx, y - g.dy)).collect(),
                 color: ctx.ink(&st.rc.color, st.rc.shading.or(st.rc.highlight)),
                 alpha,
@@ -785,7 +785,7 @@ fn tab_leaders(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         let glyphs = leader_xs(ctx.x + left, ctx.x + right, advance).into_iter().map(|gx| (gid, gx, ctx.base)).collect();
         out.push(Draw::Glyphs {
             face: style.face,
-            size: style.size,
+            size: font_ink_size(style.size),
             glyphs,
             color: ctx.ink(&style.rc.color, None),
             alpha: ctx.alpha,
@@ -956,4 +956,11 @@ fn equation(items: &[MItem], x: f32, base: f32, alpha: f32, screen: bool, out: &
             }
         }
     }
+}
+
+/// Word's print glyph outlines use a 600-dpi em size. The pen positions and
+/// line metrics still use the nominal size: snapping advances as well would
+/// change both character spacing and pagination (especially fixed-pitch text).
+fn font_ink_size(size: f32) -> f32 {
+    if size.is_finite() && size >= 0.12 { (size / 0.12).round() * 0.12 } else { size }
 }
