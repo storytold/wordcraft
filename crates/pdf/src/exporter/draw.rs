@@ -309,6 +309,10 @@ impl Exporter<'_> {
 
     fn picture(&mut self, s: &mut Surface, rect: &Rect, media: &str, crop: &[f32; 4], alpha: f32, fx: PicFx) {
         let Some(clip) = rect_path(rect) else { return };
+        self.picture_effects(s, rect, media, *crop, fx);
+        if fx.bright == 0 && fx.contrast == 0 && self.svg_picture(s, rect, media, crop, alpha) {
+            return;
+        }
         if let Some(v) = self.vector(media) {
             vector_picture(self, s, &v, rect, crop, &clip, alpha);
             return;
@@ -333,6 +337,80 @@ impl Exporter<'_> {
         s.pop();
         s.pop();
         if fade {
+            s.pop();
+        }
+    }
+
+    fn svg_picture(&mut self, s: &mut Surface, rect: &Rect, media: &str, crop: &[f32; 4], alpha: f32) -> bool {
+        use craft_pdf::write::svg;
+        let Some(clip) = rect_path(rect) else { return false };
+        let Some(key) = self.doc.svg_pictures.get(media) else { return false };
+        let Some(bytes) = self.doc.media.get(key) else { return false };
+        let document = self.svgs.entry(key.clone()).or_insert_with(|| {
+            let mut options = svg::usvg::Options { font_family: "Source Sans 3".into(), ..Default::default() };
+            for face in wordcraft_fonts::FontDb::global().loaded_faces() {
+                options.fontdb_mut().load_font_data(face.data().to_vec());
+            }
+            options.fontdb_mut().set_serif_family("Source Serif 4");
+            options.fontdb_mut().set_sans_serif_family("Source Sans 3");
+            options.fontdb_mut().set_monospace_family("JetBrains Mono");
+            match svg::Document::parse(bytes, svg::Limits { depth: 24, ..Default::default() }, options) {
+                Ok(doc) => Some(std::sync::Arc::new(doc)),
+                Err(error) => {
+                    log::warn!("PDF: SVG `{key}` uses its raster fallback: {error}");
+                    None
+                }
+            }
+        });
+        let Some(document) = document else { return false };
+        let [cl, ct, vw, vh] = wordcraft_layout::crop_window(*crop).map(|v| v as f32);
+        let (fw, fh) = (rect.w / vw, rect.h / vh);
+        let Some(size) = Size::from_wh(fw, fh) else { return false };
+        s.push_opacity(norm(alpha));
+        s.push_clip_path(&clip, &FillRule::NonZero);
+        s.push_transform(&Transform::from_translate(rect.x - cl * fw, rect.y - ct * fh));
+        let result = document.draw(s, size, svg::SvgSettings::default());
+        s.pop();
+        s.pop();
+        s.pop();
+        match result {
+            Ok(()) => true,
+            Err(error) => {
+                log::warn!("PDF: SVG `{key}` uses its raster fallback: {error}");
+                false
+            }
+        }
+    }
+
+    fn picture_effects(&mut self, s: &mut Surface, rect: &Rect, media: &str, crop: [f32; 4], fx: PicFx) {
+        let effects = fx.shape_effects();
+        if effects.shadow.is_none() && effects.glow.is_none() {
+            return;
+        }
+        let key = wordcraft_layout::display::picture_effect_key(media, rect.w, rect.h, crop, fx);
+        let images = if let Some(images) = self.effect_images.get(&key) {
+            images.clone()
+        } else {
+            let Some(source) = self.doc.media.get(media) else { return };
+            let masks = wordcraft_layout::display::picture_effects(source, rect.w, rect.h, crop, fx);
+            let bytes: usize = masks.iter().map(|e| e.rgba.len()).sum();
+            let images: Vec<_> = masks.into_iter().map(|e| (e.rect, super::Image::from_rgba8(e.rgba.as_ref().clone(), e.width, e.height))).collect();
+            const CACHE_BYTES: usize = 64 * 1024 * 1024;
+            if self.effect_image_bytes.saturating_add(bytes) > CACHE_BYTES || self.effect_images.len() >= 256 {
+                self.effect_images.clear();
+                self.effect_image_bytes = 0;
+            }
+            if bytes <= CACHE_BYTES {
+                self.effect_image_bytes += bytes;
+                self.effect_images.insert(key, images.clone());
+            }
+            images
+        };
+        for (frame, image) in images {
+            let Some(size) = Size::from_wh(frame.w, frame.h) else { continue };
+            let (x, y) = wordcraft_layout::display::picture_effect_origin(rect.x, rect.y, frame.x, frame.y);
+            s.push_transform(&Transform::from_translate(x, y));
+            s.draw_image(image, size);
             s.pop();
         }
     }

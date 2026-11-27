@@ -10,6 +10,25 @@ use crate::*;
 use wordcraft_layout::LayoutOptions;
 use wordcraft_layout::display::DisplayOptions;
 
+/// A4 in DOCX is stored in twips; the physical PDF sheet uses a 600-dpi
+/// device grid without changing the paragraph's nominal layout frame.
+#[test]
+fn twip_paper_size_keeps_layout_but_uses_print_device_media_box() {
+    let mut d = Document::from_text("Paper geometry");
+    d.last_section.page_w = 11906.0 / 20.0;
+    d.last_section.page_h = 16838.0 / 20.0;
+    let opts = PdfOptions::default();
+    let lay = layout(&d, &mut LayoutCache::new(), &opts.layout_options());
+    let bytes = export_layout(&d, &lay, &opts).unwrap();
+    let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+    let paper = pdf.pages()[0].media_box();
+    assert!((paper.width() - 595.32).abs() < 0.001);
+    assert!((paper.height() - 841.92).abs() < 0.001);
+    assert!(paper.width() > f64::from(lay.pages[0].w) && paper.height() > f64::from(lay.pages[0].h));
+    assert_eq!(lay.pages[0].w, d.last_section.page_w);
+    assert_eq!(lay.pages[0].h, d.last_section.page_h);
+}
+
 /// Verify preset lines and connectors emit the requested PDF line-cap operator.
 #[test]
 fn shape_line_caps_reach_pdf_content() {
@@ -1842,6 +1861,9 @@ fn bookmark_destination_is_the_page_of_its_start() {
         outlined: &outlined,
         cmaps: HashMap::new(),
         images: HashMap::new(),
+        effect_images: HashMap::new(),
+        effect_image_bytes: 0,
+        svgs: HashMap::new(),
         vectors: HashMap::new(),
         tags: Vec::new(),
         tag_index: HashMap::new(),
@@ -2624,7 +2646,10 @@ fn picture_fx_is_baked_into_the_embedded_image() {
     assert!(pdf_fill_opacities(&faded).iter().any(|a| (a - 0.4).abs() < 0.01), "{:?}", pdf_fill_opacities(&faded));
     assert!(!pdf_fill_opacities(&export_with(&jpeg, "jpeg", &[PicFx::default()])).iter().any(|a| *a < 0.99));
     // Hostile corrections export.
-    assert_eq!(pdf_images(&export_with(&jpeg, "jpeg", &[PicFx { bright: i32::MAX, contrast: i32::MIN, transparency: -7 }])).len(), 1);
+    assert_eq!(
+        pdf_images(&export_with(&jpeg, "jpeg", &[PicFx { bright: i32::MAX, contrast: i32::MIN, transparency: -7, ..Default::default() }])).len(),
+        1
+    );
 }
 
 /// A hostile header (a few bytes claiming 20 000 × 20 000 RGBA, 1.6 GB decoded) is refused by
@@ -3422,4 +3447,48 @@ fn chart_and_equation_text_keep_their_pdf_bytes() {
     let expected: std::collections::BTreeSet<String> =
         ["B", "o", "d", "y", " ", "t", "e", "x", "R", "v", "n", "u", "2", "0", "4", "+", "1", equation_x].into_iter().map(String::from).collect();
     assert_eq!(shown, expected, "math face: {}", math_face.family);
+}
+
+#[test]
+fn svg_alternatives_export_as_vectors_and_invalid_svg_uses_the_raster() {
+    let mut d = Document::new();
+    let png = wordcraft_geom::picture::encode_format(
+        &image::DynamicImage::from(image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 255, 255]))),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
+    let fallback = d.add_media(png, "png");
+    let vector =
+        d.add_media(br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><path d="M0 0H10V10H0Z" fill="red"/></svg>"#.to_vec(), "svg");
+    let media = d.add_svg_picture(&fallback, &vector).unwrap();
+    let mut p = Paragraph::new();
+    p.insert_object(
+        0,
+        InlineObject::Image {
+            media,
+            w: 10.0,
+            h: 10.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        },
+        &CharProps::default(),
+    )
+    .unwrap();
+    d.body = vec![para_block(p)];
+    let options = PdfOptions { compress: false, ..Default::default() };
+    let bytes = export(&d, &options).unwrap();
+    assert!(
+        !String::from_utf8_lossy(&bytes).split_ascii_whitespace().collect::<String>().contains("/Subtype/Image"),
+        "a vector SVG must not embed the raster fallback"
+    );
+    assert!(String::from_utf8_lossy(&bytes).contains("1 0 0 rg"), "the SVG path is drawn in its own colour");
+    d.media.insert(vector, Arc::new(b"invalid SVG".to_vec()));
+    let bytes = export(&d, &options).unwrap();
+    assert!(
+        String::from_utf8_lossy(&bytes).split_ascii_whitespace().collect::<String>().contains("/Subtype/Image"),
+        "an invalid optional SVG retains its visible PNG fallback"
+    );
 }

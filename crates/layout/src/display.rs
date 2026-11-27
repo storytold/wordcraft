@@ -20,6 +20,9 @@ mod objects;
 mod options;
 mod page;
 mod paint;
+mod picture;
+
+pub use picture::{PictureEffect, picture_effect_key, picture_effect_origin, picture_effects};
 
 pub(crate) use glyphs::author_order;
 pub use glyphs::{CHECK_BOX_INSET, check_box, text_color, upright_in_vertical};

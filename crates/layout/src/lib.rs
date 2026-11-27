@@ -56,6 +56,7 @@ pub use table::{autofit_widths, cell_margins, measure_table_columns};
 mod boxes;
 mod cache;
 mod ctx;
+mod drawing;
 mod floats;
 mod flow;
 mod headers;

@@ -157,6 +157,11 @@ pub struct Float {
     /// inline or floating: lines and surrounding text keep clear of it. Rotation's own overhang
     /// is not in here: it follows from [`Float::rot`] (see [`Float::spin_pad`]).
     pub effect: [f32; 4],
+    /// A DrawingML picture's internal transform extent, in EMUs. Its aspect is
+    /// fitted inside the outer drawing frame; keep both extents when saving.
+    /// Absent when equal to the outer extent, or from other formats.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub picture_extent: Option<[u32; 2]>,
     /// Rotation clockwise about the object's centre, degrees (DrawingML `a:xfrm/@rot`). Offsets
     /// and the size stay those of the unrotated frame, as in Word; see [`Float::spin`].
     #[serde(skip_serializing_if = "is_zero")]

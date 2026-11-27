@@ -11,6 +11,230 @@ const W_NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingm
 
 const ROOT_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
 
+#[test]
+fn number_label_theme_transforms_survive_saves_but_not_formatting_edits() {
+    let styles = format!(
+        r#"<w:styles {W_NS}><w:style w:type="paragraph" w:styleId="ListedHeading"><w:name w:val="Own listed heading"/>
+        <w:pPr><w:numPr><w:numId w:val="7"/></w:numPr></w:pPr>
+        <w:rPr><w:color w:val="000000" w:themeColor="accent2" w:themeTint="99"/></w:rPr></w:style></w:styles>"#
+    );
+    let numbering = format!(
+        r#"<w:numbering {W_NS}>
+        <w:abstractNum w:abstractNumId="3"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/>
+        <w:rPr><w:rFonts w:asciiTheme="majorHAnsi" w:hAnsiTheme="majorHAnsi"/><w:color w:val="000000" w:themeColor="accent2" w:themeTint="80"/></w:rPr></w:lvl></w:abstractNum>
+        <w:num w:numId="7"><w:abstractNumId w:val="3"/><w:lvlOverride w:ilvl="0"><w:lvl><w:numFmt w:val="decimal"/><w:lvlText w:val="%1)"/>
+        <w:rPr><w:color w:val="000000" w:themeColor="background2" w:themeShade="99"/></w:rPr></w:lvl></w:lvlOverride></w:num>
+        </w:numbering>"#
+    );
+    let theme = r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Own"><a:themeElements><a:clrScheme name="Own"><a:lt2><a:srgbClr val="5482CA"/></a:lt2><a:accent2><a:srgbClr val="E45B25"/></a:accent2></a:clrScheme></a:themeElements></a:theme>"#;
+    let bytes = docx(
+        "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"7\"/></w:numPr></w:pPr><w:r><w:t>Own list</w:t></w:r></w:p>",
+        &[("numbering", "numbering", "numbering.xml"), ("theme", "theme", "theme/theme1.xml"), ("styles", "styles", "styles.xml")],
+        &[("word/numbering.xml", &numbering), ("word/theme/theme1.xml", theme), ("word/styles.xml", &styles)],
+    );
+    let mut d = wordcraft_docx::read(&bytes).unwrap();
+    for _ in 0..3 {
+        let out = wordcraft_docx::write(&d).unwrap();
+        let parts = unzip(&out);
+        let xml = text(&parts, "word/numbering.xml");
+        assert!(
+            xml.contains("w:themeTint=\"80\"") && xml.contains("w:themeShade=\"99\""),
+            "abstract and overriding number labels keep their theme transforms"
+        );
+        assert!(xml.contains("w:themeColor=\"light2\""), "a logical slot is mapped before saving");
+        assert!(text(&parts, "word/styles.xml").contains("w:themeTint=\"99\""), "a style's list reference must not erase its independent run tint");
+        assert!(!parts.keys().any(|p| p.starts_with("wordcraft:")), "source hints are internal metadata");
+        d = wordcraft_docx::read(&out).unwrap();
+    }
+    let unchanged = d.clone();
+    let mut changed_style = d.clone();
+    Arc::make_mut(&mut changed_style.styles).styles.iter_mut().find(|s| s.id == "ListedHeading").unwrap().para.numbering.as_mut().unwrap().num = 42;
+    let out = wordcraft_docx::write(&changed_style).unwrap();
+    let reread = wordcraft_docx::read(&out).unwrap();
+    assert_eq!(reread.styles.get("ListedHeading").unwrap().para.numbering.unwrap().num, 42, "list references still pass through the editable model");
+    assert!(!text(&unzip(&out), "word/styles.xml").contains("w:themeTint"), "style edits invalidate partial source hints too");
+    Arc::make_mut(&mut d.numbering).abstracts.iter_mut().find(|a| a.id == 3).unwrap().levels[0].chr.color = Some(TextColor::Rgb(Rgb(7, 23, 45)));
+    let out = wordcraft_docx::write(&d).unwrap();
+    let xml = text(&unzip(&out), "word/numbering.xml");
+    assert!(!xml.contains("w:themeTint") && xml.contains("w:themeShade"), "editing one definition must invalidate only that label's source");
+    assert_eq!(
+        wordcraft_docx::read(&out).unwrap().numbering.abstracts.iter().find(|a| a.id == 3).unwrap().levels[0].chr.color,
+        Some(TextColor::Rgb(Rgb(7, 23, 45)))
+    );
+    let mut changed_theme = unchanged.clone();
+    changed_theme.settings.theme_colors[3] = Rgb(3, 9, 27);
+    let out = wordcraft_docx::write(&changed_theme).unwrap();
+    let xml = text(&unzip(&out), "word/numbering.xml");
+    assert!(!xml.contains("w:themeTint") && !xml.contains("w:themeShade"), "palette edits must invalidate themed label sources");
+    let mut damaged = unchanged;
+    let hint = damaged.passthrough.iter_mut().find(|(k, _)| k.starts_with("wordcraft:numbering-format:")).unwrap().1;
+    let bytes = Arc::make_mut(hint);
+    let prefix = bytes.iter().position(|b| *b == b'\n').unwrap() + 1;
+    bytes.truncate(prefix);
+    bytes.extend_from_slice(b"<broken");
+    assert!(wordcraft_docx::read(&wordcraft_docx::write(&damaged).unwrap()).is_ok(), "malformed hints fall back to modeled character properties");
+}
+
+#[test]
+fn unchanged_table_styles_keep_theme_tints_but_edits_replace_them() {
+    let styles = format!(
+        r#"<w:styles {W_NS}><w:style w:type="table" w:styleId="Tinted"><w:name w:val="Tinted"/><w:qFormat/>
+        <w:rPr><w:rFonts w:asciiTheme="minorHAnsi" w:hAnsiTheme="minorHAnsi"/></w:rPr>
+        <w:tblPr><w:tblBorders><w:top w:val="single" w:sz="8" w:color="000000" w:themeColor="accent1" w:themeTint="99"/></w:tblBorders></w:tblPr>
+        <w:tblStylePr w:type="firstRow"><w:tcPr><w:shd w:val="clear" w:fill="000000" w:themeFill="background2" w:themeFillTint="33"/></w:tcPr></w:tblStylePr>
+        </w:style></w:styles>"#
+    );
+    let theme = r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Own"><a:themeElements><a:clrScheme name="Own"><a:lt2><a:srgbClr val="5482CA"/></a:lt2><a:accent1><a:srgbClr val="E45B25"/></a:accent1></a:clrScheme></a:themeElements></a:theme>"#;
+    let bytes = docx(
+        "<w:p/>",
+        &[("styles", "styles", "styles.xml"), ("theme", "theme", "theme/theme1.xml")],
+        &[("word/styles.xml", &styles), ("word/theme/theme1.xml", theme)],
+    );
+    let mut d = wordcraft_docx::read(&bytes).unwrap();
+    for _ in 0..3 {
+        let out = wordcraft_docx::write(&d).unwrap();
+        let xml = text(&unzip(&out), "word/styles.xml");
+        assert!(xml.contains("w:themeFillTint=\"33\"") && xml.contains("w:themeTint=\"99\""), "a save keeps both kinds of source tint");
+        assert!(xml.contains("w:themeFill=\"light2\""), "logical colours are canonicalized before the source mapping is dropped");
+        d = wordcraft_docx::read(&out).unwrap();
+    }
+    let unchanged = d.clone();
+    Arc::make_mut(&mut d.styles).styles.iter_mut().find(|s| s.id == "Tinted").unwrap().table.as_mut().unwrap().header_fill = Some(Rgb(7, 23, 45));
+    let out = wordcraft_docx::write(&d).unwrap();
+    let xml = text(&unzip(&out), "word/styles.xml");
+    assert!(!xml.contains("w:themeFillTint"), "changed table formatting must invalidate the old source");
+    assert_eq!(wordcraft_docx::read(&out).unwrap().styles.get("Tinted").unwrap().table.as_ref().unwrap().header_fill, Some(Rgb(7, 23, 45)));
+    let mut damaged_hint = unchanged.clone();
+    let source = damaged_hint.passthrough.iter_mut().find(|(k, _)| k.starts_with("wordcraft:style-format:")).unwrap().1;
+    let bytes = Arc::make_mut(source);
+    let prefix = bytes.iter().position(|b| *b == b'\n').unwrap() + 1;
+    bytes.truncate(prefix);
+    bytes.extend_from_slice(b"<broken");
+    let out = wordcraft_docx::write(&damaged_hint).unwrap();
+    assert!(wordcraft_docx::read(&out).is_ok(), "damaged native-document hints must fall back to modeled formatting");
+    let mut changed_slot = unchanged.clone();
+    Arc::make_mut(&mut changed_slot.styles).styles.iter_mut().find(|s| s.id == "Tinted").unwrap().chr.font_ascii_theme =
+        Some(wordcraft_doc::props::ThemeFont::MajorHAnsi);
+    let out = wordcraft_docx::write(&changed_slot).unwrap();
+    assert!(
+        !text(&unzip(&out), "word/styles.xml").contains("w:themeFillTint"),
+        "a different theme-font identity invalidates the source even when its resolved name stays the same"
+    );
+    let mut changed_theme = unchanged;
+    changed_theme.settings.theme_colors[3] = Rgb(3, 9, 27);
+    let out = wordcraft_docx::write(&changed_theme).unwrap();
+    assert!(!text(&unzip(&out), "word/styles.xml").contains("w:themeFillTint"), "a changed palette must not reuse stale theme-dependent formatting");
+}
+
+#[test]
+fn paragraph_and_character_style_shading_keeps_its_theme_on_repeated_saves() {
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+        <w:style w:type="paragraph" w:styleId="ShadedParagraph"><w:name w:val="Shaded paragraph"/><w:qFormat/>
+        <w:pPr><w:shd w:val="clear" w:fill="000000" w:themeFill="accent1" w:themeFillTint="33"/></w:pPr></w:style>
+        <w:style w:type="character" w:styleId="ShadedCharacter"><w:name w:val="Shaded character"/>
+        <w:rPr><w:shd w:val="clear" w:fill="000000" w:themeFill="accent1" w:themeFillTint="33"/></w:rPr></w:style>
+        </w:styles>"#
+    );
+    let theme = r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Own"><a:themeElements><a:clrScheme name="Own"><a:accent1><a:srgbClr val="578ACD"/></a:accent1></a:clrScheme></a:themeElements></a:theme>"#;
+    let bytes = docx(
+        "<w:p/>",
+        &[("styles", "styles", "styles.xml"), ("theme", "theme", "theme/theme1.xml")],
+        &[("word/styles.xml", &styles), ("word/theme/theme1.xml", theme)],
+    );
+    let mut d = wordcraft_docx::read(&bytes).unwrap();
+    for _ in 0..3 {
+        let out = wordcraft_docx::write(&d).unwrap();
+        let xml = text(&unzip(&out), "word/styles.xml");
+        assert_eq!(xml.matches("w:themeFillTint=\"33\"").count(), 2, "both paragraph and character shading retain the source transform");
+        d = wordcraft_docx::read(&out).unwrap();
+    }
+    let replacement = Rgb(19, 29, 43);
+    Arc::make_mut(&mut d.styles).get_mut("ShadedParagraph").unwrap().para.shading = Some(replacement);
+    Arc::make_mut(&mut d.styles).get_mut("ShadedCharacter").unwrap().chr.shading = Some(replacement);
+    let out = wordcraft_docx::write(&d).unwrap();
+    assert!(!text(&unzip(&out), "word/styles.xml").contains("w:themeFillTint"), "editing either property invalidates its old transform");
+    let d = wordcraft_docx::read(&out).unwrap();
+    assert_eq!(d.styles.get("ShadedParagraph").unwrap().para.shading, Some(replacement));
+    assert_eq!(d.styles.get("ShadedCharacter").unwrap().chr.shading, Some(replacement));
+}
+
+#[test]
+fn equal_formatting_keeps_source_run_boundaries_on_repeated_saves() {
+    let mut d = read_body(
+        r#"<w:p>
+        <w:r w:rsidRPr="00112233"><w:rPr><w:spacing w:val="4"/></w:rPr><w:t xml:space="preserve">Tracked </w:t></w:r>
+        <w:r><w:rPr><w:spacing w:val="4"/></w:rPr><w:t>te</w:t></w:r>
+        <w:r w:rsidRPr="00AABBCC"><w:rPr><w:spacing w:val="4"/></w:rPr><w:t>xt</w:t></w:r>
+    </w:p>"#,
+    );
+    assert_eq!(paras(&d)[0].runs.len(), 1, "the editable formatting model remains normalized");
+    for _ in 0..3 {
+        let out = wordcraft_docx::write(&d).unwrap();
+        let xml = text(&unzip(&out), "word/document.xml");
+        assert!(
+            xml.contains("<w:r w:rsidRPr=\"00112233\">") && xml.contains("<w:r w:rsidRPr=\"00AABBCC\">"),
+            "Word's formatting-run identities must survive"
+        );
+        assert_eq!(xml.matches("w:rsidRPr=").count(), 2, "the intervening run must keep its distinct identity");
+        assert!(xml.contains("Tracked </w:t>") && xml.contains("te</w:t>") && xml.contains("xt</w:t>"), "source fragments changed: {xml}");
+        d = wordcraft_docx::read(&out).unwrap();
+        assert_eq!(paras(&d)[0].plain_text(), "Tracked text");
+    }
+    let Block::Para(p) = Arc::make_mut(&mut d.body[0]) else { panic!("paragraph") };
+    let props = p.runs[0].props.clone();
+    p.insert_text(10, "ā", &props).unwrap();
+    assert!(p.source_runs.as_ref().unwrap().offsets_for(&p.text).is_empty(), "edited text invalidates old byte offsets");
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(paras(&again)[0].plain_text(), "Tracked teāxt", "stale boundaries cannot drop or split edited Unicode text");
+}
+
+#[test]
+fn source_run_identities_survive_a_leading_bookmark_and_punctuation_runs() {
+    let mut d = read_body(
+        r#"<w:p><w:bookmarkStart w:id="0" w:name="OwnBookmark"/>
+        <w:r w:rsidR="00112233" w:rsidRPr="11223344"><w:t>Alpha</w:t></w:r>
+        <w:r w:rsidR="00AABBCC" w:rsidRPr="11223344"><w:t>,</w:t></w:r>
+        <w:r w:rsidR="00112233" w:rsidRPr="11223344"><w:t xml:space="preserve"> beta.</w:t></w:r>
+        <w:bookmarkEnd w:id="0"/></w:p>"#,
+    );
+    for _ in 0..3 {
+        let out = wordcraft_docx::write(&d).unwrap();
+        let xml = text(&unzip(&out), "word/document.xml");
+        assert_eq!(xml.matches("w:rsidRPr=\"11223344\"").count(), 3, "a leading non-text object must not discard the first run's identity");
+        assert_eq!(xml.matches("w:rsidR=\"00112233\"").count(), 2, "equal formatting does not erase the surrounding editing identities");
+        assert!(xml.contains("w:rsidR=\"00AABBCC\""), "the punctuation's distinct editing identity controls reference-app run placement");
+        d = wordcraft_docx::read(&out).unwrap();
+        assert_eq!(paras(&d)[0].plain_text(), "Alpha, beta.");
+    }
+}
+
+#[test]
+fn malformed_source_run_hints_do_not_drop_text() {
+    let mut d = read_body("<w:p><w:r><w:t>å</w:t></w:r><w:r><w:t>text</w:t></w:r></w:p>");
+    let Block::Para(p) = Arc::make_mut(&mut d.body[0]) else { panic!("paragraph") };
+    let mut hints = serde_json::to_value(p.source_runs.as_ref().unwrap()).unwrap();
+    hints["offsets"] = serde_json::json!([1, usize::MAX, 2]);
+    hints["formattingRevisions"] = serde_json::json!([[0, "not an ID"]]);
+    p.source_runs = Some(serde_json::from_value(hints).unwrap());
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(paras(&again)[0].plain_text(), "åtext");
+}
+
+#[test]
+fn malformed_formatting_revision_ids_are_ignored_without_losing_run_text() {
+    let mut d = read_body("<w:p><w:r w:rsidRPr=\"00112233\"><w:t>one</w:t></w:r><w:r><w:t>two</w:t></w:r></w:p>");
+    let Block::Para(p) = Arc::make_mut(&mut d.body[0]) else { panic!("paragraph") };
+    let mut hints = serde_json::to_value(p.source_runs.as_ref().unwrap()).unwrap();
+    hints["formattingRevisions"] = serde_json::json!([[0, "not an ID"]]);
+    hints["editingRevisions"] = serde_json::json!([[0, "not an ID"]]);
+    p.source_runs = Some(serde_json::from_value(hints).unwrap());
+    let output = wordcraft_docx::write(&d).unwrap();
+    assert!(!text(&unzip(&output), "word/document.xml").contains("rsidRPr"));
+    assert!(!text(&unzip(&output), "word/document.xml").contains("rsidR="));
+    assert_eq!(paras(&wordcraft_docx::read(&output).unwrap())[0].plain_text(), "onetwo");
+}
+
 pub fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut zw = craft_zip::Writer::new();
     for (name, bytes) in entries {
@@ -965,6 +1189,37 @@ fn vml_image_and_inline_drawing() {
         o => panic!("{o:?}"),
     }
     assert_eq!(d.media.get("pic.png").unwrap().as_slice(), png);
+}
+
+#[test]
+fn picture_transform_and_outer_frame_remain_distinct_after_saving_and_resizing() {
+    let mut d = Document::from_text("");
+    let media = d.add_media(b"own image stand-in".to_vec(), "png");
+    let object = InlineObject::Image {
+        media,
+        w: 120.0,
+        h: 60.12,
+        alt: String::new(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+        float: wordcraft_doc::para::Float { picture_extent: Some([1_270_000, 889_000]), ..Default::default() },
+    };
+    d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().insert_object(0, object, &Default::default()).unwrap();
+    for _ in 0..3 {
+        d = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        let (w, h, f) = paras(&d)[0].objects[0].frame().unwrap();
+        assert_eq!((w, h), (120.0, 60.12));
+        assert_eq!(f.picture_extent, Some([1_270_000, 889_000]), "saving must not replace the internal transform with the outer frame");
+    }
+    let object = &mut d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().objects[0];
+    let old = object.frame().unwrap().2.picture_extent.unwrap();
+    object.set_size(240.0, 60.12);
+    let new = object.frame().unwrap().2.picture_extent.unwrap();
+    assert_eq!(new[0], old[0] * 2, "an explicit horizontal resize scales the transform too");
+    assert_eq!(new[1], old[1]);
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(paras(&again)[0].objects[0].frame().unwrap().2.picture_extent, Some(new));
 }
 
 #[test]
@@ -2239,6 +2494,25 @@ fn theme_colour_wins_over_the_fixed_colour() {
     assert_eq!(at(6).color, Some(TextColor::Rgb(Rgb(0x05, 0x63, 0xC1))));
     let fill = at(7).shading.unwrap();
     assert!(near(Some(TextColor::Rgb(fill)), Rgb(0xFB, 0xE4, 0xD5)), "{fill:?}");
+}
+
+#[test]
+fn theme_text_and_background_tints_keep_identical_colours_after_repeated_saves() {
+    let theme = r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:themeElements><a:clrScheme name="Test"><a:accent1><a:srgbClr val="FF6727"/></a:accent1></a:clrScheme></a:themeElements></a:theme>"#;
+    // Public reference exports of our generated text and shading controls give
+    // these RGB values for both uses of each tint, including the half tint.
+    for (tint, color) in [("33", Rgb(255, 224, 211)), ("80", Rgb(255, 178, 146)), ("99", Rgb(255, 163, 125))] {
+        let body = format!(
+            r#"<w:p><w:pPr><w:shd w:val="clear" w:fill="00FF00" w:themeFill="accent1" w:themeFillTint="{tint}"/></w:pPr><w:r><w:rPr><w:color w:val="00FF00" w:themeColor="accent1" w:themeTint="{tint}"/></w:rPr><w:t>Own colour control</w:t></w:r></w:p>"#
+        );
+        let bytes = docx(&body, &[("theme", "theme", "theme/theme1.xml")], &[("word/theme/theme1.xml", theme)]);
+        let mut d = wordcraft_docx::read(&bytes).unwrap();
+        for _ in 0..3 {
+            assert_eq!(paras(&d)[0].props.shading, Some(color));
+            assert_eq!(paras(&d)[0].props_of_char(0).color, Some(TextColor::Rgb(color)), "text and shading share the theme conversion");
+            d = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        }
+    }
 }
 
 /// `w:shd w:val="nil"` paints nothing despite its fill: a CV template's red cell showed over the name.
@@ -4132,6 +4406,79 @@ fn picture_brightness_contrast_transparency() {
     assert_eq!(fx_of(&back), read);
 }
 
+/// Original DrawingML fixture: independent decorations on two instances of one
+/// image must survive the shared-model bridge and repeated DOCX saves.
+#[test]
+fn picture_shadow_glow_and_soft_edge_survive_repeated_saves() {
+    let effects = r#"<a:effectLst><a:glow rad="50800"><a:srgbClr val="2050A0"><a:alpha val="87000"/></a:srgbClr></a:glow><a:outerShdw blurRad="38100" dist="25400" dir="1800000" rotWithShape="0"><a:srgbClr val="204050"><a:alpha val="75000"/></a:srgbClr></a:outerShdw><a:softEdge rad="6350"/></a:effectLst>"#;
+    let picture = |effects: &str| {
+        format!(
+            r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="914400" cy="457200"/><wp:docPr id="1" name="Original synthetic picture"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rPicture"/></pic:blipFill><pic:spPr>{effects}</pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#
+        )
+    };
+    let body = format!("{}{}", picture(effects), picture(""));
+    let mut d =
+        wordcraft_docx::read(&docx(&body, &[("rPicture", "image", "media/p.png")], &[("word/media/p.png", "original synthetic image payload")]))
+            .unwrap();
+    let fx_of = |d: &Document| {
+        paras(d)
+            .iter()
+            .map(|p| match p.objects.first().unwrap() {
+                InlineObject::Image { fx, .. } => *fx,
+                o => panic!("expected picture: {o:?}"),
+            })
+            .collect::<Vec<_>>()
+    };
+    let expected = fx_of(&d);
+    assert!(expected[0].shadow.is_some() && expected[0].glow.is_some() && expected[0].soft_edge_emu.is_some());
+    assert!(expected[1].is_identity(), "decoration belongs to an instance, not its shared media");
+    let media = d.media.clone();
+    for _ in 0..3 {
+        d = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        assert_eq!(fx_of(&d), expected);
+        assert_eq!(d.media.values().collect::<Vec<_>>(), media.values().collect::<Vec<_>>());
+    }
+}
+
+#[test]
+fn svg_alternatives_keep_their_fallbacks_and_distinct_vectors_on_repeated_saves() {
+    let picture = |id: Option<&str>| {
+        let ext = id.map_or(String::new(), |id| format!(r#"<a:extLst><a:ext uri="{{96DAC541-7B7A-43D3-8B79-37D633B846F1}}"><s:svgBlip xmlns:s="http://schemas.microsoft.com/office/drawing/2016/SVG/main" r:embed="{id}"/></a:ext></a:extLst>"#));
+        format!(
+            r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="914400" cy="457200"/><wp:docPr id="1" name="Synthetic vector"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rRaster">{ext}</a:blip></pic:blipFill><pic:spPr/></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#
+        )
+    };
+    let body = format!("{}{}{}", picture(None), picture(Some("rSvg1")), picture(Some("rSvg2")));
+    let a = r#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="red"/></svg>"#;
+    let b = r#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><circle cx="20" cy="10" r="10" fill="blue"/></svg>"#;
+    let mut d = wordcraft_docx::read(&docx(
+        &body,
+        &[("rRaster", "image", "media/p.png"), ("rSvg1", "image", "media/a.svg"), ("rSvg2", "image", "media/b.svg")],
+        &[("word/media/p.png", "synthetic fallback"), ("word/media/a.svg", a), ("word/media/b.svg", b)],
+    ))
+    .unwrap();
+    for _ in 0..3 {
+        d = serde_json::from_slice(&serde_json::to_vec(&d).unwrap()).unwrap();
+        let keys = paras(&d)
+            .iter()
+            .map(|p| match &p.objects[0] {
+                InlineObject::Image { media, .. } => media.clone(),
+                _ => panic!("picture"),
+            })
+            .collect::<Vec<_>>();
+        assert!(!d.svg_pictures.contains_key(&keys[0]), "a plain raster must not acquire another instance's vector");
+        for (key, vector) in keys[1..].iter().zip([a, b]) {
+            assert_eq!(d.media[key].as_slice(), b"synthetic fallback");
+            assert_eq!(d.media[&d.svg_pictures[key]].as_slice(), vector.as_bytes());
+        }
+        let out = wordcraft_docx::write(&d).unwrap();
+        let parts = unzip(&out);
+        assert_eq!(text(&parts, "word/document.xml").matches("<asvg:svgBlip ").count(), 2);
+        assert!(text(&parts, "[Content_Types].xml").contains("image/svg+xml"));
+        d = wordcraft_docx::read(&out).unwrap();
+    }
+}
+
 /// Word's picture watermark with Washout (#1711): a VML picture in a header's Watermarks
 /// building block keeps its brightness and contrast.
 #[test]
@@ -4780,4 +5127,22 @@ fn vml_horizontal_rules_are_read_and_kept() {
     .concat();
     let d = read_body(&body);
     assert_eq!(rules(&d).iter().map(|r| r.0).collect::<Vec<_>>(), [None, None]);
+}
+
+#[test]
+fn invisible_shape_outlines_keep_their_text_geometry_on_repeated_saves() {
+    let body = r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="1270000" cy="635000"/><wp:docPr id="1" name="Box"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:cNvSpPr txBox="1"/><wps:spPr><a:prstGeom prst="rect"/><a:noFill/><a:ln w="6350"><a:noFill/></a:ln></wps:spPr><wps:txbx><w:txbxContent><w:p><w:r><w:t>Text</w:t></w:r></w:p></w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#;
+    let mut d = read_body(body);
+    let outline = |d: &Document| {
+        paras(d)[0].objects.iter().find_map(|o| match o {
+            InlineObject::Shape { stroke, stroke_width, .. } => Some((*stroke, *stroke_width)),
+            _ => None,
+        })
+    };
+    let original = outline(&d).unwrap();
+    assert!(original.0.is_none() && original.1 > 0.0, "no ink, but a positive layout width");
+    for _ in 0..3 {
+        d = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        assert_eq!(outline(&d), Some(original));
+    }
 }

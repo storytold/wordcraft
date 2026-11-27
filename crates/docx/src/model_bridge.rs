@@ -53,9 +53,10 @@ fn paragraph_value_from_shared(
     source: craft_wordmodel::para::Paragraph,
     graphics: &mut GraphicCache,
 ) -> Result<wordcraft_doc::para::Paragraph, DocxError> {
-    let craft_wordmodel::para::Paragraph { text, runs, props, mark, objects, section, .. } = source;
+    let craft_wordmodel::para::Paragraph { text, runs, source_runs, props, mark, objects, section, .. } = source;
     let mut paragraph = wordcraft_doc::para::Paragraph::new();
     paragraph.text = text;
+    paragraph.source_runs = source_runs.map(convert).transpose()?;
     paragraph.runs =
         runs.into_iter().map(|run| Ok(wordcraft_doc::para::Run { len: run.len, props: convert(run.props)? })).collect::<Result<_, DocxError>>()?;
     paragraph.props = convert(props)?;
@@ -200,6 +201,7 @@ pub fn from_shared_model(mut source: craft_wordmodel::Document) -> Result<wordcr
         footnote_separators,
         endnote_separators,
         media,
+        svg_pictures,
         passthrough,
         glossary,
         missing_pictures,
@@ -222,6 +224,7 @@ pub fn from_shared_model(mut source: craft_wordmodel::Document) -> Result<wordcr
     document.footnote_separators = convert(footnote_separators)?;
     document.endnote_separators = convert(endnote_separators)?;
     document.media = media;
+    document.svg_pictures = svg_pictures;
     document.passthrough = passthrough;
     document.glossary = glossary.into_iter().map(|g| glossary_value_from_shared(g, &mut graphics)).collect::<Result<_, _>>()?;
     document.missing_pictures = missing_pictures_from_shared(missing_pictures)?;
@@ -280,6 +283,7 @@ fn sanitize_char_props(mut props: wordcraft_doc::CharProps) -> wordcraft_doc::Ch
 fn paragraph_value_to_shared(source: &wordcraft_doc::para::Paragraph) -> Result<craft_wordmodel::para::Paragraph, DocxError> {
     let mut paragraph = craft_wordmodel::para::Paragraph::new();
     paragraph.text = source.text.clone();
+    paragraph.source_runs = source.source_runs.as_ref().map(convert_ref).transpose()?;
     paragraph.runs = source
         .runs
         .iter()
@@ -397,6 +401,7 @@ pub fn to_shared_model(source: &wordcraft_doc::Document) -> Result<craft_wordmod
     document.footnote_separators = convert_ref(&source.footnote_separators)?;
     document.endnote_separators = convert_ref(&source.endnote_separators)?;
     document.media = source.media.clone();
+    document.svg_pictures = source.svg_pictures.clone();
     document.passthrough = source.passthrough.clone();
     document.glossary = source.glossary.iter().map(glossary_value_to_shared).collect::<Result<_, _>>()?;
     document.missing_pictures = missing_pictures_to_shared(&source.missing_pictures)?;

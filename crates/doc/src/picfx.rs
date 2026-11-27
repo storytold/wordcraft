@@ -1,9 +1,9 @@
-//! Picture colour corrections read from a file: brightness, contrast and transparency
+//! Picture effects read from a file: brightness, contrast, transparency and soft edges
 //! (DrawingML `a:lum` and `a:alphaModFix` inside `a:blip`, ECMA-376 §20.1.8.42 and §20.1.8.4;
 //! VML `v:imagedata` `gain` and `blacklevel`, which Word's picture watermark "Washout" sets).
 //!
-//! Values are kept in OOXML units: thousandths of a percent, so 100 000 is 100 %. All zero is
-//! the picture as it is.
+//! Colour corrections use OOXML's thousandths of a percent, so 100 000 is 100 %. A picture's
+//! DrawingML soft-edge radius uses EMUs, independent of its shared image pixels.
 //!
 //! The pixel formula was measured on Word (#1711, #1766): Word bakes the corrected pixels into
 //! the picture it embeds in a PDF export, so a synthetic grey and colour ramp exported with
@@ -30,7 +30,9 @@ use serde::{Deserialize, Serialize};
 /// The largest magnitude of a correction (100 %).
 pub const FX_MAX: i32 = 100_000;
 
-/// Brightness, contrast and transparency of a picture (see the module docs).
+const MAX_SOFT_EDGE_EMU: i64 = crate::effects::MAX_SOFT_EDGE as i64 * 12_700;
+
+/// Per-picture effects (see the module docs).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PicFx {
@@ -40,17 +42,97 @@ pub struct PicFx {
     pub contrast: i32,
     /// 0 (opaque) ..= 100 000 (invisible).
     pub transparency: i32,
+    /// Radius of a DrawingML soft edge in EMUs. An absent or zero radius leaves a sharp edge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub soft_edge_emu: Option<u32>,
+    /// DrawingML outer shadow (`a:outerShdw`), separate from the shared pixels.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<PictureShadow>,
+    /// DrawingML glow (`a:glow`), separate from the shared pixels.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub glow: Option<PictureGlow>,
+}
+
+/// Picture decoration uses integer OOXML units so it remains an exact, hashable
+/// part of the per-instance image style: lengths in EMUs, angles in 1/60000 degree,
+/// transparency in thousandths of a percent (ECMA-376 §20.1.8).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PictureShadow {
+    pub color: crate::props::Rgb,
+    pub transparency: u32,
+    pub blur_emu: u32,
+    pub distance_emu: u32,
+    pub angle: i32,
+    pub rot_with_shape: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PictureGlow {
+    pub color: crate::props::Rgb,
+    pub transparency: u32,
+    pub radius_emu: u32,
 }
 
 impl PicFx {
     /// Corrections clamped to their ranges.
     pub fn new(bright: i32, contrast: i32, transparency: i32) -> PicFx {
-        PicFx { bright: bright.clamp(-FX_MAX, FX_MAX), contrast: contrast.clamp(-FX_MAX, FX_MAX), transparency: transparency.clamp(0, FX_MAX) }
+        PicFx {
+            bright: bright.clamp(-FX_MAX, FX_MAX),
+            contrast: contrast.clamp(-FX_MAX, FX_MAX),
+            transparency: transparency.clamp(0, FX_MAX),
+            soft_edge_emu: None,
+            shadow: None,
+            glow: None,
+        }
     }
 
     /// The same corrections, each clamped to its range (for values that came from anywhere).
     pub fn clamped(self) -> PicFx {
-        PicFx::new(self.bright, self.contrast, self.transparency)
+        PicFx::new(self.bright, self.contrast, self.transparency).with_shape_effects(self.shape_effects())
+    }
+
+    /// Convert the picture's decoration to the common shape-effects painter.
+    pub fn shape_effects(&self) -> crate::effects::ShapeEffects {
+        use crate::effects::{Glow, Shadow, ShapeEffects};
+        ShapeEffects {
+            shadow: self.shadow.map(|s| Shadow {
+                color: s.color,
+                transparency: s.transparency as f32 / 1000.0,
+                blur: s.blur_emu as f32 / 12_700.0,
+                distance: s.distance_emu as f32 / 12_700.0,
+                angle: s.angle as f32 / 60_000.0,
+                rot_with_shape: s.rot_with_shape,
+            }),
+            glow: self.glow.map(|g| Glow { color: g.color, transparency: g.transparency as f32 / 1000.0, size: g.radius_emu as f32 / 12_700.0 }),
+            soft_edge: self.soft_edge_emu.map(|r| r as f32 / 12_700.0),
+        }
+        .sanitized()
+    }
+
+    /// Retain DrawingML decoration without baking it into the original image.
+    pub fn with_shape_effects(mut self, effects: crate::effects::ShapeEffects) -> Self {
+        let effects = effects.sanitized();
+        let emu = |v: f32| (v * 12_700.0).round() as u32;
+        self.shadow = effects.shadow.map(|s| PictureShadow {
+            color: s.color,
+            transparency: (s.transparency * 1000.0).round() as u32,
+            blur_emu: emu(s.blur),
+            distance_emu: emu(s.distance),
+            angle: (s.angle * 60_000.0).round() as i32,
+            rot_with_shape: s.rot_with_shape,
+        });
+        self.glow =
+            effects.glow.map(|g| PictureGlow { color: g.color, transparency: (g.transparency * 1000.0).round() as u32, radius_emu: emu(g.size) });
+        self.soft_edge_emu = effects.soft_edge.map(emu).filter(|r| *r != 0);
+        self
+    }
+
+    /// Sets and bounds the picture's soft-edge radius without changing its other effects.
+    pub fn with_soft_edge_emu(mut self, radius: i64) -> Self {
+        self.soft_edge_emu = u32::try_from(radius.clamp(0, MAX_SOFT_EDGE_EMU)).ok().filter(|&value| value != 0);
+        self
     }
 
     /// No correction at all.
@@ -174,7 +256,7 @@ mod tests {
     #[test]
     fn hostile_values_clamp() {
         for v in [i32::MIN, -100_001, 0, 100_001, i32::MAX] {
-            let fx = PicFx { bright: v, contrast: v, transparency: v };
+            let fx = PicFx { bright: v, contrast: v, transparency: v, ..Default::default() };
             let _ = fx.table();
             assert!((0.0..=1.0).contains(&fx.opacity()));
             let mut px = [1u8, 2, 3, 4];
