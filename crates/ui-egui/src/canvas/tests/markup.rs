@@ -915,3 +915,29 @@ fn hovering_a_paragraph_with_tracked_formatting_shows_formatted() {
     point_at(&mut h);
     assert_eq!(tips(&h), 0, "with formatting markup off the change isn't marked, so it has no tip");
 }
+
+/// #7887 review: a link in a footnote shows its tip while the caret is in the body. The hover
+/// looks in the story under the pointer, so the link's tip still comes before the tracked
+/// change tip there.
+#[test]
+fn a_footnote_link_shows_its_tip_with_the_caret_in_the_body() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Body text")), Default::default());
+    a.run("caret.docEnd", json!({})).unwrap();
+    a.run("review.trackChanges", json!({"value": true})).unwrap();
+    a.run("references.footnote", json!({"text": "Note link"})).unwrap();
+    let note = a.session.sel.focus.story;
+    let pos = |off: usize| json!({"story": note, "path": [0], "off": off});
+    a.run("select.range", json!({"anchor": pos(5), "focus": pos(9)})).unwrap();
+    a.run("insert.link", json!({"url": "https://example.com/note"})).unwrap();
+    a.run("caret.set", json!({"pos": {"block": 0, "off": 2}})).unwrap();
+    assert_eq!(a.session.sel.focus.story, StoryRef::Body);
+    // The whole page in the window, footnote area and all.
+    a.run("view.zoom", json!({"value": 40})).unwrap();
+    let mut h = window(a);
+    let c = h.state_mut().session.layout().caret(&Pos { story: note, path: wordcraft_doc::Path::top(0), off: 7 }).unwrap();
+    let at = screen(&mut h, c.x, c.top + c.height / 2.0);
+    h.event(egui::Event::PointerMoved(at));
+    super::rest_for_tip(&mut h);
+    assert!(h.query_all_by_label_contains("https://example.com/note").count() > 0, "the footnote's link shows its tip (pointer at {at:?})");
+    assert_eq!(h.query_all_by_label_contains("Inserted\n").count(), 0, "not the tracked insertion's tip");
+}

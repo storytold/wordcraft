@@ -164,7 +164,8 @@ impl<'a> PageTextTool<'a> {
         let (page, x, y) = page_of(self.body.pages, pos)?;
         let layout = &*self.layout;
         // A linked picture or shape under the pointer comes first: it lies over the text (#5267).
-        let story = app.session.sel.focus.story;
+        // The text is the story under the pointer, as for the tracked change tip that follows.
+        let story = pointer_story(app, layout, page, x, y, app.session.sel.focus.story);
         let link = crate::objects::link_at(app, layout, self.body, pos)
             .or_else(|| layout.hit(page, x, y, story).and_then(|at| link_under(app, layout, page, x, y, &at)))?;
         let target = if is_generated_bookmark_link(&link) { tl!("Current Document").to_string() } else { link };
