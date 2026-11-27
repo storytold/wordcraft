@@ -434,3 +434,5 @@ fn shared_base64_preserves_command_payload_bytes() {
     assert_eq!(super::objects::base64_decode("Z g\n"), Some(b"f".to_vec()));
     assert_eq!(super::objects::base64_decode("!!!!"), None);
 }
+
+mod blank_page_header;
