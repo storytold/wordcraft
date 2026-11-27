@@ -962,17 +962,17 @@ const CP437_HIGH: [char; 128] = [
 
 /// Read an unsigned 16-bit little-endian integer at byte offset `i`.
 fn u16_at(b: &[u8], i: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(b.get(i..i + 2)?.try_into().ok()?))
+    Some(u16::from_le_bytes(b.get(i..i.checked_add(2)?)?.try_into().ok()?))
 }
 
 /// Read an unsigned 32-bit little-endian integer at byte offset `i`.
 fn u32_at(b: &[u8], i: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(b.get(i..i + 4)?.try_into().ok()?))
+    Some(u32::from_le_bytes(b.get(i..i.checked_add(4)?)?.try_into().ok()?))
 }
 
 /// Read an unsigned 64-bit little-endian integer at byte offset `i`.
 fn u64_at(b: &[u8], i: usize) -> Option<u64> {
-    Some(u64::from_le_bytes(b.get(i..i + 8)?.try_into().ok()?))
+    Some(u64::from_le_bytes(b.get(i..i.checked_add(8)?)?.try_into().ok()?))
 }
 
 /// The parsed zip central directory: the raw records examined within the entry budget, and
@@ -1007,15 +1007,16 @@ fn check_concatenated_archives(bytes: &[u8], readable: bool, acc: &mut Acc) {
     }
 
     const CANDIDATE_LIMIT: usize = 2;
-    let last_footer = exact_end_footer(bytes);
+    let exact_ends = exact_end_footers(bytes);
     if readable {
         acc.ran("PKG-CONCATENATED");
-    } else if last_footer.is_none() {
+    } else if exact_ends.is_empty() {
         return;
     }
     let mut remaining = CANDIDATE_LIMIT;
     let mut unresolved = false;
     let mut comment_end = 0;
+    let mut walks = FooterWalks::new(acc.limits.entries);
     for (footer, byte) in bytes.iter().enumerate() {
         if footer < comment_end || *byte != b'P' || u32_at(bytes, footer) != Some(0x0605_4B50) {
             continue;
@@ -1024,9 +1025,13 @@ fn check_concatenated_archives(bytes: &[u8], readable: bool, acc: &mut Acc) {
             continue;
         };
         let boundary = footer + 22 + usize::from(comment);
+        // Without a comment the footer cannot anchor anything, and its walk only matters when a local header follows.
+        if comment == 0 && u32_at(bytes, boundary) != Some(0x0403_4B50) {
+            continue;
+        }
         // Only a footer verified as an archive's own may anchor its declared comment. A record stored in
         // entry data can pass the cheap preflight and must not hide a later real footer.
-        let first_count = match verify_footer(bytes, footer, acc.limits.entries) {
+        let first_count = match walks.footer(bytes, footer, acc.limits.entries) {
             Footer::Verified(count) => {
                 if comment != 0 && boundary <= bytes.len() {
                     comment_end = boundary;
@@ -1045,8 +1050,13 @@ fn check_concatenated_archives(bytes: &[u8], readable: bool, acc: &mut Acc) {
             continue;
         }
         let (first, second) = bytes.split_at(boundary);
-        let second_directory =
-            last_footer.and_then(|last| last.checked_sub(boundary)).and_then(|last| archive_count_at(second, last).map(|count| (last, count)));
+        // The second archive's own footer is the last exact-end record whose directory is plausible in the
+        // second slice; a lookalike with no plausible directory (inside the comment) must not shadow it.
+        let second_directory = exact_ends
+            .iter()
+            .filter_map(|&last| last.checked_sub(boundary))
+            .take_while(|_| walks.charge(1))
+            .find_map(|last| archive_count_at(second, last).map(|count| (last, count)));
         if first_count.is_none() && second_directory.is_none() {
             continue;
         }
@@ -1058,35 +1068,96 @@ fn check_concatenated_archives(bytes: &[u8], readable: bool, acc: &mut Acc) {
             acc.ran("PKG-CONCATENATED");
         }
         remaining -= 1;
-        if first_count.is_none_or(|count| count > acc.limits.entries as u64) || !standalone_opc(first, footer, acc.limits) {
+        if first_count.is_none_or(|count| count > acc.limits.entries as u64) || !standalone_opc(first, footer, acc.limits, false) {
             unresolved = true;
             continue;
         }
         if let Some((last, count)) = second_directory
             && count <= acc.limits.entries as u64
-            && (first == second || standalone_opc(second, last, acc.limits))
+            && (first == second || standalone_opc(second, last, acc.limits, true))
         {
             acc.add("PKG-CONCATENATED", None, format!("a second complete OPC archive starts at byte {boundary}"));
             return;
         }
         unresolved = true;
     }
+    unresolved |= walks.spent;
     if unresolved {
         acc.note("concatenated archive checking could not resolve a candidate boundary within the ZIP layout and examination limits".to_string());
         acc.set_incomplete();
     }
 }
 
-/// Find an EOCD with a comment ending exactly at EOF, within its 16-bit comment window.
-fn exact_end_footer(bytes: &[u8]) -> Option<usize> {
-    let last = bytes.len().checked_sub(22)?;
-    (last.saturating_sub(0xFFFF)..=last).rev().find(|&footer| {
-        u32_at(bytes, footer) == Some(0x0605_4B50)
-            && u16_at(bytes, footer + 20).is_some_and(|comment| footer + 22 + usize::from(comment) == bytes.len())
-    })
+/// Scan-wide accounting for central-record walks. Every walk of a directory is charged its declared record
+/// count against one budget, and a walk already done for the same directory is reused, so many footer-like
+/// records aimed at one directory cost one walk. Two archives at the entry limit, each with its footer, fit
+/// the budget with room for lookalikes inside entry data.
+struct FooterWalks {
+    budget: usize,
+    /// A walk was refused because the budget ran out; the scan must report incomplete coverage.
+    spent: bool,
+    /// (directory start, record count) -> the footer position walked from and its outcome. A walk that
+    /// found the directory consistent holds for any later footer, since a later footer only adds room.
+    done: HashMap<(usize, u64), (usize, Footer)>,
+}
+
+impl FooterWalks {
+    fn new(entries: usize) -> Self {
+        Self { budget: entries.saturating_mul(4), spent: false, done: HashMap::new() }
+    }
+
+    /// Spend `cost` units of the scan-wide budget; false (and `spent`) when it is exhausted.
+    fn charge(&mut self, cost: usize) -> bool {
+        match self.budget.checked_sub(cost) {
+            Some(rest) => {
+                self.budget = rest;
+                true
+            }
+            None => {
+                self.spent = true;
+                false
+            }
+        }
+    }
+
+    fn footer(&mut self, bytes: &[u8], footer: usize, limit: usize) -> Footer {
+        let Some((start, count)) = directory_at(bytes, footer) else {
+            return Footer::Rejected;
+        };
+        if count > limit as u64 {
+            return Footer::Undecided(count);
+        }
+        if let Some(&(walked_from, outcome)) = self.done.get(&(start, count))
+            && footer >= walked_from
+            && !matches!(outcome, Footer::Rejected)
+        {
+            return outcome;
+        }
+        if !self.charge(usize::try_from(count).unwrap_or(usize::MAX)) {
+            return Footer::Unanchored(count);
+        }
+        let outcome = verify_footer(bytes, footer, limit);
+        self.done.insert((start, count), (footer, outcome));
+        outcome
+    }
+}
+
+/// Every EOCD-like record with a comment ending exactly at EOF, within its 16-bit comment window, last first.
+fn exact_end_footers(bytes: &[u8]) -> Vec<usize> {
+    let Some(last) = bytes.len().checked_sub(22) else {
+        return Vec::new();
+    };
+    (last.saturating_sub(0xFFFF)..=last)
+        .rev()
+        .filter(|&footer| {
+            u32_at(bytes, footer) == Some(0x0605_4B50)
+                && u16_at(bytes, footer + 20).is_some_and(|comment| footer + 22 + usize::from(comment) == bytes.len())
+        })
+        .collect()
 }
 
 /// The outcome of checking whether an EOCD-like record is the footer of an archive starting at byte zero.
+#[derive(Clone, Copy)]
 enum Footer {
     Verified(u64),
     /// The directory passes the preflight but is larger than the entry budget, so it was not walked.
@@ -1259,21 +1330,31 @@ fn descriptor_fits(lengths: u32, gap: usize) -> bool {
 /// and sizes equal the central record's. Covers 32- and 64-bit sizes, each with and without the signature.
 fn descriptor_lengths(bytes: &[u8], at: usize, crc: u32, compressed: u64, uncompressed: u64) -> u32 {
     let mut found = 0;
+    // `at` can lie anywhere a hostile directory's sizes point, so every offset is computed checked.
     for signed in [true, false] {
         let body = if signed {
             if u32_at(bytes, at) != Some(0x0807_4B50) {
                 continue;
             }
-            at + 4
+            let Some(body) = at.checked_add(4) else {
+                continue;
+            };
+            body
         } else {
             at
         };
         if u32_at(bytes, body) != Some(crc) {
             continue;
         }
-        let narrow =
-            u32_at(bytes, body + 4).zip(u32_at(bytes, body + 8)).is_some_and(|(c, u)| u64::from(c) == compressed && u64::from(u) == uncompressed);
-        let wide = u64_at(bytes, body + 4).zip(u64_at(bytes, body + 12)).is_some_and(|(c, u)| c == compressed && u == uncompressed);
+        let field = |offset: usize| body.checked_add(offset);
+        let narrow = field(4)
+            .zip(field(8))
+            .and_then(|(c, u)| u32_at(bytes, c).zip(u32_at(bytes, u)))
+            .is_some_and(|(c, u)| u64::from(c) == compressed && u64::from(u) == uncompressed);
+        let wide = field(4)
+            .zip(field(12))
+            .and_then(|(c, u)| u64_at(bytes, c).zip(u64_at(bytes, u)))
+            .is_some_and(|(c, u)| c == compressed && u == uncompressed);
         let head = body - at + 4;
         if narrow {
             found |= 1 << (head + 8);
@@ -1325,7 +1406,7 @@ fn directory_at(bytes: &[u8], footer: usize) -> Option<(usize, u64)> {
 }
 
 /// Isolated loading reuses the normal entry, decompression and XML budgets.
-fn standalone_opc(bytes: &[u8], footer: usize, limits: crate::Limits) -> bool {
+fn standalone_opc(bytes: &[u8], footer: usize, limits: crate::Limits, require_clean_rels: bool) -> bool {
     observation_contract! {
         rules: "-";
         collections: "field.content_types*2,field.incomplete*1";
@@ -1340,6 +1421,12 @@ fn standalone_opc(bytes: &[u8], footer: usize, limits: crate::Limits) -> bool {
         return false;
     };
     if probe.incomplete || !pkg.content_types_present || pkg.content_types.inventory_invalid {
+        return false;
+    }
+    // A malformed or partly read package-level relationships part cannot certify the trailing archive as complete.
+    if require_clean_rels
+        && pkg.rels.iter().any(|part| part.name.eq_ignore_ascii_case("_rels/.rels") && (part.incomplete || !part.inventory_complete))
+    {
         return false;
     }
     match &pkg.main {
