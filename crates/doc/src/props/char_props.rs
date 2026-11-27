@@ -61,6 +61,22 @@ impl Underline {
     }
 }
 
+/// The theme's typeface slot. The resolved font name remains in `CharProps`;
+/// the slot preserves its inheritance and DOCX identity even when two slots
+/// currently name the same installed typeface.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ThemeFont {
+    MajorEastAsia,
+    MajorBidi,
+    MajorAscii,
+    MajorHAnsi,
+    MinorEastAsia,
+    MinorBidi,
+    MinorAscii,
+    MinorHAnsi,
+}
+
 /// The OpenType ligatures a run asks for ([MS-DOCX] `w14:ligatures`): standard (`liga`),
 /// contextual (`clig`), historical (`hlig`) and discretional (`dlig`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -235,6 +251,10 @@ pub struct CharProps {
     pub style: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_ascii_theme: Option<ThemeFont>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_hansi_theme: Option<ThemeFont>,
     /// The symbol's own font (OOXML `w:sym/@w:font`, ECMA-376 §17.3.3.30), set on a symbol
     /// character from a `w:sym` or Insert › Symbol: it is shown in this font whatever `font` is,
     /// so changing the text's font keeps the symbol. `None` = the run's font.
@@ -329,6 +349,10 @@ pub struct CharProps {
     /// inherit, then `font`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_ea: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_ea_theme: Option<ThemeFont>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_cs_theme: Option<ThemeFont>,
     /// Complex-script size, points (`w:szCs`). `None` leaves the inherited value unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size_cs: Option<f32>,
@@ -492,11 +516,26 @@ impl CharProps {
     /// The fields of `self` that differ from `base` (equal ones unset): what `self` adds when
     /// overlaid on `base`.
     pub fn minus(mut self, base: &CharProps) -> CharProps {
+        let font = self.font.clone();
         self.minus_text_style(base);
+        self.minus_latin_theme(base, font);
         self.minus_run_visibility(base);
         self.minus_script_style(base);
         self.minus_document_marks(base);
         self
+    }
+
+    fn minus_latin_theme(&mut self, base: &CharProps, font: Option<String>) {
+        let keep = (self.font_ascii_theme, self.font_hansi_theme);
+        drop_same_fields!(self, base; font_ascii_theme, font_hansi_theme);
+        // An explicit font clears inherited slots. Keep it even when the
+        // resolved name matches the base if the theme identity differs.
+        if self.font.is_none() && font.is_some() && keep != (base.font_ascii_theme, base.font_hansi_theme) {
+            self.font = font;
+        }
+        if self.font.is_some() {
+            (self.font_ascii_theme, self.font_hansi_theme) = keep;
+        }
     }
 
     fn minus_text_style(&mut self, base: &CharProps) {
@@ -509,7 +548,21 @@ impl CharProps {
     }
 
     fn minus_script_style(&mut self, base: &CharProps) {
-        drop_same_fields!(self, base; cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout);
+        let keep = (self.font_ea_theme, self.font_cs_theme);
+        let (ea, cs) = (self.font_ea.clone(), self.font_cs.clone());
+        drop_same_fields!(self, base; cs, font_cs, font_ea, font_ea_theme, font_cs_theme, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout);
+        if self.font_ea.is_none() && keep.0 != base.font_ea_theme {
+            self.font_ea = ea;
+        }
+        if self.font_cs.is_none() && keep.1 != base.font_cs_theme {
+            self.font_cs = cs;
+        }
+        if self.font_ea.is_some() {
+            self.font_ea_theme = keep.0;
+        }
+        if self.font_cs.is_some() {
+            self.font_cs_theme = keep.1;
+        }
     }
 
     fn minus_document_marks(&mut self, base: &CharProps) {
@@ -522,11 +575,20 @@ impl CharProps {
     /// format both scripts must set both values explicitly.
     pub fn overlay(&mut self, patch: &CharProps) {
         self.overlay_text_style(patch);
+        self.overlay_latin_theme(patch);
         self.overlay_run_visibility(patch);
         self.overlay_script_style(patch);
         self.overlay_document_marks(patch);
         if let Some(p) = &patch.text_effects {
             self.text_effects.get_or_insert_with(Default::default).overlay(p);
+        }
+    }
+
+    fn overlay_latin_theme(&mut self, patch: &CharProps) {
+        if patch.font.is_some() {
+            (self.font_ascii_theme, self.font_hansi_theme) = (patch.font_ascii_theme, patch.font_hansi_theme);
+        } else {
+            overlay_fields!(self, patch; font_ascii_theme, font_hansi_theme);
         }
     }
 
@@ -540,7 +602,13 @@ impl CharProps {
     }
 
     fn overlay_script_style(&mut self, patch: &CharProps) {
-        overlay_fields!(self, patch; cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout);
+        if patch.font_ea.is_some() && patch.font_ea_theme.is_none() {
+            self.font_ea_theme = None;
+        }
+        if patch.font_cs.is_some() && patch.font_cs_theme.is_none() {
+            self.font_cs_theme = None;
+        }
+        overlay_fields!(self, patch; cs, font_cs, font_ea, font_ea_theme, font_cs_theme, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout);
     }
 
     fn overlay_document_marks(&mut self, patch: &CharProps) {

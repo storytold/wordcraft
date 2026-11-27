@@ -23,7 +23,8 @@ mod para_props;
 mod table_props;
 
 pub use char_props::{
-    CharProps, CombineBrackets, DEFAULT_FONT_SIZE, EastAsianLayout, EmphasisMark, Highlight, Ligatures, NumChange, PropChange, Underline, VertAlign,
+    CharProps, CombineBrackets, DEFAULT_FONT_SIZE, EastAsianLayout, EmphasisMark, Highlight, Ligatures, NumChange, PropChange, ThemeFont, Underline,
+    VertAlign,
 };
 pub use color::{Rgb, TextColor};
 pub use para_props::{
@@ -38,6 +39,31 @@ pub use table_props::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_font_choices_clear_theme_slots_even_when_names_match() {
+        let themed = CharProps {
+            font: Some("Own Latin".into()),
+            font_ascii_theme: Some(ThemeFont::MajorAscii),
+            font_hansi_theme: Some(ThemeFont::MajorHAnsi),
+            font_ea: Some("Own CJK".into()),
+            font_ea_theme: Some(ThemeFont::MajorEastAsia),
+            font_cs: Some("Own complex".into()),
+            font_cs_theme: Some(ThemeFont::MajorBidi),
+            ..Default::default()
+        };
+        let explicit =
+            CharProps { font: themed.font.clone(), font_ea: themed.font_ea.clone(), font_cs: themed.font_cs.clone(), ..Default::default() };
+        assert_eq!(themed.clone().overlaid(&explicit), explicit, "a font selected by name replaces its inherited theme identity");
+        let delta = explicit.clone().minus(&themed);
+        assert!(!delta.is_empty(), "equal resolved names do not mean equal formatting");
+        assert_eq!(themed.clone().overlaid(&delta), explicit, "format deltas must retain the slot-clearing font choice");
+        assert!(themed.clone().minus(&themed).is_empty());
+        let bold = CharProps { bold: Some(true), ..Default::default() };
+        let changed = themed.clone().overlaid(&bold);
+        assert_eq!(changed.clone().minus(&themed), bold, "unrelated formatting keeps the theme slots inherited");
+        assert_eq!(explicit.clone().overlaid(&changed.clone().minus(&explicit)), changed, "a delta reattaches the theme identities");
+    }
 
     #[test]
     fn rgb_hex() {
