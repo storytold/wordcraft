@@ -37,9 +37,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use craft::host::{FileError, Files, PickId, PickRequest, Picked};
+use craft::host::{FileError, Files, PendingPick, PickId, PickRequest, Picked, WriteIntent};
 use craft::platform::browser_files::BrowserFiles;
-use craft::platform::open::{DropTarget, DroppedFile, IntakeSender};
+use craft::platform::open::{DroppedFile, IntakeSender};
 use craft::web_host::web::{FileData, Host, Message};
 use wordcraft_ui_egui::{Services, WordApp};
 
@@ -131,7 +131,7 @@ fn deliver_open(intake: &IntakeSender, name: &str, data: &FileData) {
         return;
     }
     let file = DroppedFile { path: None, name, bytes: Some(Arc::from(array.to_vec())) };
-    intake.dropped(vec![file], DropTarget::Elsewhere);
+    intake.dropped(vec![file]);
 }
 
 /// The files of a hosted page: reads go to the browser's files, but a save goes to the host page,
@@ -167,16 +167,16 @@ impl Files for HostedFiles {
         }
     }
 
-    fn pick_pending(&self) -> bool {
-        self.inner.pick_pending()
+    fn pending_pick(&self) -> Option<PendingPick> {
+        self.inner.pending_pick()
     }
 
     fn read(&self, path: &Path) -> Result<Vec<u8>, FileError> {
         self.inner.read(path)
     }
 
-    fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), FileError> {
-        self.inner.write(path, bytes)
+    fn write(&self, path: &Path, bytes: &[u8], intent: WriteIntent) -> Result<bool, FileError> {
+        self.inner.write(path, bytes, intent)
     }
 
     fn last_folder(&self, purpose: &str) -> Option<PathBuf> {
@@ -192,7 +192,7 @@ impl Files for HostedFiles {
         let answer = match sent {
             // A Save As or first Save makes the page hold the document as this file: the answer
             // names it, and the next Save posts the name with `save_as` false.
-            Ok(()) if request.save_as => Picked::Paths(vec![PathBuf::from(&name)]),
+            Ok(()) if request.save_as => Picked::Saved { path: PathBuf::from(&name), file_type: None },
             // An overwrite of the opened file, or a copy: the document's file stays as it is.
             Ok(()) => Picked::Downloaded(name),
             Err(error) => Picked::Failed(error),

@@ -16,6 +16,9 @@ pub(crate) struct Runtime {
     /// The desktop app turns the check at start on; tests and the web build leave it off.
     #[cfg(not(target_arch = "wasm32"))]
     startup_check: bool,
+    /// How many times the test stub answered a check (see `stub_update_check`).
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) stub_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Default for Runtime {
@@ -25,6 +28,8 @@ impl Default for Runtime {
             updater: Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_translator(translate),
             #[cfg(not(target_arch = "wasm32"))]
             startup_check: false,
+            #[cfg(all(test, not(target_arch = "wasm32")))]
+            stub_calls: Default::default(),
         }
     }
 }
@@ -53,6 +58,30 @@ impl WordApp {
         rt.updater = Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_translator(translate).with_source(refused_check());
     }
 
+    /// The Nightly channel's rule: ArtCraft Launcher installs and replaces the nightly build, so
+    /// this window never checks for, offers or starts one. Nightly-only text is English: it is not
+    /// one of the stable catalogs' strings.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn use_launcher_updates(&mut self) {
+        let rt = &mut self.updates_rt;
+        rt.startup_check = false;
+        rt.updater = Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_translator(translate).with_source(launcher_check());
+    }
+
+    /// Answers every update check with "up to date" instead of asking GitHub, so a test's result
+    /// doesn't depend on the network or its rate limit (#7463).
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn stub_update_check(&mut self) {
+        let rt = &mut self.updates_rt;
+        rt.startup_check = false;
+        let calls = rt.stub_calls.clone();
+        rt.updater =
+            Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_translator(translate).with_source(std::sync::Arc::new(move || {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(None)
+            }));
+    }
+
     /// Starts the helper of an update that is ready, so that it installs once the process has
     /// ended. Call it once the exit is certain, before a path that ends the process without
     /// dropping the app. Later calls do nothing.
@@ -68,7 +97,14 @@ impl WordApp {
 fn refused_check() -> craft::update::updater::CheckSource {
     let why = tl!("Updates are off in this window: WordCraft was started with another program's AppImage settings. Start WordCraft from its own menu entry to update it.")
         .to_string();
-    std::sync::Arc::new(move || Err(why.clone()))
+    std::sync::Arc::new(move || Err(why.clone().into()))
+}
+
+/// A check whose only answer is that the Launcher owns this build's updates.
+#[cfg(not(target_arch = "wasm32"))]
+fn launcher_check() -> craft::update::updater::CheckSource {
+    let why = "Updates for WordCraft Nightly are managed by ArtCraft Launcher. Open ArtCraft Launcher to update it.".to_string();
+    std::sync::Arc::new(move || Err(why.clone().into()))
 }
 
 /// Help ▸ Check for Updates. The result dialog opens from [`run`] while the updater has a status.
@@ -249,5 +285,16 @@ mod tests {
             assert!(!app.dialog_host.is_open::<UpdateCheckDialog>(), "{file}: the dialog stays closed");
             let _ = std::fs::remove_dir_all(&root);
         }
+    }
+}
+
+/// The Nightly channel's rule: the Launcher owns its updates, so a check never reaches the network
+/// and says why.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod launcher_updates {
+    #[test]
+    fn a_nightly_check_never_reaches_the_network_and_names_the_launcher() {
+        let error = super::launcher_check()().unwrap_err();
+        assert!(error.to_string().contains("ArtCraft Launcher"), "{error}");
     }
 }

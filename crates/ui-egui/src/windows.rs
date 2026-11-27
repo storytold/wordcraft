@@ -43,9 +43,27 @@ use crate::{WordApp, documents, window_geometry::MIN_SIZE, window_ui::WindowUi};
 
 pub(crate) mod arrange;
 
-/// The window title for a document called `name`.
+/// The window title for a document called `name`, in the channel this window runs as: a Nightly
+/// keeps its name in every document window's title, so the two channels never look alike.
 pub(crate) fn title(name: &str, dirty: bool) -> String {
-    format!("{name}{} - WordCraft", if dirty { " •" } else { "" })
+    channel_title(name, dirty, crate::os_window::name_for(crate::os_window::identity()))
+}
+
+/// [`title`] for an explicit channel name: the stable spelling is unchanged, and a Nightly's keeps
+/// its channel after the document and the unsaved dot.
+fn channel_title(name: &str, dirty: bool, app: &str) -> String {
+    format!("{name}{} - {app}", if dirty { " •" } else { "" })
+}
+
+#[cfg(test)]
+mod channel_title_tests {
+    #[test]
+    fn the_channel_name_stays_in_every_document_title() {
+        assert_eq!(super::channel_title("Document1", false, "WordCraft"), "Document1 - WordCraft");
+        assert_eq!(super::channel_title("Document1", true, "WordCraft"), "Document1 • - WordCraft");
+        assert_eq!(super::channel_title("Letter", false, "WordCraft Nightly"), "Letter - WordCraft Nightly");
+        assert_eq!(super::channel_title("Letter", true, "WordCraft Nightly"), "Letter • - WordCraft Nightly");
+    }
 }
 
 /// The id of the container that shows window `id`; the window host names its viewport by it.
@@ -469,7 +487,7 @@ impl WordApp {
     /// The drawn window's title: its document's name as View › Window › Switch Windows gives it.
     pub(crate) fn window_title(&self) -> String {
         if !self.has_document() {
-            return "WordCraft".to_string();
+            return crate::os_window::name_for(crate::os_window::identity()).to_string();
         }
         let name = self.window_menu().title(self.windows.shown).map(str::to_string).unwrap_or_else(|| self.title_stem());
         title(&name, self.session.dirty)
@@ -479,7 +497,7 @@ impl WordApp {
     fn title_in(menu: &WindowMenu, id: WindowId) -> String {
         match menu.get(id).filter(|e| !e.title.is_empty()) {
             Some(e) => title(&e.title, e.dirty),
-            None => "WordCraft".to_string(),
+            None => crate::os_window::name_for(crate::os_window::identity()).to_string(),
         }
     }
 
