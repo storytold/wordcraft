@@ -3409,8 +3409,10 @@ fn dark_interface_text_uses_the_app_s_lighter_curve() {
     };
     let dark = curve(&mut a, theme::Appearance::Dark);
     let light = curve(&mut a, theme::Appearance::Light);
-    assert_ne!(dark, egui::Visuals::dark().text_options.color_transfer_function, "dark mode draws with the app's curve");
+    let lighter = egui::epaint::FontColorTransferFunction::Gamma(0.8);
+    assert_eq!(dark, lighter, "dark mode draws with the app's curve");
     assert_eq!(light, egui::Visuals::light().text_options.color_transfer_function, "light mode keeps egui's");
+    assert_eq!(curve(&mut a, theme::Appearance::Dark), lighter, "back to dark gets the app's curve again");
 }
 
 /// #1861: the registered Interface Theme command drives the same setting as Options:
