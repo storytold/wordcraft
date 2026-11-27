@@ -111,9 +111,37 @@ impl SaveAcks {
     }
 }
 
+/// What the page reports to the parent as `dirty`: the document's own state, or any save the
+/// parent hasn't acknowledged. Never clean while a ticket is pending.
+pub fn reported_dirty(document_dirty: bool, acks: &SaveAcks) -> bool {
+    document_dirty || acks.waiting()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Storage rejects, the ticket expires: at no step is the document reported clean, and a
+    /// retry that is acknowledged ends clean.
+    #[test]
+    fn rejected_then_expired_save_is_never_reported_clean() {
+        let mut acks = SaveAcks::default();
+        // The app marked the document saved when it posted the save; the host holds the ticket.
+        acks.posted_as(1, "a.docx", 0.0);
+        assert!(reported_dirty(false, &acks));
+        // Expiry removes the ticket; the page marks the document dirty in the same step.
+        let expired = acks.expire(SAVE_ACK_TIMEOUT_MS);
+        assert_eq!(expired.len(), 1);
+        let document_dirty = true;
+        assert!(reported_dirty(document_dirty, &acks), "no clean step between expiry and dirty");
+        // Retry, then the matching acknowledgement.
+        acks.posted_as(2, "a.docx", SAVE_ACK_TIMEOUT_MS);
+        assert!(reported_dirty(false, &acks));
+        assert!(!acks.saved(1), "the expired ticket's late answer confirms nothing");
+        assert!(reported_dirty(false, &acks));
+        assert!(acks.saved(2));
+        assert!(!reported_dirty(false, &acks));
+    }
 
     const OWN: &str = "https://app.example";
 

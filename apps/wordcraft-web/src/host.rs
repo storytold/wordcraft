@@ -98,6 +98,9 @@ impl Bridge {
     pub fn tick(&self, ctx: &egui::Context) {
         let expired = self.acks.borrow_mut().expire(js_sys::Date::now());
         for (id, name) in expired {
+            // The save didn't land: the document is unsaved from this very report on, with no
+            // clean one in between (the app marks it dirty a frame later).
+            self.dirty.set(true);
             let error = format!("{name}: the host page didn't confirm the save");
             self.saves.finish(id, SaveOutcome::Failed(error.clone()));
             self.send(&[("type", "wordcraft:failed".into()), ("id", JsValue::from_f64(id as f64)), ("error", error.into())]);
@@ -126,7 +129,7 @@ impl Bridge {
     }
 
     fn report_dirty(&self) {
-        let dirty = self.dirty.get() || self.acks.try_borrow().map_or(true, |a| a.waiting());
+        let dirty = self.acks.try_borrow().map_or(true, |a| crate::bridge::reported_dirty(self.dirty.get(), &a));
         if self.reported.get() != Some(dirty) && self.send(&[("type", "wordcraft:dirty".into()), ("dirty", dirty.into())]) {
             self.reported.set(Some(dirty));
         }

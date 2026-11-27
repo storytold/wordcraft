@@ -20,10 +20,23 @@ impl WordApp {
         }
     }
 
-    /// Tell the host whether the document has unsaved changes ([`Services::on_dirty`]).
+    /// The save state the title bar shows after the name. A save the host hasn't confirmed yet
+    /// counts as edited, never "Saved".
+    pub(crate) fn title_state(&self) -> String {
+        if self.session.dirty || self.save_unconfirmed() {
+            tl!("Edited").into()
+        } else if self.session.path.is_some() {
+            tl!("Saved").into()
+        } else {
+            tl!("Not saved").into()
+        }
+    }
+
+    /// Tell the host whether the document has unsaved changes ([`Services::on_dirty`]). A save
+    /// still waiting for the host's confirmation is unsaved: no clean report until it lands.
     pub(super) fn report_dirty(&self) {
         if let Some(f) = &self.services.on_dirty {
-            f(self.session.dirty || panes::has_comment_drafts(self));
+            f(self.session.dirty || self.save_unconfirmed() || panes::has_comment_drafts(self));
         }
     }
 

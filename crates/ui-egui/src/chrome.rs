@@ -381,17 +381,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 // No document open (#1129): the app's name alone.
                 "WordCraft".to_string()
             } else {
-                format!(
-                    "{} — {}",
-                    app.title_stem(),
-                    if app.session.dirty {
-                        tl!("Edited")
-                    } else if app.session.path.is_some() {
-                        tl!("Saved")
-                    } else {
-                        tl!("Not saved")
-                    }
-                )
+                format!("{} — {}", app.title_stem(), app.title_state())
             };
             let font = TypeRung::Chrome.semibold();
             let track = TypeRung::Chrome.tracking();

@@ -4231,6 +4231,74 @@ fn web_picker_app() -> (WordApp, async_saves::AsyncSaves, std::rc::Rc<std::cell:
     (a, saves, last)
 }
 
+/// A web host page that stores saves and answers later: `file.save` posts the bytes and the
+/// host confirms or refuses with the save's ticket ([`Services::host_save`]).
+fn host_confirmed_app() -> (WordApp, async_saves::AsyncSaves, std::rc::Rc<std::cell::Cell<u64>>, std::rc::Rc<std::cell::RefCell<Vec<bool>>>) {
+    let mut a = typed();
+    let saves = async_saves::AsyncSaves::default();
+    let last = std::rc::Rc::new(std::cell::Cell::new(0));
+    let (hook, seen) = (saves.clone(), last.clone());
+    a.services.host_save = Some(Box::new(move |_, _, _| {
+        seen.set(hook.start());
+        Ok(())
+    }));
+    a.services.download = Some(Box::new(|_, _| Ok(())));
+    a.services.async_saves = Some(saves.clone());
+    let reports = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let log = reports.clone();
+    a.services.on_dirty = Some(Box::new(move |d| log.borrow_mut().push(d)));
+    (a, saves, last, reports)
+}
+
+/// PR 4490 review: with the host page unconfirmed, the document is never reported clean, the
+/// title never says "Saved", and a refused or expired save goes straight back to unsaved with
+/// no clean report in between. A retry that the host confirms leaves it clean.
+#[test]
+fn host_save_stays_unsaved_until_confirmed_and_retry_cleans_it() {
+    let (a, saves, last, reports) = host_confirmed_app();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..3 {
+        h.step();
+    }
+    reports.borrow_mut().clear();
+    h.state_mut().execute("file.save", json!({"path": "doc.docx"})).unwrap();
+    assert!(!h.state().session.dirty, "the save marked the document saved on its own side");
+    for _ in 0..3 {
+        h.step();
+        assert_eq!(h.state().title_state(), "Edited", "the title never says Saved while the host hasn't confirmed");
+    }
+    assert!(h.state_mut().run("file.close", json!({})).is_ok());
+    assert_eq!(prompt(h.state()), Some("saveChanges"), "Close asks while the save is unconfirmed");
+    h.state_mut().dialog = None;
+    // The host refuses (storage 503) or never answers (expiry): the ticket fails.
+    saves.finish(last.get(), async_saves::SaveOutcome::Failed("the host page didn't confirm the save".into()));
+    h.step();
+    h.step();
+    assert!(h.state().session.dirty);
+    assert_eq!(h.state().title_state(), "Edited");
+    assert!(reports.borrow().iter().all(|d| *d), "no clean report at any point: {:?}", reports.borrow());
+    // Retry, and the host confirms this time.
+    h.state_mut().execute("file.save", json!({"path": "doc.docx"})).unwrap();
+    h.step();
+    assert_eq!(h.state().title_state(), "Edited");
+    assert!(reports.borrow().iter().all(|d| *d), "still no clean report before the acknowledgement");
+    saves.finish(last.get(), async_saves::SaveOutcome::Saved);
+    h.step();
+    h.step();
+    assert_eq!(h.state().title_state(), "Saved");
+    assert_eq!(reports.borrow().last(), Some(&false), "clean only after the matching acknowledgement");
+    assert!(body_text(h.state()).contains(UNSAVED), "all edits are still there");
+    assert!(h.state_mut().run("file.close", json!({})).is_ok());
+    assert_eq!(prompt(h.state()), None, "a confirmed document closes without asking");
+}
+
 /// #1315: Save in the prompt before Close waits for the picker: Close runs only once the file
 /// is written and closed.
 #[test]
