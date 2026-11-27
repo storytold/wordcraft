@@ -5,13 +5,13 @@
 use craft::behavior::{EditEvent, Preview};
 use craft::keymap::CommandRef;
 use craft::pages::ui::PageBody;
-use craft::ui::buttons::{IconButton, ToggleButton};
+use craft::ui::buttons::{Button, ControlPlace, GroupLevel, ToggleButton};
 use craft::ui::canvas_controls::TaskBar;
 use craft::ui::contract::{Bind, Entry, Gap, Hover, Props, Show as _, ShowContainer as _};
 use craft::ui::display::Divider;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::pickers::ComboBox;
-use craft::ui::runtime::env::Label;
+use craft::ui::runtime::env::{Label, with_env};
 use egui::{Rect, Ui, pos2};
 use serde_json::{Value, json};
 
@@ -176,82 +176,102 @@ pub(crate) fn members(app: &mut WordApp, ui: &mut Ui, preview: bool) {
     if preview && let Some(held) = app.canvas.list_preview.clone() {
         app.canvas.command_preview = Some(held);
     }
-    Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-        Row::new().gap(Gap::Tight).show(ui, |ui, _| {
-            let mut family = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
-            let picked = crate::widgets::font_box::font_box(ui, app, tl!("Font").to_string(), &mut family);
-            follow_list(app, preview, &picked.preview, |f| Some(("format.font".to_string(), json!({"name": f}))));
-            if let Some(f) = &picked.picked {
-                let _ = app.run("format.font", json!({"name": f}));
-            }
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(GroupLevel::Compact);
+            overrides.values.set(ControlPlace::Ribbon);
+        },
+        |ui| {
+            Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+                Row::new().gap(Gap::Tight).show(ui, |ui, _| {
+                    let mut family = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
+                    let picked = crate::widgets::font_box::font_box(ui, app, tl!("Font").to_string(), &mut family);
+                    follow_list(app, preview, &picked.preview, |f| Some(("format.font".to_string(), json!({"name": f}))));
+                    if let Some(f) = &picked.picked {
+                        let _ = app.run("format.font", json!({"name": f}));
+                    }
 
-            let size = st.get("size").and_then(Value::as_f64).map(number_text).unwrap_or_default();
-            let sizes: Vec<Entry<String>> =
-                wordcraft_engine::cmd::format::SIZES.iter().map(|s| Entry::new(number_text(f64::from(*s)), number_text(f64::from(*s)))).collect();
-            let mut text = size.clone();
-            let combo = ComboBox::new(tl!("Font Size").to_string(), Bind::bound(&mut text), &sizes).show(ui);
-            follow_list(app, preview, &combo.preview, |v| v.trim().parse::<f64>().ok().map(|x| ("format.size".to_string(), json!({"size": x}))));
-            // Only a pick or Enter applies the size: typing alone is an edit of the box's draft.
-            let committed = combo.edit.submitted || combo.edit.events.iter().any(|e| matches!(e, EditEvent::Set { .. } | EditEvent::Commit { .. }));
-            if committed
-                && text != size
-                && let Ok(x) = text.trim().parse::<f64>()
-            {
-                let _ = app.run("format.size", json!({"size": x}));
-            }
+                    let size = st.get("size").and_then(Value::as_f64).map(number_text).unwrap_or_default();
+                    let sizes: Vec<Entry<String>> = wordcraft_engine::cmd::format::SIZES
+                        .iter()
+                        .map(|s| Entry::new(number_text(f64::from(*s)), number_text(f64::from(*s))))
+                        .collect();
+                    let mut text = size.clone();
+                    let combo = ComboBox::new(tl!("Font Size").to_string(), Bind::bound(&mut text), &sizes).show(ui);
+                    follow_list(app, preview, &combo.preview, |v| {
+                        v.trim().parse::<f64>().ok().map(|x| ("format.size".to_string(), json!({"size": x})))
+                    });
+                    // Only a pick or Enter applies the size: typing alone is an edit of the box's draft.
+                    let committed =
+                        combo.edit.submitted || combo.edit.events.iter().any(|e| matches!(e, EditEvent::Set { .. } | EditEvent::Commit { .. }));
+                    if committed
+                        && text != size
+                        && let Ok(x) = text.trim().parse::<f64>()
+                    {
+                        let _ = app.run("format.size", json!({"size": x}));
+                    }
 
-            for (id, icon) in [("format.growFont", "grow"), ("format.shrinkFont", "shrink")] {
-                let b = IconButton::command(crate::icons::id(icon), CommandRef::new(id)).show(ui);
-                preview_on_hover(app, b.hover, b.response.enabled(), id, json!({}), preview);
-            }
-        });
+                    for (id, icon, tip) in
+                        [("format.growFont", "grow", tl!("Increase Font Size")), ("format.shrinkFont", "shrink", tl!("Decrease Font Size"))]
+                    {
+                        let b = Button::command(CommandRef::new(id)).icon(crate::icons::spec(icon)).tooltip(tip.to_string()).show(ui);
+                        preview_on_hover(app, b.hover, b.response.enabled(), id, json!({}), preview);
+                    }
+                });
 
-        Row::new().gap(Gap::Tight).show(ui, |ui, _| {
-            for (id, key, icon) in [
-                ("format.bold", "bold", "bold"),
-                ("format.italic", "italic", "italic"),
-                ("format.underline", "underline", "underline"),
-                ("format.strikethrough", "strike", "strike"),
-            ] {
-                toggle(ui, app, id, icon, flag(key), preview);
-            }
-            let _ = Divider::vertical().show(ui);
+                Row::new().gap(Gap::Tight).show(ui, |ui, _| {
+                    for (id, key, icon) in [
+                        ("format.bold", "bold", "bold"),
+                        ("format.italic", "italic", "italic"),
+                        ("format.underline", "underline", "underline"),
+                        ("format.strikethrough", "strike", "strike"),
+                    ] {
+                        toggle(ui, app, id, icon, flag(key), preview);
+                    }
+                    let _ = Divider::vertical().show(ui);
 
-            let hl = crate::colors::highlight_split(ui, app, tl!("Text Highlight Color").to_string());
-            follow_list(app, preview, &hl.preview, |c| {
-                wordcraft_doc::props::Highlight::ALL
-                    .iter()
-                    .find(|h| h.rgb().as_ref() == Some(c))
-                    .map(|h| ("format.highlight".to_string(), json!({"color": h.ooxml()})))
+                    let hl = crate::colors::highlight_split(ui, app, tl!("Text Highlight Color").to_string());
+                    follow_list(app, preview, &hl.preview, |c| {
+                        wordcraft_doc::props::Highlight::ALL
+                            .iter()
+                            .find(|h| h.rgb().as_ref() == Some(c))
+                            .map(|h| ("format.highlight".to_string(), json!({"color": h.ooxml()})))
+                    });
+                    // PLAN: assumed ColorPick::hover (ribbon-w11, S-L413)
+                    let color = app.canvas.last_highlight.clone();
+                    preview_on_hover(app, hl.hover, hl.response.enabled(), "format.highlight", json!({"color": color}), preview);
+                    if hl.picked.is_some() {
+                        app.canvas.focus_page(ui.ctx());
+                    }
+                    let fc = crate::colors::font_color_split(
+                        ui,
+                        app,
+                        tl!("Font Color").to_string(),
+                        Target::cmd("format.color").remember(Remember::FontColor),
+                    );
+                    follow_list(app, preview, &fc.preview, |c| Some(("format.color".to_string(), json!({"color": c.hex()}))));
+                    // PLAN: assumed ColorPick::hover (ribbon-w11, S-L413)
+                    let color = app.canvas.last_font_color.clone();
+                    preview_on_hover(app, fc.hover, fc.response.enabled(), "format.color", json!({"color": color}), preview);
+                    if fc.picked.is_some() {
+                        app.canvas.focus_page(ui.ctx());
+                    }
+                    let _ = Divider::vertical().show(ui);
+
+                    use wordcraft_doc::Align as A;
+                    for (id, icon, a) in [
+                        ("para.alignLeft", "alignLeft", A::Left),
+                        ("para.alignCenter", "alignCenter", A::Center),
+                        ("para.alignRight", "alignRight", A::Right),
+                        ("para.justify", "justify", A::Justify),
+                    ] {
+                        toggle(ui, app, id, icon, align == a, preview);
+                    }
+                });
             });
-            // PLAN: assumed ColorPick::hover (ribbon-w11, S-L413)
-            let color = app.canvas.last_highlight.clone();
-            preview_on_hover(app, hl.hover, hl.response.enabled(), "format.highlight", json!({"color": color}), preview);
-            if hl.picked.is_some() {
-                app.canvas.focus_page(ui.ctx());
-            }
-            let fc =
-                crate::colors::font_color_split(ui, app, tl!("Font Color").to_string(), Target::cmd("format.color").remember(Remember::FontColor));
-            follow_list(app, preview, &fc.preview, |c| Some(("format.color".to_string(), json!({"color": c.hex()}))));
-            // PLAN: assumed ColorPick::hover (ribbon-w11, S-L413)
-            let color = app.canvas.last_font_color.clone();
-            preview_on_hover(app, fc.hover, fc.response.enabled(), "format.color", json!({"color": color}), preview);
-            if fc.picked.is_some() {
-                app.canvas.focus_page(ui.ctx());
-            }
-            let _ = Divider::vertical().show(ui);
-
-            use wordcraft_doc::Align as A;
-            for (id, icon, a) in [
-                ("para.alignLeft", "alignLeft", A::Left),
-                ("para.alignCenter", "alignCenter", A::Center),
-                ("para.alignRight", "alignRight", A::Right),
-                ("para.justify", "justify", A::Justify),
-            ] {
-                toggle(ui, app, id, icon, align == a, preview);
-            }
-        });
-    });
+        },
+    );
 }
 
 /// Keeps a bar list's preview: the framework reports `Shows` once, when the pointer reaches an
@@ -269,7 +289,7 @@ fn follow_list<T>(app: &mut WordApp, preview: bool, event: &Preview<T>, command:
 /// command carries no checked state, so the value is bound here and only draws the button.
 fn toggle(ui: &mut Ui, app: &mut WordApp, id: &str, icon: &'static str, on: bool, preview: bool) {
     let r = <ToggleButton as Props>::command(ToggleButton::new(Label::Empty, Bind::given(on)), CommandRef::new(id))
-        .icon(crate::icons::id(icon))
+        .icon(crate::icons::spec(icon))
         .icon_only()
         .show(ui);
     preview_on_hover(app, r.hover, r.response.enabled(), id, json!({}), preview);
