@@ -6281,8 +6281,8 @@ fn cut_and_copy_with_bare_caret_beside_object_change_nothing() {
     assert!(s.sel.is_collapsed());
     assert!(crate::cmd::objects::object_selection(&s).is_none());
 
-    let copy_res = run(&mut s, "edit.copy", json!({}));
-    assert_eq!(copy_res["text"], "", "copy on bare caret returns empty text");
+    let copy_res = s.run("edit.copy", &json!({}));
+    assert!(matches!(copy_res, Err(crate::CmdError::Disabled(_))), "copy on bare caret is disabled");
     assert!(s.clipboard.is_none(), "clipboard remains unset");
 
     let cut_res = s.run("edit.cut", &json!({}));
@@ -6297,8 +6297,8 @@ fn cut_and_copy_with_bare_caret_beside_object_change_nothing() {
     assert!(s.sel.is_collapsed());
     assert!(crate::cmd::objects::object_selection(&s).is_none());
 
-    let copy_res = run(&mut s, "edit.copy", json!({}));
-    assert_eq!(copy_res["text"], "", "copy on bare caret returns empty text");
+    let copy_res = s.run("edit.copy", &json!({}));
+    assert!(matches!(copy_res, Err(crate::CmdError::Disabled(_))), "copy on bare caret is disabled");
     assert!(s.clipboard.is_none(), "clipboard remains unset");
 
     let cut_res = s.run("edit.cut", &json!({}));
