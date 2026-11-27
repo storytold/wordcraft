@@ -359,6 +359,20 @@ pub enum Piece {
     Named(String),
     /// `^c`: the clipboard.
     Clip,
+    /// A straight `"` or `'` typed as itself (not a regex, not with special characters off, which
+    /// takes the text as written, and not given by its code such as `^034`): curled with smart
+    /// quotes on, as typing curls it ([`Quotes`]).
+    Quote(char),
+}
+
+/// How a quote typed in Replace with goes in (#7307).
+#[derive(Clone, Copy, Debug)]
+pub enum Quotes {
+    /// As typed.
+    Straight,
+    /// Curled by the typing rule ("straight quotes with smart quotes"): `before` is the character
+    /// in front of the match, `None` at a paragraph's start.
+    Smart { before: Option<char> },
 }
 
 /// Read Replace with text: `^` codes (unless `literal`), `\1`–`\9` with wildcards, and with a
@@ -438,6 +452,11 @@ pub fn parse_replace(with: &str, o: &Opts) -> Vec<Piece> {
             i += used;
             continue;
         }
+        if matches!(c, '"' | '\'') && !o.regex {
+            flush_literal(&mut cur, &mut out);
+            out.push(Piece::Quote(c));
+            continue;
+        }
         cur.push(c);
     }
     flush_literal(&mut cur, &mut out);
@@ -511,7 +530,8 @@ fn as_inserted(s: &str) -> String {
 }
 
 /// Fill in Replace with text for one match: `found` is the matched text, `group(n)` a group's.
-pub fn expand(pieces: &[Piece], found: &str, group: &dyn Fn(usize) -> Option<String>, clip: &str) -> String {
+/// A typed quote is curled by what goes in before it: the replacement so far, else `before`.
+pub fn expand(pieces: &[Piece], found: &str, group: &dyn Fn(usize) -> Option<String>, clip: &str, quotes: Quotes) -> String {
     let mut out = String::new();
     for p in pieces {
         match p {
@@ -520,9 +540,37 @@ pub fn expand(pieces: &[Piece], found: &str, group: &dyn Fn(usize) -> Option<Str
             Piece::Group(n) => out.push_str(&as_inserted(&group(*n).unwrap_or_default())),
             Piece::Clip => out.push_str(&clip.replace("\r\n", "\r").replace('\n', "\r")),
             Piece::Named(_) => {}
+            Piece::Quote(q) => {
+                let curly = match quotes {
+                    Quotes::Smart { before } => super::text::smart_quote(out.chars().next_back().or(before), *q),
+                    Quotes::Straight => None,
+                };
+                match curly {
+                    Some(c) => out.push_str(c),
+                    None => out.push(*q),
+                }
+            }
         }
     }
     out
+}
+
+/// Whether Replace with has a quote typed as itself, which smart quotes curl.
+pub fn has_typed_quote(pieces: &[Piece]) -> bool {
+    pieces.iter().any(|p| matches!(p, Piece::Quote(_)))
+}
+
+/// The match already reads as its replacement: the same text, with a curly quote of the same
+/// kind (single or double) wherever the replacement has a curly one. Replace leaves such a match
+/// alone and doesn't count it (#7307), so a typed `'` that also finds curly apostrophes keeps one
+/// set the other way on purpose (’90s).
+pub fn already_curled(found: &str, rep: &str) -> bool {
+    let kind = |c: char| match c {
+        '\u{2018}' | '\u{2019}' => Some('\''),
+        '\u{201C}' | '\u{201D}' => Some('"'),
+        _ => None,
+    };
+    found.chars().count() == rep.chars().count() && found.chars().zip(rep.chars()).all(|(f, r)| f == r || (kind(f).is_some() && kind(f) == kind(r)))
 }
 
 #[cfg(test)]
@@ -535,7 +583,45 @@ mod tests {
     }
 
     fn replaced(with: &str) -> String {
-        expand(&parse_replace(with, &Opts::default()), "", &|_| None, "")
+        expand(&parse_replace(with, &Opts::default()), "", &|_| None, "", Quotes::Straight)
+    }
+
+    fn curled(with: &str, o: &Opts, before: Option<char>) -> String {
+        expand(&parse_replace(with, o), "", &|_| None, "", Quotes::Smart { before })
+    }
+
+    #[test]
+    fn a_typed_quote_curls_by_what_goes_before_it_and_a_coded_one_stays_straight() {
+        let o = Opts::default();
+        // Opening at a paragraph's start or after a space, closing after a letter.
+        assert_eq!(curled("\"", &o, None), "\u{201C}");
+        assert_eq!(curled("\"", &o, Some(' ')), "\u{201C}");
+        assert_eq!(curled("\"", &o, Some('d')), "\u{201D}");
+        assert_eq!(curled("'", &o, Some('n')), "\u{2019}");
+        // Inside the replacement, the text before it decides.
+        assert_eq!(curled("\"quoted\"", &o, Some(' ')), "\u{201C}quoted\u{201D}");
+        assert_eq!(curled(" 'a'", &o, Some('x')), " \u{2018}a\u{2019}");
+        assert_eq!(curled("^p\"", &o, Some('x')), "\r\u{201C}");
+        // Given by its code, a quote stays straight; with smart quotes off, typed ones do too.
+        for code in ["^034", "^039", "^u34", "^0039"] {
+            let straight = if code.ends_with("34") { "\"" } else { "'" };
+            assert_eq!(curled(code, &o, Some('x')), straight, "{code}");
+        }
+        assert_eq!(replaced("\"a'"), "\"a'");
+        // A regex replacement and an escaped wildcard one are taken as written.
+        assert_eq!(curled("\"", &Opts { regex: true, ..o }, None), "\"");
+        assert_eq!(curled("\\\"", &Opts { wildcards: true, ..o }, None), "\"");
+        assert_eq!(curled("\"", &Opts { wildcards: true, ..o }, None), "\u{201C}");
+    }
+
+    #[test]
+    fn a_match_already_curled_the_same_kind_reads_as_its_replacement() {
+        assert!(already_curled("\u{2019}", "\u{2018}"));
+        assert!(already_curled("don\u{2019}t", "don\u{2019}t"));
+        assert!(already_curled("\u{201C}", "\u{201D}"));
+        assert!(!already_curled("'", "\u{2019}"), "a straight quote is curled");
+        assert!(!already_curled("\u{2019}", "\u{201D}"), "a single quote isn't a double one");
+        assert!(!already_curled("dont", "don\u{2019}t"));
     }
 
     #[test]

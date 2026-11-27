@@ -14,6 +14,7 @@ mod enter_tab;
 mod unicode;
 
 use autoformat::insert;
+pub(crate) use autoformat::smart_quote;
 use delete::{backspace, delete, delete_sentence_back, delete_word_back, delete_word_fwd};
 pub use enter_tab::MAX_TYPED_PARAGRAPHS;
 use enter_tab::{back_tab, new_paragraph, tab};

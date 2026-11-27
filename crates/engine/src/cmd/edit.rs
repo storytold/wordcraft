@@ -161,7 +161,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"tab"?: "find|replace|goto" (default replace)}"#)
         .pure(),
         CommandSpec::new("edit.replaceAll", "Replace All", "Home › Editing › Replace", replace_all)
-            .params(r#"{"text": string, "with": string (^p ^t ^& ^c …; \\1 with wildcards; with regex also $1 ${n} ${name} $0 $$ \\1 \\n (paragraph mark) \\t), …options of edit.find}"#),
+            .params(r#"{"text": string, "with": string (^p ^t ^& ^c …; \\1 with wildcards; with regex also $1 ${n} ${name} $0 $$ \\1 \\n (paragraph mark) \\t), …options of edit.find} (with AutoFormat's smart quotes on, a " or ' typed in `with` goes in curly by the character before it, as typing does, except with regex or special: false (taken as written); ^034 and ^039 stay straight; a match that already reads so, curled the same kind, is left and not counted)"#),
         CommandSpec::new("edit.goto", "Go To", "Home › Editing › Find", goto)
             .key("Mod+Alt+G / F5")
             .params(r#"{"page"?: n, "pageBy"?: int (pages forward, negative back, from the caret's page), "bookmark"?: string (selects its text), "paragraph"?: n}; none opens Find and Replace on its Go To tab"#)
@@ -496,6 +496,9 @@ pub(crate) struct Found {
     pub a: Pos,
     pub b: Pos,
     pub rep: Option<String>,
+    /// With smart quotes on, the match already is its replacement with the quotes curled the
+    /// same kind (a curly apostrophe a typed `'` found): Replace leaves it and doesn't count it.
+    pub keep: bool,
 }
 
 /// A stretch of searched text: `len` bytes from `hay` are paragraph `para`'s bytes from `raw`.
@@ -535,6 +538,13 @@ fn find_opts(f: &crate::session::FindState) -> find_pattern::Opts {
 /// wildcard groups). A pattern that can match a paragraph mark (`^p`) reads runs of sibling
 /// paragraphs as one text with a mark between them; otherwise each paragraph is read alone.
 pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Result<Vec<Found>, CmdError> {
+    search_matches(s, story, with_rep, false)
+}
+
+/// [`search_full`]. With `chain` (Replace All, which replaces every match), a quote typed in
+/// Replace with curls by the previous match's replacement when the two touch; without it, by the
+/// text as it is, since Replace changes only the selected match (#7307).
+fn search_matches(s: &Session, story: StoryRef, with_rep: bool, chain: bool) -> Result<Vec<Found>, CmdError> {
     use regex_automata::{Input, meta, util::syntax};
     let f = &s.find;
     if f.query.is_empty() {
@@ -551,6 +561,9 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
         let index = |name: &str| re.group_info().to_index(regex_automata::PatternID::ZERO, name);
         find_pattern::resolve_names(find_pattern::parse_replace(&f.replace, &opts), &index)
     });
+    // "Straight quotes with smart quotes" curls a quote typed in Replace with (#7307).
+    let ac = &s.prefs.autocorrect;
+    let smart = ac.enabled && ac.smart_quotes && pieces.as_deref().is_some_and(find_pattern::has_typed_quote);
     let paths = s.doc.para_paths(story);
     // Paragraphs read as one text: consecutive siblings when the pattern spans paragraphs.
     let mut chunks: Vec<std::ops::Range<usize>> = Vec::new();
@@ -613,6 +626,8 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
         };
         cuts.push(hay.len());
         let mut from = 0;
+        // Where the last match ends and the character that stands there once it is replaced.
+        let mut last: Option<(usize, Option<char>)> = None;
         for cut in cuts {
             if cut <= from {
                 continue;
@@ -636,11 +651,24 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
                     continue;
                 }
                 let (Some(a), Some(b)) = (pos_of(m.start(), false), pos_of(m.end(), true)) else { continue };
+                let found = hay.get(m.range()).unwrap_or("");
+                // A quote curls by the character in front of the match as it will read: with
+                // `chain`, the previous match's replacement when the two touch. A section mark
+                // starts a paragraph.
+                let before = match last {
+                    Some((end, c)) if chain && end == m.start() => c,
+                    _ => hay.get(..m.start()).and_then(|t| t.chars().next_back()),
+                }
+                .filter(|c| *c != find_pattern::SECT_MARK);
+                let quotes = if smart { find_pattern::Quotes::Smart { before } } else { find_pattern::Quotes::Straight };
                 let rep = pieces.as_ref().map(|pc| {
                     let group = |n: usize| caps.get_group(n).and_then(|g| hay.get(g.range())).map(str::to_string);
-                    find_pattern::expand(pc, hay.get(m.range()).unwrap_or(""), &group, &s.clipboard_text)
+                    find_pattern::expand(pc, found, &group, &s.clipboard_text, quotes)
                 });
-                out.push(Found { a, b, rep });
+                let keep = smart && rep.as_deref().is_some_and(|r| find_pattern::already_curled(found, r));
+                let stays = if keep { found } else { rep.as_deref().unwrap_or(found) };
+                last = Some((m.end(), stays.chars().next_back().or(before)));
+                out.push(Found { a, b, rep, keep });
                 if out.len() >= 100_000 {
                     return Ok(out);
                 }
@@ -779,7 +807,8 @@ fn replace(s: &mut Session, v: &Value) -> CmdResult {
     // Replace the current match if selected, then move to the next. The result says which
     // happened (#6877): a first call that only selects a match reads as `replaced: 0`.
     let mut replaced = 0;
-    if let Some(f) = results.into_iter().find(|f| f.a == a && f.b == b) {
+    // A match already curled as the replacement would curl it is left as it is (#7307).
+    if let Some(f) = results.into_iter().find(|f| f.a == a && f.b == b && !f.keep) {
         super::paste_text(s, &f.rep.unwrap_or_default())?;
         replaced = 1;
     }
@@ -799,10 +828,11 @@ fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
     need_query(s, v)?;
     read_opts(s, v);
     let story = s.sel.focus.story;
-    let results = search_full(s, story, true)?;
+    // Matches already curled as the replacement would curl them are left and not counted (#7307).
+    let results: Vec<Found> = search_matches(s, story, true, true)?.into_iter().filter(|f| !f.keep).collect();
     let n = results.len();
     super::controls::check_deletions(s, story, results.iter().map(|f| (&f.a, &f.b)))?;
-    for Found { a, b, rep } in results.into_iter().rev() {
+    for Found { a, b, rep, .. } in results.into_iter().rev() {
         let with = rep.unwrap_or_default();
         if s.doc.settings.track_changes {
             // Same path as a single replace, so the change is a reviewable revision.

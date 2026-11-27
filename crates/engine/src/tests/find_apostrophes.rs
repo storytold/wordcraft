@@ -92,3 +92,91 @@ fn normal_double_quote_search_keeps_exact_modes_and_original_byte_ranges() {
     run(&mut s, "edit.undo", json!({}));
     assert_eq!(text(&s), original);
 }
+
+/// #7307: with smart quotes on, a quote typed in Replace with goes in curly by the character
+/// before the match, as typing curls it, so finding a straight quote and replacing it with a
+/// typed one curls a manuscript's stray quotes in bulk.
+#[test]
+fn a_quote_typed_in_replace_with_is_curled_by_smart_quotes() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "He said \"hi\" (\"no\") and 'bye' -- don't"}));
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "^034", "with": "\""}))["replaced"], 4);
+    assert_eq!(text(&s), "He said “hi” (“no”) and 'bye' -- don't");
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "^039", "with": "'"}))["replaced"], 3);
+    assert_eq!(text(&s), "He said “hi” (“no”) and ‘bye’ -- don’t");
+    // One undo step each.
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(text(&s), "He said “hi” (“no”) and 'bye' -- don't");
+
+    // A match touching the one before it curls by that one's replacement: after an opening
+    // double quote a single quote opens too.
+    let mut s = super::s();
+    run(&mut s, "document.setText", json!({"text": "xx"}));
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "x", "with": "'\""}))["replaced"], 2);
+    assert_eq!(text(&s), "‘“‘“");
+
+    // Replace (one at a time) changes only the selected match, so the text before it as it is
+    // decides: the second `x` follows an unreplaced `x` and closes.
+    let mut s = super::s();
+    run(&mut s, "document.setText", json!({"text": "xx"}));
+    run(&mut s, "select.range", json!({"anchor": wordcraft_doc::Pos::body(0, 1), "focus": wordcraft_doc::Pos::body(0, 2)}));
+    assert_eq!(run(&mut s, "edit.replace", json!({"text": "x", "with": "'\""}))["replaced"], 1);
+    assert_eq!(text(&s), "x’”");
+}
+
+/// #7307: a typed `'` in Find what also finds curly apostrophes. A match that already is a curly
+/// quote of that kind is left as it is and not counted, so an apostrophe set on purpose (’90s)
+/// isn't turned into an opening quote.
+#[test]
+fn replace_with_a_typed_quote_leaves_curly_ones_and_does_not_count_them() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "the ’90s, it’s 'x' and “y”"}));
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "'", "with": "'"}))["replaced"], 2);
+    assert_eq!(text(&s), "the ’90s, it’s ‘x’ and “y”");
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "\"", "with": "\""}))["replaced"], 0);
+    assert_eq!(text(&s), "the ’90s, it’s ‘x’ and “y”");
+    // A whole word with its apostrophe: already curled, left alone; straight, curled.
+    run(&mut s, "document.setText", json!({"text": "don’t don't"}));
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "don't", "with": "don't"}))["replaced"], 1);
+    assert_eq!(text(&s), "don’t don’t");
+
+    // Replace (one at a time) skips such a match too, and moves on to the next.
+    let mut s = super::s();
+    run(&mut s, "document.setText", json!({"text": "it’s 'x"}));
+    let first = run(&mut s, "edit.replace", json!({"text": "'", "with": "'"}));
+    assert_eq!(first["replaced"], 0, "the first call selects the first match");
+    let kept = run(&mut s, "edit.replace", json!({}));
+    assert_eq!((kept["replaced"].clone(), text(&s)), (json!(0), "it’s 'x".to_string()), "the curly apostrophe stays");
+    assert_eq!(run(&mut s, "edit.replace", json!({}))["replaced"], 1);
+    assert_eq!(text(&s), "it’s ‘x");
+}
+
+/// #7307: a quote given by its code stays straight, so curly quotes can still be made straight on
+/// purpose; with smart quotes off, or with a regular expression, a typed quote stays straight too.
+#[test]
+fn coded_quotes_and_smart_quotes_off_replace_with_straight_quotes() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "“hi” it’s"}));
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "\"", "with": "^034"}))["replaced"], 2);
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "'", "with": "^039"}))["replaced"], 1);
+    assert_eq!(text(&s), "\"hi\" it's");
+
+    let mut s = super::s();
+    run(&mut s, "document.setText", json!({"text": "“hi”"}));
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "\"", "with": "\"", "regex": false, "wildcards": false}))["replaced"], 0);
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "[“”]", "with": "\"", "regex": true}))["replaced"], 2);
+    assert_eq!(text(&s), "\"hi\"");
+
+    // Special characters off takes Replace with as written: with codes off it is the way, besides
+    // turning smart quotes off, to put a straight quote in.
+    let mut s = super::s();
+    run(&mut s, "document.setText", json!({"text": "“hi”"}));
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "“", "with": "\"", "special": false}))["replaced"], 1);
+    assert_eq!(text(&s), "\"hi”");
+
+    let mut s = super::s();
+    s.prefs.autocorrect.smart_quotes = false;
+    run(&mut s, "document.setText", json!({"text": "“hi”"}));
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "\"", "with": "\"", "regex": false}))["replaced"], 2);
+    assert_eq!(text(&s), "\"hi\"");
+}
