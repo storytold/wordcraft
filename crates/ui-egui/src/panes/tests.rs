@@ -273,6 +273,143 @@ fn a_long_comment_card_keeps_its_buttons_and_the_next_card_in_view() {
     assert!(go_to[1].min.y > go_to[0].max.y, "the second card sits below the first: {go_to:?}");
 }
 
+/// #7906: the Comments pane's comment and reply fields wrap their text, so a long comment or reply shows on as many
+/// lines as it needs, up to the ten-line cap (#3382), and Enter starts a new line in them.
+#[cfg(not(target_arch = "wasm32"))]
+mod comment_wrapping {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+
+    type H = egui_kittest::Harness<'static, crate::WordApp>;
+
+    /// A sentence of comment text, longer than one line of the pane.
+    const SENTENCE: &str = "This comment is long enough to need more than one line of the Comments pane. ";
+
+    /// A window whose paragraphs carry one comment each, with `texts`, and the Comments pane open. Each frame hands the
+    /// runtime the app's input first, as the app's driver does. The window is tall enough to show every card.
+    fn pane(texts: &[String]) -> H {
+        let words = ["Alpha", "Beta", "Gamma", "Delta"];
+        let body = words.iter().map(|w| format!("{w} paragraph.")).collect::<Vec<_>>().join("\n\n");
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(&body)), crate::Services::default());
+        for (word, text) in words.iter().zip(texts) {
+            app.run("select.text", serde_json::json!({"text": word})).unwrap();
+            app.run("review.newComment", serde_json::json!({"text": text})).unwrap();
+        }
+        app.run("view.commentsPane", serde_json::json!({"value": true})).unwrap();
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 1600.0)).build_ui_state(
+            |ui, app: &mut crate::WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        crate::test_harness::frames(&mut h, 6);
+        h
+    }
+
+    /// The rects of the pane's fields named `label`, top to bottom.
+    fn fields(h: &H, label: &str) -> Vec<egui::Rect> {
+        let mut rects: Vec<egui::Rect> = [Role::TextInput, Role::MultilineTextInput]
+            .into_iter()
+            .flat_map(|role| h.query_all_by_role_and_label(role, label).map(|n| n.rect()).collect::<Vec<_>>())
+            .collect();
+        rects.sort_by(|a, b| a.min.y.total_cmp(&b.min.y));
+        rects
+    }
+
+    /// A primary click at `at`: press and release a frame apart, then frames to settle.
+    fn click_at(h: &mut H, at: egui::Pos2) {
+        h.event(egui::Event::PointerMoved(at));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+            crate::test_harness::frame(h);
+        }
+        crate::test_harness::frames(h, 3);
+    }
+
+    /// A press and release of `key`, then frames to settle.
+    fn press_key(h: &mut H, key: egui::Key) {
+        for pressed in [true, false] {
+            h.event(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE });
+        }
+        crate::test_harness::frames(h, 4);
+    }
+
+    /// Types `text` into the field that has the keyboard.
+    fn type_text(h: &mut H, text: &str) {
+        h.event(egui::Event::Text(text.into()));
+        crate::test_harness::frames(h, 4);
+    }
+
+    /// The box of the pane's field named `label` that holds `text`, and the boxes of the lines (`TextRun`s) its text is
+    /// laid out in. A line outside the field's box is out of sight until the field scrolls to it.
+    fn field_lines(h: &H, label: &str, text: &str) -> (egui::Rect, Vec<egui::Rect>) {
+        let field = [Role::TextInput, Role::MultilineTextInput]
+            .into_iter()
+            .find_map(|role| h.query_all_by_role_and_label(role, label).find(|n| n.value().as_deref() == Some(text)))
+            .unwrap_or_else(|| panic!("no {label} field holds {text:?}"));
+        let lines = field.query_all_by_role(Role::TextRun).map(|line| line.rect()).collect();
+        (field.rect(), lines)
+    }
+
+    /// Whether `line` lies inside the field's box `field`.
+    fn in_sight(field: egui::Rect, line: egui::Rect) -> bool {
+        line.top() >= field.top() - 0.5 && line.bottom() <= field.bottom() + 0.5
+    }
+
+    /// A long comment shows every line in its field, which grows past a short comment's to hold them; a longer one
+    /// shows ten lines, and the rest of its text scrolls inside the field.
+    #[test]
+    fn a_long_comment_shows_every_line_up_to_the_cap() {
+        let (short, long, capped) = ("Short note.".to_owned(), SENTENCE.repeat(3), SENTENCE.repeat(30));
+        let h = pane(&[short.clone(), long.clone(), capped.clone()]);
+        let (short_field, _) = field_lines(&h, "Comment", &short);
+        let (field, lines) = field_lines(&h, "Comment", &long);
+        assert!(lines.len() > 2, "a long comment wraps onto several lines: {lines:?}");
+        assert!(lines.iter().all(|line| in_sight(field, *line)), "every line of it is in sight: {field:?} {lines:?}");
+        assert!(field.height() > short_field.height(), "its field is taller than a short comment's: {short_field:?} {field:?}");
+        let (field, lines) = field_lines(&h, "Comment", &capped);
+        let shown = lines.iter().filter(|line| in_sight(field, **line)).count();
+        assert_eq!(shown, crate::panes::comments::COMMENT_ROWS, "a longer comment shows ten lines: {field:?}");
+        assert!(lines.len() > shown, "and the rest of it scrolls inside the field");
+    }
+
+    /// A long reply shows every line in its field as it is typed: the field grows with the text.
+    #[test]
+    fn a_long_reply_shows_every_line_as_it_is_typed() {
+        let mut h = pane(&["Short note.".to_owned()]);
+        let reply = h.get_by_role_and_label(Role::Button, "Reply").rect().center();
+        click_at(&mut h, reply);
+        let typed = SENTENCE.repeat(3);
+        type_text(&mut h, &typed);
+        let (field, lines) = field_lines(&h, "Reply", &typed);
+        assert!(lines.len() > 2, "the reply wraps onto several lines: {lines:?}");
+        assert!(lines.iter().all(|line| in_sight(field, *line)), "every line of it is in sight: {field:?} {lines:?}");
+    }
+
+    /// Enter starts a new line in a comment's field and writes nothing; leaving the field writes the edit, both lines,
+    /// as one undo step.
+    #[test]
+    fn enter_starts_a_new_line_in_a_comment_and_leaving_writes_it_once() {
+        let mut h = pane(&["Parent comment.".to_owned()]);
+        let depth = h.state().session.undo_depth();
+        let field = fields(&h, "Comment").first().map(|r| r.center()).expect("the comment's field");
+        click_at(&mut h, field);
+        press_key(&mut h, egui::Key::End);
+        type_text(&mut h, " Edited.");
+        press_key(&mut h, egui::Key::Enter);
+        type_text(&mut h, "Second line.");
+        assert_eq!(h.state().session.undo_depth(), depth, "nothing is written while the comment is typed, Enter included");
+        let page = h.state().canvas.page_rects().next().map(|(_, r)| r.center()).expect("a page is shown");
+        click_at(&mut h, page);
+        let doc = &h.state().session.doc;
+        let text = doc.comments.values().next().map(|c| doc.plain_text(wordcraft_doc::StoryRef::Part(c.part))).unwrap_or_default();
+        assert_eq!(text, "Parent comment. Edited.\nSecond line.", "leaving the field wrote both lines");
+        assert_eq!(h.state().session.undo_depth(), depth + 1, "as one undo step");
+    }
+}
+
 /// Numbered headings are listed with the number they show, and numbered body paragraphs in
 /// the same list still count (#3418).
 #[test]
