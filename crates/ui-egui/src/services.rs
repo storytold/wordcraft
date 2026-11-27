@@ -2,6 +2,10 @@
 /// reach the app through the framework's host, not through here.
 #[derive(Default)]
 pub struct Services {
+    /// Optional trusted web host, disconnected until explicitly registered by the embedding page.
+    pub file_providers: Option<crate::file_providers::Host>,
+    /// Device download independent of an existing legacy parent-frame writer.
+    pub provider_download: Option<Box<dyn Fn(&str, &[u8]) -> Result<(), String>>>,
     /// Printing: the print job layer over the host's jobs (desktop printers, the browser's print
     /// dialog on the web).
     pub print: Option<craft::print::spool::Spool>,

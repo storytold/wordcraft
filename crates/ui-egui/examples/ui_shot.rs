@@ -15,6 +15,8 @@
 //! (with `{"network": true}` on a line, downloading is already on) `{"demoPacks": "store"}` uses a real font store, as the desktop app does, in a new temporary
 //! folder rather than the person's, or in `"storeDir"` given on the same line (with
 //! `CRAFT_LANGUAGE_PACK_INDEX` for a local pack index).
+//! Add `"fileProviderPreview": true` to the first line for synthetic, separately listed local
+//! and provider Recents. This opt-in affects only this offscreen example.
 
 use craft::automation::control::{ControlChannel, ControlRequest};
 use wordcraft_engine::Session;
@@ -53,8 +55,32 @@ fn main() {
         }
         None => {}
     }
-    let mut app = WordApp::new(Session::new(doc), Services::default()).with_control(ControlChannel::new(rx));
-    if lines.first().is_some_and(|l| l.get("startScreen").is_some()) {
+    let preview = lines.first().is_some_and(|line| line.get("fileProviderPreview").and_then(serde_json::Value::as_bool) == Some(true));
+    let mut services = Services::default();
+    if preview {
+        let host = wordcraft_ui_egui::file_providers::Host::default();
+        let result = host.set_session("00112233445566778899aabbccddeeff".into()).and_then(|()| {
+            let connection = host.connect("preview".into(), "External files".into(), "example-account".into())?;
+            host.set_resources(
+                &connection,
+                vec![wordcraft_ui_egui::file_providers::Resource {
+                    id: "report".into(),
+                    name: "Provider report.docx".into(),
+                    updated_at: "2026-10-31 12:00".into(),
+                }],
+            )
+        });
+        if let Err(error) = result {
+            eprintln!("provider preview: {error}");
+            return;
+        }
+        services.file_providers = Some(host);
+    }
+    let mut app = WordApp::new(Session::new(doc), services).with_control(ControlChannel::new(rx));
+    if preview {
+        app.ui.recent = vec!["Device notes.docx".into()];
+    }
+    if preview || lines.first().is_some_and(|l| l.get("startScreen").is_some()) {
         app.start_screen();
     }
     let w = lines.iter().find_map(|l| l.get("width").and_then(|v| v.as_f64())).unwrap_or(1440.0) as f32;

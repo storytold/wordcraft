@@ -24,6 +24,7 @@ mod frame;
 mod input;
 mod pictures;
 mod prefs;
+mod provider_files;
 
 #[cfg(test)]
 pub(crate) use commands::works_without_document;
@@ -322,6 +323,7 @@ impl WordApp {
             theme::set_dark_text_curve(ctx);
             self.ctx = Some(ctx.clone());
         }
+        self.provider_tick();
         updates_ui::tick(self, ctx);
         crate::language_packs::tick(self);
         // PDFs and prints show a page reference or a REF to a missing bookmark in the
@@ -432,6 +434,9 @@ impl WordApp {
         // A failed Recent open, or a failed Save As, is news only until File closes (#2938).
         if !self.ui.backstage {
             self.backstage_state.clear_errors();
+            if let Some(host) = &self.services.file_providers {
+                host.clear_recent_open_error();
+            }
             self.export_error.clear();
         }
         let regions = self.paint_window(ui);

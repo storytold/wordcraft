@@ -76,7 +76,10 @@ impl WordApp {
                     }
                     // A new document or an import-only Word file: ask where through Save As. The
                     // guard goes on once that has saved, on a later frame (#94).
-                    if (self.session.path.is_none() || self.legacy_word_path()) && !self.browser_saves() {
+                    if (self.session.path.is_none() || self.legacy_word_path())
+                        && !self.browser_saves()
+                        && !self.services.file_providers.as_ref().is_some_and(crate::file_providers::Host::enabled)
+                    {
                         return match self.save_as(file_dialogs::AfterSave::Closing) {
                             // PLAN: assumed `AfterSave::Closing` (no fields: the state is `WordApp::closing`)
                             file_dialogs::Asked::Done(r) => r,
@@ -262,6 +265,15 @@ impl WordApp {
     /// tells the user).
     /// In the browser the save picker may write the file later ([`PromptSave::Later`], #1315).
     fn save_for_prompt(&mut self) -> Result<PromptSave, String> {
+        if let Some(host) = self.services.file_providers.clone().filter(|host| host.enabled()) {
+            let document = self.session.document_id();
+            if !self.session.dirty && !self.document_has_comment_drafts(document) && host.bound(document) && !host.pending_for(document) {
+                return Ok(PromptSave::Saved);
+            }
+            self.status(tl!("Complete the provider save, then try your action again."));
+            self.choose_provider_save(false);
+            return Ok(PromptSave::NotSaved);
+        }
         let v = self.execute("file.save", json!({}))?;
         let saved = v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some();
         if !self.safely_saved(saved) {
@@ -273,11 +285,15 @@ impl WordApp {
         })
     }
 
-    /// Web: a save of this document is still in the browser's picker (#1315). The document
-    /// looks saved, but nothing is written yet, so New/Open ask first.
+    /// Whether the shown document is waiting for a browser picker or provider save.
     pub(crate) fn save_unconfirmed(&self) -> bool {
-        let document = self.session.document_id();
+        self.save_unconfirmed_for(self.session.document_id())
+    }
+
+    /// Both file destinations can hold a save for a document that is no longer shown.
+    pub(crate) fn save_unconfirmed_for(&self, document: u64) -> bool {
         self.saves_in_flight.iter().any(|s| s.marked_saved && s.document == document)
+            || self.services.file_providers.as_ref().is_some_and(|host| host.pending_for(document))
     }
 
     /// Whether the shown document has work that isn't saved yet: changes that aren't written
