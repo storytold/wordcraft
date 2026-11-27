@@ -260,6 +260,15 @@ impl InlineObject {
     }
     /// Resize a drawing (a group's members scale with it; a canvas's keep their size and place).
     pub fn set_size(&mut self, nw: f32, nh: f32) {
+        if let InlineObject::Image { w, h, float, .. } = self
+            && let Some(extent) = float.picture_extent.as_mut()
+        {
+            for (value, (old, new)) in extent.iter_mut().zip([(*w, nw), (*h, nh)]) {
+                if old.is_finite() && old > 0.0 && new.is_finite() && new > 0.0 {
+                    *value = (f64::from(*value) * f64::from(new) / f64::from(old)).round().clamp(1.0, 50_800_000.0) as u32;
+                }
+            }
+        }
         if let InlineObject::Image { w, h, .. }
         | InlineObject::Graphic { w, h, .. }
         | InlineObject::Shape { w, h, .. }

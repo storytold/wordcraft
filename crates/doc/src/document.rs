@@ -22,10 +22,10 @@ pub(crate) struct MediaIndex {
 }
 
 impl MediaIndex {
-    fn rebuild(&mut self, media: &BTreeMap<String, Arc<Vec<u8>>>) {
+    fn rebuild(&mut self, media: &BTreeMap<String, Arc<Vec<u8>>>, svg_pictures: &BTreeMap<String, String>) {
         self.by_bytes.clear();
         // The first key (in key order) of equal bytes wins, as a scan would find it.
-        for (k, v) in media.iter().rev() {
+        for (k, v) in media.iter().rev().filter(|(k, _)| !svg_pictures.contains_key(*k)) {
             self.by_bytes.insert(v.clone(), k.clone());
         }
         self.len = media.len();
@@ -56,6 +56,30 @@ impl Default for Document {
 }
 
 impl Document {
+    /// Associate an SVG with a raster without changing other uses of that
+    /// raster. Distinct vectors may share identical fallback pixels.
+    pub fn add_svg_picture(&mut self, raster: &str, svg: &str) -> Option<String> {
+        let bytes = self.media.get(raster)?.clone();
+        self.media.get(svg)?;
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::hash::DefaultHasher::new();
+        (raster, svg).hash(&mut hash);
+        let ext = raster.rsplit_once('.').map_or("bin", |(_, ext)| ext);
+        let base = format!("svg-{:016x}.{ext}", hash.finish());
+        let mut key = base.clone();
+        let mut n = 0usize;
+        while let Some(existing) = self.media.get(&key) {
+            if Arc::ptr_eq(existing, &bytes) && self.svg_pictures.get(&key).is_some_and(|s| s == svg) {
+                return Some(key);
+            }
+            n += 1;
+            key = format!("{n}-{base}");
+        }
+        self.media.insert(key.clone(), bytes);
+        self.svg_pictures.insert(key.clone(), svg.to_string());
+        Some(key)
+    }
+
     /// A blank document: one empty Normal paragraph, Letter, built-in styles.
     pub fn new() -> Self {
         Document {
@@ -73,6 +97,7 @@ impl Document {
             footnote_separators: NoteSeparators::default(),
             endnote_separators: NoteSeparators::default(),
             media: BTreeMap::new(),
+            svg_pictures: BTreeMap::new(),
             passthrough: BTreeMap::new(),
             glossary: Vec::new(),
             media_index: MediaIndex::default(),
@@ -152,6 +177,7 @@ impl Document {
             footnote_separators,
             endnote_separators,
             media,
+            svg_pictures,
             passthrough,
             glossary,
             media_index: _,
@@ -174,6 +200,7 @@ impl Document {
             footnote_separators: other_footnotes,
             endnote_separators: other_endnotes,
             media: other_media,
+            svg_pictures: other_svg_pictures,
             passthrough: other_passthrough,
             glossary: other_glossary,
             media_index: _,
@@ -195,6 +222,7 @@ impl Document {
             && footnote_separators == other_footnotes
             && endnote_separators == other_endnotes
             && same_bytes(media, other_media)
+            && svg_pictures == other_svg_pictures
             && same_bytes(passthrough, other_passthrough)
             && same_glossary(glossary, other_glossary)
     }
@@ -812,15 +840,15 @@ impl Document {
     pub fn add_media(&mut self, bytes: Vec<u8>, ext: &str) -> String {
         let ix = &mut self.media_index;
         if ix.len != self.media.len() {
-            ix.rebuild(&self.media);
+            ix.rebuild(&self.media, &self.svg_pictures);
         }
-        if let Some(k) = ix.find(&self.media, &bytes) {
+        if let Some(k) = ix.find(&self.media, &bytes).filter(|k| !self.svg_pictures.contains_key(k)) {
             return k;
         }
         if ix.by_bytes.contains_key(&bytes) {
             // Stale (`media` was edited directly without changing its size): look again.
-            ix.rebuild(&self.media);
-            if let Some(k) = ix.find(&self.media, &bytes) {
+            ix.rebuild(&self.media, &self.svg_pictures);
+            if let Some(k) = ix.find(&self.media, &bytes).filter(|k| !self.svg_pictures.contains_key(k)) {
                 return k;
             }
         }

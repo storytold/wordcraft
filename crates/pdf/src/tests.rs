@@ -2624,7 +2624,10 @@ fn picture_fx_is_baked_into_the_embedded_image() {
     assert!(pdf_fill_opacities(&faded).iter().any(|a| (a - 0.4).abs() < 0.01), "{:?}", pdf_fill_opacities(&faded));
     assert!(!pdf_fill_opacities(&export_with(&jpeg, "jpeg", &[PicFx::default()])).iter().any(|a| *a < 0.99));
     // Hostile corrections export.
-    assert_eq!(pdf_images(&export_with(&jpeg, "jpeg", &[PicFx { bright: i32::MAX, contrast: i32::MIN, transparency: -7 }])).len(), 1);
+    assert_eq!(
+        pdf_images(&export_with(&jpeg, "jpeg", &[PicFx { bright: i32::MAX, contrast: i32::MIN, transparency: -7, ..Default::default() }])).len(),
+        1
+    );
 }
 
 /// A hostile header (a few bytes claiming 20 000 × 20 000 RGBA, 1.6 GB decoded) is refused by

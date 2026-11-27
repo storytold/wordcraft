@@ -88,6 +88,7 @@ struct TocEntry {
     text: String,
     lead: usize,
     number_gap: Option<f32>,
+    number_format: Option<(usize, CharProps)>,
 }
 
 /// The headings of the body, in document order, as (body block, level 1–9, text, leading page
@@ -130,14 +131,23 @@ fn toc_entries(s: &Session, f: &FieldCode) -> Vec<TocEntry> {
             .filter(|n| n.num != 0)
             .and_then(|n| counters.next_label(&s.doc.numbering, n.num, n.level))
             .filter(|(label, def)| !label.is_empty() && !matches!(def.format, NumFormat::Bullet | NumFormat::None))
-            .map(|(label, def)| match def.suffix {
-                LevelSuffix::Tab => {
-                    let start = def.indent - def.hanging;
-                    let gap = def.tab.filter(|t| *t > start).unwrap_or(def.indent) - start;
-                    (format!("{label}\t"), Some(gap).filter(|g| g.is_finite() && *g > 0.0))
-                }
-                LevelSuffix::Space => (format!("{label} "), None),
-                LevelSuffix::Nothing => (label, None),
+            .map(|(label, def)| {
+                // The number keeps its own typeface, while TOC size, weight and
+                // colour come from the entry style. Copy a font only when its
+                // identity differs from the heading's: a theme slot and an
+                // explicit face differ even if both currently resolve to Arial.
+                let font = number_typeface(s, p, &def.chr);
+                let len = label.len();
+                let (text, gap) = match def.suffix {
+                    LevelSuffix::Tab => {
+                        let start = def.indent - def.hanging;
+                        let gap = def.tab.filter(|t| *t > start).unwrap_or(def.indent) - start;
+                        (format!("{label}\t"), Some(gap).filter(|g| g.is_finite() && *g > 0.0))
+                    }
+                    LevelSuffix::Space => (format!("{label} "), None),
+                    LevelSuffix::Nothing => (label, None),
+                };
+                (text, gap, len, font)
             });
         let style = p.props.style.as_deref().unwrap_or("Normal");
         if style.starts_with("TOC") {
@@ -162,9 +172,10 @@ fn toc_entries(s: &Session, f: &FieldCode) -> Vec<TocEntry> {
         if let Some(l) = by_style.or(by_outline).or(if hidden { None } else { by_heading }) {
             let t = p.plain_text().replace(['\u{000C}', '\n', '\t'], " ").trim().to_string();
             if !t.is_empty() {
-                let text = number.as_ref().map_or_else(|| t.clone(), |(n, _)| format!("{n}{t}"));
-                let number_gap = number.as_ref().and_then(|(_, g)| *g);
-                v.push(TocEntry { path: path.clone(), level: l - 1, text, lead, number_gap });
+                let text = number.as_ref().map_or_else(|| t.clone(), |(n, ..)| format!("{n}{t}"));
+                let number_gap = number.as_ref().and_then(|(_, g, ..)| *g);
+                let number_format = number.as_ref().map(|(_, _, len, font)| (*len, font.clone()));
+                v.push(TocEntry { path: path.clone(), level: l - 1, text, lead, number_gap, number_format });
             }
         }
         if let Some(id) = &tc {
@@ -178,12 +189,39 @@ fn toc_entries(s: &Session, f: &FieldCode) -> Vec<TocEntry> {
                 let l = c.arg('l').and_then(|l| l.trim().parse::<u8>().ok()).unwrap_or(1).clamp(1, 9);
                 let text = c.args.first().map(|t| t.trim().to_string()).unwrap_or_default();
                 if (id.is_empty() || *id == kind) && (tc_levels.0..=tc_levels.1).contains(&l) && !text.is_empty() {
-                    v.push(TocEntry { path: path.clone(), level: l - 1, text, lead: off, number_gap: None });
+                    v.push(TocEntry { path: path.clone(), level: l - 1, text, lead: off, number_gap: None, number_format: None });
                 }
             }
         }
     }
     v
+}
+
+fn heading_char_props(s: &Session, p: &Paragraph, direct: &CharProps) -> CharProps {
+    let (_, mut props) = s.doc.styles.para_style_props(p.props.style.as_deref().unwrap_or("Normal"));
+    if let Some(style) = &direct.style {
+        for st in s.doc.styles.chain(style) {
+            props.overlay(&st.chr);
+        }
+    }
+    props.overlay(direct);
+    props
+}
+
+fn number_typeface(s: &Session, p: &Paragraph, level: &CharProps) -> CharProps {
+    let off = p.text.char_indices().find(|(_, c)| *c != OBJ && !c.is_whitespace()).map_or(0, |(i, _)| i);
+    let heading = heading_char_props(s, p, p.props_of_char(off));
+    let label = heading_char_props(s, p, &p.mark.clone().overlaid(level));
+    let same_latin =
+        label.font == heading.font && label.font_ascii_theme == heading.font_ascii_theme && label.font_hansi_theme == heading.font_hansi_theme;
+    let same_cs = label.font_cs == heading.font_cs && label.font_cs_theme == heading.font_cs_theme;
+    let same_ea = label.font_ea == heading.font_ea && label.font_ea_theme == heading.font_ea_theme;
+    CharProps {
+        font: (!same_latin).then(|| label.font.clone()).flatten(),
+        font_cs: (!same_cs).then(|| label.font_cs.clone()).flatten(),
+        font_ea: (!same_ea).then(|| label.font_ea.clone()).flatten(),
+        ..Default::default()
+    }
 }
 
 /// The TOC block range in the body: the paragraph holding the TOC field and the TOC entries after
@@ -311,6 +349,27 @@ fn range_toc_to_field(s: &mut Session) -> Result<(), CmdError> {
     let Some(after_end) = r.end.off.checked_add(OBJ.len_utf8()) else { return Ok(()) };
     let end = Pos { off: after_end, ..r.end.clone() };
     let props = s.doc.para_at(&r.start).map(|p| p.props_of_char(r.start.off).clone()).unwrap_or_default();
+    // A field end in its own paragraph also contributes a visible blank line
+    // after the table. Keep that spacing outside the regenerated entries, whose
+    // field end is written in the last entry instead. Materialize its style so
+    // it is not mistaken for another cached TOC entry on the next update.
+    let separator = s
+        .doc
+        .para_at(&r.end)
+        .filter(|p| {
+            r.end.path != r.start.path
+                && p.section.is_none()
+                && p.text.chars().all(|c| c == OBJ)
+                && p.objects.len() == 1
+                && matches!(p.objects[0], InlineObject::FieldEnd)
+        })
+        .map(|p| {
+            let (mut props, mut mark) = s.doc.styles.para_style_props(p.props.style.as_deref().unwrap_or("Normal"));
+            props.overlay(&p.props);
+            props.style = None;
+            mark.overlay(&p.mark);
+            Paragraph { props, mark, ..Paragraph::new() }
+        });
     let mut at = s.doc.delete_range(&r.start, &end)?;
     // A range that filled its own paragraphs right under a TOC heading (as Word and other writers
     // lay it out) leaves an empty paragraph behind, which would show as a blank line above the
@@ -350,8 +409,21 @@ fn range_toc_to_field(s: &mut Session) -> Result<(), CmdError> {
         form: String::new(),
     };
     let after = s.doc.insert_object(&at, field, &props)?;
+    // With a title that has no built-in heading style, the range's first
+    // paragraph remains as our field holder. Its cached entries now live in
+    // following paragraphs: the empty holder must not add a visible line.
+    if let Ok(p) = s.doc.para_mut(after.story, &after.path)
+        && p.plain_text().is_empty()
+        && p.section.is_none()
+    {
+        p.mark.hidden = Some(true);
+        p.touch();
+    }
     if s.doc.para_at(&after).is_some_and(|p| after.off < p.len()) {
         s.doc.split_paragraph(&after)?;
+    }
+    if let Some(separator) = separator {
+        s.doc.insert_block(StoryRef::Body, &Path::top(after.path.last() + 1), Block::Para(separator))?;
     }
     s.clamp_selection();
     Ok(())
@@ -612,6 +684,13 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
             if let Some(instr) = pageref {
                 let field = InlineObject::Field { instr, result: page.clone(), locked: false, dirty: false, code: false, form: String::new() };
                 para.insert_object(para.len(), field, &props)?;
+            }
+            if let Some((len, fonts)) = &e.number_format {
+                para.format(0, *len, &|props| {
+                    props.font.clone_from(&fonts.font);
+                    props.font_cs.clone_from(&fonts.font_cs);
+                    props.font_ea.clone_from(&fonts.font_ea);
+                })?;
             }
             para.mark = CharProps::default();
             if e.text.contains('\t') {

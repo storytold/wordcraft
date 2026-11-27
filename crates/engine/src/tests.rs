@@ -4840,6 +4840,45 @@ fn imported_range_toc_is_refreshed_in_place() {
     }
 }
 
+#[test]
+fn imported_toc_with_directly_formatted_title_adds_no_visible_holder_line() {
+    use wordcraft_doc::{Document, Path, para::InlineObject, props::CharProps};
+    let mut d = Document::from_text("Contents\nOld entry\t9\n\nFollowing list\nChapter");
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().mark.bold = Some(true);
+    let p = d.para_mut(StoryRef::Body, &Path::top(1)).unwrap();
+    p.props.style = Some("TOC1".into());
+    p.insert_object(0, InlineObject::FieldStart { instr: r#"TOC \o "1-1" \h"#.into(), locked: false, dirty: false }, &CharProps::default()).unwrap();
+    let end = d.para_mut(StoryRef::Body, &Path::top(2)).unwrap();
+    end.props.style = Some("TOC2".into());
+    end.insert_object(0, InlineObject::FieldEnd, &CharProps::default()).unwrap();
+    let mut s = Session::new(d);
+    run(&mut s, "caret.set", json!({"pos": Pos::body(4, 0)}));
+    run(&mut s, "styles.apply", json!({"style": "Heading 1"}));
+    let original = s.export_layout();
+    let title_gap = original.caret(&Pos::body(1, 0)).unwrap().top - original.caret(&Pos::body(0, 0)).unwrap().top;
+    let gap = original.caret(&Pos::body(3, 0)).unwrap().top - original.caret(&Pos::body(1, 0)).unwrap().top;
+    let mut positions = Vec::new();
+    for _ in 0..3 {
+        run(&mut s, "references.updateToc", json!({}));
+        let l = s.export_layout();
+        let entry = s.doc.body.iter().position(|b| b.as_para().is_some_and(|p| p.plain_text().starts_with("Chapter\t"))).unwrap();
+        let at = l.caret(&Pos::body(entry, 0)).unwrap();
+        positions.push((at.page, at.top));
+        let following = s.doc.body.iter().position(|b| b.as_para().is_some_and(|p| p.plain_text() == "Following list")).unwrap();
+        let after_gap = l.caret(&Pos::body(following, 0)).unwrap().top - at.top;
+        assert!((after_gap - gap).abs() < 0.01, "the original separator after the entries must keep its spacing: {gap} -> {after_gap}");
+        let after_title_gap = at.top - l.caret(&Pos::body(0, 0)).unwrap().top;
+        assert!(
+            (after_title_gap - title_gap).abs() < 0.01,
+            "the field holder must not add space before the entries: {title_gap} -> {after_title_gap}"
+        );
+        let bytes = wordcraft_docx::write(&s.doc).unwrap();
+        s = Session::new(wordcraft_docx::read(&bytes).unwrap());
+        assert_eq!(s.doc.body[0].as_para().unwrap().plain_text(), "Contents");
+    }
+    assert!(positions.windows(2).all(|w| w[0] == w[1]), "repeated updates and saves must not move the entries: {positions:?}");
+}
+
 /// #2182 (the save and reopen gap, not the flow in the report, which #1197 fixed): after a save
 /// and reopen a TOC is a range field opening in its first entry. The context menu offers Update
 /// Field wherever the caret is in it, including the field's own marker (offset 0 of the first
@@ -15337,4 +15376,85 @@ fn a_range_paste_formatting_keeps_the_targets_link_and_tracked_marks() {
     let c = at_start(&s);
     assert!(c.ins.is_some(), "Paste Formatting kept the insertion mark");
     assert_eq!(c.bold, Some(true));
+}
+
+#[test]
+fn toc_number_font_identity_distinguishes_theme_slots_from_equal_explicit_faces() {
+    use wordcraft_doc::props::ThemeFont;
+
+    let mut session = s();
+    run(&mut session, "references.toc", json!({"levels": 4}));
+    session.doc.settings.major_font = "Source Sans 3".into();
+    session.doc.settings.minor_font = "Source Sans 3".into();
+    let styles = Arc::make_mut(&mut session.doc.styles);
+    styles.default_chr.font = Some("Source Sans 3".into());
+    for (level, slot, explicit) in [(1, Some(ThemeFont::MajorHAnsi), true), (2, None, true), (3, None, false), (4, Some(ThemeFont::MinorHAnsi), true)]
+    {
+        let style = styles.styles.iter_mut().find(|s| s.id == format!("Heading{level}")).unwrap();
+        style.chr = wordcraft_doc::CharProps {
+            font: explicit.then(|| "Source Sans 3".into()),
+            font_ascii_theme: slot,
+            font_hansi_theme: slot,
+            ..Default::default()
+        };
+    }
+    let mut levels = wordcraft_doc::numbering::levels_for(wordcraft_doc::ListKind::Numbered);
+    for level in &mut levels {
+        level.chr.font = Some("Source Sans 3".into());
+        level.suffix = wordcraft_doc::numbering::LevelSuffix::Space;
+    }
+    let num = Arc::make_mut(&mut session.doc.numbering).try_add_levels(None, levels).unwrap();
+    for level in 1..=4 {
+        let mut p = wordcraft_doc::Paragraph::with_text(&format!("Own heading {level}"), Default::default());
+        p.props.style = Some(format!("Heading{level}"));
+        p.props.numbering = Some(wordcraft_doc::props::NumRef { num, level: level - 1 });
+        session.doc.body.push(Arc::new(wordcraft_doc::Block::Para(p)));
+    }
+    session.touch();
+    for _ in 0..3 {
+        run(&mut session, "references.updateToc", json!({}));
+        for level in 1..=4 {
+            let p = session.doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.props.style.as_deref() == Some(&format!("TOC{level}"))).unwrap();
+            assert_eq!(
+                p.props_of_char(0).font.is_some(),
+                matches!(level, 1 | 4),
+                "only a different source font identity needs a number-prefix override, level {level}"
+            );
+            let title = p.text.find("Own heading").unwrap();
+            assert!(p.props_of_char(title).font.is_none(), "entry styles still format the title");
+        }
+        session.doc = wordcraft_docx::read(&wordcraft_docx::write(&session.doc).unwrap()).unwrap();
+        session.touch();
+    }
+}
+
+#[test]
+fn toc_number_prefix_keeps_its_typeface_without_heading_size_or_colour() {
+    let mut session = s();
+    run(&mut session, "references.toc", json!({}));
+    run(&mut session, "caret.docEnd", json!({}));
+    run(&mut session, "text.pageBreak", json!({}));
+    run(&mut session, "text.insert", json!({"text": "A numbered heading"}));
+    run(&mut session, "para.heading1", json!({}));
+    let mut levels = wordcraft_doc::numbering::levels_for(wordcraft_doc::ListKind::Numbered);
+    levels[0].chr = wordcraft_doc::CharProps { font: Some("Source Serif 4".into()), size: Some(28.0), bold: Some(true), ..Default::default() };
+    let num = Arc::make_mut(&mut session.doc.numbering).try_add_levels(None, levels).unwrap();
+    for b in &mut session.doc.body {
+        if let wordcraft_doc::Block::Para(p) = Arc::make_mut(b)
+            && p.props.style.as_deref() == Some("Heading1")
+        {
+            p.props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+        }
+    }
+    for _ in 0..3 {
+        run(&mut session, "references.updateToc", json!({}));
+        let p = session.doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.props.style.as_deref() == Some("TOC1")).unwrap();
+        let prefix = p.props_of_char(0);
+        assert_eq!(prefix.font.as_deref(), Some("Source Serif 4"));
+        assert!(prefix.size.is_none() && prefix.bold.is_none(), "the TOC style supplies size and weight");
+        let title = p.text.find("A numbered").unwrap();
+        assert!(p.props_of_char(title).font.is_none(), "the heading text keeps the TOC typeface");
+        session.doc = wordcraft_docx::read(&wordcraft_docx::write(&session.doc).unwrap()).unwrap();
+        session.touch();
+    }
 }
