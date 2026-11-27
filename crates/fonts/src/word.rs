@@ -731,6 +731,14 @@ fn hhea_line(ascender: i16, descender: i16, line_gap: i16) -> (f64, f64) {
     (f64::from(ascender) + f64::from(line_gap.max(0)), f64::from(descender).abs())
 }
 
+/// Windows places external leading above the Windows ascent. The total line
+/// height can agree with hhea while its baseline differs (Calibri is one such
+/// face), so borrowing the hhea ascent alone is insufficient.
+fn windows_line(win: (f64, f64), hhea: Option<(f64, f64)>) -> (f64, f64) {
+    let leading = hhea.map_or(0.0, |h| (h.0 + h.1 - win.0 - win.1).max(0.0));
+    (win.0 + leading, win.1)
+}
+
 /// The line (ascent, descent) in units of an `upem` em that Word gives the classic PostScript
 /// families: their Windows counterparts' spacing, though Apple's own Times and Courier are one em
 /// tall (hhea 0.75 / -0.25, no gap). Measured in Word for Mac on synthetic documents (single
@@ -747,10 +755,12 @@ fn borrowed_line(family: &str, upem: f64) -> Option<(f64, f64)> {
 }
 
 /// Line metrics for a face in font units: (ascent, descent), both positive, the way word
-/// processors measure single line spacing: the hhea values with the line gap above the ascent
-/// (Word puts the first baseline that far below the line top), falling back to OS/2
-/// usWinAscent/usWinDescent; Times and Courier borrow their Windows counterparts' (see
-/// [`borrowed_line`]).
+/// processors measure single line spacing in Windows. Fonts opting into OS/2
+/// typographic metrics use those metrics and their gap; other fonts use Windows
+/// ascent/descent plus external leading from hhea. Without usable OS/2 metrics,
+/// use hhea. This rule is platform independent so opening a document on another
+/// host does not change the baseline. Times and Courier borrow their Windows
+/// counterparts' metrics (see [`borrowed_line`]).
 pub fn line_metrics(face: &crate::FontFace) -> (f64, f64) {
     static CACHE: OnceLock<Mutex<HashMap<u32, (f64, f64)>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
@@ -761,14 +771,16 @@ pub fn line_metrics(face: &crate::FontFace) -> (f64, f64) {
     if let Some(m) = borrowed_line(&face.family, face.upem) {
         v = m;
     } else if let Some(f) = face.skrifa() {
-        // hhea ascender + descender + line gap (Word on macOS), the gap above the ascent; OS/2
-        // win metrics only when the hhea values are missing, and never more than twice the em.
-        let hhea = f.hhea().ok().map(|h| hhea_line(h.ascender().to_i16(), h.descender().to_i16(), h.line_gap().to_i16()));
-        let win = f.os2().ok().map(|o| (o.us_win_ascent() as f64, o.us_win_descent() as f64));
         let ok = |m: &(f64, f64)| m.0 > 0.0 && m.0 + m.1 <= face.upem * 2.0;
-        if let Some(m) = hhea.filter(ok) {
-            v = m;
-        } else if let Some(m) = win.filter(ok) {
+        let hhea = f.hhea().ok().map(|h| hhea_line(h.ascender().to_i16(), h.descender().to_i16(), h.line_gap().to_i16())).filter(ok);
+        let os2 = f.os2().ok();
+        let typo = os2
+            .as_ref()
+            .filter(|o| o.fs_selection().contains(skrifa::raw::tables::os2::SelectionFlags::USE_TYPO_METRICS))
+            .map(|o| hhea_line(o.s_typo_ascender(), o.s_typo_descender(), o.s_typo_line_gap()))
+            .filter(ok);
+        let win = os2.as_ref().map(|o| (o.us_win_ascent() as f64, o.us_win_descent() as f64)).filter(ok).map(|m| windows_line(m, hhea));
+        if let Some(m) = typo.or(win).or(hhea) {
             v = m;
         }
     }
@@ -789,6 +801,19 @@ mod tests {
         // A negative gap adds nothing; the most negative descender doesn't overflow.
         assert_eq!(hhea_line(1000, -300, -50), (1000.0, 300.0));
         assert_eq!(hhea_line(1000, i16::MIN, 0), (1000.0, 32768.0));
+    }
+
+    #[test]
+    fn windows_baselines_keep_the_windows_descent_and_external_leading() {
+        // Public font tables and observed Windows line geometry. Calibri's
+        // hhea and Windows totals agree, but the ascents do not.
+        let calibri = windows_line((1950.0, 550.0), Some(hhea_line(1536, -512, 452)));
+        assert_eq!(calibri, (1950.0, 550.0));
+        let arial = windows_line((1854.0, 434.0), Some(hhea_line(1854, -434, 67)));
+        assert!(arial.0 > 1854.0);
+        assert_eq!(arial.0 + arial.1, 1854.0 + 434.0 + 67.0);
+        assert_eq!(windows_line((1705.0, 615.0), Some(hhea_line(1705, -615, 0))), (1705.0, 615.0));
+        assert_eq!(windows_line((1950.0, 550.0), None), calibri);
     }
 
     #[test]
