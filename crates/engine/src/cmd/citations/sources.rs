@@ -37,22 +37,7 @@ fn auto_tag_base(src: &Source) -> String {
 /// document's sources. `import` reads a Word bibliography file (`b:Sources`, #2640).
 pub(super) fn sources(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(a) = v.get("add") {
-        let mut src: Source = serde_json::from_value(a.clone()).map_err(|e| CmdError::Params(e.to_string()))?;
-        // A new source's tag is made from its author and year; an edit keeps the tag it has.
-        if src.tag.is_empty() {
-            src.tag = auto_tag(&s.doc, &src);
-        }
-        // Edit Source keeps the source's place in the list and refreshes its citations.
-        match s.doc.sources.iter().position(|x| x.tag == src.tag) {
-            Some(i) => {
-                if let Some(x) = s.doc.sources.get_mut(i) {
-                    *x = src;
-                }
-                update_citations(s)?;
-            }
-            None => s.doc.sources.push(src),
-        }
-        s.touch();
+        add_source(s, a)?;
     }
     if let Some(t) = p::str(v, "remove") {
         s.doc.sources.retain(|x| x.tag != t);
@@ -61,6 +46,28 @@ pub(super) fn sources(s: &mut Session, v: &Value) -> CmdResult {
         import_sources(s, path)?;
     }
     Ok(serde_json::to_value(&s.doc.sources).unwrap_or(Value::Null))
+}
+
+/// Adds a source, or edits the one with its tag, and returns that tag (#7443).
+fn add_source(s: &mut Session, a: &Value) -> Result<String, CmdError> {
+    let mut src: Source = serde_json::from_value(a.clone()).map_err(|e| CmdError::Params(e.to_string()))?;
+    // A new source's tag is made from its author and year; an edit keeps the tag it has.
+    if src.tag.is_empty() {
+        src.tag = auto_tag(&s.doc, &src);
+    }
+    let tag = src.tag.clone();
+    // Edit Source keeps the source's place in the list and refreshes its citations.
+    match s.doc.sources.iter().position(|x| x.tag == src.tag) {
+        Some(i) => {
+            if let Some(x) = s.doc.sources.get_mut(i) {
+                *x = src;
+            }
+            update_citations(s)?;
+        }
+        None => s.doc.sources.push(src),
+    }
+    s.touch();
+    Ok(tag)
 }
 
 /// The largest bibliography sources file imported from disk.
@@ -126,15 +133,16 @@ fn import_sources(s: &mut Session, path: &str) -> Result<(), CmdError> {
 }
 
 pub(super) fn citation(s: &mut Session, v: &Value) -> CmdResult {
-    if v.get("source").is_some() {
-        sources(s, &json!({"add": v.get("source")}))?;
-    }
-    let tag = match p::str(v, "tag") {
-        Some(t) => t.to_string(),
-        None => match v.get("source") {
-            Some(_) => s.doc.sources.last().map(|x| x.tag.clone()).unwrap_or_default(),
-            None => return Err(CmdError::Params("give `tag` or `source`".into())),
-        },
+    // The source just added or edited is the one cited when no `tag` is given, wherever it sits
+    // in the list (#7443).
+    let added = match v.get("source") {
+        Some(a) => Some(add_source(s, a)?),
+        None => None,
+    };
+    let tag = match (p::str(v, "tag"), added) {
+        (Some(t), _) => t.to_string(),
+        (None, Some(t)) => t,
+        (None, None) => return Err(CmdError::Params("give `tag` or `source`".into())),
     };
     let src = s.doc.sources.iter().find(|x| x.tag == tag).cloned().ok_or_else(|| CmdError::Params(format!("no source `{tag}`")))?;
     let pages = p::str(v, "pages").unwrap_or("").to_string();

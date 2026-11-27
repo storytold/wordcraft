@@ -598,6 +598,22 @@ fn editing_author_and_year_keeps_the_tag_and_updates_the_citation_text() {
 }
 
 #[test]
+fn citing_an_edited_source_that_is_not_last_cites_that_source() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("references.sources", &json!({"add": src_of("Alice, Ann", "2000")})).unwrap();
+    s.run("references.sources", &json!({"add": src_of("Bob, Ben", "2001")})).unwrap();
+    let mut edited = src_of("Alice Edited, Ann", "2000");
+    edited["tag"] = json!("Ali00");
+    let r = s.run("references.citation", &json!({"source": edited})).unwrap();
+    assert_eq!(r["tag"], "Ali00");
+    let tags: Vec<_> = s.doc.sources.iter().map(|x| x.tag.as_str()).collect();
+    assert_eq!(tags, ["Ali00", "Bob01"]);
+    let f = fields(&s);
+    assert_eq!(f[0].0, "CITATION Ali00");
+    assert!(f[0].1.contains("Alice Edited") && f[0].1.contains("2000"), "{:?}", f[0].1);
+}
+
+#[test]
 fn a_new_sources_tag_is_three_letters_and_two_year_digits() {
     let mut s = Session::new(wordcraft_doc::Document::new());
     for (a, y) in [
