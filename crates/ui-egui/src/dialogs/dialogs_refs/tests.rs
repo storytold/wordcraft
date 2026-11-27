@@ -430,3 +430,92 @@ fn the_source_manager_imports_a_word_sources_file() {
     assert!(status.contains("Imported 2 sources"), "{status:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// References › Insert Index › AutoMark… (desktop): the button closes the dialog and asks the
+/// host for a concordance file; the picked file's table marks its entries and the status line
+/// counts them. Run without a file (command search), AutoMark asks again; a cancelled pick marks
+/// nothing, and a file it can't read is reported on the status line.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn automark_marks_entries_from_the_picked_concordance_file() {
+    use craft::host::{Picked, ScriptedFiles};
+    use egui_kittest::kittest::Queryable;
+
+    use crate::file_dialogs::AfterPick;
+
+    let dir = std::env::temp_dir().join(format!("wordcraft-ui-automark-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let concordance = dir.join("Concordance.docx");
+    let mut c = Session::new(wordcraft_doc::Document::from_text("Kiln\tKilns\nglaze\tGlazes:clear"));
+    c.run("select.all", &json!({})).unwrap();
+    c.run("table.fromText", &json!({"separator": "tab"})).unwrap();
+    c.run("file.saveAs", &json!({"path": concordance.to_string_lossy()})).unwrap();
+    let broken = dir.join("broken.docx");
+    std::fs::write(&broken, b"not a document").unwrap();
+
+    // Every pick stays open until the test answers it, as with the dialog on screen.
+    let files = std::sync::Arc::new(ScriptedFiles::held());
+    let status = |a: &WordApp| a.status_message().map(|m| m.text.as_str().to_string());
+    let mut a = app("Kiln walls and glaze, kiln and glaze.")
+        .with_host(std::sync::Arc::new(craft::host::Host::builder(crate::APP).files(files.clone()).build()));
+    assert_eq!(a.run("references.index", json!({})).unwrap(), json!({"pending": "index"}));
+    let mut h = crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    crate::test_harness::frames(&mut h, 4);
+    h.get_by_label("AutoMark…").click();
+    crate::test_harness::frames(&mut h, 4);
+    assert!(!is_open::<IndexForm>(h.state()), "AutoMark closes the Index dialog");
+    assert!(h.state().file_dialog_open());
+    let asked: Vec<String> = files.requests().into_iter().map(|r| r.purpose).collect();
+    assert_eq!(asked, ["document"]);
+    files.answer(Picked::Paths(vec![concordance.clone()])).expect("an open pick");
+    crate::test_harness::frames(&mut h, 4);
+    assert_eq!(instrs(h.state()), vec![r#"XE "Kilns""#.to_string(), r#"XE "Glazes:clear""#.to_string()]);
+    assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "Kiln walls and glaze, kiln and glaze.");
+    assert_eq!(status(h.state()).as_deref(), Some("2 entries marked"));
+
+    let a = h.state_mut();
+    a.run("edit.undo", json!({})).unwrap();
+    assert!(instrs(a).is_empty());
+    assert_eq!(a.run("references.autoMark", json!({})).unwrap(), json!({"pending": "autoMark"}));
+    files.answer(Picked::Cancelled).expect("an open pick");
+    assert_eq!(a.poll_file_dialog().unwrap().unwrap(), json!({"cancelled": true}));
+    assert!(instrs(a).is_empty(), "a cancelled pick marks nothing");
+    a.run("references.autoMark", json!({})).unwrap();
+    files.answer(Picked::Paths(vec![broken.clone()])).expect("an open pick");
+    let e = a.poll_file_dialog().unwrap().unwrap_err();
+    assert_eq!(status(a).as_deref(), Some(e.as_str()));
+    assert!(instrs(a).is_empty());
+
+    // The pick marks the document AutoMark was asked for, though another is in front by the time
+    // the file is picked (a script opened it meanwhile): that document is shown again and marked.
+    let asked_for = a.session.document_id();
+    let picked = Some(concordance.to_string_lossy().into_owned());
+    a.execute("file.new", json!({})).unwrap();
+    a.execute("text.insert", json!({"text": "Kiln and glaze in another document."})).unwrap();
+    let other = a.session.document_id();
+    assert_ne!(other, asked_for);
+    let r = a.finish_pick(AfterPick::AutoMark { document: asked_for }, picked.clone());
+    assert_eq!(r.unwrap()["marked"], 2);
+    assert_eq!(a.session.document_id(), asked_for, "the document it was asked for is shown");
+    assert_eq!(instrs(a).len(), 2);
+    a.execute("view.switchWindows", json!({"id": other})).unwrap();
+    assert_eq!(a.session.document_id(), other);
+    assert!(instrs(a).is_empty(), "the document in front was left alone");
+
+    // Closed before the file is picked, it is not marked, and nor is the document in front.
+    a.execute("file.closeDocument", json!({"id": asked_for, "force": true})).unwrap();
+    let e = a.finish_pick(AfterPick::AutoMark { document: asked_for }, picked).unwrap_err();
+    assert_eq!(e, "the document to mark has been closed");
+    assert_eq!(status(a).as_deref(), Some(e.as_str()));
+    assert_eq!(a.session.document_id(), other);
+    assert!(instrs(a).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}

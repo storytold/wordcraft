@@ -74,6 +74,10 @@ pub(crate) enum AfterPick {
     /// document through Manage Sources (#2640).
     #[cfg(not(target_arch = "wasm32"))]
     Sources,
+    /// Mark index entries in `document` from the picked concordance file (References › Insert
+    /// Index › AutoMark…).
+    #[cfg(not(target_arch = "wasm32"))]
+    AutoMark { document: u64 },
 }
 
 /// What to do once Save As has written the document.
@@ -298,6 +302,32 @@ impl WordApp {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
                 self.load_recipients(json!({"path": path}))
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            AfterPick::AutoMark { document } => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                // The document it was asked for may wait behind another one by now: it is shown
+                // and marked, never the one in front. A closed one is not marked at all.
+                let shown = if document == self.session.document_id() {
+                    Ok(())
+                } else if self.session.is_open(document) {
+                    self.show_document(document)
+                } else {
+                    Err("the document to mark has been closed".to_string())
+                };
+                // Read here, as the person picked it (a file on a network share included), and
+                // marked from its rows: the command's `path` refuses network paths.
+                let r = shown
+                    .and_then(|()| wordcraft_engine::cmd::index::read_concordance(std::path::Path::new(&path)))
+                    .and_then(|rows| self.run("references.autoMark", json!({"entries": rows})));
+                match &r {
+                    Ok(v) => {
+                        let n = v.get("marked").and_then(Value::as_u64).unwrap_or(0);
+                        self.status(crate::i18n::tn(n, "{n} entry marked", "{n} entries marked"));
+                    }
+                    Err(e) => self.status(e.clone()),
+                }
+                r
+            }
             AfterPick::Export { ext } => {
                 let Some(mut path) = picked else {
                     // Cancelled: an earlier refusal is not news any more.
@@ -512,6 +542,19 @@ impl WordApp {
     pub(crate) fn pick_picture(&mut self) {
         let req = with_open_filters(PickRequest::open("picture"), "picture");
         let _ = self.ask_file(req, AfterPick::Picture);
+    }
+
+    /// References › Insert Index › AutoMark…: pick a concordance file, then mark the entries its
+    /// table lists in the document shown now (desktop: the browser can't hand the engine a file
+    /// by path).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn pick_concordance(&mut self) -> Result<Value, String> {
+        let after = AfterPick::AutoMark { document: self.session.document_id() };
+        match self.ask_file(with_open_filters(PickRequest::open("document"), "document"), after) {
+            Asked::Done(r) => r,
+            Asked::Pending => Ok(json!({"pending": "autoMark"})),
+            Asked::Busy => Ok(json!({"busy": true})),
+        }
     }
 
     /// Pick one or more font files to add (Add Font…).

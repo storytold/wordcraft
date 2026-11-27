@@ -446,6 +446,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-19: Content controls: text typed over a placeholder takes the control's own run properties (`w:sdtPr/w:rPr`, ECMA-376 §17.5.2.27), as in Word, and the placeholder style is recognised by its built-in name "Placeholder Text" whatever its localized id (German Word: `Platzhaltertext`), so entries in forms from localized Word no longer stay grey.
 
 | Date | What landed |
+| 2026-11-23 | References › Insert Index › AutoMark…: a concordance file (a document whose two-column table pairs the text to find with its index entry; without a table, tab-separated lines) marks the first same-case, whole-word occurrence in every paragraph with an XE field, as Word does, in one undo step; `references.autoMark` takes the file (inside the automation read root, never a network path) or the rows. |
 | 2026-11-20 | trivial | Progress log: `wordcraft-cli mcp` needs both automation roots; `--connect` refused (#7124) |
 | 2026-11-17 | trivial | Progress log: file formats, codecs and protocols come from craft-libs (#778) |
 | 2026-11-15 | trivial | Progress log: Get the Missing Fonts (download pages for missing fonts their publisher gives away) |

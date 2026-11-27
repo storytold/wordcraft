@@ -3,7 +3,7 @@ use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
 use craft::ui::choice::{Checkbox, Radio, RadioGroup};
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
-use craft::ui::dialog::DialogId;
+use craft::ui::dialog::{DialogId, dialog_id};
 use craft::ui::form::Field;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::notices::{Notice, NoticeLayout};
@@ -89,6 +89,10 @@ impl IndexForm {
     }
 }
 
+/// The Index dialog's AutoMark… body action.
+#[cfg(not(target_arch = "wasm32"))]
+const AUTOMARK: u32 = 0;
+
 impl WordForm for IndexForm {
     fn key(&self) -> &'static str {
         "index"
@@ -135,10 +139,32 @@ impl WordForm for IndexForm {
             self.leader = leader;
         }
         Checkbox::new(Bind::bound(&mut self.headings)).label(Label::from(tl!("Letter headings").to_string())).show(ui);
-        if Button::new(Label::from(tl!("Mark Entry…").to_string())).show(ui).clicked() {
-            asks.push(Asks::Open("markEntry".to_string(), Value::Null));
-        }
+        Row::new().show(ui, |ui, _| {
+            if Button::new(Label::from(tl!("Mark Entry…").to_string())).show(ui).clicked() {
+                asks.push(Asks::Open("markEntry".to_string(), Value::Null));
+            }
+            // AutoMark… (desktop): the dialog closes and a concordance file is asked for, whose
+            // table lists the text to find and the entry to mark it with.
+            #[cfg(not(target_arch = "wasm32"))]
+            if Button::new(Label::from(tl!("AutoMark…").to_string())).show(ui).clicked() {
+                asks.push(Asks::Act(AUTOMARK));
+            }
+        });
         true
+    }
+
+    /// AutoMark…: the dialog closes and the host is asked for the concordance file (desktop).
+    fn applied(&mut self, app: &mut WordApp, filed: Filed, _outcome: Result<&[Value], &str>) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if matches!(filed, Filed::Act(AUTOMARK)) {
+            // The hook has no `Context`, so the host closes the dialog at its next `run`.
+            app.dialog_host.close_by_id(dialog_id(self.key()));
+            if let Err(e) = app.pick_concordance() {
+                app.status(e);
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = (app, filed);
     }
 }
 
