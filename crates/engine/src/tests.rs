@@ -9397,6 +9397,77 @@ fn change_case_keeps_each_runs_formatting_when_lengths_change() {
     assert_eq!(text(&s), "Q");
 }
 
+/// #3479: Change Case follows language-aware mapping for Turkish, Azerbaijani, and Crimean Tatar (i↔İ, ı↔I).
+#[test]
+fn change_case_follows_turkic_language_mapping() {
+    // 1. Turkish (tr-TR): all 5 modes
+    // Capitalize Each Word (title)
+    let mut s = s();
+    run(&mut s, "review.language", json!({"lang": "tr-TR", "default": true}));
+    run(&mut s, "text.insert", json!({"text": "istanbul ışık", "raw": true}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.changeCase", json!({"mode": "title"}));
+    assert_eq!(text(&s), "İstanbul Işık");
+
+    // UPPERCASE
+    run(&mut s, "format.changeCase", json!({"mode": "upper"}));
+    assert_eq!(text(&s), "İSTANBUL IŞIK");
+
+    // lowercase
+    run(&mut s, "format.changeCase", json!({"mode": "lower"}));
+    assert_eq!(text(&s), "istanbul ışık");
+
+    // sentence case
+    let mut s = self::s();
+    run(&mut s, "review.language", json!({"lang": "tr-TR", "default": true}));
+    run(&mut s, "text.insert", json!({"text": "istanbul. ışık.", "raw": true}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.changeCase", json!({"mode": "sentence"}));
+    assert_eq!(text(&s), "İstanbul. Işık.");
+
+    // toggle case
+    let mut s = self::s();
+    run(&mut s, "review.language", json!({"lang": "tr-TR", "default": true}));
+    run(&mut s, "text.insert", json!({"text": "İstanbul Işık", "raw": true}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.changeCase", json!({"mode": "toggle"}));
+    assert_eq!(text(&s), "iSTANBUL ıŞIK");
+
+    // 2. Azerbaijani (az-AZ)
+    let mut s = self::s();
+    run(&mut s, "review.language", json!({"lang": "az-AZ", "default": true}));
+    run(&mut s, "text.insert", json!({"text": "istanbul", "raw": true}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.changeCase", json!({"mode": "title"}));
+    assert_eq!(text(&s), "İstanbul");
+
+    // 3. Crimean Tatar (crh)
+    let mut s = self::s();
+    run(&mut s, "review.language", json!({"lang": "crh", "default": true}));
+    run(&mut s, "text.insert", json!({"text": "istanbul", "raw": true}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.changeCase", json!({"mode": "title"}));
+    assert_eq!(text(&s), "İstanbul");
+
+    // 4. English control (en-US): unchanged Unicode default
+    let mut s = self::s();
+    run(&mut s, "review.language", json!({"lang": "en-US", "default": true}));
+    run(&mut s, "text.insert", json!({"text": "istanbul", "raw": true}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.changeCase", json!({"mode": "title"}));
+    assert_eq!(text(&s), "Istanbul");
+
+    // 5. Mixed-language selection: Turkish run followed by English run
+    let mut s = self::s();
+    run(&mut s, "review.language", json!({"lang": "tr-TR"}));
+    run(&mut s, "text.insert", json!({"text": "istanbul ", "raw": true}));
+    run(&mut s, "review.language", json!({"lang": "en-US"}));
+    run(&mut s, "text.insert", json!({"text": "istanbul", "raw": true}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.changeCase", json!({"mode": "title"}));
+    assert_eq!(text(&s), "İstanbul Istanbul");
+}
+
 #[test]
 fn change_case_sentence_ignores_decimal_points() {
     // #3485: Sentence case should not capitalize after decimal points.

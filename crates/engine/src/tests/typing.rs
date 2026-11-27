@@ -3320,13 +3320,22 @@ fn autocorrect_capitalisation_follows_turkic_case_mapping() {
     run(&mut s, "review.language", json!({"lang": "en-US", "default": true}));
     typ(&mut s, "İNgilizce ");
     assert_eq!(s.doc.plain_text(StoryRef::Body), "İngilizce ", "no combining dot in any language");
+    // #3503: two initial capitals and caps-lock with a stray İ in English.
+    let mut s = self::s();
+    run(&mut s, "review.language", json!({"lang": "en-US", "default": true}));
+    typ(&mut s, "Wİrd ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Wird ", "two initial capitals lowercases İ to i in English");
+    let mut s = self::s();
+    run(&mut s, "review.language", json!({"lang": "en-US", "default": true}));
+    typ(&mut s, "wİRD ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Wird ", "caps-lock slip fixes wİRD to Wird in English");
 }
 
 /// #3479: Format > Change Case follows the same Turkic case mapping as AutoCorrect, using
 /// each run's own language; other languages keep the Unicode default.
 #[test]
 fn change_case_follows_turkic_case_mapping() {
-    for tag in ["tr-TR", "az-AZ"] {
+    for tag in ["tr-TR", "az-AZ", "crh"] {
         for (mode, input, want) in [
             ("upper", "istanbul", "İSTANBUL"),
             ("lower", "IŞIK", "ışık"),
