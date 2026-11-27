@@ -4738,7 +4738,147 @@ fn a_lines_arrowheads_sit_at_its_ends() {
             _ => None,
         })
         .collect();
-    assert_eq!(tips, [(rect.x, rect.y), (rect.right(), rect.bottom())]);
+    let [(x0, y0), (x1, y1)] = tips[..] else { panic!("two arrowheads: {tips:?}") };
+    assert!((x1 - x0 - 60.0).abs() < 0.01 && (y1 - y0 - 40.0).abs() < 0.01, "tips at the frame's corners: {tips:?}");
+    // The line, drawn short of its arrowed ends (#6767), runs along the same diagonal.
+    assert!(rect.x > x0 && rect.y > y0 && rect.right() < x1 && rect.bottom() < y1, "{rect:?} between {tips:?}");
+    assert!(((rect.x - x0) / 60.0 - (rect.y - y0) / 40.0).abs() < 0.001, "{rect:?} on the diagonal from {tips:?}");
+    assert!(((x1 - rect.right()) / 60.0 - (y1 - rect.bottom()) / 40.0).abs() < 0.001, "{rect:?} on the diagonal to {tips:?}");
+}
+
+#[test]
+fn a_thick_lines_stroke_ends_inside_its_arrowheads() {
+    // #6767: the stroke stopped at each arrowhead's tip, so a thick line's body and cap stuck out
+    // of the narrow head. Each arrowed end now stops where the head is as wide as the stroke (and
+    // its cap's reach before that), for lines and every connector.
+    use wordcraft_doc::connector::{LineCap, ShapeExtra};
+    use wordcraft_doc::para::{Float, ShapeKind};
+    use wordcraft_doc::props::Rgb;
+
+    let width = 6.0;
+    let kinds = [ShapeKind::Line, ShapeKind::StraightConnector, ShapeKind::ElbowConnector, ShapeKind::CurvedConnector];
+    for kind in kinds {
+        for cap in [LineCap::Flat, LineCap::Square, LineCap::Round] {
+            let shape = InlineObject::Shape {
+                kind,
+                w: 120.0,
+                h: 60.0,
+                fill: None,
+                stroke: Some(Rgb::BLACK),
+                stroke_width: width,
+                float: Float::default(),
+                story: None,
+                freeform: None,
+                effects: Default::default(),
+                extra: ShapeExtra { arrow_start: true, arrow_end: true, cap, ..Default::default() },
+            };
+            let (ends, heads, draws) = line_ends_and_heads(shape);
+            assert_eq!((ends.len(), heads.len()), (2, 2), "{kind:?} {cap:?}: {draws:?}");
+            for (end, head) in ends.iter().zip(&heads) {
+                for corner in stroke_end_corners(*end, *head, width, cap) {
+                    assert!(in_triangle(corner, *head), "{kind:?} {cap:?}: stroke corner {corner:?} outside the head {head:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_short_lines_lone_arrowhead_takes_the_room_its_other_end_does_not_need() {
+    // #6767: an arrowed end moved at most half way along a straight line, even when the other end
+    // had no arrowhead and stayed put, so a short thick line's stroke still stuck out of its head.
+    use wordcraft_doc::connector::{LineCap, ShapeExtra};
+    use wordcraft_doc::para::{Float, ShapeKind};
+    use wordcraft_doc::props::Rgb;
+
+    let width = 6.0;
+    // Each is shorter than twice its inset (6 pt flat, 9 pt with the cap's reach) but no shorter
+    // than one inset, so the head can cover the stroke: 8 pt and 10 pt diagonals.
+    for (cap, (w, h)) in [(LineCap::Flat, (6.4, 4.8)), (LineCap::Square, (8.0, 6.0)), (LineCap::Round, (8.0, 6.0))] {
+        for kind in [ShapeKind::Line, ShapeKind::StraightConnector] {
+            for at_start in [true, false] {
+                let shape = InlineObject::Shape {
+                    kind,
+                    w,
+                    h,
+                    fill: None,
+                    stroke: Some(Rgb::BLACK),
+                    stroke_width: width,
+                    float: Float::default(),
+                    story: None,
+                    freeform: None,
+                    effects: Default::default(),
+                    extra: ShapeExtra { arrow_start: at_start, arrow_end: !at_start, cap, ..Default::default() },
+                };
+                let (ends, heads, draws) = line_ends_and_heads(shape);
+                let (&[start, end], &[head]) = (&ends[..], &heads[..]) else { panic!("{kind:?} {cap:?}: {draws:?}") };
+                let tip = head[0];
+                let (near, far) = if at_start { (start, end) } else { (end, start) };
+                // The end without an arrowhead stays where it was.
+                let other = if at_start { (tip.0 + w, tip.1 + h) } else { (tip.0 - w, tip.1 - h) };
+                assert!((far.0 - other.0).abs() < 0.01 && (far.1 - other.1).abs() < 0.01, "{kind:?} {cap:?}: {far:?} moved from {other:?}");
+                for corner in stroke_end_corners(near, head, width, cap) {
+                    assert!(in_triangle(corner, head), "{kind:?} {cap:?} start={at_start}: stroke corner {corner:?} outside the head {head:?}");
+                }
+            }
+        }
+    }
+}
+
+/// The ends of the stroked line or connector `shape` draws, from its start to its end, its
+/// arrowheads (each tip first), and all its draws.
+fn line_ends_and_heads(shape: InlineObject) -> (Vec<(f32, f32)>, Vec<[(f32, f32); 3]>, Vec<display::Draw>) {
+    use wordcraft_doc::graphic::PathSeg;
+    use wordcraft_doc::para::ShapeKind;
+
+    let mut doc = Document::from_text("Scan");
+    doc.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+    let draws = flat(display::page_display(&doc, &lay(&doc).pages[0], &Default::default()));
+    let mut ends = Vec::new();
+    let mut heads = Vec::new();
+    for d in &draws {
+        match d {
+            display::Draw::Shape { rect, kind: ShapeKind::Line, .. } => ends.extend([(rect.x, rect.y), (rect.right(), rect.bottom())]),
+            display::Draw::Path { fill: None, stroke: Some(_), segs, .. } => {
+                let point = |s: &PathSeg| match *s {
+                    PathSeg::Move(x, y) | PathSeg::Line(x, y) | PathSeg::Cubic(.., x, y) => Some((x, y)),
+                    PathSeg::Close => None,
+                };
+                ends.extend(segs.first().and_then(point));
+                ends.extend(segs.last().and_then(point));
+            }
+            display::Draw::Path { fill: Some(_), segs, .. } => {
+                if let [PathSeg::Move(tx, ty), PathSeg::Line(ax, ay), PathSeg::Line(bx, by), PathSeg::Close] = segs[..] {
+                    heads.push([(tx, ty), (ax, ay), (bx, by)]);
+                }
+            }
+            _ => {}
+        }
+    }
+    (ends, heads, draws)
+}
+
+/// The corners of a `width` stroke's `end` under arrowhead `head`, its `cap` included (a round
+/// cap lies inside them).
+fn stroke_end_corners(end: (f32, f32), head: [(f32, f32); 3], width: f32, cap: wordcraft_doc::connector::LineCap) -> [(f32, f32); 2] {
+    let [tip, a, b] = head;
+    let base = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+    let len = (tip.0 - base.0).hypot(tip.1 - base.1);
+    // The head's direction, and across it.
+    let (dx, dy) = ((tip.0 - base.0) / len, (tip.1 - base.1) / len);
+    let (nx, ny) = (-dy, dx);
+    let reach = if cap == wordcraft_doc::connector::LineCap::Flat { 0.0 } else { width / 2.0 };
+    [-1.0, 1.0].map(|side| (end.0 + dx * reach + nx * side * width / 2.0, end.1 + dy * reach + ny * side * width / 2.0))
+}
+
+/// Whether `p` lies inside (or within 0.01 pt of) triangle `t`.
+fn in_triangle(p: (f32, f32), t: [(f32, f32); 3]) -> bool {
+    let edge = |(ax, ay): (f32, f32), (bx, by): (f32, f32)| {
+        let len = (bx - ax).hypot(by - ay);
+        ((bx - ax) * (p.1 - ay) - (by - ay) * (p.0 - ax)) / len
+    };
+    let sides = [edge(t[0], t[1]), edge(t[1], t[2]), edge(t[2], t[0])];
+    sides.iter().all(|s| *s >= -0.01) || sides.iter().all(|s| *s <= 0.01)
 }
 
 #[test]
