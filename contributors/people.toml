@@ -191,6 +191,10 @@ display_name = "OtorO"
 real_name = "Oliwer Urbaniak"
 sync_github_name = true
 
+[people.quebranozes]
+real_name = "Renato Pinto"
+sync_github_name = true
+
 [people.TobyWu666]
 display_name = "tobywu"
 

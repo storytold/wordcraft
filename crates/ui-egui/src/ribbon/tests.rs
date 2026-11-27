@@ -450,6 +450,40 @@ fn ribbon_groups_fit_above_their_labels() {
     assert!(outside.is_empty(), "controls outside their group: {outside:#?}");
 }
 
+/// European Portuguese is its own entry, checked by its tag; the other Portuguese regions show
+/// by name, as other regions do.
+#[test]
+fn european_portuguese_is_in_the_language_menu() {
+    assert!(PROOFING_LANGUAGES.contains(&("pt-PT", "Portuguese (Portugal)")));
+    assert!(crate::dialogs_layout::LANGUAGES.contains(&("pt-PT", "Portuguese (Portugal)")));
+    for tag in ["pt-PT", "pt_pt", "PT-pt"] {
+        assert_eq!(language_name(Some(tag)), "Portuguese (Portugal)", "{tag}");
+    }
+    let c = language_checks("pt-pt", &short());
+    assert_eq!((c.extra, c.listed), (None, listed_only("pt-PT")));
+    assert_eq!(language_name(Some("pt-MZ")), "Portuguese (Mozambique)");
+    // #1028 review: however the tag is written, the label and the check mark follow the region
+    // it names.
+    for (tag, name, listed) in [
+        ("pt_PT.UTF-8", "Portuguese (Portugal)", "pt-PT"),
+        ("pt_PT@euro", "Portuguese (Portugal)", "pt-PT"),
+        ("por-PT", "Portuguese (Portugal)", "pt-PT"),
+        ("pt-Latn-PT", "Portuguese (Portugal)", "pt-PT"),
+        ("pt_BR.UTF-8", "Portuguese (Brazil)", "pt-BR"),
+        ("por", "Portuguese (Brazil)", "pt-BR"),
+        ("pt-x-PT", "Portuguese (Brazil)", "pt-BR"),
+    ] {
+        assert_eq!(language_name(Some(tag)), name, "{tag}");
+        let c = language_checks(tag, &short());
+        assert_eq!((c.extra, c.listed), (None, listed_only(listed)), "{tag}");
+    }
+    // A POSIX tail is read alike for every language, as craft-proof reads it.
+    let c = language_checks("pl_PL.UTF-8", &short());
+    assert_eq!((c.extra, c.listed), (None, listed_only("pl-PL")));
+    assert!(super::language::same_language("sr_RS@latin", "sr-Latn-RS"));
+    assert!(!super::language::same_language("sr_RS@latin", "sr-Cyrl-RS"));
+}
+
 /// #860: Review › Language (and the status bar) reach every proofing language, not just the
 /// short list: Set Proofing Language… opens the Language dialog (French, Set As Default),
 /// Language Preferences… opens Options › Language, and French text shows by name, checked.
