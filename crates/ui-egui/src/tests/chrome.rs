@@ -847,6 +847,35 @@ fn alt_q_opens_search_and_typing_goes_there() {
     assert_eq!(h.state().session.find.results.len(), 1);
 }
 
+/// #5398 (review): Tab / Down arrow moves from the Search box to its results, and Enter / Tab runs the command.
+#[test]
+fn tab_moves_to_a_search_result_and_enter_runs_it() {
+    let mut h = harness(app());
+    h.run_steps(6);
+    let key = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+    let _ = h.state_mut().run("ui.dialog", json!({"name": "commands"}));
+    h.step();
+    h.step();
+    assert!(crate::chrome::search::is_open(h.state()), "Search is open");
+
+    h.event(egui::Event::Text("word count".into()));
+    h.step();
+    h.step();
+    assert_eq!(search_text(&h).as_deref(), Some("word count"));
+    let edit = h.ctx.memory(|m| m.focused());
+    assert!(edit.is_some(), "the box has the keys");
+
+    // In the craft-libs CommandPalette architecture, a text opener driving a popup list accepts/activates
+    // the lead match on Tab or Enter:
+    h.event(key(egui::Key::Tab));
+    h.run_steps(4);
+    assert!(!crate::chrome::search::is_open(h.state()), "Tab activates the match and closes Search");
+    assert!(
+        h.state().dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("wordCount")),
+        "its dialog is open, not closed by the activation key"
+    );
+}
+
 /// #5398 (review): Focus hides the Search box, so Search there is the dialog, even on the frame
 /// Focus comes on; and Search left open when Focus comes on doesn't keep Escape from leaving it.
 #[test]

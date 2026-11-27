@@ -164,6 +164,31 @@ fn undo_list_row_returns_focus_to_the_document() {
     );
 }
 
+/// #1903: Cancel closes the undo list popover without undoing any steps.
+#[test]
+fn undo_list_cancel_closes_without_undoing() {
+    use egui::accesskit::Role;
+    let mut a = new_app();
+    a.run("text.insert", json!({"text": "Hello"})).unwrap();
+    let before: Vec<String> = a.session.undo_history().into_iter().map(str::to_string).collect();
+    assert!(!before.is_empty());
+    let text_before = a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).to_string();
+
+    let mut h = harness(a);
+    h.get_by_label("Undo History").click();
+    crate::test_harness::frames(&mut h, 3);
+    assert_eq!(h.query_all_by_role(Role::ListBoxOption).count(), 1, "one row for typing");
+
+    let cancel = h.get_by_role_and_label(Role::Button, "Cancel");
+    cancel.click();
+    crate::test_harness::frames(&mut h, 3);
+
+    let after: Vec<String> = h.state().session.undo_history().into_iter().map(str::to_string).collect();
+    assert_eq!(after, before, "nothing undone");
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), text_before, "document text unchanged");
+    assert_eq!(h.query_all_by_role(Role::ListBoxOption).count(), 0, "Cancel closes the list");
+}
+
 /// #1975: the zoom percentage gains and loses digits (9% → 100% → 500%); the controls to its
 /// left must not shift with it.
 #[test]
@@ -498,6 +523,144 @@ fn status_bar_texts_stop_before_the_controls_in_a_narrow_window() {
     assert!(painted_on_row_of(&wide, focus).iter().any(|(t, _)| t == "Track Changes: On"), "a wide window shows everything");
 }
 
+/// #5886: `Fit` picks the fullest step that fits, settles in one pass per unmeasured step, and drops stale
+/// widths when a step's own width changes.
+#[test]
+fn status_fit_settles_and_resizes_without_discard_loops() {
+    let mut fit = super::Fit::default();
+    assert_eq!(fit.step(), 0);
+
+    // Narrow room (200): measures step 0 (300), then step 1 (180 <= 200), and settles at step 1.
+    assert!(fit.note(0, 300.0, 200.0));
+    assert_eq!(fit.step(), 1);
+    assert!(fit.note(1, 180.0, 200.0));
+    assert_eq!(fit.step(), 1);
+    assert!(!fit.note(1, 180.0, 200.0));
+
+    // Widening room (400) immediately selects cached step 0 without re-measuring step 1.
+    assert!(fit.note(1, 180.0, 400.0));
+    assert_eq!(fit.step(), 0);
+    assert!(!fit.note(0, 300.0, 400.0));
+
+    // A width change at step 0 invalidates cached widths for other steps.
+    assert!(fit.note(0, 320.0, 200.0));
+    assert_eq!(fit.step(), 1);
+}
+
+/// #5886: status bar controls fit is per-window and settles without repaint or discard loops across wide and narrow windows.
+#[test]
+fn status_bar_controls_width_cache_is_per_window_and_avoids_discard_loops() {
+    use std::time::Duration;
+
+    use craft_ui_test_kit::windows::Windows as Kit;
+    use egui::{Pos2, Rect, ViewportId, ViewportInfo, vec2};
+
+    // 1. Multi-window rendering (`Kit`): both wide (800 pt root) and narrow (400 pt child) windows
+    // render together on the same egui context each frame without overwriting each other's `status_fit`.
+    let kit = Kit::new();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default());
+
+    let win1 = a.windows.shown();
+    a.new_window();
+    let win2 = a.windows.shown();
+    assert_ne!(win1, win2, "two distinct windows open");
+
+    let info = |rect: Rect, is_focused: bool| ViewportInfo {
+        focused: Some(is_focused),
+        inner_rect: Some(rect),
+        outer_rect: Some(rect),
+        ..Default::default()
+    };
+    let wide_rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
+    let narrow_rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 600.0));
+
+    let step_kit = |a: &mut WordApp, focus_root: bool| {
+        kit.root_info(info(wide_rect, focus_root));
+        kit.child_info(info(narrow_rect, !focus_root));
+        craft::ui::shell::embed::before_input(&kit.ctx, |out| a.frame_input(out));
+        kit.frame(Vec::new(), Vec::new(), |ui| {
+            a.logic(ui.ctx());
+            craft::ui::shell::embed::logic(ui.ctx(), || a.close_decision());
+            a.ui(ui);
+        })
+    };
+
+    let mut out = step_kit(&mut a, true);
+    for _ in 0..2 {
+        out = step_kit(&mut a, true);
+    }
+    let child_vp = out.trees.iter().map(|(id, _)| *id).find(|id| *id != ViewportId::ROOT).expect("child viewport rendered");
+
+    assert!(a.enter_window(win1));
+    let fit1 = a.chrome.status_fit.clone();
+    assert!(a.enter_window(win2));
+    let fit2 = a.chrome.status_fit.clone();
+
+    assert_eq!(fit1.step(), 0, "wide window stays at full controls step: {fit1:?}");
+    assert!(fit2.step() >= 1, "narrow window compacts controls (step >= 1): {fit2:?}");
+    assert_ne!(fit1, fit2, "per-window status fits are distinct");
+
+    let has_zoom_slider = |out: &craft_ui_test_kit::windows::Out, vp: ViewportId| {
+        let (_, tree) = out.trees.iter().find(|(id, _)| *id == vp).expect("viewport access tree");
+        tree.keys().into_iter().any(|key| tree.role_of(key) == Some(craft::ui::contract::Role::SLIDER) && tree.name_of(key) == Some("Zoom"))
+    };
+    assert!(has_zoom_slider(&out, ViewportId::ROOT), "wide window keeps the Zoom slider");
+    assert!(!has_zoom_slider(&out, child_vp), "narrow window drops the Zoom slider at step >= 1");
+
+    let frame_out = step_kit(&mut a, false);
+    assert!(has_zoom_slider(&frame_out, ViewportId::ROOT), "child-focused frame: wide window keeps Zoom slider");
+    assert!(!has_zoom_slider(&frame_out, child_vp), "child-focused frame: narrow window keeps compact controls");
+    assert!(a.enter_window(win1));
+    assert_eq!(a.chrome.status_fit, fit1, "wide window 1 settled without changes");
+    assert!(a.enter_window(win2));
+    assert_eq!(a.chrome.status_fit, fit2, "narrow window 2 settled without changes");
+
+    // 2. Direct single-pass inspection (`ctx.run_ui`): reuse `a` with one window, verify narrow (400 pt)
+    // and wide (1200 pt) layouts settle to distinct steps and run in 1 pass with no immediate repaint loop.
+    a.close_window(win2);
+    assert!(a.enter_window(win1));
+
+    let settle_one_pass = |app: &mut WordApp, width: f32, expect_compact: bool| -> super::Fit {
+        let run_pass = |app: &mut WordApp| -> (usize, Duration) {
+            let mut passes = 0;
+            craft::ui::shell::embed::before_input(&kit.ctx, |out| app.frame_input(out));
+            let full = kit.ctx.run_ui(
+                egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(width, 700.0))), ..Default::default() },
+                |ui| {
+                    crate::test_harness::logic(ui.ctx(), app);
+                    app.ui(ui);
+                    passes += 1;
+                },
+            );
+            let delay = full.viewport_output.get(&ViewportId::ROOT).map_or(Duration::MAX, |v| v.repaint_delay);
+            full.drop_without_applying_deltas();
+            (passes, delay)
+        };
+        for _ in 0..4 {
+            let (_, delay) = run_pass(app);
+            let step_ok = if expect_compact { app.chrome.status_fit.step() >= 1 } else { app.chrome.status_fit.step() == 0 };
+            if delay > Duration::ZERO && step_ok {
+                break;
+            }
+        }
+        let settled = app.chrome.status_fit.clone();
+        if expect_compact {
+            assert!(settled.step() >= 1, "width {width}: settled at compact step: {settled:?}");
+        } else {
+            assert_eq!(settled.step(), 0, "width {width}: settled at full step: {settled:?}");
+        }
+        let (passes, delay) = run_pass(app);
+        assert_eq!(passes, 1, "width {width}: completed in 1 pass (no discard loop)");
+        assert!(delay > Duration::ZERO, "width {width}: requested no immediate repaint (delay {delay:?})");
+        assert_eq!(app.chrome.status_fit, settled, "width {width}: status_fit remained unchanged");
+        settled
+    };
+
+    let settled_narrow = settle_one_pass(&mut a, 400.0, true);
+    let settled_wide = settle_one_pass(&mut a, 1200.0, false);
+    assert_ne!(settled_narrow, settled_wide);
+}
+
 /// Finds the painted track and knob rects inside a rendered `craft::ui::choice::Switch`.
 /// `Switch` sets `PARTS = false` and exposes only its `Role::Switch` node and toggled state, so
 /// the thumb position is read from the unblurred filled shapes painted inside the switch rect.
@@ -586,6 +749,99 @@ fn the_autosave_knob_sits_right_when_on_and_mirrors_right_to_left() {
     assert!(rtl_on_track.center().x > ltr_on_track.center().x, "right to left mirrors the AutoSave switch toward the start (right) edge");
     assert!(((ltr_on_knob.center().x - ltr_on_track.min.x) - (rtl_on_track.max.x - rtl_on_knob.center().x)).abs() <= 0.5);
     assert!(((ltr_off_knob.center().x - ltr_off_track.min.x) - (rtl_off_track.max.x - rtl_off_knob.center().x)).abs() <= 0.5);
+}
+
+/// Refs #7320: hovering buttons across the Ribbon, title bar (Quick Access Toolbar), and status
+/// bar produces a settled rounded hover fill matching the active theme's hover state token, and
+/// clears when unhovered.
+#[test]
+fn ribbon_and_chrome_buttons_have_responsive_hover_lighting_and_contrast() {
+    use egui::accesskit::Role;
+
+    fn to_color32(rgba: craft::theme::Rgba) -> egui::Color32 {
+        egui::Color32::from(craft::theme::Srgba::from(rgba))
+    }
+
+    fn collect_shapes<'a>(shapes: &'a [egui::epaint::ClippedShape], out: &mut Vec<&'a egui::Shape>) {
+        for clipped in shapes {
+            fn walk<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::Shape>) {
+                match shape {
+                    egui::Shape::Vec(children) => {
+                        for child in children {
+                            walk(child, out);
+                        }
+                    }
+                    other => out.push(other),
+                }
+            }
+            walk(&clipped.shape, out);
+        }
+    }
+
+    fn find_button_fill(shapes: &[egui::epaint::ClippedShape], rect: egui::Rect) -> Option<(egui::Color32, egui::CornerRadius)> {
+        let mut flattened = Vec::new();
+        collect_shapes(shapes, &mut flattened);
+        flattened.into_iter().find_map(|s| match s {
+            egui::Shape::Rect(r)
+                if (r.rect.min.x - rect.min.x).abs() <= 1.5
+                    && (r.rect.max.x - rect.max.x).abs() <= 1.5
+                    && (r.rect.min.y - rect.min.y).abs() <= 1.5
+                    && (r.rect.max.y - rect.max.y).abs() <= 1.5
+                    && r.fill != egui::Color32::TRANSPARENT =>
+            {
+                Some((r.fill, r.corner_radius))
+            }
+            _ => None,
+        })
+    }
+
+    for theme in ["light", "dark"] {
+        let mut a = new_app();
+        a.run("text.insert", json!({"text": "Hello"})).unwrap();
+        a.run("select.all", json!({})).unwrap();
+        a.run("ui.theme", json!({"value": theme})).unwrap();
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 700.0)).with_step_dt(0.016).build_ui_state(app_frame, a);
+        // Ensure animation time is enabled so responsive tweening runs as in a live window.
+        h.ctx.all_styles_mut(|s| s.animation_time = egui::Style::default().animation_time);
+        crate::test_harness::frames(&mut h, 10);
+
+        let env = craft::ui::runtime::env::Env::of_root(&h.ctx);
+        let expected_hover = to_color32(env.tokens.color.state.hover);
+
+        // Test representative buttons across Ribbon, title bar QAT, and status bar.
+        for (role, label, desc) in [
+            (Role::Button, "Cut", "Ribbon tool button"),
+            (Role::Button, "Save", "Quick Access Toolbar button"),
+            (Role::Button, "100%", "Status bar zoom button"),
+        ] {
+            let node = h.get_by_role_and_label(role, label);
+            let rect = node.rect();
+            assert!(rect.is_positive(), "{theme}: {desc} ({label}) must have positive rect");
+
+            // Before hover: no hover fill plate
+            let fill_before = find_button_fill(&h.output().shapes, rect);
+            assert_eq!(fill_before, None, "{theme}: {desc} ({label}) must have no hover fill before hover");
+
+            // Hover the control and allow animation to settle
+            node.hover();
+            crate::test_harness::frames(&mut h, 8);
+            let fill_settled = find_button_fill(&h.output().shapes, rect);
+            assert!(fill_settled.is_some(), "{theme}: {desc} ({label}) must produce settled hover shape");
+            let (settled, radius) = fill_settled.unwrap();
+            assert_eq!(settled, expected_hover, "{theme}: {desc} ({label}) settled hover fill must match theme hover token");
+            assert!(
+                radius.nw > 0 && radius.nw == radius.ne && radius.nw == radius.sw && radius.nw == radius.se,
+                "{theme}: {desc} ({label}) corner radius must be uniformly rounded: {:?}",
+                radius
+            );
+
+            // Leaving hover clears the hover fill plate
+            h.event(egui::Event::PointerMoved(egui::pos2(0.0, 0.0)));
+            crate::test_harness::frames(&mut h, 8);
+            let fill_after = find_button_fill(&h.output().shapes, rect);
+            assert_eq!(fill_after, None, "{theme}: {desc} ({label}) must clear hover fill after unhovering");
+        }
+    }
 }
 
 /// #7311: the title bar's Discord community button keeps its solid accent fill and contrasting

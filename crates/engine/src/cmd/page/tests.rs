@@ -808,6 +808,42 @@ fn preview_layout_formats_active_inherited_section_footer() {
     assert!(page1_footer.contains("vii"), "preview renders section 1 footer as vii, got {page1_footer:?}");
 }
 
+/// #5855: Moving the caret into a linked footer on another page (via click or keyboard without
+/// re-running `editFooter`) updates `hf_section` so section commands target that page's section.
+#[test]
+fn linked_footer_caret_move_updates_hf_section_without_edit_footer() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("front\nbody"));
+    s.run("select.text", &json!({"text": "front"})).unwrap();
+    s.run("caret.end", &json!({})).unwrap();
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+
+    // Enter footer on page 0 (section 0) and insert a page number; section 1 inherits it.
+    s.run("insert.editFooter", &json!({"page": 0})).unwrap();
+    s.run("insert.pageNumber", &json!({"position": "bottom"})).unwrap();
+    assert_eq!(s.hf_section, Some(0));
+    assert_eq!(section_index_of_focus(&s), 0);
+
+    // Move caret into the same linked footer on page 1 without calling `insert.editFooter`.
+    let (x, y) = {
+        let l = s.layout();
+        let c = l.caret_on(&s.sel.focus, 1).expect("linked footer laid out on page 1");
+        (c.x, c.top + c.height * 0.5)
+    };
+    let story = match s.sel.focus.story {
+        wordcraft_doc::StoryRef::Part(id) => format!("part:{id}"),
+        wordcraft_doc::StoryRef::Body => "body".to_string(),
+    };
+    s.run("caret.set", &json!({"page": 1, "x": x, "y": y, "story": story})).unwrap();
+    assert_eq!(s.hf_section, Some(1));
+    assert_eq!(section_index_of_focus(&s), 1);
+
+    // Formatting page numbers now updates section 1, leaving section 0 untouched.
+    s.run("layout.pageNumberFormat", &json!({"format": "lowerRoman", "start": 5})).unwrap();
+    let secs = s.doc.sections();
+    assert_eq!((secs[0].1.page_num_format, secs[0].1.page_num_start), (NumFormat::Decimal, None));
+    assert_eq!((secs[1].1.page_num_format, secs[1].1.page_num_start), (NumFormat::LowerRoman, Some(5)));
+}
+
 /// #5855: `layout.margins` refreshes layout before reading existing edges when editing a header/footer.
 #[test]
 fn margins_from_inherited_footer_targets_active_section() {

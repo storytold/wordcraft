@@ -224,22 +224,25 @@ fn manual_hyphenation(s: &mut Session, v: &Value) -> CmdResult {
     Ok(best.map(|(_, v)| v).unwrap_or_else(|| json!({"done": true})))
 }
 
+/// Whether `sec` displays header/footer part `id` (directly or inherited from an earlier section).
+pub(crate) fn section_uses_hf_part(sections: &[(usize, &SectionProps)], sec: usize, id: u32) -> bool {
+    let slice = sections.get(..=sec).unwrap_or(sections);
+    [
+        slice.iter().rev().find_map(|(_, sp)| sp.headers.default),
+        slice.iter().rev().find_map(|(_, sp)| sp.headers.first),
+        slice.iter().rev().find_map(|(_, sp)| sp.headers.even),
+        slice.iter().rev().find_map(|(_, sp)| sp.footers.default),
+        slice.iter().rev().find_map(|(_, sp)| sp.footers.first),
+        slice.iter().rev().find_map(|(_, sp)| sp.footers.even),
+    ]
+    .contains(&Some(id))
+}
+
 /// Resolve the section index associated with a header, footer, or note part `id`.
-fn section_of_part(s: &Session, id: u32) -> usize {
+pub(crate) fn section_of_part(s: &Session, id: u32) -> usize {
     let sections = s.doc.sections();
     if s.doc.parts.get(&id).is_some_and(|p| matches!(p.kind, wordcraft_doc::PartKind::Header | wordcraft_doc::PartKind::Footer)) {
-        let uses_hf = |sec: usize| {
-            let slice = sections.get(..=sec).unwrap_or(&sections);
-            [
-                slice.iter().rev().find_map(|(_, sp)| sp.headers.default),
-                slice.iter().rev().find_map(|(_, sp)| sp.headers.first),
-                slice.iter().rev().find_map(|(_, sp)| sp.headers.even),
-                slice.iter().rev().find_map(|(_, sp)| sp.footers.default),
-                slice.iter().rev().find_map(|(_, sp)| sp.footers.first),
-                slice.iter().rev().find_map(|(_, sp)| sp.footers.even),
-            ]
-            .contains(&Some(id))
-        };
+        let uses_hf = |sec: usize| section_uses_hf_part(&sections, sec, id);
         // The section of the page whose header or footer was opened decides: a footer inherited from
         // an earlier section still belongs to the later section that shows it. It is kept apart
         // from the page hint because a taller footer can repaginate the pages under it.
