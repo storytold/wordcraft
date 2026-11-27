@@ -17799,3 +17799,19 @@ fn header_text_covers_the_whole_band_of_centred_and_right_lines() {
         assert!(hit(x + left - 60.0), "{align:?}: beyond 40pt left of the band the picture is hit");
     }
 }
+
+#[test]
+fn evict_unused_caps_stale_entries_across_repeated_edits() {
+    crate::test_fonts();
+    let mut d = Document::from_text(&"line\n".repeat(599));
+    let mut c = LayoutCache::new();
+    layout(&d, &mut c, &LayoutOptions::default());
+    let base = c.len();
+    for pass in 0..40 {
+        for para_idx in 0..25 {
+            d.insert_text(&Pos::body(para_idx, 0), if pass % 2 == 0 { "a" } else { "b" }, &Default::default()).unwrap();
+        }
+        layout(&d, &mut c, &LayoutOptions::default());
+        assert!(c.len() <= base + 1025, "stale cache entries must be bounded (got {}, base {base})", c.len());
+    }
+}
