@@ -139,10 +139,27 @@ fn text_effects_menu(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
     }
 }
 
+fn format_font_size(s: f64) -> String {
+    if s.fract() == 0.0 { format!("{s:.0}") } else { format!("{s}") }
+}
+
+fn font_size_entries() -> &'static [Entry<String>] {
+    static ENTRIES: std::sync::OnceLock<Vec<Entry<String>>> = std::sync::OnceLock::new();
+    ENTRIES.get_or_init(|| {
+        wordcraft_engine::cmd::format::SIZES
+            .iter()
+            .map(|s| {
+                let label = format_font_size(f64::from(*s));
+                Entry::new(label.clone(), label)
+            })
+            .collect()
+    })
+}
+
 pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     // Read directly, not as a command: every command consumes the engine's pending undo joins, and
     // the ribbon draws between an input method's deletion and the commit that replaces it.
-    let st = wordcraft_engine::cmd::format::state(&app.session);
+    let st = wordcraft_engine::cmd::format::cached_state(&app.session);
     let flag = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
     row.group(ribbon_group("clipboard", "Clipboard", "paste", Some("edit.clipboardPane")), |ui| {
         // The face opens the menu and runs no command, so its tooltip adds Paste's key itself, as this
@@ -185,11 +202,8 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     if let Some(f) = out.picked {
                         let _ = app.run("format.font", json!({"name": f}));
                     }
-                    let fmt = |s: f64| if s.fract() == 0.0 { format!("{s:.0}") } else { format!("{s}") };
-                    let mut size = st.get("size").and_then(Value::as_f64).map(fmt).unwrap_or_default();
-                    let sizes: Vec<Entry<String>> =
-                        wordcraft_engine::cmd::format::SIZES.iter().map(|s| Entry::new(fmt(f64::from(*s)), fmt(f64::from(*s)))).collect();
-                    let out = craft::ui::pickers::ComboBox::new(tl!("Font Size").to_string(), Bind::bound(&mut size), &sizes)
+                    let mut size = st.get("size").and_then(Value::as_f64).map(format_font_size).unwrap_or_default();
+                    let out = craft::ui::pickers::ComboBox::new(tl!("Font Size").to_string(), Bind::bound(&mut size), font_size_entries())
                         .tooltip(tl!("Font Size").to_string())
                         .show(ui);
                     if let Some(v) = out.edit.events.committed()

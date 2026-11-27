@@ -249,6 +249,37 @@ fn the_status_bar_totals_are_the_word_count_dialogs_numbers() {
     assert_eq!(line(StatusCount::CharactersNoSpaces), "6 of 21 characters (no spaces)");
 }
 
+#[test]
+fn cached_status_count_words_matches_full_counts_across_edits() {
+    let mut a = new_app();
+    a.run("text.insert", json!({"text": "one two"})).unwrap();
+    assert_eq!(a.cached_status_count(StatusCount::Words), 2);
+
+    a.run("text.insert", json!({"text": " three four"})).unwrap();
+    assert_eq!(a.cached_status_count(StatusCount::Words), 4);
+    assert_eq!(a.cached_status_count(StatusCount::Words), a.cached_status_counts().words);
+    assert_eq!(a.cached_status_count(StatusCount::Characters), a.cached_status_counts().chars);
+}
+
+#[test]
+fn previews_style_gallery_reuses_arc_until_styles_change() {
+    let mut a = new_app();
+    let rev = a.session.rev();
+    let first = a.previews.style_gallery(&a.session.doc, rev);
+    let second = a.previews.style_gallery(&a.session.doc, rev);
+    assert!(std::sync::Arc::ptr_eq(&first, &second), "same rev should reuse cached style gallery Arc");
+    assert!(!first.is_empty());
+
+    a.run("text.insert", json!({"text": "changed"})).unwrap();
+    let typed = a.previews.style_gallery(&a.session.doc, a.session.rev());
+    assert!(std::sync::Arc::ptr_eq(&second, &typed), "text edit with identical style sheet reuses gallery Arc");
+
+    a.run("styles.create", json!({"name": "Stage7TestStyle", "fromSelection": false})).unwrap();
+    let updated = a.previews.style_gallery(&a.session.doc, a.session.rev());
+    assert!(!std::sync::Arc::ptr_eq(&typed, &updated), "changing styles refreshes style gallery");
+    assert!(updated.iter().any(|(_, name)| name == "Stage7TestStyle"));
+}
+
 /// The status bar's actions, through its menus by name: the count row sets the unit and is kept between
 /// runs, Overtype switches back to inserting.
 #[test]

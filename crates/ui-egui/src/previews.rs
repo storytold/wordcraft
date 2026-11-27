@@ -30,6 +30,7 @@ pub struct Previews {
     /// The Chinese, Japanese and Korean fonts of the font list (the Asian text font box).
     east_asian: Option<Vec<String>>,
     styles_hash: (u64, u64),
+    style_gallery: Option<(u64, &'static str, Arc<Vec<(String, String)>>)>,
 }
 
 impl Previews {
@@ -108,6 +109,7 @@ impl Previews {
     /// Another document is shown: its revisions count apart from the last one's.
     pub(crate) fn document_changed(&mut self) {
         self.styles_hash = (u64::MAX, 0);
+        self.style_gallery = None;
     }
 
     /// Hash of the style sheet (recomputed only when the document revision changes).
@@ -119,6 +121,22 @@ impl Previews {
             self.styles_hash = (rev, picture_key(&s));
         }
         self.styles_hash.1
+    }
+
+    /// Localized `(id, name)` entries for the Home › Styles gallery, cached by style-sheet key
+    /// and interface language.
+    pub(crate) fn style_gallery(&mut self, doc: &Document, rev: u64) -> Arc<Vec<(String, String)>> {
+        let key = self.styles_key(doc, rev);
+        let lang = crate::i18n::current().code();
+        if let Some((cached_key, cached_lang, entries)) = &self.style_gallery
+            && *cached_key == key
+            && *cached_lang == lang
+        {
+            return Arc::clone(entries);
+        }
+        let entries = Arc::new(doc.styles.gallery().iter().map(|s| (s.id.clone(), crate::i18n::style_name(s))).collect());
+        self.style_gallery = Some((key, lang, Arc::clone(&entries)));
+        entries
     }
 }
 

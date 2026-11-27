@@ -24,6 +24,9 @@ pub(crate) struct ChromeOpen {
     pub(crate) title_fit: Fit,
     /// How the status bar's controls fit the room the page leaves them.
     pub(crate) status_fit: Fit,
+    /// Cached word count `(document_id, count_key, words)` for [`StatusCount::Words`] so typing
+    /// avoids full-document text extraction and character scans.
+    pub(crate) status_words: Option<(u64, u64, usize)>,
 }
 
 /// The steps a bar's group of controls takes in a narrow window, from the fullest to the most compact.
@@ -244,6 +247,28 @@ impl WordApp {
         wordcraft_engine::cmd::font::warns(font, &shown).then_some(shown)
     }
 
+    /// The count in `unit` for the status bar, computing only word count when `unit` is
+    /// [`StatusCount::Words`] and the full [`StatusCounts`] has not already been cached.
+    pub fn cached_status_count(&mut self, unit: StatusCount) -> usize {
+        let key = self.session.rev().wrapping_mul(2) | u64::from(self.session.prefs.count_notes);
+        if self.status_counts.0 == key {
+            return self.status_counts.1.in_unit(unit);
+        }
+        if unit == StatusCount::Words {
+            let doc_id = self.session.document_id();
+            if let Some((cached_doc, cached_key, words)) = self.chrome.status_words
+                && cached_doc == doc_id
+                && cached_key == key
+            {
+                return words;
+            }
+            let words = self.session.word_count();
+            self.chrome.status_words = Some((doc_id, key, words));
+            return words;
+        }
+        self.cached_status_counts().in_unit(unit)
+    }
+
     /// The document's counts, recomputed only when the document (or the count option) changes:
     /// words as the status bar and the Word Count dialog count them, and characters with and
     /// without spaces as the dialog does (#2797).
@@ -252,14 +277,10 @@ impl WordApp {
         let key = self.session.rev().wrapping_mul(2) | u64::from(self.session.prefs.count_notes);
         if self.status_counts.0 != key {
             let text = self.session.counted_text();
-            self.status_counts = (
-                key,
-                StatusCounts {
-                    words: self.session.word_count(),
-                    chars: wordcraft_doc::count_chars(&text),
-                    chars_no_spaces: wordcraft_doc::count_chars_no_spaces(&text),
-                },
-            );
+            let words = self.session.word_count();
+            self.chrome.status_words = Some((self.session.document_id(), key, words));
+            self.status_counts =
+                (key, StatusCounts { words, chars: wordcraft_doc::count_chars(&text), chars_no_spaces: wordcraft_doc::count_chars_no_spaces(&text) });
         }
         self.status_counts.1
     }

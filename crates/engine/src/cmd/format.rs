@@ -1,5 +1,7 @@
 //! Character formatting (Home › Font).
 
+use std::sync::{Arc, PoisonError};
+
 use serde_json::{Value, json};
 use wordcraft_doc::eq::{EncloseShape, EncloseStyle, Enclosure};
 use wordcraft_doc::props::{Border, CharProps, Highlight, Rgb, TextColor, Underline, VertAlign};
@@ -8,7 +10,43 @@ use wordcraft_doc::{InlineObject, PartKind, Pos, RevisionKind, StoryRef};
 
 use super::sel_result;
 use super::tools::{is_turkic, lower_char, upper_char};
+use crate::doc_state::{ColumnBlock, Selection};
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
+
+#[derive(Clone, PartialEq)]
+struct StateKey {
+    document_id: u64,
+    rev: u64,
+    sel: Selection,
+    pending: Option<CharProps>,
+    pending_at: Option<Pos>,
+    column: Option<ColumnBlock>,
+    font_gen: u64,
+}
+
+/// Cached result of [`cached_state`] and the session inputs it depends on.
+pub(crate) struct StateCache {
+    key: StateKey,
+    value: Arc<Value>,
+}
+
+impl StateCache {
+    pub(crate) fn rev(&self) -> u64 {
+        self.key.rev
+    }
+}
+
+fn state_key(s: &Session) -> StateKey {
+    StateKey {
+        document_id: s.document_id(),
+        rev: s.rev(),
+        sel: s.sel.clone(),
+        pending: s.pending.clone(),
+        pending_at: s.pending_at.clone(),
+        column: s.column.clone(),
+        font_gen: wordcraft_fonts::FontDb::global().generation(),
+    }
+}
 
 /// Word's font size list.
 pub const SIZES: [f32; 17] = [8.0, 9.0, 10.0, 10.5, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 36.0, 48.0, 72.0];
@@ -879,8 +917,30 @@ fn set(s: &mut Session, v: &Value) -> CmdResult {
     apply(s, &|c| c.overlay(&props))
 }
 
+/// What the ribbon shows: the formatting at the selection (mixed values are null), cached per
+/// document revision, selection, pending caret state, column selection, and font generation.
+pub fn cached_state(s: &Session) -> Arc<Value> {
+    let key = state_key(s);
+    {
+        let cache = s.format_state.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(cached) = cache.as_ref()
+            && cached.key == key
+        {
+            return Arc::clone(&cached.value);
+        }
+    }
+    let value = Arc::new(compute_state(s));
+    let mut cache = s.format_state.lock().unwrap_or_else(PoisonError::into_inner);
+    *cache = Some(StateCache { key, value: Arc::clone(&value) });
+    value
+}
+
 /// What the ribbon shows: the formatting at the selection (mixed values are null).
 pub fn state(s: &Session) -> Value {
+    (*cached_state(s)).clone()
+}
+
+fn compute_state(s: &Session) -> Value {
     let all = resolved(s);
     let first = all.first().cloned();
     let same = |f: &dyn Fn(&ResolvedChar) -> Value| -> Value {
@@ -1053,5 +1113,31 @@ mod tests {
         // #3485: A period between two digits is a decimal point, not a sentence boundary.
         assert_eq!(convert("one 3.14 apples and two 2.5 pears.", "sentence", true), "One 3.14 apples and two 2.5 pears.");
         assert_eq!(convert("pi is 3.14. next sentence.", "sentence", true), "Pi is 3.14. Next sentence.");
+    }
+
+    #[test]
+    fn cached_state_hits_until_selection_format_or_pending_changes() {
+        use serde_json::json;
+        use std::sync::Arc;
+
+        let mut s = crate::Session::new(wordcraft_doc::Document::new());
+        let a = super::cached_state(&s);
+        let b = super::cached_state(&s);
+        assert!(Arc::ptr_eq(&a, &b), "unchanged session should reuse cached format state Arc");
+
+        s.run("text.insert", &json!({"text": "hello world"})).unwrap();
+        let c = super::cached_state(&s);
+        assert!(!Arc::ptr_eq(&b, &c), "text edit bumps rev and invalidates cache");
+
+        s.run("format.bold", &json!({})).unwrap();
+        let d = super::cached_state(&s);
+        assert!(!Arc::ptr_eq(&c, &d), "pending bold changes caret formatting");
+        assert_eq!(d["bold"], json!(true));
+        assert!(Arc::ptr_eq(&d, &super::cached_state(&s)));
+
+        s.run("select.text", &json!({"text": "hello"})).unwrap();
+        let e = super::cached_state(&s);
+        assert!(!Arc::ptr_eq(&d, &e), "selection change updates format state");
+        assert_eq!(e["bold"], json!(false));
     }
 }

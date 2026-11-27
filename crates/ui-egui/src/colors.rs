@@ -246,7 +246,7 @@ fn current_of(app: &mut WordApp, target: &Target) -> Option<Rgb> {
     let Target::Run { cmd, .. } = target else { return None };
     match cmd.as_str() {
         "format.color" => {
-            let st = wordcraft_engine::cmd::format::state(&app.session);
+            let st = wordcraft_engine::cmd::format::cached_state(&app.session);
             st.get("color").and_then(Value::as_str).and_then(parse)
         }
         _ => None,
@@ -482,8 +482,10 @@ pub(crate) fn highlight_button_appearance(name: &str) -> (&'static str, Option<C
 /// removes highlighting (#2105).
 fn highlight_body(ui: &mut Ui, app: &mut WordApp, cx: &mut BodyCx<'_>) -> ColorPick {
     use wordcraft_doc::props::Highlight;
-    let in_effect = Some(wordcraft_engine::cmd::format::state(&app.session))
-        .and_then(|st| st.get("highlight").and_then(Value::as_str).map(str::to_string))
+    let in_effect = wordcraft_engine::cmd::format::cached_state(&app.session)
+        .get("highlight")
+        .and_then(Value::as_str)
+        .map(str::to_string)
         .unwrap_or_else(|| "none".into());
     let shown: Vec<(&Highlight, Rgb)> = Highlight::ALL.iter().skip(1).filter_map(|h| h.rgb().map(|c| (h, c))).collect();
     let swatches: Vec<(Label, Srgba)> = shown.iter().map(|(h, c)| (Label::from(tl!(h.name()).to_string()), srgba(*c))).collect();

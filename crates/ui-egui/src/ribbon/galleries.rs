@@ -147,7 +147,7 @@ pub(crate) fn styles(ui: &mut Ui, app: &mut WordApp, current: Option<&str>) {
     let ppp = ui.ctx().pixels_per_point();
     let revision = style_revision(app, mode);
     let dark_page = app.session.view.dark_mode;
-    let entries: Vec<(String, String)> = app.session.doc.styles.gallery().iter().map(|s| (s.id.clone(), crate::i18n::style_name(s))).collect();
+    let entries = app.previews.style_gallery(&app.session.doc, app.session.rev());
     let current = current.unwrap_or("Normal").to_string();
     let out = {
         let doc = &app.session.doc;
