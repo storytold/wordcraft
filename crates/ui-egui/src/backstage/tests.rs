@@ -56,6 +56,263 @@ fn every_side_menu_item_has_a_drawn_icon() {
     }
 }
 
+fn to_color32(rgba: craft::theme::Rgba) -> egui::Color32 {
+    egui::Color32::from(craft::theme::Srgba::from(rgba))
+}
+
+fn collect_shapes<'a>(shapes: &'a [egui::epaint::ClippedShape], out: &mut Vec<&'a egui::Shape>) {
+    for clipped in shapes {
+        fn walk<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::Shape>) {
+            match shape {
+                egui::Shape::Vec(children) => {
+                    for child in children {
+                        walk(child, out);
+                    }
+                }
+                other => out.push(other),
+            }
+        }
+        walk(&clipped.shape, out);
+    }
+}
+
+/// WCAG contrast ratio between two opaque sRGB colours.
+fn contrast(a: egui::Color32, b: egui::Color32) -> f32 {
+    fn luminance(c: egui::Color32) -> f32 {
+        let lin = |v: u8| {
+            let v = f32::from(v) / 255.0;
+            if v <= 0.040_45 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+    }
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+/// Composited rect fill under `at`, blending translucent overlays over opaque fills in paint order.
+fn fill_under(h: &egui_kittest::Harness<'static, WordApp>, at: egui::Pos2) -> Option<egui::Color32> {
+    let mut shapes = Vec::new();
+    collect_shapes(&h.output().shapes, &mut shapes);
+    let mut acc: Option<[f32; 3]> = None;
+    for s in shapes {
+        if let egui::Shape::Rect(r) = s
+            && r.fill.a() > 0
+            && r.rect.contains(at)
+        {
+            if r.fill.a() == 255 {
+                acc = Some([f32::from(r.fill.r()), f32::from(r.fill.g()), f32::from(r.fill.b())]);
+            } else if let Some([br, bg, bb]) = acc {
+                let [pr, pg, pb, pa] = r.fill.to_array();
+                let inv = 1.0 - f32::from(pa) / 255.0;
+                acc = Some([(f32::from(pr) + br * inv).min(255.0), (f32::from(pg) + bg * inv).min(255.0), (f32::from(pb) + bb * inv).min(255.0)]);
+            }
+        }
+    }
+    acc.map(|[r, g, b]| egui::Color32::from_rgb(r.round() as u8, g.round() as u8, b.round() as u8))
+}
+
+fn step_frames(h: &mut egui_kittest::Harness<'static, WordApp>, rtl: bool, count: usize) {
+    if !rtl {
+        crate::test_harness::frames(h, count);
+        return;
+    }
+    for _ in 0..count {
+        let ctx = h.ctx.clone();
+        craft::ui::shell::embed::before_input(&ctx, |out| {
+            let mut input = h.state_mut().frame_input(out);
+            input.root = input.root.direction(craft::i18n::Direction::Rtl);
+            input
+        });
+        h.step();
+    }
+}
+
+fn framed_file_page(spec: impl FnOnce() -> craft::ui::InstallSpec + 'static, theme: &str, rtl: bool) -> egui_kittest::Harness<'static, WordApp> {
+    let mut a = new_app();
+    a.run("ui.theme", json!({"value": theme})).unwrap();
+    let mut h = crate::test_harness::builder_with(spec).with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    // macOS shortcut tooltips on Back draw "⎋", which minimal headless test fonts omit without craft-fonts.
+    h.ctx.add_glyph_rasterizer(egui::GlyphRasterizer::new("wordcraft::backstage::tests::mac_esc", |req| {
+        (req.cluster == "⎋").then(|| egui::RasterizedGlyph {
+            bitmap: egui::GlyphBitmap {
+                image: egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE]),
+                offset_px: egui::Vec2::ZERO,
+                is_color: false,
+            },
+            advance_px: req.font_size_px.max(1.0),
+        })
+    }));
+    step_frames(&mut h, rtl, 2);
+    h.state_mut().run("ui.backstage", json!({"value": true})).unwrap();
+    step_frames(&mut h, rtl, 6);
+    h
+}
+
+fn click_at(h: &mut egui_kittest::Harness<'static, WordApp>, at: egui::Pos2, rtl: bool) {
+    h.event(egui::Event::PointerMoved(at));
+    step_frames(h, rtl, 2);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    step_frames(h, rtl, 1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    step_frames(h, rtl, 4);
+}
+
+fn assert_back_on_brand_rail(h: &mut egui_kittest::Harness<'static, WordApp>, back: egui::Rect, rtl: bool, at: &str) {
+    let env = craft::ui::runtime::env::Env::of_root(&h.ctx);
+    let on_strong = to_color32(env.tokens.color.text.on_strong);
+    let mut shapes = Vec::new();
+    collect_shapes(&h.output().shapes, &mut shapes);
+    let icon_on_strong = shapes.iter().any(|s| match s {
+        egui::Shape::Mesh(mesh) => {
+            let bounds = mesh.calc_bounds();
+            back.expand(1.5).contains_rect(bounds) && !mesh.vertices.is_empty() && mesh.vertices.iter().all(|v| v.color == on_strong)
+        }
+        _ => false,
+    });
+    assert!(icon_on_strong, "{at}: Back chevron in {back:?} must paint in text.on_strong ({on_strong:?})");
+
+    let rail = fill_under(h, back.center()).unwrap_or_else(|| panic!("{at}: Back has no rail background under {back:?}"));
+    assert!(rail.b() > rail.r(), "{at}: Back rest background {rail:?} should show the blue brand rail");
+    assert!(contrast(on_strong, rail) >= 4.5, "{at}: Back rest contrast {:.2}:1 < 4.5 (bg {rail:?})", contrast(on_strong, rail));
+
+    h.event(egui::Event::PointerMoved(back.center()));
+    step_frames(h, rtl, 2);
+    let hovered = fill_under(h, back.center()).unwrap_or_else(|| panic!("{at}: hovered Back has no background"));
+    assert!(hovered != rail && hovered.b() > hovered.r(), "{at}: hovered Back {hovered:?} should blend a translucent overlay over rail {rail:?}");
+    assert!(contrast(on_strong, hovered) >= 3.0, "{at}: Back hovered contrast {:.2}:1 < 3.0 (bg {hovered:?})", contrast(on_strong, hovered));
+}
+
+/// #7462 / #7317 C6-2 (#222, #1873, #2972, #3041): on the File page `Back` paints its chevron in
+/// `text.on_strong` for `SurfaceKind::Brand` across Light and Dark themes, sits vertically centred
+/// beside the macOS traffic lights windowed (and shifts to plain rail padding in full screen or
+/// RTL), clears integrated caption bars and captions below `band`, omits any phantom top band on a
+/// native frame, and closes File only when Back itself is clicked.
+#[test]
+fn back_button_sits_beside_macos_lights_and_contrasts_with_brand_rail() {
+    use craft::host::target::{Caps, Os, ShellInfo};
+    use craft::ui::shell::{Caption, CaptionFamily, Captions, Frame, MacInset};
+    use craft::window::policy::{Decision, Desktop, DesktopKind};
+    use egui::accesskit::Role;
+
+    let mac_inset_spec = || {
+        let shell = ShellInfo::default().os(Os::Mac).caps(Caps::native(Os::Mac));
+        let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+        craft::ui::InstallSpec::new(shell, Arc::new(craft::ui::testing::windows::NoWindows)).frame(Decision {
+            frame: Frame::Inset(MacInset::default()),
+            overridden: None,
+            desktop,
+        })
+    };
+    let integrated_right_spec = || {
+        let layout = craft::window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
+        let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+        let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+        crate::test_harness::install_spec().frame(Decision { frame, overridden: None, desktop })
+    };
+    let integrated_left_spec = || {
+        let layout = craft::window::Layout { left: vec![Caption::Close, Caption::Maximize, Caption::Minimize], right: vec![] };
+        let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+        let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+        crate::test_harness::install_spec().frame(Decision { frame, overridden: None, desktop })
+    };
+    let native_spec = || {
+        let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+        crate::test_harness::install_spec().frame(Decision { frame: Frame::Native, overridden: None, desktop })
+    };
+
+    for theme in ["light", "dark"] {
+        // 1. macOS Inset windowed LTR: beside traffic lights inside 0..band.
+        let mut h = framed_file_page(mac_inset_spec, theme, false);
+        let pad = craft::ui::runtime::env::Env::of_root(&h.ctx).tokens.space.pad.regular;
+        let band = h.get_by_role_and_label(Role::Group, "Title Bar").rect();
+        let menu = h.get_by_role_and_label(Role::Group, "File").rect();
+        let windowed_back = h.get_by_role_and_label(Role::Button, "Back").rect();
+        let home = h.get_by_role_and_label(Role::Button, "Home").rect();
+        let at = format!("{theme} mac_inset_ltr");
+        assert!(
+            windowed_back.min.x >= band.min.x + MacInset::default().leading - 0.5 && windowed_back.max.y <= band.max.y + 1.0,
+            "{at}: Back {windowed_back:?} must sit beside traffic lights inside band {band:?}"
+        );
+        assert!(
+            (windowed_back.center().y - band.center().y).abs() <= 1.5,
+            "{at}: Back {windowed_back:?} should align vertically inside band {band:?}"
+        );
+        assert!(home.min.y >= band.max.y + pad - 1.5, "{at}: Home {home:?} sits {pad}pt below band {band:?}");
+        assert_back_on_brand_rail(&mut h, windowed_back, false, &at);
+
+        // Plain rail beside Back must not close File (#3041), while clicking Back closes it (#2972).
+        click_at(&mut h, egui::pos2(menu.max.x - 20.0, windowed_back.center().y), false);
+        assert!(h.state().ui.backstage, "{at}: clicking plain rail beside Back leaves File open");
+        click_at(&mut h, windowed_back.center(), false);
+        assert!(!h.state().ui.backstage, "{at}: clicking Back closes File");
+
+        // 2. macOS Inset full screen (#1873): traffic lights leave the band, so Back shifts to rail pad.
+        h.state_mut().run("ui.backstage", json!({"value": true})).unwrap();
+        h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().fullscreen = Some(true);
+        step_frames(&mut h, false, 6);
+        let full_menu = h.get_by_role_and_label(Role::Group, "File").rect();
+        let full_back = h.get_by_role_and_label(Role::Button, "Back").rect();
+        assert!(
+            (full_back.min.x - full_menu.min.x - pad).abs() <= 1.5 && (full_back.min.y - full_menu.min.y - pad).abs() <= 1.5,
+            "{theme} mac_fullscreen: Back {full_back:?} should sit at plain rail pad {pad} inside {full_menu:?}"
+        );
+        assert!(full_back.min.x < windowed_back.min.x, "{theme} mac_fullscreen: Back shifts left of traffic lights inset");
+
+        // 3. macOS Inset RTL: rail is on the physical right, Back sits inside 0..band at `pad` from the right edge.
+        let mut h = framed_file_page(mac_inset_spec, theme, true);
+        let band = h.get_by_role_and_label(Role::Group, "Title Bar").rect();
+        let menu = h.get_by_role_and_label(Role::Group, "File").rect();
+        let back = h.get_by_role_and_label(Role::Button, "Back").rect();
+        let at = format!("{theme} mac_inset_rtl");
+        assert!(menu.min.x > 1000.0, "{at}: side menu moves to physical right: {menu:?}");
+        assert!(back.max.y <= band.max.y + 1.0, "{at}: Back {back:?} stays inside top band {band:?}");
+        assert!((back.center().y - band.center().y).abs() <= 1.5, "{at}: Back {back:?} aligns vertically in {band:?}");
+        assert!((menu.max.x - back.max.x - pad).abs() <= 1.5, "{at}: Back {back:?} keeps {pad}pt from right edge of {menu:?}");
+        assert_back_on_brand_rail(&mut h, back, true, &at);
+
+        // 4. Integrated frames (Windows right-captions and Linux/GNOME left-captions): Back clears the top band below captions with plain horizontal padding.
+        for (captions_side, spec) in [
+            ("integrated_right", integrated_right_spec as fn() -> craft::ui::InstallSpec),
+            ("integrated_left", integrated_left_spec as fn() -> craft::ui::InstallSpec),
+        ] {
+            let mut h = framed_file_page(spec, theme, false);
+            let band = h.get_by_role_and_label(Role::Group, "Title Bar").rect();
+            let menu = h.get_by_role_and_label(Role::Group, "File").rect();
+            let back = h.get_by_role_and_label(Role::Button, "Back").rect();
+            let home = h.get_by_role_and_label(Role::Button, "Home").rect();
+            let at = format!("{theme} {captions_side}");
+            assert!(back.min.y >= band.max.y - 1.0, "{at}: integrated Back {back:?} must sit below band {band:?}");
+            assert!((back.min.x - menu.min.x - pad).abs() <= 1.5, "{at}: integrated Back {back:?} keeps {pad}pt from {menu:?}");
+            assert!(home.min.y > back.max.y, "{at}: Home {home:?} sits below Back {back:?}");
+            for caption in ["Minimize", "Maximize", "Close"] {
+                for btn in h.query_all_by_role_and_label(Role::Button, caption) {
+                    if band.contains_rect(btn.rect()) {
+                        assert!(!btn.rect().intersect(back).is_positive(), "{at}: Back {back:?} overlaps {caption}");
+                    }
+                }
+            }
+            assert_back_on_brand_rail(&mut h, back, false, &at);
+        }
+
+        // 5. Native frame: no phantom band gap beneath the OS title bar, Back sits at `pad` from top and start.
+        let mut h = framed_file_page(native_spec, theme, false);
+        let menu = h.get_by_role_and_label(Role::Group, "File").rect();
+        let back = h.get_by_role_and_label(Role::Button, "Back").rect();
+        assert!(
+            (back.min.x - menu.min.x - pad).abs() <= 1.5 && (back.min.y - menu.min.y - pad).abs() <= 1.5,
+            "{theme} native: Back {back:?} should sit at ({pad}, {pad}) inside {menu:?}"
+        );
+        assert_back_on_brand_rail(&mut h, back, false, &format!("{theme} native"));
+    }
+}
+
 /// #2938: opening a deleted file from Recent keeps File open and the page shows the error instead
 /// of closing it on a greyed-out window.
 #[test]

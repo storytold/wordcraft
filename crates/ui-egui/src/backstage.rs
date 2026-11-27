@@ -8,11 +8,12 @@ mod thumbs;
 use std::cell::{Cell, RefCell};
 
 use craft::behavior::IconId;
-use craft::theme::Variant;
 use craft::theme::variant::Tone;
+use craft::theme::{CustomVariant, Rgba, States, Variant, VariantLook};
 use craft::ui::buttons::Button;
 use craft::ui::buttons::ControlPlace;
 use craft::ui::buttons::IconButton;
+use craft::ui::buttons::icon_button::IconButtonStyleKey;
 use craft::ui::contract::{
     BodyCx, CollectionEvent, Commands as _, Gap, LeastWidth, Pad, Props as _, Scroll, Show as _, ShowContainer as _, Sizing, clicked,
 };
@@ -20,7 +21,7 @@ use craft::ui::display::Text;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::notices::Notice;
 use craft::ui::primitives::{HAlign, IconSpec};
-use craft::ui::runtime::env::{Label, with_env};
+use craft::ui::runtime::env::{Env, Label, with_env};
 use craft::ui::runtime::inspect;
 use craft::ui::style::{SurfaceKind, TypeRole};
 use egui::Ui;
@@ -183,11 +184,21 @@ pub(crate) fn show(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
             BackstagePageCommand::Print => {}
         }
     }
-    // The page band, the window's move band, lies over the top of the window; the controls start below it. The side
-    // menu's back button clears it. The page's own margin (production's 30 pt over its title) already reaches below a
-    // title bar's height, so only what the band takes past that margin is cleared there.
-    let band = cx.shell().and_then(|shell| shell.page_band()).map_or(0.0, |band| band.rect.height());
-    let page_band = (band - craft::ui::contract::pad_of(&craft::ui::runtime::env::Env::of(ui).tokens, Pad::Page)).max(0.0);
+    // The page band, the window's move band, lies over the top of an app-framed window; on macOS (`Frame::Inset`) the
+    // back chevron shares the band beside the traffic lights (#222, #1873), while under an integrated frame it clears
+    // the band below. Under an OS-drawn frame (`Frame::Native`) the OS owns the title bar above the viewport.
+    let frame = craft::ui::runtime::windows::WindowHost::of(&ctx).frame();
+    let band_room = match frame {
+        craft::ui::shell::Frame::Native => None,
+        _ => cx.shell().and_then(|shell| shell.page_band()).filter(|room| room.rect.height() > 0.0),
+    };
+    let band_height = band_room.as_ref().map_or(0.0, |room| room.rect.height());
+    let band = BandRoom {
+        height: band_height,
+        start_inset: band_room.as_ref().map_or(0.0, |room| room.start),
+        inset: matches!(frame, craft::ui::shell::Frame::Inset(_)) && band_height > 0.0,
+    };
+    let page_band = (band.height - craft::ui::contract::pad_of(&Env::of(ui).tokens, Pad::Page)).max(0.0);
     let choice = MenuChoice::default();
     let current = app.ui.backstage_page.clone();
     let show_discord = app.ui.show_discord;
@@ -239,10 +250,29 @@ fn page_body(ui: &mut Ui, app: &mut WordApp, page: &str) {
     }
 }
 
+#[derive(Clone, Copy)]
+struct BandRoom {
+    height: f32,
+    start_inset: f32,
+    inset: bool,
+}
+
+fn back_icon_look(tokens: &craft::theme::Tokens) -> VariantLook {
+    let ink = tokens.color.text.on_strong;
+    let clear = Rgba::TRANSPARENT;
+    let mut look = Variant::GHOST.resolve(tokens);
+    look.fill = States::new(clear, ink.with_alpha(26), ink.with_alpha(46), clear);
+    look.text = States::new(ink, ink, ink, ink.with_alpha(110));
+    look.edge = None;
+    look
+}
+
+const BACK_ICON: CustomVariant = CustomVariant::new::<IconButtonStyleKey>("wordcraft.backstage-back", back_icon_look);
+
 /// The side menu: Back, one button per page (the page buttons are one inspected region, from which
 /// the keytips take their rects), then About and the community link unless the user turned the
 /// community button off, as the title bar's pill does.
-fn side_menu(ui: &mut Ui, band: f32, current: &str, has_document: bool, show_discord: bool, choice: &MenuChoice) {
+fn side_menu(ui: &mut Ui, band: BandRoom, current: &str, has_document: bool, show_discord: bool, choice: &MenuChoice) {
     // At least the side menu's width and as tall as the window, About at its foot (production's 200 pt full-height
     // rail); its rows are the side menu place's (production's 38 pt rows of 14 pt names).
     let _ = Stack::new()
@@ -253,8 +283,26 @@ fn side_menu(ui: &mut Ui, band: f32, current: &str, has_document: bool, show_dis
         .gap(Gap::None)
         .scroll(Scroll::vertical())
         .header(move |ui, _| {
-            ui.add_space(band);
-            let _ = IconButton::command(IconSpec::svg(IconId::new("chevronLeft")), BackstagePageCommand::Back).show(ui);
+            let (top_space, lead_space, after_space) = {
+                let ui_tokens = &Env::of(ui).tokens;
+                let tokens = ui_tokens.tokens();
+                let pad = tokens.space.pad.regular;
+                if band.inset {
+                    let v_pad = ((band.height - tokens.size.control.md) * 0.5).max(0.0);
+                    (v_pad, band.start_inset.max(pad), v_pad + pad)
+                } else {
+                    let top = if band.height > 0.0 { band.height } else { pad };
+                    (top, pad, tokens.space.gap.tight)
+                }
+            };
+            ui.add_space(top_space);
+            let _ = Row::new().fill_width().gap(Gap::None).show(ui, |ui, _| {
+                ui.add_space(lead_space);
+                let _ = IconButton::command(IconSpec::svg(IconId::new("chevronLeft")), BackstagePageCommand::Back)
+                    .variant(Variant::Custom(BACK_ICON))
+                    .show(ui);
+            });
+            ui.add_space(after_space);
         })
         // The community link above About, both at the reading start, as production's bottom links: rows of the side
         // menu place too, so they read in the rail's white ink over the brand colour, not a panel button's dark ink.
