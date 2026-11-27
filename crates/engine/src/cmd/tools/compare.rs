@@ -4,6 +4,7 @@ use super::{
     Arc, Block, CharProps, CmdError, CmdResult, Document, InlineObject, Paragraph, RevisionKind, Selection, Session, StoryRef, Value, json, p,
     para_block,
 };
+use crate::cmd::fmt_revisions::MAX_DEPTH;
 use wordcraft_doc::para::OBJ;
 
 /// Compare and Combine take the same settings.
@@ -123,7 +124,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let mut budget = MAX_COMPARE_CELLS;
     let mut char_fallbacks = 0usize;
     let mut table_fallbacks = 0usize;
-    let (out, changes) = {
+    let (out, mut changes) = {
         let mut ctx = DiffCtx {
             ins,
             del,
@@ -140,6 +141,25 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         (out, ctx.changes)
     };
     s.doc.body = out;
+    // The final section has no block of its own: compare it explicitly. A section-only
+    // difference is tracked (`w:sectPrChange`) and the revised section's properties win, so
+    // rejecting restores the original's. Plain-text input has no section of its own — the one
+    // `Document::from_text` builds is a synthetic default, not an authored layout — so the
+    // original's final section is kept untouched on that path.
+    if opts.formatting && !plain_revised {
+        let mut section = revised.last_section.clone();
+        if crate::cmd::fmt_revisions::compare_section(&s.doc.last_section, &mut section, &mut s.doc.revisions, &author, &date) {
+            // References are content, not formatting: `strip_section` keeps them out of the
+            // comparison and `resolve_section` preserves them across accept/reject. The adopted
+            // section therefore keeps the original's headers and footers, so a reference-only
+            // change records nothing and a property change can never leak the revised
+            // document's stories or leave Reject unable to restore the original ones.
+            section.headers = s.doc.last_section.headers;
+            section.footers = s.doc.last_section.footers;
+            s.doc.last_section = section;
+            changes += 1;
+        }
+    }
     s.doc.ensure_nonempty();
     s.note_body_replaced();
     s.math = None;
@@ -202,7 +222,7 @@ fn diff_blocks(doc: &mut Document, old: &[Arc<Block>], new: &[Arc<Block>], ctx: 
                         if ctx.opts.formatting && pa.text == pb.text {
                             let before = doc.revisions.len();
                             crate::cmd::fmt_revisions::compare_formatting(pa, &mut p, &mut doc.revisions, ctx.author, ctx.date);
-                            if doc.revisions.len() > before || p != *pb {
+                            if doc.revisions.len() > before || para_changed_ignoring_refs(&p, pb) {
                                 ctx.changes = ctx.changes.saturating_add(1);
                             }
                         }
@@ -262,7 +282,20 @@ fn diff_matched_table(
     out: &mut Vec<Arc<Block>>,
 ) {
     if ta == tb || table_media_keys(ta) == table_media_keys(tb) {
-        if let Some(x) = b.or(a) {
+        if let (Some(ab), Some(bb)) = (a, b) {
+            // The table's text and media are unchanged, but its own, its rows' and its
+            // cells' properties may have changed: property-compare it so those changes
+            // are tracked, then keep the revised table.
+            let mut t = (*bb).clone();
+            if ctx.opts.formatting {
+                let before = doc.revisions.len();
+                crate::cmd::fmt_revisions::compare_block(ab, &mut t, &mut doc.revisions, ctx.author, ctx.date);
+                if doc.revisions.len() > before || block_changed_ignoring_refs(&t, bb) {
+                    ctx.changes = ctx.changes.saturating_add(1);
+                }
+            }
+            out.push(t);
+        } else if let Some(x) = b.or(a) {
             out.push(x.clone());
         }
     } else if depth < wordcraft_doc::table::MAX_TABLE_DEPTH && same_table_cells(ta, tb, ctx) {
@@ -769,6 +802,64 @@ fn obj_key(doc: &Document, o: &InlineObject) -> Key {
 /// Whether two paragraphs hold the same objects, as compared.
 fn same_objects(doc: &Document, a: &Paragraph, b: &Paragraph) -> bool {
     a.objects.len() == b.objects.len() && a.objects.iter().zip(&b.objects).all(|(x, y)| x == y || obj_key(doc, x) == obj_key(doc, y))
+}
+
+/// A paragraph with its embedded section's header/footer references cleared. Compare restores
+/// those to the original's (`Recorder::para`, the compare entry points), so they are content, not
+/// a formatting change: judging whether an adoption did anything must ignore them.
+fn para_without_section_refs(p: &Paragraph) -> Paragraph {
+    let mut p = p.clone();
+    if let Some(s) = p.section.as_deref_mut() {
+        s.headers = Default::default();
+        s.footers = Default::default();
+    }
+    p
+}
+
+/// Whether `after` differs from `before` in anything but a restored embedded-section reference;
+/// without a section on either side (the common case) it compares directly, no clone.
+fn para_changed_ignoring_refs(after: &Paragraph, before: &Paragraph) -> bool {
+    if after.section.is_none() && before.section.is_none() {
+        after != before
+    } else {
+        para_without_section_refs(after) != para_without_section_refs(before)
+    }
+}
+
+/// Whether a block holds an embedded section anywhere (in a table's cells' paragraphs).
+fn block_has_section(b: &Block, depth: usize) -> bool {
+    match b {
+        Block::Para(p) => p.section.is_some(),
+        Block::Table(t) if depth < MAX_DEPTH => {
+            t.rows.iter().flat_map(|r| r.cells.iter()).flat_map(|c| c.blocks.iter()).any(|x| block_has_section(x, depth + 1))
+        }
+        _ => false,
+    }
+}
+
+/// As [`para_without_section_refs`], for a block (recursing into a table's cells).
+fn block_without_section_refs(b: &Block, depth: usize) -> Block {
+    match b {
+        Block::Para(p) => Block::Para(para_without_section_refs(p)),
+        Block::Table(t) if depth < MAX_DEPTH => {
+            let mut t = t.clone();
+            for c in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+                c.blocks = c.blocks.iter().map(|x| Arc::new(block_without_section_refs(x, depth + 1))).collect();
+            }
+            Block::Table(t)
+        }
+        _ => b.clone(),
+    }
+}
+
+/// Whether `after` differs from `before` in anything but restored embedded-section references;
+/// without a section anywhere (the common case) it compares directly, no clone.
+fn block_changed_ignoring_refs(after: &Block, before: &Block) -> bool {
+    if !block_has_section(after, 0) && !block_has_section(before, 0) {
+        after != before
+    } else {
+        block_without_section_refs(after, 0) != block_without_section_refs(before, 0)
+    }
 }
 
 /// Words with the spaces after them ("The ", "cat "), or single characters, and the objects
