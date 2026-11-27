@@ -2052,6 +2052,341 @@ fn colour_fields_say_their_label_and_colour_in_the_interface_language() {
     }
 }
 
+/// #5833: Modify Style rejects a tab it does not draw and keeps the previous selection.
+#[test]
+fn modify_style_rejects_unsupported_tab() {
+    let mut h = app_harness(app_with("Body text."));
+    crate::test_harness::frames(&mut h, 2);
+    let try_tab = |h: &mut egui_kittest::Harness<'_, WordApp>, id: DialogId, tab: Json| {
+        let ctx = h.ctx.clone();
+        h.state_mut().dialog_host.set_json_field(&ctx, id, "tab", tab)
+    };
+
+    let id = open_named(&mut h, "modifyStyle", json!({"style": "FootnoteText"}));
+    assert!(try_tab(&mut h, id, json!(1)).is_ok());
+    assert_eq!(fields_of(h.state(), "modifyStyle")["tab"], json!(1));
+    for bad in [json!(2), json!(255), json!(-1), json!("1")] {
+        assert!(try_tab(&mut h, id, bad.clone()).is_err(), "{bad} is refused");
+        assert_eq!(fields_of(h.state(), "modifyStyle")["tab"], json!(1), "a refused tab keeps Paragraph selected");
+    }
+    let ctx = h.ctx.clone();
+    close_all(h.state_mut(), &ctx);
+    h.run_steps(2);
+
+    let id = open_named(&mut h, "modifyStyle", json!({"style": "FootnoteReference"}));
+    assert!(try_tab(&mut h, id, json!(1)).is_err(), "a character style has no Paragraph tab");
+    assert_eq!(fields_of(h.state(), "modifyStyle")["tab"], json!(0), "the Font tab stays selected");
+    assert!(try_tab(&mut h, id, json!(0)).is_ok());
+}
+
+/// #5833: Modify Style offers paragraph formatting (alignment, indents, first line, line spacing)
+/// on its Paragraph tab, allowing footnotes and styles to have indents without manually formatting
+/// each footnote paragraph.
+#[test]
+fn modify_style_configures_paragraph_options_and_indents() {
+    use egui::accesskit::Role;
+
+    let mut app = app_with("Body text.");
+    let fn_res = app.run("references.footnote", json!({"text": "Footnote body."})).unwrap();
+    let fn_story = wordcraft_doc::StoryRef::Part(fn_res["id"].as_u64().unwrap() as u32);
+
+    // Initially, FootnoteText has no first-line or left indent.
+    let rp0 = app.session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some("FootnoteText".into()), ..Default::default() });
+    assert_eq!(rp0.indent_first, 0.0);
+    assert_eq!(rp0.indent_left, 0.0);
+
+    let mut h = app_harness(app);
+    crate::test_harness::frames(&mut h, 2);
+
+    // Opening Modify Style for a character style has isChar true and hides the Paragraph tab.
+    open_named(&mut h, "modifyStyle", json!({"style": "FootnoteReference"}));
+    assert_eq!(fields_of(h.state(), "modifyStyle")["isChar"], json!(true), "FootnoteReference is a character style");
+    assert!(h.query_by_role_and_label(Role::Tab, "Paragraph").is_none());
+    let ctx = h.ctx.clone();
+    close_all(h.state_mut(), &ctx);
+    h.run_steps(2);
+
+    // Open Modify Style for FootnoteText and switch to the Paragraph tab.
+    open_named(&mut h, "modifyStyle", json!({"style": "FootnoteText"}));
+    assert_eq!(fields_of(h.state(), "modifyStyle")["isChar"], json!(false), "FootnoteText is a paragraph style");
+    assert_eq!(fields_of(h.state(), "modifyStyle")["tab"], json!(0));
+
+    h.get_by_role_and_label(Role::Tab, "Paragraph").click();
+    crate::test_harness::frames(&mut h, 2);
+    assert_eq!(fields_of(h.state(), "modifyStyle")["tab"], json!(1));
+
+    set_field(&mut h, "modifyStyle", "first", json!(36.0));
+    set_field(&mut h, "modifyStyle", "left", json!(18.0));
+    set_field(&mut h, "modifyStyle", "align", json!("center"));
+    press(&mut h, "OK");
+    assert!(!is_open(h.state(), "modifyStyle"));
+
+    // Style itself now resolves with updated first-line indent, left indent, and center alignment.
+    let rp1 = h.state().session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some("FootnoteText".into()), ..Default::default() });
+    assert_eq!(rp1.indent_first, 36.0);
+    assert_eq!(rp1.indent_left, 18.0);
+    assert_eq!(rp1.align, wordcraft_doc::Align::Center);
+
+    // Footnote paragraph in footnote story automatically inherits these style properties.
+    let foot_para = h.state().session.doc.para(fn_story, &wordcraft_doc::Path::top(0)).unwrap();
+    let foot_rp = h.state().session.doc.styles.resolve_para(&foot_para.props);
+    assert_eq!(foot_rp.indent_first, 36.0);
+    assert_eq!(foot_rp.indent_left, 18.0);
+    assert_eq!(foot_rp.align, wordcraft_doc::Align::Center);
+}
+
+/// #5833: editing a style with non-multiple line spacing (e.g., Exactly or At Least) preserves
+/// that non-multiple line spacing when the user does not change the line spacing box in Modify Style.
+#[test]
+fn modify_style_preserves_non_multiple_line_spacing_when_unchanged() {
+    use wordcraft_doc::props::LineSpacing;
+
+    let mut app = app_with("Sample text.");
+    app.run(
+        "styles.modify",
+        json!({
+            "style": "FootnoteText",
+            "para": {
+                "lineSpacing": {"rule": "exactly", "value": 24.0}
+            }
+        }),
+    )
+    .unwrap();
+
+    let rp0 = app.session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some("FootnoteText".into()), ..Default::default() });
+    assert_eq!(rp0.line_spacing, LineSpacing::Exactly(24.0));
+
+    let mut h = app_harness(app);
+    crate::test_harness::frames(&mut h, 2);
+
+    // Open Modify Style for FootnoteText: line is None while non-multiple line spacing is active.
+    open_named(&mut h, "modifyStyle", json!({"style": "FootnoteText"}));
+    assert!(fields_of(h.state(), "modifyStyle")["line"].is_null());
+
+    // Modify only alignment without touching line spacing.
+    set_field(&mut h, "modifyStyle", "align", json!("center"));
+    press(&mut h, "OK");
+    assert!(!is_open(h.state(), "modifyStyle"));
+
+    // Verify alignment updated but Exactly(24.0) line spacing was preserved.
+    let rp1 = h.state().session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some("FootnoteText".into()), ..Default::default() });
+    assert_eq!(rp1.align, wordcraft_doc::Align::Center);
+    assert_eq!(rp1.line_spacing, LineSpacing::Exactly(24.0));
+
+    // When line spacing IS explicitly edited, multiple line spacing replaces the fixed spacing.
+    open_named(&mut h, "modifyStyle", json!({"style": "FootnoteText"}));
+    set_field(&mut h, "modifyStyle", "line", json!(1.5));
+    press(&mut h, "OK");
+    assert!(!is_open(h.state(), "modifyStyle"));
+
+    let rp2 = h.state().session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some("FootnoteText".into()), ..Default::default() });
+    assert_eq!(rp2.line_spacing, LineSpacing::Multiple(1.5));
+}
+
+/// #5833: when a style has non-multiple line spacing (e.g. Exactly(24)), typing 1.0 into
+/// Line spacing explicitly switches it to Single (Multiple(1.0)) rather than keeping Exactly(24).
+#[test]
+fn modify_style_can_switch_non_multiple_to_single_line_spacing() {
+    use egui::accesskit::Role;
+    use wordcraft_doc::props::LineSpacing;
+
+    let mut app = app_with("Sample text.");
+    app.run(
+        "styles.modify",
+        json!({
+            "style": "FootnoteText",
+            "para": {
+                "lineSpacing": {"rule": "exactly", "value": 24.0}
+            }
+        }),
+    )
+    .unwrap();
+
+    let mut h = app_harness(app);
+    crate::test_harness::frames(&mut h, 2);
+
+    open_named(&mut h, "modifyStyle", json!({"style": "FootnoteText"}));
+    h.get_by_role_and_label(Role::Tab, "Paragraph").click();
+    crate::test_harness::frames(&mut h, 2);
+
+    // Focus the Line spacing field and type "1" to select Single (Multiple(1.0)).
+    h.get_by_role_and_label(Role::SpinButton, "Line spacing:").click();
+    crate::test_harness::frames(&mut h, 2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    crate::test_harness::frames(&mut h, 1);
+    h.get_by_role_and_label(Role::SpinButton, "Line spacing:").type_text("1");
+    crate::test_harness::frames(&mut h, 2);
+    h.key_press(egui::Key::Tab);
+    crate::test_harness::frames(&mut h, 2);
+    press(&mut h, "OK");
+    assert!(!is_open(h.state(), "modifyStyle"));
+
+    let rp = h.state().session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some("FootnoteText".into()), ..Default::default() });
+    assert_eq!(rp.line_spacing, LineSpacing::Multiple(1.0));
+}
+
+/// #5833: opening Modify Style and clicking OK with no edits preserves the style's own properties
+/// without saving unedited values, so derived styles continue inheriting updates from their base style.
+#[test]
+fn modify_style_ok_with_no_edits_preserves_own_properties_and_base_inheritance() {
+    let mut app = app_with("Some document text.");
+    app.run("styles.create", json!({"name": "BaseStyle", "basedOn": "Normal"})).unwrap();
+    app.run("styles.modify", json!({"style": "BaseStyle", "chr": {"size": 18.0}, "para": {"indentLeft": 36.0, "align": "center"}})).unwrap();
+    app.run("styles.create", json!({"name": "DerivedStyle", "basedOn": "BaseStyle"})).unwrap();
+
+    // DerivedStyle initially inherits BaseStyle's properties.
+    let rp_init = app.session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some("DerivedStyle".into()), ..Default::default() });
+    assert_eq!(rp_init.indent_left, 36.0);
+    assert_eq!(rp_init.align, wordcraft_doc::Align::Center);
+
+    let st_before = app.session.doc.styles.get("DerivedStyle").unwrap();
+    assert!(st_before.para.indent_left.is_none());
+    assert!(st_before.para.align.is_none());
+    assert!(st_before.chr.size.is_none());
+
+    // Open Modify Style for DerivedStyle and click OK with no edits.
+    let mut h = app_harness(app);
+    crate::test_harness::frames(&mut h, 2);
+    open_named(&mut h, "modifyStyle", json!({"style": "DerivedStyle"}));
+    press(&mut h, "OK");
+    assert!(!is_open(h.state(), "modifyStyle"));
+
+    // DerivedStyle's own properties remain unset, avoiding shadowing of base style properties.
+    let st_after = h.state().session.doc.styles.get("DerivedStyle").unwrap();
+    assert_eq!(st_after.para.indent_left, None, "DerivedStyle must not store own indentLeft");
+    assert_eq!(st_after.para.align, None, "DerivedStyle must not store own align");
+    assert_eq!(st_after.chr.size, None, "DerivedStyle must not store own size");
+
+    // Later edits to BaseStyle still reach DerivedStyle.
+    h.state_mut().run("styles.modify", json!({"style": "BaseStyle", "para": {"indentLeft": 72.0}})).unwrap();
+
+    let rp_propagated =
+        h.state().session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some("DerivedStyle".into()), ..Default::default() });
+    assert_eq!(rp_propagated.indent_left, 72.0, "DerivedStyle must follow BaseStyle updates");
+}
+
+/// #5833: right-to-left styles round-trip unchanged on OK without swapping visual left/right coordinates,
+/// and visual edits convert back to logical values on save.
+#[test]
+fn modify_style_rtl_round_trips_unchanged() {
+    let mut app = app_with("نص عربي");
+    app.run("styles.create", json!({"name": "RtlStyle", "basedOn": "Normal"})).unwrap();
+    app.run(
+        "styles.modify",
+        json!({
+            "style": "RtlStyle",
+            "para": {
+                "bidi": true,
+                "indentLeft": 18.0,
+                "indentRight": 36.0,
+                "align": "left",
+            },
+        }),
+    )
+    .unwrap();
+
+    let st_orig = app.session.doc.styles.get("RtlStyle").unwrap();
+    assert_eq!(st_orig.para.bidi, Some(true));
+    assert_eq!(st_orig.para.indent_left, Some(18.0));
+    assert_eq!(st_orig.para.indent_right, Some(36.0));
+    assert_eq!(st_orig.para.align, Some(wordcraft_doc::Align::Left));
+
+    // Open Modify Style. In RTL, visual indents and alignment are displayed flipped:
+    // visual Left = logical indent_right (36.0), visual Right = logical indent_left (18.0).
+    // visual align = Align::Left.visual(true) = Align::Right ("right").
+    let mut h = app_harness(app);
+    crate::test_harness::frames(&mut h, 2);
+    open_named(&mut h, "modifyStyle", json!({"style": "RtlStyle"}));
+    let fields = fields_of(h.state(), "modifyStyle");
+    assert_eq!(fields["bidi"], json!(true));
+    assert!((fields["left"].as_f64().unwrap() - 36.0).abs() < 0.001);
+    assert!((fields["right"].as_f64().unwrap() - 18.0).abs() < 0.001);
+    assert_eq!(fields["align"], json!("right"));
+
+    // Press OK with no edits.
+    press(&mut h, "OK");
+    assert!(!is_open(h.state(), "modifyStyle"));
+
+    // Verify RTL style round-tripped unchanged: left and right indents and alignment did not swap.
+    let st_after = h.state().session.doc.styles.get("RtlStyle").unwrap();
+    assert_eq!(st_after.para.indent_left, Some(18.0));
+    assert_eq!(st_after.para.indent_right, Some(36.0));
+    assert_eq!(st_after.para.align, Some(wordcraft_doc::Align::Left));
+
+    // Edit visual alignment in RTL dialog to visual "left" (which is logical "right").
+    open_named(&mut h, "modifyStyle", json!({"style": "RtlStyle"}));
+    set_field(&mut h, "modifyStyle", "align", json!("left"));
+    press(&mut h, "OK");
+    assert!(!is_open(h.state(), "modifyStyle"));
+
+    let st_align_edit = h.state().session.doc.styles.get("RtlStyle").unwrap();
+    assert_eq!(st_align_edit.para.align, Some(wordcraft_doc::Align::Right));
+}
+
+/// #5833: character-unit indents on a paragraph style survive a font-only edit without
+/// being cleared by cancel_char_indents.
+#[test]
+fn modify_style_character_indents_survive_font_only_edit() {
+    let mut app = app_with("Sample document.");
+    app.run("styles.create", json!({"name": "CharIndentStyle", "basedOn": "Normal"})).unwrap();
+    app.run(
+        "styles.modify",
+        json!({
+            "style": "CharIndentStyle",
+            "para": {
+                "indentFirstChars": 2.0,
+                "indentLeftChars": 1.5,
+            },
+        }),
+    )
+    .unwrap();
+
+    let st_orig = app.session.doc.styles.get("CharIndentStyle").unwrap();
+    assert_eq!(st_orig.para.indent_first_chars, Some(2.0));
+    assert_eq!(st_orig.para.indent_left_chars, Some(1.5));
+
+    // Open Modify Style and edit only font size on the Font tab.
+    let mut h = app_harness(app);
+    crate::test_harness::frames(&mut h, 2);
+    open_named(&mut h, "modifyStyle", json!({"style": "CharIndentStyle"}));
+    set_field(&mut h, "modifyStyle", "size", json!(16.0));
+    press(&mut h, "OK");
+    assert!(!is_open(h.state(), "modifyStyle"));
+
+    let st_after = h.state().session.doc.styles.get("CharIndentStyle").unwrap();
+    assert_eq!(st_after.chr.size, Some(16.0));
+    assert_eq!(st_after.para.indent_first_chars, Some(2.0), "indent_first_chars must survive font edit");
+    assert_eq!(st_after.para.indent_left_chars, Some(1.5), "indent_left_chars must survive font edit");
+
+    // Supplying both indentLeft and indentLeftChars preserves the explicit character-unit indent.
+    h.state_mut()
+        .run(
+            "styles.modify",
+            json!({
+                "style": "CharIndentStyle",
+                "para": {
+                    "indentLeft": 24.0,
+                    "indentLeftChars": 1.5,
+                },
+            }),
+        )
+        .unwrap();
+    let st_both = h.state().session.doc.styles.get("CharIndentStyle").unwrap();
+    assert_eq!(st_both.para.indent_left, Some(24.0));
+    assert_eq!(st_both.para.indent_left_chars, Some(1.5), "explicit indentLeftChars must not be zeroed");
+
+    // Editing only Left in Modify Style cancels indent_left_chars while leaving untouched indent_first_chars.
+    open_named(&mut h, "modifyStyle", json!({"style": "CharIndentStyle"}));
+    set_field(&mut h, "modifyStyle", "left", json!(30.0));
+    press(&mut h, "OK");
+    assert!(!is_open(h.state(), "modifyStyle"));
+
+    let st_left_edit = h.state().session.doc.styles.get("CharIndentStyle").unwrap();
+    assert_eq!(st_left_edit.para.indent_left, Some(30.0));
+    assert_eq!(st_left_edit.para.indent_left_chars, Some(0.0), "editing Left must cancel indent_left_chars");
+    assert_eq!(st_left_edit.para.indent_first_chars, Some(2.0), "untouched indent_first_chars must stay");
+}
+
 /// #7446: the SmartArt picker renders compact layout tiles capped at three rows (PICKER_HEIGHT = 304),
 /// instead of expanding each thumbnail to default card dimensions (~132×132 pt) and overflowing.
 #[test]
