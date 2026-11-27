@@ -79,6 +79,48 @@ fn title_stem_omits_nul_from_each_title_source() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn non_latin_names_in_the_recover_list_get_a_face() {
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    use craft::host::Wake;
+    use craft::i18n::Han;
+    use craft::ui::fonts::{FontCandidates, SystemCandidates};
+
+    struct RecordingCandidates {
+        scripts: Mutex<Vec<String>>,
+    }
+
+    impl RecordingCandidates {
+        fn new() -> Arc<Self> {
+            Arc::new(Self { scripts: Mutex::new(Vec::new()) })
+        }
+
+        fn scripts(&self) -> Vec<String> {
+            self.scripts.lock().map(|guard| guard.clone()).unwrap_or_default()
+        }
+    }
+
+    impl FontCandidates for RecordingCandidates {
+        fn files(&self, script: &str, han: Option<Han>) -> Vec<PathBuf> {
+            if let Ok(mut scripts) = self.scripts.lock() {
+                scripts.push(script.to_owned());
+            }
+            SystemCandidates.files(script, han)
+        }
+
+        fn covers(&self, data: &[u8], c: char) -> Option<u32> {
+            SystemCandidates.covers(data, c)
+        }
+
+        fn pending(&self) -> bool {
+            SystemCandidates.pending()
+        }
+
+        fn wake_when_ready(&self, wake: Wake) {
+            SystemCandidates.wake_when_ready(wake);
+        }
+    }
+
     let with_copy = |name: &str| {
         let root = std::env::temp_dir().join(format!(
             "wordcraft-recover-fonts-{}-{}",
@@ -93,13 +135,19 @@ fn non_latin_names_in_the_recover_list_get_a_face() {
         });
         std::fs::write(root.join(id).join("snapshot-00000000000000000001.json"), serde_json::to_vec(&snapshot).unwrap()).unwrap();
         let mut a = app();
-        a.session.enable_recovery(root.clone(), std::sync::Arc::new(|| {})).unwrap();
-        let mut h = harness(a);
+        a.session.enable_recovery(root.clone(), Arc::new(|| {})).unwrap();
+        let spy = RecordingCandidates::new();
+        let spy_for_fonts = Arc::clone(&spy);
+        let mut h = crate::test_harness::builder_with_fonts(move || {
+            crate::ui_fonts(crate::i18n::Lang::EN).on_demand(spy_for_fonts as Arc<dyn FontCandidates>)
+        })
+        .with_size(egui::vec2(800.0, 600.0))
+        .build_eframe(|_| a);
         let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
             h.run_steps(1);
             if h.state().session.recovery_ready() && !h.state().session.recovery_documents().is_empty() {
-                // One more frame looks at the names it found.
+                // One more frame draws the Recover list with the names it found.
                 h.run_steps(2);
                 break;
             }
@@ -107,14 +155,14 @@ fn non_latin_names_in_the_recover_list_get_a_face() {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         let _ = std::fs::remove_dir_all(&root);
-        h
+        (h, spy)
     };
-    let h_latin = with_copy("Synthetic draft");
+    let (h_latin, spy_latin) = with_copy("Synthetic draft");
     assert!(h_latin.query_by_label("Synthetic draft").is_some(), "Latin names are listed");
-    let h_cjk = with_copy("会议记录-草稿");
+    assert!(!spy_latin.scripts().iter().any(|s| s == "Hani"), "Latin recovered name asks for no Hani font: {:?}", spy_latin.scripts());
+    let (h_cjk, spy_cjk) = with_copy("会议记录-草稿");
     assert!(h_cjk.query_by_label("会议记录-草稿").is_some(), "a CJK name in Recover is listed");
-    let drawn = h_cjk.ctx.fonts_mut(|f| f.has_glyphs(&egui::FontId::proportional(13.0), "会议记录"));
-    assert!(drawn || cfg!(not(any(target_os = "macos", windows))), "the CJK UI font draws the recovered name");
+    assert!(spy_cjk.scripts().iter().any(|s| s == "Hani"), "CJK recovered name asks for a Hani font: {:?}", spy_cjk.scripts());
 }
 
 /// A harness on a document with text whose page has the keyboard.
