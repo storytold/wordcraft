@@ -266,13 +266,32 @@ impl<'a> Shaped<'a> {
             }
             before = "";
             seg = i + c.len_utf8();
-            let style = self.b.style(rc, None, false);
+            // A break after Arabic text in a missing font has the line metrics of that text, even
+            // when the text is in an earlier run, in its own size and colour.
+            let arabic_font = if matches!(c, LINE_BREAK | '\r' | PAGE_BREAK | COLUMN_BREAK) { self.missing_arabic_font_before() } else { None };
+            let style = match arabic_font {
+                Some(font) => {
+                    let mut break_rc = (**rc).clone();
+                    break_rc.font = font;
+                    self.b.style_for(&Arc::new(break_rc), None, false, true)
+                }
+                None => self.b.style(rc, None, false),
+            };
             let slot = Slot { start: range.start + i, end: range.start + i + c.len_utf8(), style, g: self.b.glyphs.len() as u32 };
             self.special(cx, c, slot, (rc, props));
         }
         if let Some(s) = text.get(seg..) {
             self.b.shape_around(s, range.start + seg, rc, None, Dir::Para, ShapeContext { before, after: around.after });
         }
+    }
+
+    /// The font of the Arabic text in a missing font that a break here ends, if it has the
+    /// missing-font line (the text before it, across runs, up to the last break). Spaces and
+    /// markers before the break do not count.
+    fn missing_arabic_font_before(&self) -> Option<String> {
+        let last = self.b.clusters.iter().rev().find(|c| !matches!(c.kind, ClKind::Space | ClKind::Marker))?;
+        let style = self.b.styles.get(last.style as usize)?;
+        (last.kind == ClKind::Text && style.arabic_line).then(|| style.rc.font.clone())
     }
 
     /// The text shown on either side of the next `len` bytes shown, and moves past them. What

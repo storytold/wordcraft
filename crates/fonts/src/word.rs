@@ -194,6 +194,88 @@ pub fn symbol_line(family: &str, resolved: &Resolved) -> Option<(f64, f64)> {
     (resolved.substituted || one_em(line_metrics(&resolved.face), resolved.face.upem)).then_some(m)
 }
 
+/// Word's distance between paragraphs of Arabic text, in em at 12 pt and single spacing in a
+/// style with 1.08 line spacing, in fonts that come with Office and Windows and have Arabic letters
+/// of their own. Measured in Word for Windows on synthetic documents, with the font missing here.
+const WORD_ARABIC_PITCH: &[(&str, f64)] = &[
+    ("traditional arabic", 1.615),
+    ("simplified arabic", 1.792),
+    ("arabic typesetting", 1.229),
+    ("sakkal majalla", 1.500),
+    ("andalus", 1.240),
+    ("aldhabi", 1.885),
+    ("urdu typesetting", 1.833),
+    ("dubai", 1.812),
+    ("arial unicode ms", 1.875),
+];
+
+/// Fonts that Word has with Arabic letters and lines of their own, installed where it measured,
+/// that aren't in [`WORD_ARABIC_PITCH`]: Tahoma's paragraphs are 1.302 em apart, Segoe UI's 1.438,
+/// Microsoft Sans Serif's 1.219. (Word draws Arabic text in a font without Arabic letters, such
+/// as Verdana, Georgia, Aptos or Sylfaen, in Times New Roman, 1.240.)
+fn has_arabic_line_of_its_own(lower: &str) -> bool {
+    const FAMILIES: &[&str] = &[
+        "microsoft sans serif",
+        "tahoma",
+        "segoe ui",
+        "arial",
+        "times",
+        "times new roman",
+        "courier",
+        "courier new",
+        "consolas",
+        "calibri",
+        "symbol",
+        "wingdings",
+        "wingdings 2",
+        "wingdings 3",
+        "webdings",
+    ];
+    // Weight and width variants of those families. A name with any other word after the family
+    // ("Arial Custom Naskh") is another font: a family name is not a prefix test.
+    const VARIANTS: &[&str] =
+        &["narrow", "black", "light", "semilight", "semibold", "bold", "italic", "oblique", "regular", "cyr", "ce", "greek", "tur", "baltic"];
+    FAMILIES.iter().any(|f| {
+        lower.strip_prefix(f).is_some_and(|rest| {
+            let mut words = rest.split_whitespace();
+            rest.is_empty() || (rest.starts_with(' ') && words.all(|w| VARIANTS.contains(&w)))
+        })
+    })
+}
+
+/// Is `c` an Arabic-script letter, mark or digit (Arabic, Supplement, Extended-B and -A, presentation forms)?
+pub fn is_arabic_script(c: char) -> bool {
+    matches!(u32::from(c), 0x0600..=0x060B | 0x060D..=0x061A | 0x0620..=0x06FF | 0x0750..=0x077F | 0x0870..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFC)
+}
+
+/// The (ascent, descent) in em Word gives a line of Arabic-script text in the font `family` when
+/// it `missing` (not installed, or drawn as another font) and the line isn't the substitute's own.
+/// For a font Word doesn't have it is Times New Roman's (hhea 1825 / -443, gap 87 per 2048, 1.150
+/// em). Measured in Word for Windows on synthetic documents (12 pt, single spacing in a style with
+/// 1.08 line spacing): paragraphs of Persian and Arabic text in a missing font are 1.240 em apart,
+/// as in Times New Roman (1.150 times 1.08), however tall the face WordCraft draws the letters in
+/// (Noto Naskh Arabic's line is 1.84). The Office fonts of [`WORD_ARABIC_PITCH`] have their
+/// measured line, split like Times New Roman's. Fonts with a metric twin (Arial, Times New
+/// Roman…), symbol fonts and [`has_arabic_line_of_its_own`] keep the face's own line.
+pub fn missing_arabic_line(family: &str, missing: bool) -> Option<(f64, f64)> {
+    if !missing {
+        return None;
+    }
+    let name = family.split(';').map(str::trim).find(|f| !f.is_empty())?;
+    let base = charset_base_family(name);
+    let lower = base.to_ascii_lowercase();
+    let (a, d) = hhea_line(1825, -443, 87);
+    let (a, d) = (a / 2048.0, d / 2048.0);
+    if let Some((_, pitch)) = WORD_ARABIC_PITCH.iter().find(|(n, _)| *n == lower) {
+        let k = pitch / 1.08 / (a + d);
+        return Some((a * k, d * k));
+    }
+    if symbol_font_metrics(name).is_some() || metric_twins(base).next().is_some() || has_arabic_line_of_its_own(&lower) {
+        return None;
+    }
+    Some((a, d))
+}
+
 /// Is a line's (ascent, descent) one `upem` em tall?
 fn one_em((ascent, descent): (f64, f64), upem: f64) -> bool {
     upem > 0.0 && ((ascent + descent) / upem - 1.0).abs() < 0.005
@@ -925,6 +1007,87 @@ mod tests {
         if symbol.substituted {
             assert_eq!(symbol_line("Symbol", &symbol), symbol_font_metrics("Symbol"));
         }
+    }
+
+    #[test]
+    fn a_missing_arabic_font_takes_times_new_romans_line() {
+        // Times New Roman's 1.150 em; Word's paragraphs in it lie 1.240 = 1.150 x 1.08 em apart.
+        let times = 2355.0 / 2048.0;
+        let total = |m: Option<(f64, f64)>| m.map(|(a, d)| a + d);
+        // Fonts Word hasn't, and fonts it has without Arabic letters (measured: also 1.240).
+        for family in [
+            "B Lotus",
+            "IRZar",
+            "Zz Invented Naskh 6803",
+            "Arial Custom Naskh 6803",
+            "Times Custom Naskh 6803",
+            "Tahoma Custom Naskh 6803",
+            "Segoe UI Custom Naskh 6803",
+            "Calibri Custom Naskh 6803",
+            "IranNastaliq",
+            "KFGQPC Uthman Taha Naskh",
+            "CTraditional Arabic",
+            "Verdana",
+            "Aptos",
+            "Sylfaen",
+            "Nirmala UI",
+        ] {
+            let t = total(missing_arabic_line(family, true)).unwrap_or(0.0);
+            assert!((t - times).abs() < 1e-9, "{family}: {t}");
+        }
+        // A font list is classed by its first font.
+        let t = total(missing_arabic_line("B Titr;Arial", true)).unwrap_or(0.0);
+        assert!((t - times).abs() < 1e-9, "{t}");
+        // Installed fonts keep their own line, a face drawn as another doesn't change that.
+        let bundled = resolve("Source Serif 4", false, false);
+        assert!(!bundled.substituted);
+        assert_eq!(missing_arabic_line("B Lotus", bundled.substituted), None);
+        let invented = resolve("Zz Invented Naskh 6803", false, false);
+        assert!(invented.substituted);
+        assert!(missing_arabic_line("Zz Invented Naskh 6803", invented.substituted).is_some());
+    }
+
+    #[test]
+    fn office_arabic_fonts_have_the_line_word_measured() {
+        // Word's paragraphs lie this far apart (em), a line of that over 1.08.
+        for (family, pitch) in
+            [("Traditional Arabic", 1.615), ("Simplified Arabic", 1.792), ("Sakkal Majalla", 1.5), ("Andalus", 1.24), ("Arial Unicode MS", 1.875)]
+        {
+            let (a, d) = missing_arabic_line(family, true).unwrap_or_default();
+            assert!(((a + d) * 1.08 - pitch).abs() < 1e-9, "{family}: {}", (a + d) * 1.08);
+        }
+        // Fonts with Arabic letters and lines of their own, symbol fonts and fonts with a metric twin.
+        for family in [
+            "Arial",
+            "Arial Narrow",
+            "Times New Roman",
+            "Calibri",
+            "Symbol",
+            "Tahoma",
+            "Segoe UI",
+            "Segoe UI Light",
+            "Segoe UI Semibold",
+            "Calibri Light",
+            "Microsoft Sans Serif",
+            "Courier New",
+        ] {
+            assert_eq!(missing_arabic_line(family, true), None, "{family}");
+        }
+    }
+
+    #[test]
+    fn arabic_script_is_told_from_latin() {
+        assert!(is_arabic_script('ب') && is_arabic_script('پ') && is_arabic_script('\u{FEFB}') && is_arabic_script('\u{064E}'));
+        assert!(!is_arabic_script('a') && !is_arabic_script('א') && !is_arabic_script('1'));
+        // U+FEFF (byte order mark / zero width no-break space) ends the block but isn't Arabic.
+        assert!(!is_arabic_script('\u{FEFF}') && is_arabic_script('\u{FEFC}'));
+        // Arabic Extended-B (U+0870..U+089F) letters are Arabic too.
+        assert!(is_arabic_script('\u{0870}') && is_arabic_script('\u{089F}'));
+        // The Arabic comma, semicolon and question mark are Common-script punctuation, so a Latin run holding one stays Latin.
+        assert!(!is_arabic_script('\u{060C}') && !is_arabic_script('\u{061B}') && !is_arabic_script('\u{061F}'));
+        // The Arabic letter mark (a format control) and the triple dot punctuation mark are not letters either.
+        assert!(!is_arabic_script('\u{061C}') && !is_arabic_script('\u{061E}'));
+        assert!(is_arabic_script('\u{0621}') && is_arabic_script('\u{060D}'));
     }
 
     #[test]

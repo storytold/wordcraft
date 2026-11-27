@@ -186,6 +186,8 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 ## Revision history
 
+> 2026-11-15 · Gap 16: Arabic text in a font that isn't installed takes Times New Roman's line height (paragraphs 1.240 em apart at 12 pt, single spacing), as Word does, instead of the tall Naskh substitute's; Traditional Arabic, Simplified Arabic, Arabic Typesetting, Sakkal Majalla, Andalus, Aldhabi, Urdu Typesetting, Dubai and Arial Unicode MS have the heights measured in Word (#6803). Hebrew, Syriac, Thaana, and an empty paragraph's mark in a missing font, are not covered. Readiness unchanged.
+
 > 2026-11-05 · Gap 16: Arabic letters join across a change of formatting and past hidden or deleted text (#4093); readiness unchanged.
 
 > 2026-11-03 · Section `w:chapStyle` values now preserve the complete unsigned-byte range, including 10; values above 255 are rejected.
