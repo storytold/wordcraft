@@ -51,14 +51,17 @@ USAGE:
                                               documents and with {\"id\": N} makes one active
   wordcraft-cli commands [--json]             list every command
   wordcraft-cli parity [--markdown]           feature-catalog parity
-  wordcraft-cli mcp [--connect HOST:PORT | --author NAME] [--automation-read-root DIR] [--automation-write-root DIR]
-                                              MCP server on stdio (headless, or bridged to the app).
-                                              --automation-read-root / --automation-write-root confine
-                                              the files the agent's commands read (open, insert text
-                                              or picture, mail-merge data, templates…) and write (save,
-                                              export, merge output…) to DIR, links followed; a root left
-                                              out grants none of its access. They apply to the headless
-                                              server and are an error with --connect.
+  wordcraft-cli validate <file> [--json]      structural integrity check (exit 0 pass, 1 fail, 2 incomplete, 3 usage/IO)
+  wordcraft-cli mcp --automation-read-root DIR --automation-write-root DIR [--author NAME]
+                                              MCP server on stdio, with a headless session.
+                                              Both roots are required: the agent's commands read
+                                              files (open, insert text or picture, mail-merge data,
+                                              templates…) only inside the read root and write them
+                                              (save, export, merge output…) only inside the write
+                                              root, links followed; the same folder may be both.
+                                              --connect HOST:PORT (bridge to the running app) is
+                                              refused until the app confines its control channel
+                                              (#3695, #5819).
   wordcraft-cli zotero <command> <file> [--cmd 'id={json}' …] [--save OUT] [--trace] [--port P]
                                               run a Zotero command on a document (Zotero must be
                                               running): addEditCitation, addEditBibliography,
@@ -79,7 +82,7 @@ same output on every machine.
 ";
 
 /// The subcommands, in `USAGE` order; `--help` or `-h` after any of them prints `USAGE` (#968).
-const SUBCOMMANDS: &[&str] = &["convert", "info", "text", "inspect", "render", "run", "commands", "parity", "mcp", "zotero"];
+const SUBCOMMANDS: &[&str] = &["convert", "info", "text", "inspect", "render", "run", "commands", "parity", "validate", "mcp", "zotero"];
 
 fn wants_help(cmd: &str, rest: &[String]) -> bool {
     SUBCOMMANDS.contains(&cmd) && rest.iter().any(|a| a == "--help" || a == "-h")
@@ -116,7 +119,7 @@ fn open(path: &Path, password: Option<&str>) -> Result<Session, Failure> {
 
 /// The commands that open a file, and which positional argument it is, excluding option values.
 /// `run` opens the value of `--file`.
-const OPENS_FILE: &[(&str, usize)] = &[("convert", 0), ("info", 0), ("text", 0), ("inspect", 0), ("render", 0), ("zotero", 1)];
+const OPENS_FILE: &[(&str, usize)] = &[("convert", 0), ("info", 0), ("text", 0), ("inspect", 0), ("render", 0), ("validate", 0), ("zotero", 1)];
 
 /// The arguments as text. Only the file the command opens may have a name that isn't valid Unicode,
 /// such as a Latin-1 one (#1440): it comes back as the path to open, and lossy among the arguments.
@@ -215,6 +218,19 @@ fn listed_text(doc: &wordcraft_doc::Document) -> Result<String, String> {
 /// named editing exceptions the session can use, so the flag must not bypass that check.
 fn set_author(s: &mut Session, name: &str) -> Result<(), String> {
     s.run("file.setAuthor", &json!({"name": name})).map(|_| ()).map_err(|e| escape_text(&format!("--author: {e}"), false))
+}
+
+/// `mcp`'s headless backend: a session confined to `roots`, its author `author` when given. The caller confines the
+/// process to the same roots first (`confine_process`), which a test must not do.
+fn headless_mcp(
+    roots: std::sync::Arc<wordcraft_engine::file_access::AutomationRoots>,
+    author: Option<&str>,
+) -> Result<wordcraft_mcp::Headless, String> {
+    let mut headless = wordcraft_mcp::Headless::default().with_automation_roots(Some(roots));
+    if let Some(name) = author {
+        set_author(&mut headless.session, name)?;
+    }
+    Ok(headless)
 }
 
 fn arg_value(args: &[String], name: &str) -> Option<String> {
@@ -352,6 +368,18 @@ const RUN_OPTIONS: &[OptionSpec] = &[
 ];
 const COMMANDS_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--json", takes_value: false }];
 const PARITY_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--markdown", takes_value: false }];
+const VALIDATE_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--json", takes_value: false }];
+
+/// Why `mcp` won't start unconfined (shared rule 18, #7124).
+const MCP_NEEDS_ROOTS: &str = "mcp: give both --automation-read-root DIR and --automation-write-root DIR: an agent's \
+     commands may read only inside the read root and write only inside the write root (the same folder may be both)";
+
+/// Why `mcp --connect` is refused: the running app would not confine the agent's file access.
+// lean: refused outright; allow it once the app confines its control channel and reports both roots.
+const MCP_CONNECT_REFUSED: &str = "mcp: --connect is refused for now: the desktop app does not confine its control \
+     channel to automation roots yet (storytold/wordcraft#3695, #5819). Use the headless server: wordcraft-cli mcp \
+     --automation-read-root DIR --automation-write-root DIR";
+
 const MCP_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--connect", takes_value: true }, OptionSpec { name: "--author", takes_value: true }];
 const ZOTERO_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--cmd", takes_value: true },
@@ -366,8 +394,10 @@ enum Failure {
     /// A real error, reported on stderr with a failing exit status.
     Error(String),
     /// Whoever read stdout closed it (`wordcraft-cli commands --json | head`): there is nobody left
-    /// to write to, so stop quietly and exit 0 like other command-line tools.
+    /// to write to. Most commands exit 0; validation retains its verdict status.
     StdoutClosed,
+    /// The subcommand has already written its output and decided its own exit status (`validate`).
+    Status(u8),
     /// `convert --strict` refused: the text for stderr (the report's lines, then its JSON line).
     /// Exit status 3.
     Strict(String),
@@ -378,6 +408,7 @@ impl fmt::Display for Failure {
         match self {
             Failure::Error(e) => f.write_str(e),
             Failure::StdoutClosed => f.write_str("stdout closed"),
+            Failure::Status(code) => write!(f, "exit {code}"),
             Failure::Strict(report) => f.write_str(report),
         }
     }
@@ -414,14 +445,6 @@ fn write_stdout(write: impl FnOnce(&mut std::io::StdoutLock<'static>) -> std::io
 fn script_operand<S: AsRef<OsStr>>(raw: &[S]) -> Option<PathBuf> {
     let at = raw.iter().position(|a| a.as_ref() == OsStr::new("--script"))?;
     raw.get(at + 1).map(|a| PathBuf::from(a.as_ref()))
-}
-
-/// Whether `addr` (`HOST:PORT`, as `--connect` gives it) is at least shaped like an address: a
-/// host of some kind and a numeric port. Malformed addresses fail at startup — a lazy remote
-/// would otherwise retry one on every call and never say why nothing connects.
-fn valid_connect_addr(addr: &str) -> bool {
-    let Some((host, port)) = addr.rsplit_once(':') else { return false };
-    !host.is_empty() && port.parse::<u16>().is_ok()
 }
 
 /// A failed `--strict` export: a strict refusal becomes [`Failure::Strict`] carrying what stderr
@@ -700,7 +723,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                     for c in s.registry.all() {
                         writeln!(o, "{:<32} {:<36} {:<24} {}", c.id, c.label, c.shortcut, c.location)?;
                     }
-                    Ok(())
+                    writeln!(o, "{:<32} Structural integrity check", "validate")
                 })
             }
         }
@@ -714,60 +737,24 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                 write_stdout(|o| writeln!(o, "{}", serde_json::to_string_pretty(&p).unwrap_or_default()))
             }
         }
+        "validate" => run_validate(file.as_deref(), &rest),
         "mcp" => {
             let (roots, rest) = automation_roots("mcp", &rest)?;
-            validate_options("mcp", &rest, MCP_OPTIONS)?;
-            let author = arg_value(&rest, "--author");
-            let connect = arg_value(&rest, "--connect");
-            if roots.is_some() && connect.is_some() {
-                return Err(
-                    "mcp: --automation-read-root and --automation-write-root confine the headless server; a running app is not confined by them"
-                        .into(),
-                );
+            // Refused with or without a value, before the option check, so `--connect=…` gets this refusal rather than
+            // "unknown option": a bare trailing `--connect` must not slip past either.
+            if rest.iter().any(|a| a == "--connect" || a.starts_with("--connect=")) {
+                return Err(MCP_CONNECT_REFUSED.into());
             }
-            let backend: Box<dyn wordcraft_mcp::Backend> = match connect {
-                // The app's user name is the person's own setting; don't rewrite it from a flag.
-                Some(_) if author.is_some() => {
-                    return Err("mcp: --author applies to the headless server; with --connect, run file.setAuthor".into());
-                }
-                Some(addr) => {
-                    // A malformed address must fail at startup, not on every tool call the lazy
-                    // remote would retry it with.
-                    if !valid_connect_addr(&addr) {
-                        return Err(format!("mcp: --connect needs HOST:PORT with a numeric port, got `{addr}`").into());
-                    }
-                    match wordcraft_mcp::Remote::connect(&addr) {
-                        Ok(remote) => {
-                            eprintln!("wordcraft-cli mcp: connected to WordCraft at {addr}");
-                            if let Some(w) = remote.key_warning() {
-                                eprintln!("wordcraft-cli: {w}");
-                            }
-                            Box::new(remote)
-                        }
-                        // The app may start after the client does: serve anyway and connect on the
-                        // first call, or the client marks the server failed for its whole session
-                        // (#4078).
-                        Err(e) => {
-                            eprintln!("wordcraft-cli mcp: WordCraft is not reachable at {addr} yet ({e}); will retry on each call");
-                            Box::new(wordcraft_mcp::Remote::lazy(&addr))
-                        }
-                    }
-                }
-                None => {
-                    let mut headless = wordcraft_mcp::Headless::default();
-                    if let Some(roots) = roots {
-                        // Every thread of this process, not only the server's: nothing reaches past the roots.
-                        wordcraft_engine::file_access::confine_process(roots.clone());
-                        let show = |root: Option<&std::path::Path>| root.map_or_else(|| "none".to_string(), |r| r.display().to_string());
-                        eprintln!("wordcraft-cli: files confined: read root {}, write root {}", show(roots.read_root()), show(roots.write_root()));
-                        headless = headless.with_automation_roots(Some(roots));
-                    }
-                    if let Some(name) = author {
-                        set_author(&mut headless.session, &name)?;
-                    }
-                    Box::new(headless)
-                }
+            validate_options("mcp", &rest, MCP_OPTIONS)?;
+            // Shared rule 18 (#7124): an agent entry point never runs unconfined.
+            let Some(roots) = roots.filter(|r| r.read_root().is_some() && r.write_root().is_some()) else {
+                return Err(MCP_NEEDS_ROOTS.into());
             };
+            // Every thread of this process, not only the server's: nothing reaches past the roots.
+            wordcraft_engine::file_access::confine_process(roots.clone());
+            let show = |root: Option<&std::path::Path>| root.map_or_else(|| "none".to_string(), |r| r.display().to_string());
+            eprintln!("wordcraft-cli: files confined: read root {}, write root {}", show(roots.read_root()), show(roots.write_root()));
+            let backend: Box<dyn wordcraft_mcp::Backend> = Box::new(headless_mcp(roots, arg_value(&rest, "--author").as_deref())?);
             let mut server = wordcraft_mcp::Server::new(backend);
             let stdin = std::io::stdin();
             // A client that closes our stdout has hung up: `serve` returns BrokenPipe and we end cleanly.
@@ -917,8 +904,144 @@ fn parity_markdown(p: &Value) -> String {
     s
 }
 
+/// `validate`: exactly one positional path (batch mode does not exist yet, so a surplus operand is
+/// a usage error rather than a silently ignored second file). `file` is the preserved operand, so a
+/// file name that is not valid Unicode still reaches the validator.
+fn run_validate(file: Option<&Path>, rest: &[String]) -> Result<(), Failure> {
+    if let Err(e) = validate_options("validate", rest, VALIDATE_OPTIONS) {
+        eprintln!("wordcraft-cli: {e}");
+        return Err(Failure::Status(3));
+    }
+    let paths = positionals(rest, VALIDATE_OPTIONS);
+    if paths.len() != 1 {
+        eprintln!("wordcraft-cli: validate takes exactly one file\n\n{USAGE}");
+        return Err(Failure::Status(3));
+    }
+    let path = file.unwrap_or_else(|| Path::new(paths[0]));
+    let report = match wordcraft_validate::validate_path(path) {
+        Ok(report) => report,
+        Err(e) => {
+            eprintln!("wordcraft-cli: {}: {e}", path.display());
+            return Err(Failure::Status(3));
+        }
+    };
+    let written = if rest.iter().any(|a| a == "--json") {
+        let json = serde_json::to_string_pretty(&report).unwrap_or_default();
+        write_stdout(|o| writeln!(o, "{json}"))
+    } else {
+        write_stdout(|o| write_validate_report(o, &report))
+    };
+    match written {
+        // A reader closing early must not turn a FAIL or INCOMPLETE verdict into PASS.
+        Ok(()) | Err(Failure::StdoutClosed) => {}
+        Err(error) => {
+            eprintln!("wordcraft-cli: {error}");
+            return Err(Failure::Status(3));
+        }
+    }
+    match report.verdict {
+        wordcraft_validate::Verdict::Pass => Ok(()),
+        wordcraft_validate::Verdict::Fail => Err(Failure::Status(1)),
+        wordcraft_validate::Verdict::Incomplete => Err(Failure::Status(2)),
+    }
+}
+
+/// Write a `validate` report for people: the verdict, then one line per finding
+/// (`SEVERITY RULE [part] message`), then the coverage notes.
+fn write_validate_report(o: &mut std::io::StdoutLock<'static>, report: &wordcraft_validate::Report) -> std::io::Result<()> {
+    o.write_all(render_validate_report(report).as_bytes())
+}
+
+/// Render a `validate` report for people. Document-controlled text — a ZIP entry name flowing into
+/// a finding part or coverage note — is escaped so a name cannot end its line or drive the
+/// terminal; printable text, including Unicode, is left as written.
+///
+/// The `--json` form is not escaped by hand; it is the validator's own `serde_json` serialization.
+/// `serde_json` escapes `U+0000`–`U+001F`, `"` and `\`; C1 controls such as `U+009B` and the bidi
+/// embeddings/overrides (`U+202A`–`U+202E`, `U+2066`–`U+2069`) are emitted raw. So a control or bidi
+/// run carried by a ZIP entry name survives into the JSON text; JSON is only safe because a
+/// *parser* takes the string value as data. If that text is printed directly to a terminal, the raw
+/// C1/bidi run reaches the terminal exactly as it would from any other text, so the JSON form is
+/// not a terminal-safe rendering. Only the human report below escapes those characters, and it does
+/// so to defend the terminal; keeping the JSON byte-for-byte the validator's own serialization is
+/// why its escaping is left to `serde_json`.
+fn render_validate_report(report: &wordcraft_validate::Report) -> String {
+    let mut out = format!("{}\n", verdict_label(report.verdict));
+    for f in &report.findings {
+        let severity = severity_label(f.severity);
+        match &f.part {
+            Some(part) => out.push_str(&format!("{severity} {} [{}] {}\n", f.rule, escape_report_text(part), escape_report_text(&f.message))),
+            None => out.push_str(&format!("{severity} {} {}\n", f.rule, escape_report_text(&f.message))),
+        }
+    }
+    for note in &report.coverage_notes {
+        out.push_str(&format!("note: {}\n", escape_report_text(note)));
+    }
+    out
+}
+
+/// Escape the control and invisible-formatting characters that could spoof a report line, in the
+/// same escape *form* `escape_debug` uses (`\u{1b}`, `\n`); printable characters (including Unicode)
+/// are left untouched. The *selection* is a hand-picked set ([`is_invisible_format`] plus
+/// `char::is_control`), not `escape_debug`'s full non-printable set: it omits, for example, the
+/// U+E0000 tag block, U+FFF9–U+FFFB and the Hangul fillers. None of those can end a line or drive a
+/// terminal, which is the threat this guards against. Backslash is not escaped, so a name that
+/// literally contains the text `\u{1b}` prints exactly like an escaped ESC and the output is not
+/// injective.
+fn escape_report_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_control() || is_invisible_format(c) {
+            out.extend(c.escape_debug());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Invisible Unicode formatting characters and line/paragraph separators: no glyph, but they can
+/// alter how a terminal renders the rest of the line (`char::is_control` covers C0/C1 controls).
+fn is_invisible_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00ad}' | '\u{061c}' | '\u{180e}' | '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2060}'..='\u{206f}' | '\u{feff}'
+    )
+}
+
+/// Map a validation verdict enum to its human-readable uppercase display label.
+fn verdict_label(v: wordcraft_validate::Verdict) -> &'static str {
+    match v {
+        wordcraft_validate::Verdict::Pass => "PASS",
+        wordcraft_validate::Verdict::Fail => "FAIL",
+        wordcraft_validate::Verdict::Incomplete => "INCOMPLETE",
+    }
+}
+
+/// Map a validation severity enum to its human-readable uppercase display label.
+fn severity_label(s: wordcraft_validate::Severity) -> &'static str {
+    match s {
+        wordcraft_validate::Severity::Corrupt => "CORRUPT",
+        wordcraft_validate::Severity::Error => "ERROR",
+        wordcraft_validate::Severity::Warning => "WARNING",
+    }
+}
+
+/// The Launcher's Nightly bootstrap belongs to the desktop app: a CLI must not accept it, in the
+/// separate-token or `=` form, so a mis-routed launch fails loudly instead of editing stable data.
+fn launcher_profile_flag(args: &[OsString]) -> bool {
+    args.iter().any(|arg| {
+        let arg = arg.to_string_lossy();
+        arg == "--launch-profile" || arg == "--profile-root" || arg.starts_with("--launch-profile=") || arg.starts_with("--profile-root=")
+    })
+}
+
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if launcher_profile_flag(&args) {
+        eprintln!("wordcraft-cli: --launch-profile and --profile-root are the desktop app's Nightly bootstrap, not a CLI option");
+        return ExitCode::from(2);
+    }
     // Language packs installed in the suite's font store are used; `proof.installPack` installs
     // only while the person has turned downloading on in the app.
     wordcraft_engine::packs::use_font_store(false);
@@ -927,6 +1050,7 @@ fn main() -> ExitCode {
     }
     match run(&args) {
         Ok(()) | Err(Failure::StdoutClosed) => ExitCode::SUCCESS,
+        Err(Failure::Status(code)) => ExitCode::from(code),
         Err(Failure::Error(e)) => {
             eprintln!("wordcraft-cli: {e}");
             ExitCode::FAILURE

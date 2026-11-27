@@ -85,14 +85,7 @@ fn picking_a_wordart_style_hands_the_keyboard_back_to_the_page() {
     use egui_kittest::kittest::{By, Queryable};
     let mut a = app();
     a.run("ui.tab", json!({"tab": "Insert"})).unwrap();
-    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            crate::test_harness::driver_logic(&ctx, app);
-            app.ui(ui);
-        },
-        a,
-    );
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| a);
     h.run_steps(4);
     // Insert › Decorative Text is the WordArt gallery's opener, under that name in production too.
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Decorative Text").click();
@@ -158,14 +151,7 @@ fn citations_provider_menu_has_zotero_checked() {
     }
     assert_eq!(a.session.undo_depth(), depth, "not an undo step");
     a.run("ui.tab", json!({"tab": "Citations"})).unwrap();
-    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            crate::test_harness::driver_logic(&ctx, app);
-            app.ui(ui);
-        },
-        a,
-    );
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| a);
     h.run_steps(4);
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Provider").click();
     h.run_steps(3);
