@@ -155,7 +155,7 @@ pub fn context_menu_visible(app: &WordApp) -> bool {
 /// command while the pointer rests on it; the context menu's copy of the bar (which calls this
 /// from `canvas/context_menu.rs`) previews nothing.
 pub(crate) fn members(app: &mut WordApp, ui: &mut Ui, preview: bool) {
-    let st: Value = wordcraft_engine::cmd::format::state(&app.session);
+    let st = wordcraft_engine::cmd::format::cached_state(&app.session);
     let flag = |k: &str| match st.get(k) {
         Some(Value::Bool(b)) => *b,
         Some(Value::String(s)) => !s.is_empty() && s != "none",

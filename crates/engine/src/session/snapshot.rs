@@ -113,6 +113,7 @@ impl Session {
             autocap: _,
             rev: _,
             protect_facts: _,
+            format_state: _,
             cache: _,
             layout: _,
             // The word being typed, like `column`: valid only while `sel` is where typing left it.
@@ -295,6 +296,10 @@ impl Session {
         let facts = self.protect_facts.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner);
         if facts.as_ref().is_some_and(|((_, r, _), _)| *r != rev) {
             *facts = None;
+        }
+        let format_state = self.format_state.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if format_state.as_ref().is_some_and(|c| c.rev() != rev) {
+            *format_state = None;
         }
     }
 

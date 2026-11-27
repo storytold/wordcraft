@@ -121,13 +121,13 @@ fn readouts(app: &mut WordApp, ui: &mut Ui) -> egui::Rect {
 /// without spaces, whichever was chosen (#2797). A click opens Word Count; a right click the choice.
 fn count(app: &mut WordApp, ui: &mut Ui) {
     let unit = app.ui.status_count;
-    let counts = app.cached_status_counts();
+    let total = app.cached_status_count(unit);
     // A selected picture/shape/text box isn't a text selection: show the total.
     let text = if app.session.sel.is_collapsed() || crate::objects::selected(app).is_some() {
-        status_count_text(unit, counts.in_unit(unit), None)
+        status_count_text(unit, total, None)
     } else {
         let selected = crate::count_in_unit(&app.session.selected_text(), unit);
-        status_count_text(unit, counts.in_unit(unit), Some(selected))
+        status_count_text(unit, total, Some(selected))
     };
     let out = item(ui, text, None);
     if out.clicked() {

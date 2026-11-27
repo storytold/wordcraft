@@ -1,6 +1,6 @@
 //! The font box: Word's plain font picker over the app's catalog and its one recent-fonts list.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use craft::font_manager::Catalog;
 use craft::font_manager::picker::{FontPicker, FontPickerKind, FontPickerOutput, FontPickerSettings, MissingAdvice};
@@ -41,10 +41,21 @@ impl CatalogRef {
 
 /// The action rows after the font families, in the order `FontPickerOutput::action` indexes them:
 /// Add Font…, and in the browser Load System Installed Fonts….
-fn actions() -> Vec<Label> {
+fn actions() -> Arc<Vec<Label>> {
+    static CACHE: OnceLock<Mutex<Option<(&'static str, Arc<Vec<Label>>)>>> = OnceLock::new();
+    let lang = crate::i18n::current().code();
+    let cell = CACHE.get_or_init(|| Mutex::new(None));
+    let mut guard = cell.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((cached_lang, rows)) = guard.as_ref()
+        && *cached_lang == lang
+    {
+        return Arc::clone(rows);
+    }
     let add = Label::from(tl!("Add Font…").to_string());
     let load = cfg!(target_arch = "wasm32").then(|| Label::from(tl!("Load System Installed Fonts…").to_string()));
-    std::iter::once(add).chain(load).collect()
+    let rows = Arc::new(std::iter::once(add).chain(load).collect());
+    *guard = Some((lang, Arc::clone(&rows)));
+    rows
 }
 
 /// The command an action row runs.
