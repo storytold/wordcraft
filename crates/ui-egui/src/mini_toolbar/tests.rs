@@ -848,3 +848,72 @@ fn the_anchor_spans_every_run_on_the_topmost_line() {
     let l = visible_anchor(rects, clip, false).unwrap();
     assert!(l.min.x == line1[0].min.x && l.max.x < a.max.x, "LTR anchor is the top run only: {l:?}");
 }
+
+/// Automatic in Font Color and No Color in Text Highlight Color mark the current choice when active.
+#[test]
+fn automatic_and_no_color_mark_the_current_choice() {
+    use egui::accesskit::Toggled;
+
+    let mut h = bar_over("brown fox");
+
+    let arrow = split_arrow(&h, "Font Color");
+    click_at(&mut h, arrow.center());
+    let auto = h.get_by_label("Automatic");
+    assert_eq!(auto.accesskit_node().role(), Role::MenuItemCheckBox);
+    assert_eq!(auto.accesskit_node().toggled(), Some(Toggled::True), "Automatic is checked by default");
+    h.key_press(egui::Key::Escape);
+    steps(&mut h);
+
+    h.state_mut().run("format.color", json!({"color": "FF0000"})).unwrap();
+    steps(&mut h);
+    let arrow = split_arrow(&h, "Font Color");
+    click_at(&mut h, arrow.center());
+    assert_eq!(h.get_by_label("Automatic").accesskit_node().toggled(), Some(Toggled::False), "Automatic is unchecked after a colour pick");
+    h.key_press(egui::Key::Escape);
+    steps(&mut h);
+
+    let arrow = split_arrow(&h, "Text Highlight Color");
+    click_at(&mut h, arrow.center());
+    let no_color = h.get_by_label("No Color");
+    assert_eq!(no_color.accesskit_node().role(), Role::MenuItemCheckBox);
+    assert_eq!(no_color.accesskit_node().toggled(), Some(Toggled::True), "No Color is checked when no highlight is applied");
+    h.key_press(egui::Key::Escape);
+    steps(&mut h);
+
+    h.state_mut().run("format.highlight", json!({"color": "yellow"})).unwrap();
+    steps(&mut h);
+    let arrow = split_arrow(&h, "Text Highlight Color");
+    click_at(&mut h, arrow.center());
+    assert_eq!(h.get_by_label("No Color").accesskit_node().toggled(), Some(Toggled::False), "No Color is unchecked after highlighting");
+}
+
+/// Hovering Automatic in Font Color or No Color in Text Highlight Color on the mini toolbar
+/// previews removing the formatting and clears the preview when the pointer leaves.
+#[test]
+fn automatic_and_no_color_preview_on_hover() {
+    for (button, item_label, setup_cmd, setup_color, preview_cmd, preview_color) in [
+        ("Font Color", "Automatic", "format.color", "FF0000", "format.color", "auto"),
+        ("Text Highlight Color", "No Color", "format.highlight", "yellow", "format.highlight", "none"),
+    ] {
+        let mut h = bar_over("brown fox");
+        h.state_mut().run(setup_cmd, json!({"color": setup_color})).unwrap();
+        steps(&mut h);
+        let (doc, sel, rev) = (h.state().session.doc.clone(), h.state().session.sel.clone(), h.state().session.rev());
+
+        let arrow = split_arrow(&h, button);
+        click_at(&mut h, arrow.center());
+        let target = h.get_by_label(item_label).rect().center();
+        hover_at(&mut h, target);
+
+        assert_eq!(
+            h.state().canvas.command_previewed,
+            Some((preview_cmd.to_string(), json!({"color": preview_color}))),
+            "{button} {item_label} hover previews {preview_cmd}({preview_color})"
+        );
+        assert_ne!(crate::canvas::page_doc(h.state()), &doc, "{button} {item_label}: page shows the live preview");
+        assert_eq!((&h.state().session.doc, &h.state().session.sel, h.state().session.rev()), (&doc, &sel, rev));
+
+        hover_at(&mut h, pos2(5.0, 5.0));
+        assert_eq!(h.state().canvas.command_previewed, None, "{button} {item_label}: moving off clears the preview");
+    }
+}

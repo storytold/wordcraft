@@ -232,11 +232,12 @@ pub(crate) fn members(app: &mut WordApp, ui: &mut Ui, preview: bool) {
                     let _ = Divider::vertical().show(ui);
 
                     let hl = crate::colors::highlight_split(ui, app, tl!("Text Highlight Color").to_string());
-                    follow_list(app, preview, &hl.preview, |c| {
-                        wordcraft_doc::props::Highlight::ALL
+                    follow_list(app, preview, &hl.preview, |c| match c {
+                        Some(c) => wordcraft_doc::props::Highlight::ALL
                             .iter()
                             .find(|h| h.rgb().as_ref() == Some(c))
-                            .map(|h| ("format.highlight".to_string(), json!({"color": h.ooxml()})))
+                            .map(|h| ("format.highlight".to_string(), json!({"color": h.ooxml()}))),
+                        None => Some(("format.highlight".to_string(), json!({"color": "none"}))),
                     });
                     // PLAN: assumed ColorPick::hover (ribbon-w11, S-L413)
                     let color = app.canvas.last_highlight.clone();
@@ -250,7 +251,13 @@ pub(crate) fn members(app: &mut WordApp, ui: &mut Ui, preview: bool) {
                         tl!("Font Color").to_string(),
                         Target::cmd("format.color").remember(Remember::FontColor),
                     );
-                    follow_list(app, preview, &fc.preview, |c| Some(("format.color".to_string(), json!({"color": c.hex()}))));
+                    follow_list(app, preview, &fc.preview, |c| {
+                        let color = match c {
+                            Some(c) => c.hex(),
+                            None => "auto".to_string(),
+                        };
+                        Some(("format.color".to_string(), json!({"color": color})))
+                    });
                     // PLAN: assumed ColorPick::hover (ribbon-w11, S-L413)
                     let color = app.canvas.last_font_color.clone();
                     preview_on_hover(app, fc.hover, fc.response.enabled(), "format.color", json!({"color": color}), preview);
