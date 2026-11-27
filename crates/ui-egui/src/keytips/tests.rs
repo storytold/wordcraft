@@ -58,7 +58,7 @@ fn every_keytip_command_is_registered() {
     let a = app();
     let catalog: Vec<&str> = wordcraft_engine::catalog::entries().into_iter().map(|e| e.3).collect();
     let mut missing = Vec::new();
-    for (tab, _) in TAB_LETTERS.iter().chain(&TABLE_TAB_LETTERS) {
+    for tab in TAB_LETTERS.iter().map(|(t, _)| *t).chain(TABLE_TAB_LETTERS.iter().map(|(t, _)| *t)).chain(LETTERED_TABS) {
         for ctrl in controls(tab) {
             let id = ctrl.command.id.as_str();
             if a.session.registry.get(id).is_none() && !catalog.contains(&id) && !id.starts_with("ui.") {
@@ -153,8 +153,9 @@ fn a_menu_buttons_keytip_does_not_depend_on_the_language() {
 fn legacy_menu_keys_stay_off_the_ribbon_letters_and_all_resolve() {
     let mut a = app();
     a.run("insert.table", serde_json::json!({"rows": 2, "cols": 2})).unwrap();
-    let mut taken: Vec<&str> = badge_tabs(&a).into_iter().map(tab_letter).collect();
-    taken.push(SEARCH_LETTER);
+    let mut taken: Vec<String> = badge_tabs(&a).into_iter().map(|t| tab_letter_for(&a, t)).collect();
+    taken.extend(lettered_tab_letters().iter().map(|(_, c)| c.to_string()));
+    taken.push(SEARCH_LETTER.to_string());
     for (keys, command) in legacy() {
         let first = &keys[..1];
         assert!(!taken.iter().any(|l| l.starts_with(first)), "{keys} starts on a ribbon letter");
@@ -581,4 +582,65 @@ fn keytips_update_controls_when_switching_tabs() {
     press_keytip_seq(&mut h, &bold_badge);
     crate::test_harness::frames(&mut h, 3);
     assert!(bold(&mut h), "Home keytip badge {bold_badge} runs format.bold after switching back from Insert");
+}
+
+/// The tab's key-tip controls, without the Search badge that every tab shares.
+fn tab_controls(a: &WordApp, tab: &str) -> Vec<KeytipControl<'static>> {
+    KeytipCache::build_tab_controls(a, tab).into_iter().filter(|c| c.command.id != "tools.search").collect()
+}
+
+#[test]
+fn contextual_tabs_get_free_letters_that_open_them() {
+    let all = lettered_tab_letters();
+    assert_eq!(
+        all,
+        &[("Picture Format", 'B'), ("Shape Format", 'C'), ("SmartArt Design", 'K'), ("Chart Design", 'L'), ("Equation", 'U'), ("Outlining", 'X')]
+    );
+    let mut seen: Vec<char> = Vec::new();
+    for (tab, c) in all {
+        assert!(!seen.contains(c), "{tab}: {c} is used twice");
+        seen.push(*c);
+        assert!(TAB_LETTERS.iter().all(|(_, l)| !l.starts_with(*c)), "{tab}: {c} is a tab letter");
+        assert!(!"JQ".contains(*c) && legacy().iter().all(|(k, _)| !k.starts_with(*c)), "{tab}: {c} is taken");
+    }
+    let mut a = app();
+    assert_eq!(tab_letter_for(&a, "Shape Format"), "");
+    a.run("insert.shape", serde_json::json!({"kind": "rectangle", "width": 50, "height": 50})).unwrap();
+    assert_eq!(tab_letter_for(&a, "Shape Format"), "C");
+    assert!(badge_tabs(&a).contains(&"Shape Format"));
+    let mut h = harness(a);
+    h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
+    crate::test_harness::frame(&mut h);
+    h.input_mut().events.push(key_event(egui::Key::C, true, egui::Modifiers::NONE));
+    crate::test_harness::frames(&mut h, 3);
+    assert_eq!(h.state().ui.tab, "Shape Format");
+}
+
+#[test]
+fn contextual_menus_without_a_safe_default_get_no_key_tip() {
+    let a = app();
+    for tab in CONTEXTUAL_TABS {
+        let expected: Vec<String> = controls(tab).iter().filter(|c| !key_tip_blocked(tab, c)).map(|c| c.command.id.clone()).collect();
+        let shown: Vec<String> = tab_controls(&a, tab).iter().map(|c| c.command.id.clone()).collect();
+        assert_eq!(shown, expected, "{tab}: controls are the ones a key tip may run");
+    }
+    let picture: Vec<String> = tab_controls(&a, "Picture Format").iter().map(|c| c.command.id.clone()).collect();
+    for id in ["picture.corrections", "picture.color", "picture.transparency", "picture.style", "picture.border", "arrange.rotate"] {
+        assert!(!picture.iter().any(|p| p == id), "{id} runs with default values from a key tip");
+    }
+    assert!(picture.iter().any(|p| p == "arrange.wrap"), "Wrap Text keeps its key tip");
+    let shape: Vec<String> = tab_controls(&a, "Shape Format").iter().map(|c| c.command.id.clone()).collect();
+    assert!(!shape.iter().any(|p| p == "wordArt.textFill"), "Text Fill runs with default values from a key tip");
+}
+
+#[test]
+fn smart_art_add_shape_keytip_preserves_the_selected_insertion_point() {
+    let mut a = app();
+    a.run("insert.smartArt", serde_json::json!({"items": ["A", "B"]})).unwrap();
+    a.smart_art_item = Some(0);
+    let add_shape = tab_controls(&a, "SmartArt Design").into_iter().find(|c| c.command.id == "smartArt.addShape").expect("Add Shape keytip");
+    let command = add_shape.command.clone();
+    a.run(&command.id, command.params).unwrap();
+    let items = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).expect("selected SmartArt");
+    assert_eq!(items.items.iter().map(|item| item.text.as_str()).collect::<Vec<_>>(), ["A", "", "B"]);
 }

@@ -165,9 +165,49 @@ pub fn tab_letter(tab: &str) -> &'static str {
     TAB_LETTERS.iter().chain(&TABLE_TAB_LETTERS).find(|(t, _)| *t == tab).map(|(_, l)| *l).unwrap_or("")
 }
 
+/// Contextual tabs with no fixed letters, in the order that hands out their letters.
+const LETTERED_TABS: [&str; 6] = ["Picture Format", "Shape Format", "SmartArt Design", "Chart Design", "Equation", "Outlining"];
+
+/// A letter for each of `LETTERED_TABS`: the tab's initial when free, else the first free letter.
+/// Tab letters, J (table tabs), Q (Search) and the first letters of legacy menu keys are taken.
+fn lettered_tab_letters() -> &'static [(&'static str, char)] {
+    static LETTERS: std::sync::OnceLock<Vec<(&'static str, char)>> = std::sync::OnceLock::new();
+    LETTERS.get_or_init(|| {
+        let mut taken: Vec<char> = TAB_LETTERS.iter().chain(&TABLE_TAB_LETTERS).filter_map(|(_, l)| l.chars().next()).collect();
+        taken.extend(SEARCH_LETTER.chars());
+        taken.extend(legacy().iter().filter_map(|(k, _)| k.chars().next()));
+        let mut out = Vec::new();
+        for tab in LETTERED_TABS {
+            let initial = tab.chars().find(char::is_ascii_alphabetic).map(|c| c.to_ascii_uppercase());
+            let letter = initial.filter(|c| !taken.contains(c)).or_else(|| ('A'..='Z').find(|c| !taken.contains(c)));
+            if let Some(c) = letter {
+                taken.push(c);
+                out.push((tab, c));
+            }
+        }
+        out
+    })
+}
+
+/// The contextual tabs of the selection that take a letter from `lettered_tab_letters`.
+fn lettered_tabs(app: &WordApp) -> Vec<&'static str> {
+    crate::ribbon::contextual_tabs(&app.session).into_iter().filter(|t| LETTERED_TABS.contains(t)).collect()
+}
+
+/// The badge for a tab: its fixed letter, or the letter its contextual tab was given.
+pub fn tab_letter_for(app: &WordApp, tab: &str) -> String {
+    match tab_letter(tab) {
+        "" if lettered_tabs(app).contains(&tab) => {
+            lettered_tab_letters().iter().find(|(t, _)| *t == tab).map(|(_, c)| c.to_string()).unwrap_or_default()
+        }
+        "" => String::new(),
+        fixed => fixed.to_string(),
+    }
+}
+
 /// The tab a badge the keytips reported belongs to.
-fn tab_of_badge(badge: &str) -> Option<&'static str> {
-    TAB_LETTERS.iter().chain(&TABLE_TAB_LETTERS).find(|(_, l)| *l == badge).map(|(t, _)| *t)
+fn tab_of_badge(app: &WordApp, badge: &str) -> Option<&'static str> {
+    badge_tabs(app).into_iter().find(|t| tab_letter_for(app, t) == badge)
 }
 
 /// The tabs that carry a badge, in display order.
@@ -176,7 +216,20 @@ pub fn badge_tabs(app: &WordApp) -> Vec<&'static str> {
     if crate::ribbon::in_table_public(app) {
         v.extend_from_slice(&["Table Design", "Table Layout"]);
     }
+    v.extend(lettered_tabs(app));
     v
+}
+
+/// Contextual menus whose command, run with `{}`, only opens the menu or changes nothing.
+const SAFE_CONTEXTUAL_MENUS: &[&str] = &["arrange.wrap"];
+
+/// The contextual tabs that take the menu allow-list.
+const CONTEXTUAL_TABS: &[&str] = &["Picture Format", "Shape Format", "SmartArt Design", "Chart Design"];
+
+/// A control with no key tip: a contextual menu whose `{}` command may edit the picture or shape.
+fn key_tip_blocked(tab: &str, ctl: &Control) -> bool {
+    let id = ctl.command.id.as_str();
+    ctl.menu && CONTEXTUAL_TABS.contains(&tab) && !SAFE_CONTEXTUAL_MENUS.contains(&id)
 }
 
 /// Letters Alt+letter already drives elsewhere; only Alt-only (or bare) shortcuts count, so
@@ -216,15 +269,21 @@ fn shortcut_letter(app: &WordApp, id: &str) -> Option<char> {
 struct Control {
     tip: &'static str,
     command: CommandRef,
+    /// A menu opens from a click; a key tip runs its command with `{}` instead.
+    menu: bool,
 }
 
 /// A tab's controls in the order they are drawn; mirrors `ribbon.rs`, so badges land in order.
 fn controls(tab: &str) -> Vec<Control> {
-    let c = |tip: &'static str, id: &'static str| Control { tip, command: CommandRef::new(id) };
-    let m = c;
-    let d =
-        |tip: &'static str, name: &'static str| Control { tip, command: CommandRef::with_params("ui.dialog", serde_json::json!({ "name": name })) };
-    let p = |tip: &'static str, id: &'static str, params: serde_json::Value| Control { tip, command: CommandRef::with_params(id, params) };
+    let c = |tip: &'static str, id: &'static str| Control { tip, command: CommandRef::new(id), menu: false };
+    let m = |tip: &'static str, id: &'static str| Control { menu: true, ..c(tip, id) };
+    let d = |tip: &'static str, name: &'static str| Control {
+        tip,
+        command: CommandRef::with_params("ui.dialog", serde_json::json!({ "name": name })),
+        menu: false,
+    };
+    let p =
+        |tip: &'static str, id: &'static str, params: serde_json::Value| Control { tip, command: CommandRef::with_params(id, params), menu: false };
     match tab {
         "Home" => vec![
             m("Paste", "edit.paste"),
@@ -451,6 +510,58 @@ fn controls(tab: &str) -> Vec<Control> {
             c("Convert to Text", "table.toText"),
             c("Formula", "table.formula"),
         ],
+        // Menus match by their tooltip, buttons by command id.
+        "Picture Format" => vec![
+            m("Brightness, contrast and sharpness", "picture.corrections"),
+            m("Saturation and recolor", "picture.color"),
+            m("Recolor a one-color picture, such as an icon", "picture.iconColor"),
+            m("Picture transparency", "picture.transparency"),
+            c("Change Picture", "ui.changePicture"),
+            c("Reset Picture", "picture.reset"),
+            m("Frames and effects", "picture.style"),
+            m("Picture border", "picture.border"),
+            c("Alt Text", "view.altTextPane"),
+            c("Position", "arrange.position"),
+            m("Wrap Text", "arrange.wrap"),
+            m("Rotate", "arrange.rotate"),
+            m("Align", "arrange.align"),
+            m("Group", "arrange.group"),
+            c("Crop", "ui.crop"),
+        ],
+        "Shape Format" => vec![
+            m("Shape Fill", "shape.fill"),
+            m("Shape Outline", "shape.outline"),
+            m("Shadow, glow and soft edges", "shape.effects"),
+            c("Alt Text", "view.altTextPane"),
+            m("Drawing Canvas", "canvas.fit"),
+            m("Decorative Text Styles", "wordArt.style"),
+            m("Text Fill", "wordArt.textFill"),
+            m("Text Outline", "wordArt.textOutline"),
+            m("Text Effects", "wordArt.transform"),
+            m("Text Direction", "shape.textDirection"),
+            m("Align Text", "shape.alignText"),
+            c("Break Link", "shape.breakLink"),
+            c("Create Link", "ui.linkTextBox"),
+            c("Position", "arrange.position"),
+            m("Wrap Text", "arrange.wrap"),
+            m("Rotate", "arrange.rotate"),
+            m("Align", "arrange.align"),
+        ],
+        "SmartArt Design" => vec![
+            c("Add Shape", "smartArt.addShape"),
+            c("Promote", "smartArt.promote"),
+            c("Demote", "smartArt.demote"),
+            c("Text Pane", "smartArt.textPane"),
+            m("Change Colors", "smartArt.colors"),
+            c("Reset Graphic", "smartArt.reset"),
+        ],
+        "Chart Design" => vec![
+            m("Chart Title", "chart.title"),
+            m("Legend", "chart.legend"),
+            m("Data Labels", "chart.dataLabels"),
+            c("Edit Data", "chart.editData"),
+            c("Change Chart Type", "chart.type"),
+        ],
         _ => Vec::new(),
     }
 }
@@ -477,7 +588,15 @@ impl KeytipCache {
     fn build_tab_controls(app: &WordApp, tab: &str) -> Vec<KeytipControl<'static>> {
         let mut out: Vec<KeytipControl<'static>> = controls(tab)
             .into_iter()
-            .map(|control| {
+            .filter(|control| !key_tip_blocked(tab, control))
+            .map(|mut control| {
+                // Match the SmartArt ribbon button: with a valid focused Text Pane row, Add Shape inserts after it.
+                if control.command.id == "smartArt.addShape"
+                    && let Some(graphic) = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session)
+                    && let Some(index) = app.smart_art_item.filter(|i| *i < graphic.items.len())
+                {
+                    control.command.params = serde_json::json!({ "after": index });
+                }
                 let letters = shortcut_letter(app, &control.command.id).and_then(ascii_upper_str);
                 KeytipControl::new(control.command, control.tip, letters)
             })
@@ -531,9 +650,10 @@ pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>
 
     // A tab the ribbon shows has an element id this pass; one in the overflow menu has none and gets no badge.
     // PLAN: assumed `RibbonOutput::tab_ids: Vec<(T, egui::Id)>` (ribbon-w3, S-L361).
-    let tabs: Vec<(Label, &str, egui::Id)> = badge_tabs(app)
-        .into_iter()
-        .filter_map(|t| ribbon.tab_ids.iter().find(|(name, _)| name == t).map(|(_, id)| (Label::from(t), tab_letter(t), *id)))
+    let tab_badges: Vec<(&'static str, String)> = badge_tabs(app).into_iter().map(|t| (t, tab_letter_for(app, t))).collect();
+    let tabs: Vec<(Label, &str, egui::Id)> = tab_badges
+        .iter()
+        .filter_map(|(t, letter)| ribbon.tab_ids.iter().find(|(name, _)| name == t).map(|(_, id)| (Label::from(*t), letter.as_str(), *id)))
         .collect();
 
     let cache = match app.keytip_cache.take() {
@@ -579,7 +699,7 @@ pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>
     app.keytip_cache = Some(cache);
     // PLAN: `WordApp::keytips_active` is app-hub's (rb.A11).
     app.keytips_active = out.active;
-    if let Some(tab) = out.tab.as_deref().and_then(tab_of_badge) {
+    if let Some(tab) = out.tab.as_deref().and_then(|badge| tab_of_badge(app, badge)) {
         let _ = app.run("ui.tab", serde_json::json!({ "tab": tab }));
     }
     if let Some(pending) = &out.pending {

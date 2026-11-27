@@ -152,6 +152,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
    (20–30 h).
 
 ## Progress log
+- 2026-10-26: Contextual ribbon tabs receive stable WordCraft-assigned single-letter KeyTips; the four object-design tabs also expose control badges, while Equation and Outlining do not yet have control badges (#3854).
 
 - 2026-11-24: Pasting a plain table over selected cells overwrites from the selection's top-left, even when the copy is wider than the selection (#6742).
 - 2026-11-21: Layout: strict column balancing measures a kept paragraph again in each candidate column, so a float in one column does not make the paragraph skip another where it fits (#6821). Readiness estimates unchanged.
@@ -1140,6 +1141,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-10-27 | trivial | Connector rerouting indexes laid-out object positions once per batch, preserving page hints, first-match order and same-page glue; synthetic equivalence, geometry and scaling regressions (#3631); routing policy and readiness estimates unchanged |
 | 2026-10-27 | trivial | Progress log: Return on File › Print prints, as Word's default Print button does |
 | 2026-10-27 | trivial | PR #4609: Numeric cross-references (#4533): preserve the numbered clause through field updates; adapted from @Alyosha-dot-shop's issue patch, with extra relative-context and cache guards. Synthetic checks only; readiness estimates unchanged. |
+| 2026-10-26 | trivial | Contextual KeyTips (#3854): WordCraft-assigned letters for six contextual tabs; four tabs have control badges, Equation and Outlining do not |
 | 2026-10-27 | trivial | Preserve #4249 complete-record CSV delimiter detection and its regressions in the mailings modules; recipient commands, limits and refusal behavior unchanged. |
 | 2026-10-27 | trivial | Progress log: AutoCorrect Options with no document open (#4585) |
 | 2026-10-27 | trivial | 2026-10-27 · #4533 review: numeric REF updates lazily index body bookmarks once per update, retaining the first body bookmark for duplicate names. Unsupported switches and ordinary REF/PAGEREF behavior are unchanged; a synthetic 64-reference regression covers repeated updates and duplicate names. Estimates unchanged. |
