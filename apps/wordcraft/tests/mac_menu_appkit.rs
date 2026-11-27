@@ -21,6 +21,7 @@ fn main() {
     let ctx = egui::Context::default();
     let mut app =
         wordcraft_ui_egui::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), wordcraft_ui_egui::Services::default());
+    app.logic(&ctx);
     let mut menu = None;
     native_menu::NativeMenu::frame(&mut menu, &mut app, &ctx);
 
@@ -84,7 +85,6 @@ fn main() {
     // The document behind it must survive unchanged.
     let original = app.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
     let mut field = String::from("Search terms");
-    app.canvas.focused = false;
     let field_id = egui::Id::unique("native-menu-test-field");
     ctx.run_ui(egui::RawInput::default(), |ui| {
         ui.add(egui::TextEdit::singleline(&mut field).id(field_id)).request_focus();

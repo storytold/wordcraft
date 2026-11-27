@@ -292,7 +292,7 @@ mod bar {
     use muda::accelerator::Accelerator;
     use muda::{IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
     use serde_json::{Value, json};
-    use wordcraft_ui_egui::{WordApp, i18n, widgets};
+    use wordcraft_ui_egui::{WordApp, i18n};
 
     use super::{ABOUT, Entry, InputKind, MENUS, SETTINGS};
 
@@ -320,6 +320,7 @@ mod bar {
         /// Kept alive: AppKit holds the menu only while muda's handles exist.
         _menu: Menu,
         _submenus: Vec<Submenu>,
+        ctx: egui::Context,
         events: Receiver<MenuEvent>,
         actions: Vec<(muda::MenuId, Action)>,
         tracked: Vec<Tracked>,
@@ -358,8 +359,8 @@ mod bar {
 
         /// Add an action and track its enablement and configurable shortcut.
         fn add(&mut self, menu: &Submenu, text: &str, action: Action, app: &WordApp) {
-            let accelerator = accelerator(&action, app);
-            let enabled = action_enabled(&action, app, false);
+            let accelerator = accelerator(&self.ctx, &action);
+            let enabled = action_enabled(&self.ctx, &action, app, false);
             let item = MenuItem::with_id(self.next_id(), text, enabled, accelerator);
             self.actions.push((item.id().clone(), action.clone()));
             self.tracked.push(Tracked { item: item.clone(), action, enabled, accelerator });
@@ -402,6 +403,7 @@ mod bar {
             let mut me = Self {
                 _menu: menu.clone(),
                 _submenus: Vec::new(),
+                ctx: ctx.clone(),
                 events,
                 actions: Vec::new(),
                 tracked: Vec::new(),
@@ -473,7 +475,7 @@ mod bar {
             let Some(me) = slot.as_mut() else { return };
             while let Ok(e) = me.events.try_recv() {
                 let Some(action) = me.actions.iter().find(|(id, _)| id == e.id()).map(|(_, a)| a.clone()) else { continue };
-                if !action_enabled(&action, app, text_field_focused(ctx, app.active_viewport())) {
+                if !action_enabled(ctx, &action, app, text_field_focused(ctx, app.active_viewport())) {
                     continue;
                 }
                 match action {
@@ -498,18 +500,18 @@ mod bar {
                     }
                     Action::Input(kind) => {
                         // Document undo uses its registry; text fields keep egui's local undo.
-                        if app.canvas.focused && !app.modal_open() && matches!(kind, InputKind::Undo | InputKind::Redo) {
+                        if app.canvas.focused(ctx) && !app.modal_open() && matches!(kind, InputKind::Undo | InputKind::Redo) {
                             let id = if kind == InputKind::Undo { "edit.undo" } else { "edit.redo" };
                             if let Err(err) = app.run(id, json!({})) {
                                 app.status(err);
                             }
                             continue;
                         }
-                        let events = input_events(kind);
+                        let events = input_events(ctx, kind);
                         if events.is_empty() {
                             // Paste with no text on the clipboard (a picture): the ribbon's Paste,
                             // which reads pictures, HTML and RTF itself (#45, #584, #687).
-                            if app.canvas.focused
+                            if app.canvas.focused(ctx)
                                 && !app.modal_open()
                                 && let Err(err) = app.run("edit.paste", json!({}))
                             {
@@ -524,12 +526,12 @@ mod bar {
             }
             let field_focused = text_field_focused(ctx, app.active_viewport());
             for t in &mut me.tracked {
-                let enabled = action_enabled(&t.action, app, field_focused);
+                let enabled = action_enabled(ctx, &t.action, app, field_focused);
                 if enabled != t.enabled {
                     t.item.set_enabled(enabled);
                     t.enabled = enabled;
                 }
-                let accelerator = accelerator(&t.action, app);
+                let accelerator = accelerator(ctx, &t.action);
                 if accelerator != t.accelerator {
                     if let Err(err) = t.item.set_accelerator(accelerator) {
                         log::warn!("native menu shortcut: {err}");
@@ -563,7 +565,7 @@ mod bar {
     }
 
     /// Map supported Command bindings to AppKit, reserving standard Mac shortcuts.
-    fn accelerator(action: &Action, app: &WordApp) -> Option<Accelerator> {
+    fn accelerator(ctx: &egui::Context, action: &Action) -> Option<Accelerator> {
         let fixed = match action {
             Action::Hide => Some("CMD+H"),
             Action::Minimize => Some("CMD+M"),
@@ -598,18 +600,52 @@ mod bar {
         ) {
             return None;
         }
-        app.session
-            .keymap
-            .keys_for(&app.session.registry, id)
-            .iter()
+        let Some(km) = craft::ui::runtime::commands::keymap(ctx) else {
+            let default_key = match *id {
+                "file.new" => Some("CMD+N"),
+                "file.open" => Some("CMD+O"),
+                "file.close" => Some("CMD+W"),
+                "file.save" => Some("CMD+S"),
+                "file.saveAs" => Some("CMD+SHIFT+S"),
+                "file.print" => Some("CMD+P"),
+                "edit.find" => Some("CMD+F"),
+                "format.bold" => Some("CMD+B"),
+                "format.italic" => Some("CMD+I"),
+                "format.underline" => Some("CMD+U"),
+                _ => None,
+            };
+            return default_key.and_then(|k| Accelerator::from_str(k).ok());
+        };
+        km.bindings(&craft::keymap::CommandRef::new(*id))
+            .into_iter()
+            .map(|b| b.trigger.to_string())
             .filter(|key| {
-                key.starts_with("Mod+")
+                (key.starts_with("Mod+") || key.starts_with("Cmd+"))
                     && !matches!(
                         key.as_str(),
-                        "Mod+H" | "Mod+M" | "Mod+Q" | "Mod+," | "Mod+X" | "Mod+C" | "Mod+V" | "Mod+A" | "Mod+Z" | "Mod+Shift+Z"
+                        "Mod+H"
+                            | "Cmd+H"
+                            | "Mod+M"
+                            | "Cmd+M"
+                            | "Mod+Q"
+                            | "Cmd+Q"
+                            | "Mod+,"
+                            | "Cmd+,"
+                            | "Mod+X"
+                            | "Cmd+X"
+                            | "Mod+C"
+                            | "Cmd+C"
+                            | "Mod+V"
+                            | "Cmd+V"
+                            | "Mod+A"
+                            | "Cmd+A"
+                            | "Mod+Z"
+                            | "Cmd+Z"
+                            | "Mod+Shift+Z"
+                            | "Cmd+Shift+Z"
                     )
             })
-            .find_map(|key| Accelerator::from_str(&key.replace("Mod+", "CMD+")).ok())
+            .find_map(|key| Accelerator::from_str(&key.replace("Mod+", "CMD+").replace("Cmd+", "CMD+")).ok())
     }
 
     /// Retain text-field focus for each window: the menu runs in the root viewport,
@@ -664,7 +700,7 @@ mod bar {
     }
 
     /// Apply document/modal guards both to displayed items and queued native actions.
-    fn action_enabled(action: &Action, app: &WordApp, field_focused: bool) -> bool {
+    fn action_enabled(ctx: &egui::Context, action: &Action, app: &WordApp, field_focused: bool) -> bool {
         match action {
             Action::Hide | Action::Minimize => true,
             // Input must remain available inside modal dialogs' text fields.
@@ -685,7 +721,7 @@ mod bar {
                         || matches!(params.get("name").and_then(Value::as_str), Some("about"))
                         || matches!(params.get("page").and_then(Value::as_str), Some("options" | "new"))
                 } else {
-                    widgets::enabled(app, id)
+                    craft::ui::runtime::commands::resolve(ctx, *id).enabled
                 }
             }
         }
@@ -713,7 +749,7 @@ mod bar {
     }
 
     /// The input events the keyboard would have produced (as egui-winit makes them).
-    pub(super) fn input_events(kind: InputKind) -> Vec<egui::Event> {
+    pub(super) fn input_events(ctx: &egui::Context, kind: InputKind) -> Vec<egui::Event> {
         match kind {
             InputKind::Undo => key_events(egui::Key::Z, false),
             InputKind::Redo => key_events(egui::Key::Z, true),
@@ -721,7 +757,8 @@ mod bar {
             InputKind::Copy => vec![egui::Event::Copy],
             InputKind::Paste => {
                 // As egui-winit does for ⌘V: a paste event only when there is text.
-                let text = arboard::Clipboard::new().and_then(|mut c| c.get_text()).unwrap_or_default().replace("\r\n", "\n");
+                let text =
+                    craft::ui::runtime::commands::ClipboardHandle::of(ctx).read_text().ok().flatten().unwrap_or_default().replace("\r\n", "\n");
                 if text.is_empty() { Vec::new() } else { vec![egui::Event::Paste(text)] }
             }
             InputKind::SelectAll => key_events(egui::Key::A, false),
@@ -801,6 +838,8 @@ mod tests {
                 continue;
             }
             let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), Services::default());
+            let ctx = egui::Context::default();
+            app.logic(&ctx);
             let r = app.run(id, params.clone());
             // Commands that need something first (a search, a copy, an edit) say so, as their
             // keys do; that is not a dead item.
@@ -832,7 +871,7 @@ mod tests {
                 && !NEEDS_STATE.contains(&id)
             {
                 failures.push(format!("{id} {params}: {err}"));
-            } else if id == "ui.dialog" && app.dialog.is_none() {
+            } else if id == "ui.dialog" && app.dialog_host_mut().is_empty() {
                 failures.push(format!("{id} {params}: no such dialog"));
             }
         }

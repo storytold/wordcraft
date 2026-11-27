@@ -1030,7 +1030,22 @@ mod smoke {
             let drops = intake.sender();
             let session = Session::new(wordcraft_doc::Document::new());
             let app = WordApp::new(session, services(spool.clone(), intake, false)).with_host(host).with_settings(settings.clone());
-            Run { app: App { app, panels, drops, settings, spool, control: None, exit: None }, frames, ctx, sender }
+            Run {
+                app: App {
+                    app,
+                    panels,
+                    drops,
+                    settings,
+                    spool,
+                    control: None,
+                    exit: None,
+                    #[cfg(target_os = "macos")]
+                    menu: None,
+                },
+                frames,
+                ctx,
+                sender,
+            }
         }
 
         /// One frame as eframe runs it: the input hook once, the logic once, the UI per pass.
