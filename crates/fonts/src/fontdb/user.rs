@@ -720,10 +720,11 @@ impl FontDb {
     }
 
     /// Is `face` fit to hand out? A face listed from the catalogue is checked against its file the
-    /// first time one of the file's faces is handed out ([`FontDb::face`] and the fallback
-    /// searches), which reads the file: when its faces aren't the ones the catalogue described, they
-    /// are made again from its bytes (or dropped, when it can't be used any more), the catalogue
-    /// is corrected, and the answer is no, so the caller looks again.
+    /// first time one of the file's faces is handed out ([`FontDb::face`], also when it makes a
+    /// style at other axis values from one, and the fallback searches), which reads the file: when
+    /// its faces aren't the ones the catalogue described, they are made again from its bytes (or
+    /// dropped, when it can't be used any more), the catalogue is corrected, and the answer is no,
+    /// so the caller looks again.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn checked(&self, face: &super::FontFace) -> bool {
         // Faces made from the bytes (named instances, or faces a check made again) fit them.
@@ -824,7 +825,10 @@ impl FontDb {
                 refused.push(refuse(UserFontError::AlreadyAvailable(families)));
                 continue;
             }
-            let shared = Arc::new(catalog::FontFile::new(path.clone(), *stamp, self.files.clone(), *scanned));
+            // Without a status-change time (Windows), a file this start read that is then rewritten
+            // in place keeping its size and times keeps its stamp: it is checked when first used
+            // too, as a catalogued one is.
+            let shared = Arc::new(catalog::FontFile::new(path.clone(), *stamp, self.files.clone(), *scanned && cfg!(unix)));
             let added: Vec<Arc<super::FontFace>> = fresh.iter().map(|(r, _)| Arc::new(r.face(&shared))).collect();
             present.extend(fresh.into_iter().map(|(_, k)| k));
             faces.extend(added.iter().cloned());

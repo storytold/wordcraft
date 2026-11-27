@@ -3,22 +3,28 @@
 //! font's file is read the first time one of its faces is used. A start still lists the folder and
 //! reads each file's metadata, and the faces' descriptions take memory; the fonts' bytes don't.
 //!
-//! An entry describes the file of one exact name while its size, its modification time and what
-//! changes when a file is replaced or rewritten (its inode and status-change time on Unix, its
-//! creation time on Windows) are as they were. A file added, replaced or changed since is read and
-//! checked again, as an added font is. A file that can't be used isn't kept: it is read and
-//! checked at every start, so a repaired one shows.
+//! An entry describes the file of one exact name while its size and modification time are as they
+//! were, and on Unix its inode and status-change time, which a rewrite or a replacement changes
+//! even when it keeps the other two. Windows offers only the creation time, which a rewrite in
+//! place keeps (see `identity`). A file added, replaced or changed since is read and checked again,
+//! as an added font is. A file that can't be used isn't kept: it is read and checked at every
+//! start, so a repaired one shows.
 //!
 //! The catalogue's first line is a digest of the rest: a damaged or edited catalogue is made again
 //! from the fonts, as it is when WordCraft's version or the catalogue's format changes. A face
 //! listed from it is checked against its file before it is first handed out
-//! ([`FontDb::face`](super::super::FontDb::face) and the fallback searches), so a description
-//! that doesn't match the file never reaches layout: the file's faces are made again from its
-//! bytes, and the entry with them.
+//! ([`FontDb::face`](super::super::FontDb::face), also before a style at other axis values is made
+//! from it, and the fallback searches), so a description that doesn't match the file never reaches
+//! layout: the file's faces are made again from its bytes, and the entry with them. A font list
+//! preview of a font no document uses is drawn from a copy read from the file.
+//!
+//! A file's bytes are read only while it has the stamp it was listed with: a font whose file is
+//! replaced, removed or made unreadable during a session, before a document uses it, falls back
+//! until the next start, which reads the file as it is then.
 //!
 //! Each write goes to a temporary file of its own, renamed over the catalogue once complete, so a
 //! reader finds a whole catalogue, old or new, whatever other writers (other instances of the app)
-//! are doing.
+//! are doing. One left for an hour (its writer stopped) is cleared at a later start.
 
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
@@ -49,8 +55,9 @@ const MAX_CATALOG_BYTES: u64 = 128 << 20;
 const ABANDONED: Duration = Duration::from_secs(60 * 60);
 
 /// What tells a file's contents apart without reading them: its size, its modification time, and
-/// what changes when the file is replaced or rewritten even when both are kept (as a restore can
-/// keep them). An entry describes the file only while all of them match.
+/// where the platform offers it (Unix), what changes when the file is replaced or rewritten even
+/// when both are kept (as a restore can keep them). An entry describes the file only while all of
+/// them match.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Stamp {
     len: u64,
@@ -87,9 +94,11 @@ fn identity(meta: &std::fs::Metadata) -> (u64, i64, u32) {
     (meta.ino(), meta.ctime(), u32::try_from(meta.ctime_nsec()).unwrap_or(0))
 }
 
-/// Windows offers no inode or status-change time without a handle: a file rewritten in place
-/// keeping its size and both times shows when its faces are first handed out (they are checked
-/// against the file then).
+/// Windows offers no inode or status-change time without a handle, and the creation time doesn't
+/// change when a file is rewritten in place, nor always when it is replaced (file-system tunnelling
+/// can give a file saved under the old one's name within seconds its creation time). So a file
+/// changed keeping its size and modification time can keep its whole stamp: its faces, whether
+/// listed from the catalogue or read at this start, are checked against it when first handed out.
 #[cfg(windows)]
 fn identity(meta: &std::fs::Metadata) -> (u64, i64, u32) {
     use std::os::windows::fs::MetadataExt;
@@ -296,8 +305,8 @@ pub(super) fn read(dir: &Path) -> HashMap<OsString, Entry> {
 }
 
 /// Keep `entries` as the catalogue in `dir`, replacing the old one whole: written to a temporary
-/// file of this write's own, then renamed over the catalogue. Another writer's temporary file is
-/// never opened, reused or removed, so no writer can publish another's unfinished file.
+/// file of this write's own, then renamed over the catalogue. A write never opens, reuses or
+/// removes another writer's temporary file, so no writer can publish another's unfinished file.
 pub(super) fn write(dir: &Path, entries: &[Entry]) -> std::io::Result<()> {
     let body =
         serde_json::to_vec(&CatalogOut { format: FORMAT, version: env!("CARGO_PKG_VERSION"), files: entries }).map_err(std::io::Error::other)?;

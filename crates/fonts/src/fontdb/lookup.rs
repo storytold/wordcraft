@@ -12,7 +12,7 @@ impl FontDb {
     /// name ("Roboto Light", whose styles are Light and Light Italic). Installed system fonts are
     /// found by name whatever ran before. An exact full or PostScript name selects its face. An
     /// added font's face listed from its catalogue is checked against the font's file before it is
-    /// first handed out.
+    /// first handed out, or before a style at other axis values is made from it.
     pub fn face(&self, family: &str, style: &str) -> Arc<FontFace> {
         loop {
             let face = self.resolve(family, style);
@@ -177,7 +177,13 @@ impl FontDb {
     /// `Style {wght:650,wdth:90}`: the named style's font at those axis values, made on first use.
     fn instance(&self, family: &str, style: &str) -> Option<Arc<FontFace>> {
         let open = style.find('{')?;
-        let base = self.find(family, style[..open].trim())?;
+        // The named style it starts from, checked against its file first (an added font's face).
+        let base = loop {
+            let base = self.find(family, style[..open].trim())?;
+            if self.checked(&base) {
+                break base;
+            }
+        };
         if base.skrifa().is_none_or(|f| f.axes().is_empty()) {
             return Some(base);
         }

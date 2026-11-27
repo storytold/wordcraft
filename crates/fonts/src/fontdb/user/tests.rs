@@ -739,6 +739,7 @@ fn an_added_font_whose_file_is_gone_when_first_used_falls_back() {
     std::fs::write(dir.join("a.ttf"), numbered(1)).unwrap();
     restart(&dir);
     let (db, _, _) = restart(&dir);
+    let (previewing, _, _) = restart(&dir);
     std::fs::remove_file(dir.join("a.ttf")).unwrap();
     let generation = db.generation();
     // Checked against its file before it is handed out: there is nothing to draw it with, so its
@@ -746,6 +747,9 @@ fn an_added_font_whose_file_is_gone_when_first_used_falls_back() {
     assert_eq!(db.face("Userfont 00001", "Italic").family, super::super::FALLBACK_FAMILY);
     assert!(!db.is_loaded("Userfont 00001") && db.user_fonts().is_empty());
     assert!(db.generation() > generation);
+    // A font list preview finds the same: no face to draw its name in, and it is no longer listed.
+    assert!(previewing.preview_face("Userfont 00001").is_none());
+    assert!(previewing.user_fonts().is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -810,7 +814,8 @@ fn fonts_added_or_removed_in_a_session_are_catalogued_for_the_next_start() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// The review's four reproductions (27 Nov), as regressions: each fails on 6f7b5328.
+// The catalogue's identity, staleness, integrity and writes: each test fails without the
+// protection it guards.
 
 /// Two files whose names aren't valid Unicode but read the same once made text
 /// (`font-\u{FFFD}.ttf`), with equal sizes and times, as legacy-encoded names restored from an
@@ -973,6 +978,39 @@ fn a_damaged_font_repaired_keeping_size_and_time_is_used() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `font` (TrueType) with its `head` table's units per em set to `upem`: the same size, other
+/// metrics.
+#[cfg(windows)]
+fn with_upem(font: &[u8], upem: u16) -> Vec<u8> {
+    let n = u16::from_be_bytes([font[4], font[5]]) as usize;
+    let head = (0..n).map(|i| &font[12 + i * 16..28 + i * 16]).find(|r| &r[..4] == b"head").unwrap();
+    let at = u32::from_be_bytes(head[8..12].try_into().unwrap()) as usize + 18;
+    let mut out = font.to_vec();
+    out[at..at + 2].copy_from_slice(&upem.to_be_bytes());
+    out
+}
+
+/// Windows keeps no status-change time: a font this start read itself (new since the catalogue)
+/// and then rewritten in place, keeping its size and times, is checked when first used, so its
+/// metrics come from the file as it is now.
+#[cfg(windows)]
+#[test]
+fn a_font_read_at_start_then_rewritten_keeping_its_stamp_is_checked_when_first_used() {
+    let dir = temp_dir("rewritten-after-scan");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("a.ttf");
+    std::fs::write(&path, numbered(1)).unwrap();
+    let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+    let (db, loaded, _) = restart(&dir);
+    assert_eq!(loaded.len(), 1);
+    let rewritten = with_upem(&numbered(1), 2000);
+    assert_eq!(rewritten.len() as u64, std::fs::metadata(&path).unwrap().len());
+    std::fs::write(&path, &rewritten).unwrap();
+    std::fs::File::options().write(true).open(&path).unwrap().set_modified(modified).unwrap();
+    assert_eq!(db.face("Userfont 00001", "Italic").upem, 2000.0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[cfg(unix)]
 #[test]
 fn a_catalogue_write_leaves_another_writers_unfinished_file_alone() {
@@ -1022,11 +1060,21 @@ fn a_catalogue_write_leaves_another_writers_unfinished_file_alone() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Give the first face the catalogue in `dir` describes twice its ascent, in a catalogue that is
+/// still whole (its digest made again), as a build describing faces another way could leave it.
+fn double_first_ascent(dir: &Path) {
+    edit_catalogue(dir, |json| {
+        let ascent = number_after(json, "\"ascent\":");
+        json.replacen(&format!("\"ascent\":{ascent}"), &format!("\"ascent\":{:?}", ascent.parse::<f64>().unwrap() * 2.0), 1)
+    });
+    catalog::reseal(dir);
+}
+
 #[test]
 fn a_whole_catalogue_unlike_a_file_is_corrected_when_the_font_is_first_used() {
-    // A catalogue whose digest matches but whose entry doesn't fit its file (as a build describing
-    // faces another way would leave): believed at start, then the face is checked against the
-    // file before it is handed out, made again from it, and the catalogue corrected.
+    // A catalogue whose digest matches but whose entry doesn't fit its file: believed at start,
+    // then the face is checked against the file before it is handed out, made again from it, and
+    // the catalogue corrected.
     let dir = temp_dir("unfit");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("a.ttf"), numbered(1)).unwrap();
@@ -1034,11 +1082,7 @@ fn a_whole_catalogue_unlike_a_file_is_corrected_when_the_font_is_first_used() {
     eager.install_font("a.ttf", &numbered(1)).unwrap();
     let reference = eager.face("Userfont 00001", "Italic");
     restart(&dir);
-    edit_catalogue(&dir, |json| {
-        let ascent = number_after(json, "\"ascent\":");
-        json.replacen(&format!("\"ascent\":{ascent}"), &format!("\"ascent\":{:?}", ascent.parse::<f64>().unwrap() * 2.0), 1)
-    });
-    catalog::reseal(&dir);
+    double_first_ascent(&dir);
     let (db, loaded, _) = restart(&dir);
     assert_eq!((reads(&db), loaded.len()), (0, 1), "a whole catalogue is believed at start");
     let generation = db.generation();
@@ -1054,6 +1098,63 @@ fn a_whole_catalogue_unlike_a_file_is_corrected_when_the_font_is_first_used() {
     let generation = db.generation();
     assert_eq!(db.face("Userfont 00001", "Italic").ascent, reference.ascent);
     assert_eq!((reads(&db), db.generation()), (1, generation));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn every_fallback_search_checks_a_catalogued_face() {
+    // With only the added font loaded, each fallback search has to choose it: from a whole
+    // catalogue that doubles its ascent, each hands out the face as the file has it.
+    let dir = temp_dir("fallbacks");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.ttf"), numbered(1)).unwrap();
+    let eager = db();
+    eager.install_font("a.ttf", &numbered(1)).unwrap();
+    let reference = eager.face("Userfont 00001", "Italic");
+    restart(&dir);
+    double_first_ascent(&dir);
+    let unlike = std::fs::read(dir.join(catalog::CATALOG_FILE)).unwrap();
+    type Search = fn(&FontDb) -> Option<Arc<super::super::FontFace>>;
+    let searches: [(&str, Search); 3] = [
+        ("fallback_for", |db| db.fallback_for('a', u32::MAX)),
+        ("fallback_for_run", |db| db.fallback_for_run(&['a', 'b'], u32::MAX, false, false)),
+        ("fallback_for_diagram", |db| db.fallback_for_diagram(&['a', 'b'], u32::MAX, true)),
+    ];
+    for (search, pick) in searches {
+        // Each search from the same catalogue: the one before it corrected the catalogue.
+        std::fs::write(dir.join(catalog::CATALOG_FILE), &unlike).unwrap();
+        let (db, loaded, _) = restart(&dir);
+        assert_eq!(loaded.len(), 1);
+        db.faces.write().unwrap().retain(|f| matches!(f.bytes, FontBytes::File(_)));
+        let face = pick(&db).unwrap();
+        assert_eq!((face.family.as_str(), face.ascent), ("Userfont 00001", reference.ascent), "{search}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_axis_style_is_made_from_a_checked_face() {
+    // A whole catalogue that gives a variable font's Black instance another weight: a style at
+    // other axis values made from it (`Black {opsz:12}`) has the weight and location the file
+    // gives that instance.
+    let dir = temp_dir("axis-style");
+    std::fs::create_dir_all(&dir).unwrap();
+    let font = with_named_instances(&renamed("SourceSans3-Regular.ttf", "Userfont Vars"), "Userfont Vars", &[("Light", 300), ("Black", 900)]);
+    std::fs::write(dir.join("vars.ttf"), &font).unwrap();
+    let eager = db();
+    eager.install_font("vars.ttf", &font).unwrap();
+    let reference = eager.face("Userfont Vars", "Black {opsz:12}");
+    restart(&dir);
+    // The Black instance's `wght` coordinate, 900, made 100, and the digest made again.
+    edit_catalogue(&dir, |json| json.replacen("[[119,103,104,116],900.0]", "[[119,103,104,116],100.0]", 1));
+    catalog::reseal(&dir);
+    let (db, loaded, _) = restart(&dir);
+    assert_eq!(loaded.len(), 1);
+    let face = db.face("Userfont Vars", "Black {opsz:12}");
+    assert_eq!((face.weight, &face.coords), (reference.weight, &reference.coords));
+    // Made after the check, so no later correction takes it out of the face list.
+    db.face("Userfont Vars", "Black");
+    assert!(db.read_faces().iter().any(|f| f.id == face.id));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
