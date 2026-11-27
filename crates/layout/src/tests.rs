@@ -16992,6 +16992,45 @@ fn keep_with_next_counts_the_next_paragraphs_top_border() {
     assert_eq!(line_tops(&l).len(), 0, "the heading moves on with the bordered paragraph");
 }
 
+/// A kept-together group member that doesn't fit moves on only when it fits on the next page
+/// with the top border it takes there (the group ends with the page): lines filling all but
+/// 64pt of the page and a 64pt band don't fit, so it splits here instead of over two more pages.
+#[test]
+fn keep_lines_counts_the_top_border_a_group_member_takes_on_the_next_page() {
+    use wordcraft_doc::para_block;
+    let rule = Some(Border { style: BorderStyle::Single, width: 0.5, color: None, space: 63.5 });
+    let borders = Some(Borders { top: rule, ..Default::default() });
+    // One word a line.
+    let kept = |words: usize| {
+        let text = (0..words).map(|i| format!("word{i:02}")).collect::<Vec<_>>().join(" ");
+        let mut p = ruled_para(&text, borders);
+        p.props.indent_right = Some(468.0 - 50.0);
+        p.props.keep_lines = Some(true);
+        p.props.widow_control = Some(false);
+        p
+    };
+    let height = |p: wordcraft_doc::Paragraph| {
+        let mut d = Document::from_text("");
+        d.body = vec![para_block(p)];
+        let l = lay(&d);
+        l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some((para.height, para.lines.len())) } else { None })
+    };
+    let (h, one) = height(kept(1)).unwrap();
+    assert_eq!(one, 1);
+    // The most lines that fit on the 648pt page without the band.
+    let n = (648.0 / h).floor() as usize;
+    assert!(n as f32 * h + 64.0 > 648.0, "setup: {n} lines of {h}pt and the band overflow the page");
+    assert_eq!(height(kept(n)).map(|(_, k)| k), Some(n), "setup: one word a line");
+    // A member of the group above it (the same borders and indents).
+    let mut first = ruled_para("First", borders);
+    first.props.indent_right = Some(468.0 - 50.0);
+    let mut d = Document::from_text("");
+    d.body = vec![para_block(first), para_block(kept(n))];
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 2, "pages");
+    assert_eq!(line_tops(&l).len(), 2, "the kept paragraph starts on the first page");
+}
+
 /// A section break ends a border group: each side of it gets its own top and bottom rule.
 #[test]
 fn a_section_break_ends_a_border_group() {
