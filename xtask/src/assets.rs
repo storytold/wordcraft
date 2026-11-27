@@ -14,7 +14,7 @@ const ASSET_EXT: &[&str] = &[
 const ASSET_DIRS: &[&str] = &["assets/", "docs/images/", "examples/"];
 
 pub fn is_asset(path: &str) -> bool {
-    let ext = Path::new(path).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    let ext = Path::new(path).extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase).unwrap_or_default();
     ASSET_DIRS.iter().any(|d| path.starts_with(d)) || ASSET_EXT.contains(&ext.as_str())
 }
 
@@ -73,8 +73,10 @@ mod tests {
     fn a_failed_file_listing_fails_the_check() {
         // #1364: outside a git checkout `git ls-files` fails, and its empty output read as "no
         // files" passed the check.
-        let dir = std::env::temp_dir().join(format!("wordcraft-xtask-assets-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        // Created exclusively under a name no one can predict: an existing folder or link there would be someone else's.
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+        let dir = std::env::temp_dir().join(format!("wordcraft-xtask-assets-{}-{nanos}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
         std::fs::write(dir.join("ATTRIBUTION.md"), "").unwrap();
         let inside_git = Command::new("git").current_dir(&dir).args(["rev-parse", "--git-dir"]).output().is_ok_and(|o| o.status.success());
         let result = run(&dir);
