@@ -231,7 +231,7 @@ pub(crate) fn math_picture<'a>(label: impl Into<Label>, key: u64, thumbnails: &'
 }
 
 /// An equation rasterised for a tile of `w`×`h` points, as an ink mask.
-fn math_image(nodes: &wordcraft_doc::math::Arg, display: bool, pt: f32, w: f32, h: f32, ppp: f32) -> Option<ColorImage> {
+pub(crate) fn math_image(nodes: &wordcraft_doc::math::Arg, display: bool, pt: f32, w: f32, h: f32, ppp: f32) -> Option<ColorImage> {
     use wordcraft_doc::math::{Math, to_linear};
     let props = CharProps { size: Some(pt), ..Default::default() };
     let mut p = Paragraph::with_text("", props.clone());
