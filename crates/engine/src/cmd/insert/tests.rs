@@ -358,6 +358,8 @@ fn date_pictures_keep_quoted_text() {
     // Two quotes outside quoted text are one too (an apostrophe), not an empty quoted text.
     assert_eq!(format_date_parts("yyyy '' MM", 2026, 10, 21, (0, 0, 0), 0), "2026 ' 10");
     assert_eq!(format_date_parts("d''MM", 2026, 10, 21, (0, 0, 0), 0), "21'10");
+    // Bare `a` is literal, not AM/PM (#3488).
+    assert_eq!(format_date_parts("yyyy a", 2026, 10, 21, (14, 30, 0), 0), "2026 a");
 }
 
 #[test]

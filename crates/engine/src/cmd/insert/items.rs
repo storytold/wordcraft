@@ -311,7 +311,7 @@ pub fn format_date_parts_in(fmt: &str, lang: Option<&str>, y: i64, m: usize, d: 
             ('m', _) => out.push_str(&mm.to_string()),
             ('s', 2..) => out.push_str(&format!("{ss:02}")),
             ('s', _) => out.push_str(&ss.to_string()),
-            ('a' | 'A', _) => out.push_str(if hh < 12 { "AM" } else { "PM" }),
+            // Bare `a`/`A` is literal; AM/PM is the `am/pm` token (#3488).
             _ => {
                 for _ in 0..n {
                     out.push(c);
