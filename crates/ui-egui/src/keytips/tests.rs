@@ -504,21 +504,22 @@ fn file_keytips_reach_the_backstage_pages() {
     assert!(h.state().keytips_active, "Backstage keytip badges stay active while waiting");
     assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "F did not type into the document");
 
-    // Unmapped letters do not navigate or type, and Escape ends the badges while leaving Backstage open.
+    // Unmapped letters do not navigate, type, or dismiss keytips; Escape ends the badges while leaving Backstage open.
     let page = h.state().ui.backstage_page.clone();
     h.input_mut().events.extend([key_event(egui::Key::Q, true, egui::Modifiers::NONE), egui::Event::Text("q".into())]);
     crate::test_harness::frames(&mut h, 2);
-    assert_eq!((h.state().ui.backstage, h.state().ui.backstage_page.as_str()), (true, page.as_str()));
+    assert_eq!((h.state().keytips_active, h.state().ui.backstage, h.state().ui.backstage_page.as_str()), (true, true, page.as_str()));
     assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "unmapped key does not type into the document");
 
     h.input_mut().events.push(key_event(egui::Key::Escape, true, egui::Modifiers::NONE));
     crate::test_harness::frames(&mut h, 2);
     assert_eq!((h.state().keytips_active, h.state().ui.backstage, h.state().ui.backstage_page.as_str()), (false, true, page.as_str()));
 
-    for (second, text, page) in [(egui::Key::P, "p", "print"), (egui::Key::S, "s", "saveAs"), (egui::Key::V, "v", "print")] {
+    for (second, text, page) in
+        [(egui::Key::P, "p", "print"), (egui::Key::V, "v", "print"), (egui::Key::A, "a", "saveAs"), (egui::Key::T, "t", "options")]
+    {
         // Leave Backstage before starting the next F10, F sequence.
-        h.input_mut().events.push(key_event(egui::Key::Escape, true, egui::Modifiers::NONE));
-        crate::test_harness::frame(&mut h);
+        h.state_mut().run("ui.backstage", serde_json::json!({"value": false})).unwrap();
         assert!(!h.state().ui.backstage);
 
         activate_and_file(&mut h, false);
@@ -526,25 +527,53 @@ fn file_keytips_reach_the_backstage_pages() {
         crate::test_harness::frames(&mut h, 2);
         assert_eq!((h.state().ui.backstage, h.state().ui.backstage_page.as_str()), (true, page), "{second:?}");
         assert!(!h.state().keytips_active, "badge letter completes and ends keytips");
-        assert!(!h.state().file_dialog_open(), "unnamed Save redirects to saveAs without opening a file dialog");
         assert!(files.requests().is_empty(), "no native file picker requested");
         assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "{second:?} did not type into the document");
     }
+}
+
+#[test]
+fn backstage_save_and_close_keytips_on_clean_document() {
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::held());
+    let host = craft::host::Host::builder(crate::APP).files(files.clone()).build();
+    let mut h = harness(app().with_host(std::sync::Arc::new(host)));
+
+    let open_file = |h: &mut egui_kittest::Harness<'static, WordApp>| {
+        h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
+        crate::test_harness::frame(h);
+        h.input_mut().events.extend([key_event(egui::Key::F, true, egui::Modifiers::NONE), egui::Event::Text("f".into())]);
+        crate::test_harness::frames(h, 2);
+        assert!(h.state().ui.backstage && h.state().keytips_active);
+    };
+
+    // Unnamed Save (`S`) redirects to saveAs without opening a file dialog.
+    open_file(&mut h);
+    h.input_mut().events.extend([key_event(egui::Key::S, true, egui::Modifiers::NONE), egui::Event::Text("s".into())]);
+    crate::test_harness::frames(&mut h, 2);
+    assert_eq!((h.state().ui.backstage, h.state().ui.backstage_page.as_str()), (true, "saveAs"));
+    assert!(!h.state().keytips_active);
+    assert!(!h.state().file_dialog_open(), "unnamed Save redirects to saveAs without opening a file dialog");
+    assert!(files.requests().is_empty(), "no native file picker requested");
 
     // Close (`C`) closes a clean document.
-    h.input_mut().events.push(key_event(egui::Key::Escape, true, egui::Modifiers::NONE));
-    crate::test_harness::frame(&mut h);
-    activate_and_file(&mut h, false);
+    h.state_mut().run("ui.backstage", serde_json::json!({"value": false})).unwrap();
+    open_file(&mut h);
     h.input_mut().events.extend([key_event(egui::Key::C, true, egui::Modifiers::NONE), egui::Event::Text("c".into())]);
     crate::test_harness::frames(&mut h, 2);
     assert!(!h.state().has_document(), "Alt/F10, F, C closes an untouched document");
     assert!(!h.state().ui.backstage && !h.state().keytips_active);
+}
 
-    // Close (`C`) prompts on unsaved changes.
+#[test]
+fn backstage_close_keytip_prompts_on_unsaved_changes() {
     let mut dirty = app();
     dirty.run("text.insert", serde_json::json!({"text": "Draft"})).unwrap();
-    let mut h = fast_harness(dirty);
-    activate_and_file(&mut h, false);
+    let mut h = harness(dirty);
+    h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
+    crate::test_harness::frame(&mut h);
+    h.input_mut().events.extend([key_event(egui::Key::F, true, egui::Modifiers::NONE), egui::Event::Text("f".into())]);
+    crate::test_harness::frames(&mut h, 2);
+    assert!(h.state().ui.backstage && h.state().keytips_active);
     h.input_mut().events.extend([key_event(egui::Key::C, true, egui::Modifiers::NONE), egui::Event::Text("c".into())]);
     crate::test_harness::frames(&mut h, 2);
     assert!(h.state().closing.is_some(), "Alt/F10, F, C prompts before discarding unsaved changes");

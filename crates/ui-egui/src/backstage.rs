@@ -208,9 +208,6 @@ pub(crate) fn show(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
             page_body(ui, app, &current);
         });
     });
-    if let Some(id) = choice.page.take() {
-        go_to_page(app, id);
-    }
     if choice.about.get() {
         let _ = crate::dialogs::open(app, "about", &json!({}));
     }
@@ -345,11 +342,6 @@ pub(crate) fn go_to_page(app: &mut WordApp, id: &str) {
         }
         "saveAs" => {
             app.ui.backstage_page = "saveAs".into();
-        }
-        // Not a page: `file.close` asks Save / Don't Save / Cancel first when there
-        // are unsaved changes, and Cancel leaves the Backstage where it was.
-        "close" => {
-            let _ = if app.user_origin { app.run("file.close", json!({})) } else { app.execute("file.close", json!({})) };
         }
         _ => app.ui.backstage_page = id.into(),
     }

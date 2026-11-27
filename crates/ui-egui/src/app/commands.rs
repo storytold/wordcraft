@@ -577,8 +577,7 @@ impl WordApp {
                 }
                 self.ui.backstage = p.get("value").and_then(Value::as_bool).unwrap_or(!self.ui.backstage);
                 if let Some(pg) = pg.filter(|p| *p != "close") {
-                    let ctx = self.ctx.clone().unwrap_or_default();
-                    crate::backstage::go_to_page(self, pg, &ctx);
+                    crate::backstage::go_to_page(self, pg);
                 }
                 if let Some(pane) = s("pane") {
                     self.ui.options_pane = pane.into();
