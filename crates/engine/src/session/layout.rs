@@ -214,8 +214,13 @@ impl Session {
         let first = self.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
         let l =
             if !self.view.read_mode && self.view.mode == ViewMode::Print { self.layout() } else { self.output_layout_of(&self.doc, false, false) };
-        let Some((caret, page)) = l.caret(pos).and_then(|c| Some((c, l.pages.get(c.page)?))) else { return first };
-        let section = self.doc.sections().get(page.section).map(|(_, sp)| (*sp).clone());
+        let Some((caret, page)) = l.caret_on(pos, self.page_hint).and_then(|c| Some((c, l.pages.get(c.page)?))) else { return first };
+        // A page can hold several continuous sections: the body's own comes from the position.
+        let at = match (pos.story, pos.path.0.first()) {
+            (StoryRef::Body, Some(b)) => self.doc.section_index_of(*b as usize),
+            _ => page.section,
+        };
+        let section = self.doc.sections().get(at).map(|(_, sp)| (*sp).clone());
         let column = match (&section, pos.story) {
             (Some(sp), StoryRef::Body) => {
                 let boxes = sp.column_boxes();

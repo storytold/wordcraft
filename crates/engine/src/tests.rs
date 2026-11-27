@@ -15014,6 +15014,27 @@ fn an_inserted_or_pasted_picture_fits_where_it_goes() {
     assert!((widths(&s)[0].0 - text_w).abs() < 0.5);
 }
 
+/// #5428 review: a page can hold several continuous sections; a picture goes by the section of the
+/// position, not of the page's first one (two columns, then a continuous single-column section).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_picture_after_a_continuous_break_fits_its_own_section() {
+    let sect = |cols: &str, kind: &str| format!(r#"<w:sectPr>{kind}<w:pgSz w:w="11906" w:h="16838"/><w:cols {cols} w:space="708"/></w:sectPr>"#);
+    let body = [
+        "<w:p><w:r><w:t>one</w:t></w:r></w:p>".to_string(),
+        format!("<w:p><w:pPr>{}</w:pPr></w:p>", sect(r#"w:num="2""#, "")),
+        "<w:p><w:r><w:t>two</w:t></w:r></w:p>".to_string(),
+        sect("", r#"<w:type w:val="continuous"/>"#),
+    ]
+    .concat();
+    let mut s = Session::new(wordcraft_docx::read(&docx_with_styles(&body, "")).unwrap());
+    let last = s.doc.body.len() - 1;
+    s.sel = crate::Selection::caret(Pos::body(last, 0));
+    let room = s.room_at(&s.sel.focus.clone());
+    let column = s.doc.sections()[0].1.column_boxes()[0].1;
+    assert!(room > column + 50.0, "{room} is the single column's width, not the earlier two columns' ({column})");
+}
+
 /// #5428 review: Web Layout and Read Mode reflow the text to the window, but a picture put in
 /// there is fitted to the page's text width, as in Print Layout: the size stays in the document.
 #[cfg(not(target_arch = "wasm32"))]
