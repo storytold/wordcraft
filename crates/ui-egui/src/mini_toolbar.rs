@@ -268,6 +268,13 @@ pub(crate) fn members(app: &mut WordApp, ui: &mut Ui, preview: bool) {
                     ] {
                         toggle(ui, app, id, icon, align == a, preview);
                     }
+                    let _ = Divider::vertical().show(ui);
+                    // #6068: Word's bar offers Clear All Formatting after the alignments.
+                    let clear = Button::command(CommandRef::new("format.clear"))
+                        .icon(crate::icons::id("clear"))
+                        .tooltip(tl!("Clear All Formatting").to_string())
+                        .show(ui);
+                    preview_on_hover(app, clear.hover, clear.response.enabled(), "format.clear", json!({}), preview);
                 });
             });
         },

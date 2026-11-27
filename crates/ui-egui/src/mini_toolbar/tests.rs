@@ -6,6 +6,24 @@ use super::*;
 
 type H = egui_kittest::Harness<'static, WordApp>;
 
+/// #6068: the bar offers Clear All Formatting, which removes the selection's direct character
+/// formatting.
+#[test]
+fn the_bar_offers_clear_all_formatting() {
+    use wordcraft_doc::Pos;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Bold word"})).unwrap();
+    a.run("select.text", json!({"text": "Bold"})).unwrap();
+    a.run("format.bold", json!({})).unwrap();
+    let mut h = bar_over_app(a);
+    // The bar lies inside the document area and the ribbon's own Clear All Formatting above it, so
+    // the member search scoped to the canvas finds the bar's button.
+    let at = member(&h, "Clear All Formatting").expect("the bar offers Clear All Formatting").center();
+    click_at(&mut h, at);
+    let p = h.state().session.doc.para_at(&Pos::body(0, 0)).expect("the paragraph");
+    assert_eq!(p.props_of_char(0).bold, None, "the selection's bold is cleared");
+}
+
 fn vp() -> Rect {
     Rect::from_min_size(pos2(100.0, 50.0), Vec2::new(1200.0, 700.0))
 }
@@ -209,6 +227,7 @@ fn every_control_fits_inside_the_bar() {
         "Font Color",
         "Increase Font Size",
         "Decrease Font Size",
+        "Clear All Formatting",
     ] {
         let r = member(&h, label).unwrap_or_else(|| panic!("the bar has {label}"));
         rects.push((label.to_string(), r));
@@ -222,7 +241,8 @@ fn every_control_fits_inside_the_bar() {
         .map(|n| n.rect())
         .find(|r| c.contains_rect(*r))
         .expect("the selection bar lies inside the document area");
-    assert!(bar.width() < 350.0, "bar width {} must not be bloated by text labels", bar.width());
+    // The one added control (#6068, Clear All Formatting) makes the bar a button and a rule wider.
+    assert!(bar.width() < 380.0, "bar width {} must not be bloated by text labels", bar.width());
     for (name, r) in &rects {
         assert!(bar.contains_rect(*r), "{name} {r:?} must stay inside the bar {bar:?}");
     }

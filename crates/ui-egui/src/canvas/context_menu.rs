@@ -163,6 +163,7 @@ fn rows(app: &mut WordApp, ui: &mut Ui) {
     }
     item(ui, "Font…", "ui.dialog", json!({"name": "font"}));
     item(ui, "Paragraph…", "ui.dialog", json!({"name": "paragraph"}));
+    item(ui, "Clear All Formatting", "format.clear", json!({}));
     item(ui, "Link…", "ui.dialog", json!({"name": "link"}));
     item(ui, "New Comment", "review.newComment", json!({}));
     if !wordcraft_engine::cmd::fields::selected(&app.session).is_empty() {

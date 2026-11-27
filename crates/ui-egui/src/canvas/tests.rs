@@ -1016,6 +1016,52 @@ fn right_clicking_a_link_hides_the_hover_tooltip() {
     assert_eq!(tips(&h), 0, "the link tooltip is gone, so it can't cover the menu");
 }
 
+/// #6068: the text context menu offers Clear All Formatting, which clears the selection's direct
+/// character formatting (the ribbon's own command).
+#[test]
+fn context_menu_clears_all_formatting() {
+    use egui_kittest::kittest::Queryable;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Bold\nTarget")), Default::default());
+    // The popup can also draw the mini toolbar, whose own Clear All Formatting button runs the same
+    // command: with it off, the label below the viewport can only be the menu item (`mini_toolbar`'s
+    // test covers the bar's button).
+    a.ui.mini_toolbar = false;
+    a.session
+        .doc
+        .format_range(&Pos::body(0, 0), &Pos::body(0, 4), &|c| {
+            c.bold = Some(true);
+            c.italic = Some(true);
+        })
+        .unwrap();
+    a.session.relayout();
+    a.run("select.text", json!({"text": "Bold"})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h, 6);
+    let c = h.state_mut().session.layout().caret(&Pos::body(0, 2)).expect("laid out");
+    let at = page_to_screen(h.state_mut(), c.page, c.x, c.top + c.height / 2.0).expect("on screen");
+    h.event(egui::Event::PointerMoved(at));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+        h.app_frame();
+    }
+    h.app_frame();
+    // The ribbon's own Clear All Formatting stays above the document viewport; only the
+    // context popup may offer it here, so the menu item is what this finds.
+    let top = h.state().canvas.canvas_rect().expect("the canvas is shown").top();
+    let item = h.query_all_by_label_contains("Clear All Formatting").find(|n| n.rect().min.y > top).expect("the menu offers Clear All Formatting");
+    item.click();
+    steps(&mut h, 3);
+    let p = h.state().session.doc.para_at(&Pos::body(0, 0)).expect("the paragraph");
+    assert_eq!((p.props_of_char(0).bold, p.props_of_char(0).italic), (None, None), "the selection's direct formatting is gone");
+}
+
 /// #4501 follow-up: a press the canvas handles (here Ctrl+click following a link) is done with
 /// the pointer, so the link tooltip stands down that frame; plain hovering shows it again.
 #[test]
