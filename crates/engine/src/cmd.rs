@@ -430,14 +430,18 @@ fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>)
         let part = part.replace('\u{000B}', "\n");
         if !part.is_empty() {
             inserted = true;
-            let starts_para = direction_unset(s, &at);
+            let unset = direction_unset(s, &at);
+            let starts_para = unset && s.doc.para_at(&at).is_some_and(|p| !p.text.chars().any(char::is_alphabetic));
             at = s.doc.insert_text(&at, &part, &props)?;
             // Typing Arabic, Hebrew… as the first letters of a paragraph whose direction nothing
             // sets makes it a right-to-left paragraph, so the caret and text start at the right
-            // margin. Paragraphs that already have letters, or a direction, keep theirs.
-            if starts_para
+            // margin. A paragraph that began with other letters becomes right to left once most
+            // of its letters are, so a final full stop isn't drawn at the wrong end. A paragraph
+            // with a direction of its own keeps it.
+            if unset
+                && part.chars().any(wordcraft_doc::bidi::is_rtl_script)
                 && let Ok(p) = s.doc.para_mut(at.story, &at.path)
-                && wordcraft_doc::bidi::first_strong_is_rtl(&p.text)
+                && ((starts_para && wordcraft_doc::bidi::first_strong_is_rtl(&p.text)) || wordcraft_doc::bidi::mostly_rtl(&p.text))
             {
                 p.props.bidi = Some(true);
                 p.touch();
@@ -454,11 +458,11 @@ fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>)
     Ok(InsertEffect { content_changed, state_changed: deletion.state_changed || content_changed || placeholder_changed })
 }
 
-/// Is the paragraph at `at` still without letters (empty, or only spaces, digits and
-/// punctuation), with no direction set on it, its style chain or the document defaults?
+/// Does the paragraph at `at` have no direction set on it, its style chain or the document
+/// defaults?
 fn direction_unset(s: &Session, at: &Pos) -> bool {
     let Some(p) = s.doc.para_at(at) else { return false };
-    if p.props.bidi.is_some() || p.text.chars().any(char::is_alphabetic) || s.doc.styles.default_para.bidi.is_some() {
+    if p.props.bidi.is_some() || s.doc.styles.default_para.bidi.is_some() {
         return false;
     }
     let style = p.props.style.as_deref().unwrap_or("Normal");

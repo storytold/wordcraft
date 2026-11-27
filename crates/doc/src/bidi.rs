@@ -57,6 +57,23 @@ pub fn first_strong_is_rtl(text: &str) -> bool {
     false
 }
 
+/// Are there more letters of right-to-left scripts in `text` than letters of any other script?
+///
+/// Digits, punctuation and spaces don't count. Used for a paragraph whose direction nothing sets
+/// and that starts with Latin letters: once most of its letters are Arabic, Hebrew…, the final
+/// full stop and other neutral characters belong at the paragraph's right-to-left end.
+pub fn mostly_rtl(text: &str) -> bool {
+    let (mut rtl, mut other) = (0usize, 0usize);
+    for c in text.chars().filter(|c| c.is_alphabetic()) {
+        if is_rtl_script(c) {
+            rtl += 1;
+        } else {
+            other += 1;
+        }
+    }
+    rtl > other
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,5 +99,13 @@ mod tests {
         assert!(!first_strong_is_rtl("Hello سلام"));
         assert!(!first_strong_is_rtl("123 Hello"));
         assert!(!first_strong_is_rtl(""));
+    }
+
+    #[test]
+    fn mostly_rtl_compares_letters_only() {
+        assert!(mostly_rtl("Hello مرحبا بالعالم."));
+        assert!(!mostly_rtl("Hello سلام"), "more Latin letters than Arabic ones");
+        assert!(!mostly_rtl("12345 . ,"), "no letters at all");
+        assert!(!mostly_rtl(""));
     }
 }
