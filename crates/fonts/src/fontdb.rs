@@ -95,6 +95,10 @@ pub struct FontDb {
     /// Counts the font folder scans, so the coverage index notices a rescan.
     #[cfg(not(target_arch = "wasm32"))]
     catalog_gen: AtomicU32,
+    /// Families (lowercase, as asked for) whose installed files have all been loaded since the
+    /// font folder scan counted here: [`FontDb::load_rest_of`] reads a family's files once.
+    #[cfg(not(target_arch = "wasm32"))]
+    completed: RwLock<(u32, std::collections::HashSet<String>)>,
 }
 
 impl FontDb {
@@ -150,6 +154,8 @@ impl FontDb {
             coverage: Mutex::new(CoverageIndex::default()),
             #[cfg(not(target_arch = "wasm32"))]
             catalog_gen: AtomicU32::new(0),
+            #[cfg(not(target_arch = "wasm32"))]
+            completed: RwLock::new((0, std::collections::HashSet::new())),
         }
     }
 
