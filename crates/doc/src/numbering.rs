@@ -228,7 +228,7 @@ impl Numbering {
     /// Whether a paragraph in list `num` at `level` gets a label ([`Counters::next_label`] gives
     /// one), without counting it.
     pub fn shows_label(&self, num: u32, level: u8) -> bool {
-        self.abstract_of(num).is_some() && self.level(num, level.min(8)).is_some_and(|d| d.format != NumFormat::None)
+        self.abstract_of(num).is_some() && self.level(num, level.min(8)).is_some()
     }
     pub fn level(&self, num: u32, level: u8) -> Option<&Level> {
         if let Some((_, l)) = self.num(num)?.level_overrides.iter().find(|(i, _)| *i == level) {
@@ -294,6 +294,14 @@ pub struct Counters {
     /// Per abstract list: whether each level has counted yet (a value of 0 can be a real count when a
     /// level starts at 0).
     flags: HashMap<u32, [LevelFlags; 9]>,
+    /// The last explicitly rendered label and template at each abstract-list level.
+    labels: HashMap<(u32, u8), CountedLabel>,
+}
+
+#[derive(Debug, Clone)]
+struct CountedLabel {
+    label: Option<String>,
+    levels: Vec<usize>,
 }
 
 /// Whether a level has counted yet, and the value its next item takes if a start override says so.
@@ -317,11 +325,9 @@ impl Counters {
         let lv = (level as usize).min(8);
         // This list's own definition of a level wins over its abstract list's.
         let level_def = |k: usize| numbering.level(num, k as u8);
+        // A "none" level (Word's numFmt none) still counts and restarts the levels below it; only
+        // its number reads as nothing, so its literal text ("RESPONSE:") shows (#4985).
         let def = level_def(lv)?.clone();
-        // A "none" level shows no label at all (Word's numFmt none) — not even its text.
-        if def.format == NumFormat::None {
-            return None;
-        }
         let st = self.state.entry(abs.id).or_insert([0; 9]);
         let fl = self.flags.entry(abs.id).or_default();
         // Only this level's override, not the num's others: the counters are shared by every
@@ -366,42 +372,108 @@ impl Counters {
             if restarts {
                 *deeper = 0;
                 *f = LevelFlags::default();
+                self.labels.remove(&(abs.id, d as u8));
             }
         }
         let vals = *st;
         let started = *fl;
-        if def.format == NumFormat::Bullet {
-            return Some((def.text.clone(), def));
-        }
-        let mut label = String::new();
-        // Word's level text is short; .docx and the lists command already cap it at 64.
-        let mut chars = def.text.chars().take(MAX_LEVEL_TEXT).peekable();
-        while let Some(c) = chars.next() {
-            if c == '%'
-                && let Some(d) = chars.peek().and_then(|d| d.to_digit(10))
-            {
-                chars.next();
-                let k = (d as usize).saturating_sub(1).min(8);
-                let val = vals.get(k).copied().unwrap_or(0);
-                let counted = started.get(k).is_some_and(|f| f.started);
-                let val = if counted { val } else { level_def(k).map(|l| l.start).unwrap_or(1) };
-                // Legal numbering (w:isLgl) shows every level in Arabic digits, whatever its own
-                // format (二 of a Chinese outline becomes 2 in "2.1").
-                let fmt = match level_def(k).map(|l| l.format).unwrap_or(NumFormat::Decimal) {
-                    NumFormat::DecimalZero => NumFormat::DecimalZero,
-                    _ if def.legal => NumFormat::Decimal,
-                    f => f,
-                };
-                label.push_str(&fmt.format(val));
-                if label.len() > MAX_LABEL_BYTES {
-                    break;
-                }
-            } else {
-                label.push(c);
-            }
-        }
+        let numeric = def.format != NumFormat::Bullet;
+        let label = if numeric { render_label(numbering, num, &def, &vals, &started) } else { def.text.clone() };
+        // A "none" level shows its literal text, but has no number of its own for a reference to
+        // show (#4985): it is kept as one that shows none.
+        let counted = if def.format == NumFormat::None {
+            CountedLabel { label: None, levels: Vec::new() }
+        } else {
+            CountedLabel { label: numeric.then(|| label.clone()), levels: template_levels(&def.text) }
+        };
+        self.labels.insert((abs.id, lv as u8), counted);
         Some((label, def))
     }
+    /// Which levels of `num`'s list have counted a paragraph yet (a level never used has no
+    /// number of its own to show in a reference).
+    pub fn started(&self, numbering: &Numbering, num: u32) -> Option<[bool; 9]> {
+        let abs = numbering.abstract_of(num)?;
+        Some(std::array::from_fn(|k| self.labels.get(&(abs.id, k as u8)).is_some_and(|last| last.label.is_some())))
+    }
+
+    /// The label `level` of `num`'s list shows at this point of the walk, without counting: what
+    /// the last paragraph at that level showed (`"14."` while walking clause 14's sub-clauses).
+    /// `None` for a bullet or "none" level, or a level the list doesn't define.
+    pub fn current_label(&self, numbering: &Numbering, num: u32, level: u8) -> Option<String> {
+        let abs = numbering.abstract_of(num)?;
+        if let Some(last) = self.labels.get(&(abs.id, level.min(8))) {
+            return last.label.clone();
+        }
+        // A deeper item can count a level implicitly without rendering a paragraph there.
+        let def = numbering.level(num, level.min(8))?;
+        if matches!(def.format, NumFormat::None | NumFormat::Bullet) {
+            return None;
+        }
+        let vals = self.state.get(&abs.id).copied().unwrap_or([0; 9]);
+        let started = self.flags.get(&abs.id).copied().unwrap_or_default();
+        Some(render_label(numbering, num, def, &vals, &started))
+    }
+
+    /// Levels shown by the last rendered label, or the current definition for an implicit level.
+    pub fn current_template_levels(&self, numbering: &Numbering, num: u32, level: u8) -> Vec<usize> {
+        if let Some(abs) = numbering.abstract_of(num)
+            && let Some(last) = self.labels.get(&(abs.id, level.min(8)))
+        {
+            return last.levels.clone();
+        }
+        numbering.level(num, level.min(8)).map(|def| template_levels(&def.text)).unwrap_or_default()
+    }
+}
+
+/// The zero-based levels a label template shows (`"%1.%2"` → `[0, 1]`, `"(%3)"` → `[2]`).
+pub fn template_levels(text: &str) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut chars = text.chars().take(MAX_LEVEL_TEXT).peekable();
+    while let Some(c) = chars.next() {
+        if c == '%'
+            && let Some(d) = chars.peek().and_then(|d| d.to_digit(10))
+        {
+            chars.next();
+            let k = (d as usize).saturating_sub(1).min(8);
+            if !out.contains(&k) {
+                out.push(k);
+            }
+        }
+    }
+    out
+}
+
+/// Render a list label without advancing counters, retaining the existing hostile-input caps.
+fn render_label(numbering: &Numbering, num: u32, def: &Level, vals: &[u32; 9], started: &[LevelFlags; 9]) -> String {
+    let level_def = |k: usize| numbering.level(num, k as u8);
+    let mut label = String::new();
+    // Word's level text is short; .docx and the lists command already cap it at 64.
+    let mut chars = def.text.chars().take(MAX_LEVEL_TEXT).peekable();
+    while let Some(c) = chars.next() {
+        if c == '%'
+            && let Some(d) = chars.peek().and_then(|d| d.to_digit(10))
+        {
+            chars.next();
+            let k = (d as usize).saturating_sub(1).min(8);
+            let val = vals.get(k).copied().unwrap_or(0);
+            let counted = started.get(k).is_some_and(|f| f.started);
+            let val = if counted { val } else { level_def(k).map(|l| l.start).unwrap_or(1) };
+            // Legal numbering (w:isLgl) shows every level in Arabic digits, whatever its own
+            // format (二 of a Chinese outline becomes 2 in "2.1"); a "none" level stays empty.
+            let fmt = match level_def(k).map(|l| l.format).unwrap_or(NumFormat::Decimal) {
+                f @ (NumFormat::DecimalZero | NumFormat::None) => f,
+                _ if def.legal => NumFormat::Decimal,
+                f => f,
+            };
+            label.push_str(&fmt.format(val));
+            if label.len() > MAX_LABEL_BYTES {
+                break;
+            }
+        } else {
+            label.push(c);
+        }
+    }
+    label
 }
 
 /// Longest level text (in characters) expanded into a list label.
@@ -412,6 +484,45 @@ const MAX_LABEL_BYTES: usize = 256;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Read-only counter APIs retain the renderer's bounds and never advance a list.
+    #[test]
+    fn reference_labels_are_bounded_and_do_not_advance_counters() {
+        let mut n = Numbering::default();
+        let id = n.add_list(ListKind::Numbered);
+        if let Some(num) = n.nums.iter_mut().find(|x| x.id == id) {
+            num.level_overrides = vec![(0, Level { text: "%1".repeat(30_000), ..Level::default() })];
+        }
+        let mut c = Counters::default();
+        let label = c.next_label(&n, id, 0).unwrap().0;
+        let before = c.values(&n, id);
+        assert_eq!(c.current_label(&n, id, 0).as_deref(), Some(label.as_str()));
+        assert_eq!(c.values(&n, id), before);
+        assert!(label.len() <= 512);
+        assert_eq!(template_levels(&"%1%9".repeat(30_000)), [0, 8]);
+        assert!(c.started(&n, id).unwrap()[0]);
+    }
+
+    #[test]
+    fn last_ancestor_label_keeps_the_instance_that_rendered_it() {
+        let mut numbering = Numbering::default();
+        let first = numbering.add_list(ListKind::Numbered);
+        numbering.abstracts[0].levels[0].text = "Clause %1.".into();
+        let mut second = numbering.num(first).unwrap().clone();
+        second.id = first + 1;
+        second.level_overrides = vec![
+            (0, Level { text: "Part %1.%2.".into(), ..Level::default() }),
+            (1, Level { format: NumFormat::LowerLetter, text: "(%2)".into(), ..Level::default() }),
+        ];
+        let second_id = second.id;
+        numbering.nums.push(second);
+        let mut counters = Counters::default();
+        assert_eq!(counters.next_label(&numbering, first, 0).unwrap().0, "Clause 1.");
+        assert_eq!(counters.next_label(&numbering, second_id, 1).unwrap().0, "(a)");
+        assert_eq!(counters.current_label(&numbering, second_id, 0).as_deref(), Some("Clause 1."));
+        assert_eq!(counters.current_template_levels(&numbering, second_id, 0), vec![0]);
+        assert_eq!(counters.started(&numbering, second_id).unwrap()[..2], [true, true]);
+    }
 
     #[test]
     fn a_huge_level_text_gives_a_bounded_label() {
@@ -447,6 +558,27 @@ mod tests {
         // with the first level-1 item, so this is its second.
         assert_eq!(c.next_label(&n, id, 0).unwrap().0, "2.");
         assert_eq!(n.level(id, 2).map(|l| l.format), Some(NumFormat::DecimalZero));
+    }
+
+    #[test]
+    fn a_none_level_shows_its_text_and_still_counts() {
+        // As Word shows them (#4985): a "none" level's literal text is its label, its own number
+        // reads as nothing (also in legal numbering), and it restarts the levels below it.
+        let mut n = Numbering::default();
+        let id = n.add_list(ListKind::Numbered);
+        let lvl = |format, text: &str| Level { format, text: text.into(), ..Level::default() };
+        let legal = Level { legal: true, ..lvl(NumFormat::Decimal, "%2.%3") };
+        if let Some(num) = n.nums.iter_mut().find(|x| x.id == id) {
+            num.level_overrides = vec![(0, lvl(NumFormat::None, "RESPONSE:")), (1, lvl(NumFormat::None, "[%2]")), (2, legal)];
+        }
+        assert!(n.shows_label(id, 0));
+        let mut c = Counters::default();
+        assert_eq!(c.next_label(&n, id, 0).unwrap().0, "RESPONSE:");
+        assert_eq!(c.next_label(&n, id, 1).unwrap().0, "[]");
+        assert_eq!(c.next_label(&n, id, 2).unwrap().0, ".1");
+        assert_eq!(c.next_label(&n, id, 2).unwrap().0, ".2");
+        assert_eq!(c.next_label(&n, id, 1).unwrap().0, "[]");
+        assert_eq!(c.next_label(&n, id, 2).unwrap().0, ".1");
     }
 
     #[test]

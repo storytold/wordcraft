@@ -924,6 +924,33 @@ mod tests {
     #[test]
     fn numbers_read_currency_and_separators_but_not_letters() {
         assert_eq!(parse_number("$1,200", None), Some(1200.0));
+        assert_eq!(parse_number("B/. 1,234.50", None), Some(1234.5), "the Panamanian balboa");
+        assert_eq!(parse_number("1,234.50 B/.", None), Some(1234.5));
+        assert_eq!(parse_number("(B/. 1,234.50)", None), Some(-1234.5), "an accounting negative");
+        assert_eq!(parse_number("B/.1,234.50", None), None, "Word needs a space after the sign");
+        assert_eq!(parse_number("1/.5", None), None, "a fraction is not a balboa amount");
+        // The formula reads the cell in the document's language. With the document's default text
+        // as es-PA and the editing language as pl-PL the choice is observable: `1,250.50` is a
+        // number under es-PA and not under pl-PL (whose decimal separator is `,`).
+        let balboa = table(&[&["B/. 1,234.50"], &["(B/. 1,234.50)"], &[""]]);
+        let mut doc = wordcraft_doc::Document::new();
+        std::sync::Arc::make_mut(&mut doc.styles).default_chr.lang = Some("es-PA".into());
+        assert_eq!(
+            evaluate_with(&balboa, Some(&doc), Some("pl-PL"), 2, 0, "=SUM(ABOVE)"),
+            Ok(0.0),
+            "a balboa cell sums in the document's language, and its negative in parentheses cancels it",
+        );
+        assert_eq!(evaluate_with(&balboa, Some(&doc), Some("pl-PL"), 2, 0, "=COUNT(ABOVE)"), Ok(2.0), "both balboa cells are numbers",);
+        // And the other way around: a balboa cell written with Polish separators is read only when
+        // the document language reaches the parser, not when it falls back to English.
+        let mut polish = wordcraft_doc::Document::new();
+        std::sync::Arc::make_mut(&mut polish.styles).default_chr.lang = Some("pl-PL".into());
+        let balboa_pl = table(&[&["B/. 1 250,50"], &[""]]);
+        assert_eq!(
+            evaluate_with(&balboa_pl, Some(&polish), Some("en-US"), 1, 0, "=SUM(ABOVE)"),
+            Ok(1250.5),
+            "the cell's language selects the separators; English does not read `1 250,50`",
+        );
         assert_eq!(parse_number(" 12% ", None), Some(12.0));
         assert_eq!(parse_number("(5)", None), Some(-5.0));
         assert_eq!(parse_number("x9", None), None);

@@ -154,7 +154,7 @@ pub fn show_results(s: &mut Session) -> Result<(), CmdError> {
 fn set_code(s: &mut Session, v: &Value) -> CmdResult {
     let code = p::req_str(v, "code")?.trim().to_string();
     if code.is_empty() || code.len() > MAX_CODE || code.contains(OBJ) {
-        return Err(CmdError::Params("bad field code".into()));
+        return Err(CmdError::Params("`code` must be non-empty, at most 4096 UTF-8 bytes, and contain no U+FFFC object markers".into()));
     }
     let Some(f) = selected(s).into_iter().next() else { return Err(none_selected()) };
     with_field(s, &f.at, |o| match o {
@@ -403,18 +403,18 @@ mod tests {
     #[test]
     fn f11_is_full_screen_and_alt_f1_walks_fields() {
         let s = Session::new(wordcraft_doc::Document::new());
-        let key = |k: &str| s.keymap.resolve(&s.registry, k).map(|c| c.id);
-        assert_eq!(key("F11"), Some("view.fullScreen"));
-        assert_eq!(key("Alt+F1"), Some("fields.next"));
-        assert_eq!(key("Alt+Shift+F1"), Some("fields.previous"));
-        assert_eq!(key("Shift+F11"), Some("fields.previous"));
-        assert_eq!(key("Mod+F11"), Some("fields.lock"));
-        // ⌃⌘F is macOS' own full-screen key; elsewhere Mod is Ctrl, so "Mod+Ctrl+F" would read
-        // Ctrl+Ctrl+F: F11 only there.
+        let keymap = crate::keymap::registry_keymap(&s.registry, s.keymap());
+        let chord = |c: &str| craft_keymap::Chord::parse(c).unwrap();
+        let key = |k: &str| keymap.holder(&chord(k)).map(|c| c.id);
+        assert_eq!(key("F11").as_deref(), Some("view.fullScreen"));
+        assert_eq!(key("Alt+F1").as_deref(), Some("fields.next"));
+        assert_eq!(key("Alt+Shift+F1").as_deref(), Some("fields.previous"));
+        assert_eq!(key("Shift+F11").as_deref(), Some("fields.previous"));
+        assert_eq!(key("Mod+F11").as_deref(), Some("fields.lock"));
         let shortcut = s.registry.get("view.fullScreen").map(|c| c.shortcut);
         if cfg!(target_os = "macos") {
             assert_eq!(shortcut, Some("Mod+Ctrl+F / F11"));
-            assert_eq!(key("Mod+Ctrl+F"), Some("view.fullScreen"));
+            assert_eq!(key("Mod+Ctrl+F").as_deref(), Some("view.fullScreen"));
         } else {
             assert_eq!(shortcut, Some("F11"));
         }
@@ -441,7 +441,10 @@ mod tests {
         s.run("fields.setCode", &json!({"code": "TITLE"})).unwrap();
         let objs = |s: &Session| s.doc.body.first().and_then(|b| b.as_para()).map(|p| p.objects.clone()).unwrap_or_default();
         assert!(matches!(objs(&s).first(), Some(InlineObject::Field { instr, result, .. }) if instr == "TITLE" && result == "Report"));
-        assert!(s.run("fields.setCode", &json!({"code": ""})).is_err());
+        assert!(matches!(
+            s.run("fields.setCode", &json!({"code": ""})),
+            Err(crate::CmdError::Params(message)) if message == "`code` must be non-empty, at most 4096 UTF-8 bytes, and contain no U+FFFC object markers"
+        ));
 
         // A locked field keeps its result.
         s.run("fields.lock", &json!({})).unwrap();
