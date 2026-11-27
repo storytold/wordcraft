@@ -170,6 +170,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-11-15: Native, built-in and web Insert/Change Picture choosers offer both TIFF extensions (`.tif`, `.tiff`) alongside other supported pictures; native drops, picked-file inbox dispatch and pasted picture paths recognize the same suffixes (#6704). TIFF decoding remains limited to supported compression.
 
 
+- 2026-11-27: Replace with curls a quote typed there when smart quotes are on, as typing does: finding `^034` and replacing with a typed `"` curls stray straight quotes in bulk; `^034` and `^039` stay straight, and a curly quote a typed `'` also finds is left and not counted (#7307).
 - 2026-11-15: Get the Missing Fonts. A document opened from a file that is missing fonts their publisher gives away (Microsoft's Aptos family, the default in recent Word documents; Cascadia Code and Mono) brings up a box naming each font, the font drawn instead, the publisher's download page and how to install the download, with Don't show this again. `font.missing` reports the same page, so agents get it without the box. WordCraft links to the page only; it downloads and bundles nothing.
 - 2026-10-30: Track Changes: a list item deleted whole, text and paragraph mark, shows its number as deleted text, in the deletion's colour and with its mark (struck through by default, or caret, #, bold, italic, underline), and hides it with No Markup or when Track Changes Options hide deletions (#4828). Readiness unchanged.
 - 2026-11-03: A picture inserted or pasted in a table cell fits the cell, as in Word, instead of running out of it; in text columns it fits the column, in a section with other margins that section's width (#5428).
@@ -980,6 +981,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-27 | trivial | Progress log: a quote typed in Replace with goes in curly when smart quotes are on (#7307) |
 | 2026-11-18 | trivial | DOCX validation reports undeclared binary tombstones in coverage notes when relationship discovery establishes that no relationship targets the part. |
 | 2026-11-18 | trivial | DOCX validation excludes the content-type manifest from main-part cardinality and reports untargeted ordinary document parts in coverage when one ordinary main is established. |
 | 2026-11-18 | trivial | DOCX validation warns on an image signature mismatch when the image is unused or can be decoded in another raster format. Used, unusable images retain their error. |
