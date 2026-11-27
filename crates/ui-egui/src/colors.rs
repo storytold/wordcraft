@@ -602,6 +602,14 @@ pub enum ColorFieldEmpty {
         /// What its swatch shows.
         face: AutoFace,
     },
+    /// Several choices that aren't colours, as (label, value). A value that is none of them and
+    /// not a colour shows the first choice.
+    Choices(&'static [(&'static str, &'static str)]),
+}
+
+/// The label of the choice `value` is, or the first choice's when it is none of them.
+pub fn shown_choice<'a>(value: &str, choices: &[(&'a str, &str)]) -> &'a str {
+    choices.iter().find(|(_, v)| *v == value).or(choices.first()).map_or("", |(l, _)| *l)
 }
 
 /// The face of an Automatic choice's swatch.
@@ -638,22 +646,23 @@ pub fn color_field(ui: &mut Ui, label: &Label, value: &mut String, empty: &Color
             },
             label.clone(),
         ),
+        (None, ColorFieldEmpty::Choices(choices)) => (None, Label::from(tl!(shown_choice(value, choices)).to_string())),
     };
     let icon = shown.map_or_else(IconSpec::empty_swatch, IconSpec::swatch);
     let spoken_value = current.map_or_else(|| text.as_str().to_string(), |c| format!("#{}", c.hex()));
     let spoken = format!("{} {spoken_value}", label.as_str());
     let field = SplitButton::<NoValue>::body(text, |ui: &mut Ui, cx: &mut BodyCx<'_>| {
-        let empty_label = match empty {
-            ColorFieldEmpty::NoColor => Label::from(tl!("No Color").to_string()),
-            ColorFieldEmpty::Automatic { label, .. } => label.clone(),
+        let empties: Vec<(Label, &str)> = match empty {
+            ColorFieldEmpty::NoColor => vec![(Label::from(tl!("No Color").to_string()), "")],
+            ColorFieldEmpty::Automatic { label, value, .. } => vec![(label.clone(), *value)],
+            ColorFieldEmpty::Choices(choices) => choices.iter().map(|(l, v)| (Label::from(tl!(*l).to_string()), *v)).collect(),
         };
-        if MenuItem::new(empty_label).show(ui).ran {
-            *value = match empty {
-                ColorFieldEmpty::NoColor => String::new(),
-                ColorFieldEmpty::Automatic { value, .. } => (*value).to_string(),
-            };
-            resp.changed = true;
-            cx.request_close();
+        for (label, choice) in empties {
+            if MenuItem::new(label).show(ui).ran {
+                *value = choice.to_string();
+                resp.changed = true;
+                cx.request_close();
+            }
         }
         let (picked, _) = swatches(ui, palette, current);
         if let Some(c) = picked {
