@@ -31,6 +31,7 @@ fn picture_after_text(align: Option<TextAlignment>) -> Document {
         alt: String::new(),
         float: Default::default(),
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().insert_object(5, pic, &Default::default()).unwrap();
@@ -248,7 +249,16 @@ fn annotated_line(align: TextAlignment, ruby: bool) -> (f32, f32) {
         InlineObject::Field { instr: e.instr(), result: "A".into(), locked: false, dirty: false, code: false, form: String::new() }
     };
     d.insert_object(&Pos::body(0, 0), item, &Default::default()).unwrap();
-    let pic = InlineObject::Image { media: "m".into(), w: 30.0, h: 60.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    let pic = InlineObject::Image {
+        media: "m".into(),
+        w: 30.0,
+        h: 60.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
     d.insert_object(&Pos::body(0, 0), pic, &Default::default()).unwrap();
     let l = lay(&d);
     let items = display::page_display(&d, &l.pages[0], &Default::default());

@@ -347,11 +347,7 @@ impl<'e> Breaker<'e> {
             return;
         }
         self.top = if self.lines.len() > self.row_first {
-            self.top + even_row(
-                self.lines.get_mut(self.row_first..).unwrap_or_default(),
-                self.rp.text_alignment,
-                pl.drop_cap.map_or(0, |d| d.0),
-            )
+            self.top + even_row(self.lines.get_mut(self.row_first..).unwrap_or_default(), self.rp.text_alignment, pl.drop_cap.map_or(0, |d| d.0))
         } else {
             // Nothing on this row: go below the first object that ends, as when no span is wide enough.
             self.exclusions
@@ -665,11 +661,7 @@ impl<'e> Breaker<'e> {
             self.row_rest.clear();
         }
         if self.row_rest.is_empty() {
-            self.top += even_row(
-                self.lines.get_mut(self.row_first..).unwrap_or_default(),
-                self.rp.text_alignment,
-                pl.drop_cap.map_or(0, |d| d.0),
-            );
+            self.top += even_row(self.lines.get_mut(self.row_first..).unwrap_or_default(), self.rp.text_alignment, pl.drop_cap.map_or(0, |d| d.0));
         }
         if self.i >= self.n {
             // A paragraph ending with a line break gets an empty last line.

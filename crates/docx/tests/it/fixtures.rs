@@ -3926,7 +3926,7 @@ fn bidi_theme_slots_follow_the_theme_font_language() {
         };
         let body = [run("majorBidi"), run("minorBidi"), run("majorHAnsi")].concat();
         let rels = [
-            ("rId7", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings", "settings.xml"),
+            ("rId7", "settings", "settings.xml"),
             ("rId8", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles", "styles.xml"),
             ("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme", "theme/theme1.xml"),
         ];
@@ -3987,7 +3987,7 @@ fn roman_fonts_split_fallback_lists() {
 fn html_auto_spacing_off_is_read_and_kept() {
     let settings = |compat: &str| {
         let s = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings {W_NS}><w:compat>{compat}</w:compat></w:settings>"#);
-        let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings", "settings.xml")];
+        let rels = [("rId9", "settings", "settings.xml")];
         let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/settings.xml", &s)])).unwrap();
         let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
         (d.settings.sum_paragraph_spacing, again.settings.sum_paragraph_spacing)
@@ -4002,7 +4002,7 @@ fn html_auto_spacing_off_is_read_and_kept() {
 fn do_not_expand_shift_return_is_read_and_kept() {
     let settings = |compat: &str| {
         let s = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings {W_NS}><w:compat>{compat}</w:compat></w:settings>"#);
-        let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings", "settings.xml")];
+        let rels = [("rId9", "settings", "settings.xml")];
         let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/settings.xml", &s)])).unwrap();
         let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
         (d.settings.do_not_expand_shift_return, again.settings.do_not_expand_shift_return)
@@ -4041,7 +4041,7 @@ fn text_alignment_is_read_and_kept() {
 fn adjust_line_height_in_table_is_read_and_kept() {
     let settings = |compat: &str| {
         let s = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings {W_NS}><w:compat>{compat}</w:compat></w:settings>"#);
-        let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings", "settings.xml")];
+        let rels = [("rId9", "settings", "settings.xml")];
         let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/settings.xml", &s)])).unwrap();
         let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
         (d.settings.adjust_line_height_in_table, again.settings.adjust_line_height_in_table)
@@ -4057,9 +4057,11 @@ fn adjust_line_height_in_table_is_read_and_kept() {
 fn adjust_line_height_in_table_edits_survive_a_save_over_original_compat() {
     let original = |flag: &str| {
         let s = format!(
-            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings {W_NS}><w:compat>{flag}<w:useFELayout/></w:compat></w:settings>"#
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings {W_NS}><w:compat> {flag}<w:useFELayout/>
+</w:compat>
+    </w:settings>"#
         );
-        let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings", "settings.xml")];
+        let rels = [("rId9", "settings", "settings.xml")];
         wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/settings.xml", &s)])).unwrap()
     };
     let saved = |d: &Document| wordcraft_docx::read(&wordcraft_docx::write(d).unwrap()).unwrap();

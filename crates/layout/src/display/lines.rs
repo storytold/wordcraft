@@ -97,11 +97,13 @@ fn collect_glyph_run(
     let st = style;
     let mut k = start;
     let run = pl.clusters.get(start..line.c1.min(pl.clusters.len())).unwrap_or_default();
+    let run_shift = line.shift_at(start);
     let (n_glyphs, n_bytes) = run
         .iter()
-        .take_while(|cluster| cluster.style == si)
-        .filter(|cluster| matches!(cluster.kind, ClKind::Text | ClKind::Space))
-        .fold((0usize, 0usize), |(glyphs, bytes), cluster| {
+        .enumerate()
+        .take_while(|(offset, cluster)| cluster.style == si && (*offset == 0 || line.shift_at(start + *offset) == run_shift))
+        .filter(|(_, cluster)| matches!(cluster.kind, ClKind::Text | ClKind::Space))
+        .fold((0usize, 0usize), |(glyphs, bytes), (_, cluster)| {
             (glyphs + cluster.g1.saturating_sub(cluster.g0) as usize, bytes + cluster.end.saturating_sub(cluster.start))
         });
     let mut glyphs = Vec::with_capacity(n_glyphs);
@@ -341,16 +343,7 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                     let uy = decor_base - st.shift + st.size * 0.12;
                     let ucolor = rc.underline_color.unwrap_or(color);
                     if underline == Underline::Words {
-                        for kk in decor_start..decor_end {
-                            let Some(c) = pl.clusters.get(kk) else { continue };
-                            if c.kind != ClKind::Text {
-                                continue;
-                            }
-                            let a = x + line.cl_left(kk).unwrap_or(0.0);
-                            let b = x + line.cl_right(kk).unwrap_or(a - x);
-                            if a < x0 - 0.01 || b > x1 + 0.01 {
-                                continue; // drawn with its own span
-                            }
+                        for (a, b) in word_spans(pl, line, (decor_start, decor_end), x, (x0, x1)) {
                             out.push(Draw::Line { x0: a, y0: uy, x1: b, y1: uy, width: thick, color: ucolor, stroke: Stroke::Solid, alpha, text_bg });
                         }
                     } else {
@@ -630,15 +623,16 @@ fn formatting_marks(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             let cx = x + line.cl_left(k).unwrap_or(0.0);
             let nx = x + line.cl_right(k).unwrap_or(cx - x);
             let size = pl.styles.get(c.style as usize).map(|s| s.size).unwrap_or(msize);
+            let cluster_base = base + line.shift_at(k);
             let arrow = if line.rtl { '←' } else { '→' };
             match c.kind {
                 ClKind::Space if marks.spaces => {
-                    out.push(Draw::Mark { x: (cx + nx) / 2.0 - size * 0.12, baseline: base - size * 0.08, size, ch: '·', color: None })
+                    out.push(Draw::Mark { x: (cx + nx) / 2.0 - size * 0.12, baseline: cluster_base - size * 0.08, size, ch: '·', color: None })
                 }
                 ClKind::Tab if marks.tabs => {
-                    out.push(Draw::Mark { x: cx + ((nx - cx) / 2.0 - size * 0.3).max(0.0), baseline: base, size, ch: arrow, color: None })
+                    out.push(Draw::Mark { x: cx + ((nx - cx) / 2.0 - size * 0.3).max(0.0), baseline: cluster_base, size, ch: arrow, color: None })
                 }
-                ClKind::LineBreak if marks.paragraphs => out.push(Draw::Mark { x: cx + 1.0, baseline: base, size, ch: '↵', color: None }),
+                ClKind::LineBreak if marks.paragraphs => out.push(Draw::Mark { x: cx + 1.0, baseline: cluster_base, size, ch: '↵', color: None }),
                 ClKind::PageBreak | ClKind::ColumnBreak if marks.paragraphs => {
                     let label = if c.kind == ClKind::PageBreak { '⤓' } else { '⇥' };
                     out.push(Draw::Line {
@@ -783,23 +777,41 @@ fn proofing_marks(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         if *end <= ctx.line.start || *start >= ctx.line.stop {
             continue;
         }
-        for (x0, x1) in ctx.pl.x_spans(ctx.li, (*start).max(ctx.line.start), (*end).min(ctx.line.stop)) {
-            if x1 - x0 < 1.0 {
+        let from = (*start).max(ctx.line.start);
+        let to = (*end).min(ctx.line.stop);
+        let mut k = ctx.line.c0;
+        while k < ctx.line.c1 {
+            let Some(cluster) = ctx.pl.clusters.get(k) else { break };
+            if cluster.start >= to || cluster.end <= from {
+                k += 1;
                 continue;
             }
-            let y = ctx.base + 2.5;
-            let color = if *grammar { Rgb(0x2B, 0x57, 0xC0) } else { Rgb(0xE0, 0x24, 0x24) };
-            out.push(Draw::Line {
-                x0: ctx.x + x0,
-                y0: y,
-                x1: ctx.x + x1,
-                y1: y,
-                width: 0.8,
-                color,
-                stroke: if *grammar { Stroke::Double } else { Stroke::Wave },
-                alpha: ctx.alpha,
-                text_bg: None,
-            });
+            let shift = ctx.line.shift_at(k);
+            let segment_start = k;
+            k += 1;
+            while k < ctx.line.c1 && ctx.line.shift_at(k) == shift && ctx.pl.clusters.get(k).is_some_and(|c| c.start < to && c.end > from) {
+                k += 1;
+            }
+            let Some(first) = ctx.pl.clusters.get(segment_start) else { continue };
+            let Some(last) = ctx.pl.clusters.get(k - 1) else { continue };
+            for (x0, x1) in ctx.pl.x_spans(ctx.li, first.start.max(from), last.end.min(to)) {
+                if x1 - x0 < 1.0 {
+                    continue;
+                }
+                let y = ctx.base + shift + 2.5;
+                let color = if *grammar { Rgb(0x2B, 0x57, 0xC0) } else { Rgb(0xE0, 0x24, 0x24) };
+                out.push(Draw::Line {
+                    x0: ctx.x + x0,
+                    y0: y,
+                    x1: ctx.x + x1,
+                    y1: y,
+                    width: 0.8,
+                    color,
+                    stroke: if *grammar { Stroke::Double } else { Stroke::Wave },
+                    alpha: ctx.alpha,
+                    text_bg: None,
+                });
+            }
         }
     }
 }

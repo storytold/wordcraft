@@ -607,6 +607,7 @@ mod tests {
             boxes: Default::default(),
             chains: Default::default(),
             grid: Default::default(),
+            cell_grid_off: false,
             hide_deleted: opts.hides_deleted(StoryRef::Body),
             uses_totals: false,
             track_totals: false,

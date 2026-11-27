@@ -39,17 +39,12 @@ pub(crate) fn read_adjust_line_height_in_table(passthrough: &BTreeMap<String, Ar
     if root.local() != "settings" {
         return false;
     }
-    root.child("w:compat").is_some_and(|compat| {
-        compat.children(ADJUST).any(|element| !is_switched_off(element.attr("w:val")))
-    })
+    root.child("w:compat").is_some_and(|compat| compat.children(ADJUST).any(|element| !is_switched_off(element.attr("w:val"))))
 }
 
 /// Make the preserved settings match the WordCraft model. The shared DOCX writer merges this
 /// original part into its generated settings and already treats the switch as an unowned option.
-pub(crate) fn write_adjust_line_height_in_table(
-    passthrough: &mut BTreeMap<String, Arc<Vec<u8>>>,
-    enabled: bool,
-) -> Result<(), DocxError> {
+pub(crate) fn write_adjust_line_height_in_table(passthrough: &mut BTreeMap<String, Arc<Vec<u8>>>, enabled: bool) -> Result<(), DocxError> {
     let had_original = passthrough.contains_key(SETTINGS_ORIG);
     let original = passthrough.get(SETTINGS_ORIG).map(|bytes| bytes.as_slice());
     if !had_original && !enabled {
@@ -65,8 +60,7 @@ pub(crate) fn write_adjust_line_height_in_table(
     if root.local() != "settings" {
         return Err(DocxError::Xml("settings.xml has an unexpected root".into()));
     }
-    let updated = sync_adjust_line_height(xml, enabled)
-        .ok_or_else(|| DocxError::Xml("could not update adjustLineHeightInTable".into()))?;
+    let updated = sync_adjust_line_height(xml, enabled).ok_or_else(|| DocxError::Xml("could not update adjustLineHeightInTable".into()))?;
     if !had_original || updated.as_bytes() != original {
         passthrough.insert(SETTINGS_ORIG.into(), Arc::new(updated.into_bytes()));
     }
@@ -75,9 +69,7 @@ pub(crate) fn write_adjust_line_height_in_table(
 
 /// Is an ST_OnOff value false? An absent value means true.
 fn is_switched_off(value: Option<&str>) -> bool {
-    value.is_some_and(|v| {
-        matches!(v.trim(), "0" | "false" | "off" | "False" | "FALSE" | "Off" | "OFF")
-    })
+    value.is_some_and(|v| matches!(v.trim(), "0" | "false" | "off" | "False" | "FALSE" | "Off" | "OFF"))
 }
 
 /// Keep the original bytes except for the owned switch, inserting it in CT_Compat order.
@@ -85,11 +77,7 @@ fn sync_adjust_line_height(xml: &str, enabled: bool) -> Option<String> {
     let (_, close, settings_children) = children(xml, "w:settings")?;
     let Some(compat) = settings_children.iter().find(|child| child.name == "w:compat") else {
         return if enabled {
-            Some(format!(
-                "{}<w:compat><w:adjustLineHeightInTable/></w:compat>{}",
-                xml.get(..close)?,
-                xml.get(close..)?
-            ))
+            Some(format!("{}<w:compat><w:adjustLineHeightInTable/></w:compat>{}", xml.get(..close)?, xml.get(close..)?))
         } else {
             Some(xml.to_string())
         };
@@ -99,12 +87,7 @@ fn sync_adjust_line_height(xml: &str, enabled: bool) -> Option<String> {
     if updated_compat == original_compat {
         return Some(xml.to_string());
     }
-    Some(format!(
-        "{}{}{}",
-        xml.get(..compat.start)?,
-        updated_compat,
-        xml.get(compat.end..)?
-    ))
+    Some(format!("{}{}{}", xml.get(..compat.start)?, updated_compat, xml.get(compat.end..)?))
 }
 
 fn sync_compat(compat: &str, enabled: bool) -> Option<String> {
@@ -116,8 +99,8 @@ fn sync_compat(compat: &str, enabled: bool) -> Option<String> {
         let open = compat.get(..open_end - 2)?.trim_end();
         return Some(format!("{open}><w:adjustLineHeightInTable/></w:compat>"));
     }
-    let (_, _, children) = children(compat, "w:compat")?;
-    let matches: Vec<&Child> = children.iter().filter(|child| child.name == ADJUST).collect();
+    let (_, _, compat_children) = children(compat, "w:compat")?;
+    let matches: Vec<&Child> = compat_children.iter().filter(|child| child.name == ADJUST).collect();
     let mut out = compat.to_string();
     for child in matches.iter().rev() {
         out.replace_range(child.start..child.end, "");
@@ -126,16 +109,7 @@ fn sync_compat(compat: &str, enabled: bool) -> Option<String> {
         return Some(out);
     }
     let (_, close, children) = children(&out, "w:compat")?;
-    let at = AFTER
-        .iter()
-        .filter_map(|name| {
-            children
-                .iter()
-                .find(|child| child.name == *name)
-                .map(|child| child.start)
-        })
-        .min()
-        .unwrap_or(close);
+    let at = AFTER.iter().filter_map(|name| children.iter().find(|child| child.name == *name).map(|child| child.start)).min().unwrap_or(close);
     out.insert_str(at, "<w:adjustLineHeightInTable/>");
     Some(out)
 }
@@ -155,7 +129,13 @@ fn children(xml: &str, root: &str) -> Option<(usize, usize, Vec<Child>)> {
     let mut current: Option<(String, usize)> = None;
     while i < close {
         let rest = xml.get(i..close)?;
-        let at = i + rest.find('<')?;
+        let Some(next_tag) = rest.find('<') else {
+            if rest.chars().all(|c| matches!(c, ' ' | '\t' | '\r' | '\n')) {
+                break;
+            }
+            return None;
+        };
+        let at = i + next_tag;
         let tail = xml.get(at..close)?;
         if tail.starts_with("<!--") {
             i = at + tail.find("-->")? + 3;
@@ -177,11 +157,7 @@ fn children(xml: &str, root: &str) -> Option<(usize, usize, Vec<Child>)> {
                 out.push(Child { name, start, end });
             }
         } else {
-            let name: String = tag
-                .get(1..)?
-                .chars()
-                .take_while(|c| !c.is_whitespace() && *c != '>' && *c != '/')
-                .collect();
+            let name: String = tag.get(1..)?.chars().take_while(|c| !c.is_whitespace() && *c != '>' && *c != '/').collect();
             if depth == 0 {
                 if tag.ends_with("/>") {
                     out.push(Child { name, start: at, end });
