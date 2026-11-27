@@ -76,6 +76,20 @@ fn system_help(h: &egui_kittest::Harness<'static, WordApp>) -> Option<String> {
     h.query_by_label_contains("Your system has animation effects").and_then(|n| n.accesskit_node().label()).map(|s| s.to_string())
 }
 
+/// Deserializing settings with thousands of unknown keys runs in linear time and does not fail.
+#[test]
+fn unknown_settings_keys_load_in_linear_time() {
+    let mut map = serde_json::Map::new();
+    for i in 0..20_000 {
+        map.insert(format!("unknownKey{i}"), json!(i));
+    }
+    map.insert("miniToolbar".into(), json!(false));
+    let bytes = serde_json::to_vec(&serde_json::Value::Object(map)).unwrap();
+    let (prefs, errors) = legacy_ui_json(&bytes).unwrap();
+    assert!(errors.is_empty());
+    assert!(!prefs.mini_toolbar);
+}
+
 /// File › Options must not offer a way around the protected document's author check.
 #[test]
 fn user_name_field_disables_when_protection_starts() {

@@ -46,16 +46,20 @@ wordcraft-mcp = { path = "crates/mcp" }
 wordcraft-zotero = { path = "crates/zotero" }
 wordcraft-control-key = { path = "crates/control-key" }
 wordcraft-ui-egui = { path = "crates/ui-egui" }
+wordcraft-validate = { path = "crates/validate" }
 craft-codepage = { git = "https://github.com/hshamilt/craft-libs", rev = "aa7c95cbecdbf6bd401ca16c3a24c59eb099a62c", version = "=0.1.0" }
 craft = { git = "https://github.com/hshamilt/craft-libs", rev = "aa7c95cbecdbf6bd401ca16c3a24c59eb099a62c", version = "=0.1.0", default-features = false }
 craft-ui-test-kit = { git = "https://github.com/hshamilt/craft-libs", rev = "aa7c95cbecdbf6bd401ca16c3a24c59eb099a62c", version = "=0.1.0" }
 craft-keymap = { git = "https://github.com/hshamilt/craft-libs", rev = "aa7c95cbecdbf6bd401ca16c3a24c59eb099a62c", version = "=0.1.0" }
 craft-metafile = { git = "https://github.com/hshamilt/craft-libs", rev = "aa7c95cbecdbf6bd401ca16c3a24c59eb099a62c", version = "=0.1.0" }
+
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
+quick-xml = "0.41"
+zip = { version = "3", default-features = false, features = ["deflate"] }
 log = "0.4"
 # All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
@@ -181,19 +185,19 @@ hayro-jbig2 = { git = "https://github.com/hshamilt/craft-libs", rev = "aa7c95cbe
 hayro-cmap = { git = "https://github.com/hshamilt/craft-libs", rev = "aa7c95cbecdbf6bd401ca16c3a24c59eb099a62c" }
 hayro-postscript = { git = "https://github.com/hshamilt/craft-libs", rev = "aa7c95cbecdbf6bd401ca16c3a24c59eb099a62c" }
 linesweeper = { git = "https://github.com/hshamilt/craft-libs", rev = "aa7c95cbecdbf6bd401ca16c3a24c59eb099a62c" }
-ecolor = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-emath = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-epaint = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui-winit = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui_glow = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui_extras = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-eframe = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
+ecolor = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+emath = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+epaint = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui-winit = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_glow = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_extras = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+eframe = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
 

@@ -248,6 +248,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "arbitrary"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3bc62ac97cc33321f50863d514c3bc38a453947a8f9e781137e47c7401020aed"
+dependencies = [
+ "derive_arbitrary",
+]
+
+[[package]]
 name = "arboard"
 version = "3.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -263,7 +272,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -349,7 +358,7 @@ dependencies = [
  "futures-lite",
  "parking",
  "polling",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "slab",
  "windows-sys 0.61.2",
 ]
@@ -380,7 +389,7 @@ dependencies = [
  "cfg-if",
  "event-listener",
  "futures-lite",
- "rustix 1.1.5",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -406,7 +415,7 @@ dependencies = [
  "cfg-if",
  "futures-core",
  "futures-io",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "signal-hook-registry",
  "slab",
  "windows-sys 0.61.2",
@@ -782,7 +791,7 @@ checksum = "43b32313e937c8721c9d17ee9bf60699a6402b4b7c2cb6ac1bee0ffcaa4b4e5e"
 dependencies = [
  "bitflags 2.13.2",
  "polling",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "tracing",
 ]
 
@@ -805,7 +814,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "138efcf0940a02ebf0cc8d1eff41a1682a46b431630f4c52450d6265876021fa"
 dependencies = [
  "calloop 0.14.5",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "wayland-backend",
  "wayland-client",
 ]
@@ -822,7 +831,7 @@ dependencies = [
  "io-lifetimes 3.0.1",
  "ipnet",
  "maybe-owned",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "rustix-linux-procfs",
  "windows-sys 0.61.2",
  "winx",
@@ -1226,7 +1235,7 @@ name = "craft-atomic"
 version = "0.1.0"
 source = "git+https://github.com/hshamilt/craft-libs?rev=aa7c95cbecdbf6bd401ca16c3a24c59eb099a62c#aa7c95cbecdbf6bd401ca16c3a24c59eb099a62c"
 dependencies = [
- "rustix 1.1.5",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -1530,7 +1539,7 @@ dependencies = [
 [[package]]
 name = "craft-font-subset"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=750a9bdd575b494055d7fb65b91f978b8eff651a#750a9bdd575b494055d7fb65b91f978b8eff651a"
+source = "git+https://github.com/hshamilt/craft-libs?rev=aa7c95cbecdbf6bd401ca16c3a24c59eb099a62c#aa7c95cbecdbf6bd401ca16c3a24c59eb099a62c"
 dependencies = [
  "brotli 9.1.3",
  "harfbuzz-subset-sys",
@@ -1543,15 +1552,10 @@ dependencies = [
 [[package]]
 name = "craft-fonts-build"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=750a9bdd575b494055d7fb65b91f978b8eff651a#750a9bdd575b494055d7fb65b91f978b8eff651a"
+source = "git+https://github.com/hshamilt/craft-libs?rev=aa7c95cbecdbf6bd401ca16c3a24c59eb099a62c#aa7c95cbecdbf6bd401ca16c3a24c59eb099a62c"
 dependencies = [
  "craft-font-subset",
 ]
-
-[[package]]
-name = "craft-fonts-build"
-version = "0.1.0"
-source = "git+https://github.com/hshamilt/craft-libs?rev=aa7c95cbecdbf6bd401ca16c3a24c59eb099a62c#aa7c95cbecdbf6bd401ca16c3a24c59eb099a62c"
 
 [[package]]
 name = "craft-gpu"
@@ -2167,7 +2171,7 @@ dependencies = [
  "craft-behavior",
  "craft-codepage",
  "craft-font-catalog",
- "craft-fonts-build 0.1.0 (git+https://github.com/hshamilt/craft-libs?rev=aa7c95cbecdbf6bd401ca16c3a24c59eb099a62c)",
+ "craft-fonts-build",
  "craft-host",
  "craft-i18n",
  "craft-keymap",
@@ -2308,7 +2312,7 @@ dependencies = [
  "image",
  "log",
  "plist",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "semver",
  "serde",
  "serde_json",
@@ -2319,7 +2323,7 @@ dependencies = [
  "verifysign",
  "winreg",
  "winsafe",
- "zip",
+ "zip 9.1.0",
 ]
 
 [[package]]
@@ -2436,7 +2440,7 @@ source = "git+https://github.com/hshamilt/craft-libs?rev=aa7c95cbecdbf6bd401ca16
 dependencies = [
  "flate2",
  "thiserror 2.0.21",
- "zip",
+ "zip 9.1.0",
 ]
 
 [[package]]
@@ -2571,6 +2575,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e9de72ce2ad1f90dc62fa25f0f430ef85eb4b0d8fa0be4f30373bc40a21d28e"
 
 [[package]]
+name = "derive_arbitrary"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b034bd7d5f032402a2479444dcc6f74e36a03f31854d41680fb240ef682a1ac"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
+]
+
+[[package]]
 name = "dify"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2624,7 +2639,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2712,7 +2727,7 @@ dependencies = [
  "drm-ffi",
  "drm-fourcc",
  "libc",
- "rustix 1.1.5",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -2722,7 +2737,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51a91c9b32ac4e8105dec255e849e0d66e27d7c34d184364fb93e469db08f690"
 dependencies = [
  "drm-sys",
- "rustix 1.1.5",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -2750,7 +2765,7 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 [[package]]
 name = "ecolor"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1#72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1"
+source = "git+https://github.com/storytold/egui.git?rev=b9770908e0f304896f9658d239a7b29cf8af1564#b9770908e0f304896f9658d239a7b29cf8af1564"
 dependencies = [
  "bytemuck",
  "emath",
@@ -2759,7 +2774,7 @@ dependencies = [
 [[package]]
 name = "eframe"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1#72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1"
+source = "git+https://github.com/storytold/egui.git?rev=b9770908e0f304896f9658d239a7b29cf8af1564#b9770908e0f304896f9658d239a7b29cf8af1564"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -2794,7 +2809,7 @@ dependencies = [
 [[package]]
 name = "egui"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1#72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1"
+source = "git+https://github.com/storytold/egui.git?rev=b9770908e0f304896f9658d239a7b29cf8af1564#b9770908e0f304896f9658d239a7b29cf8af1564"
 dependencies = [
  "accesskit",
  "ahash",
@@ -2813,7 +2828,7 @@ dependencies = [
 [[package]]
 name = "egui-wgpu"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1#72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1"
+source = "git+https://github.com/storytold/egui.git?rev=b9770908e0f304896f9658d239a7b29cf8af1564#b9770908e0f304896f9658d239a7b29cf8af1564"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -2832,7 +2847,7 @@ dependencies = [
 [[package]]
 name = "egui-winit"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1#72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1"
+source = "git+https://github.com/storytold/egui.git?rev=b9770908e0f304896f9658d239a7b29cf8af1564#b9770908e0f304896f9658d239a7b29cf8af1564"
 dependencies = [
  "accesskit_winit",
  "arboard",
@@ -2858,7 +2873,7 @@ dependencies = [
 [[package]]
 name = "egui_extras"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1#72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1"
+source = "git+https://github.com/storytold/egui.git?rev=b9770908e0f304896f9658d239a7b29cf8af1564#b9770908e0f304896f9658d239a7b29cf8af1564"
 dependencies = [
  "ahash",
  "egui",
@@ -2871,7 +2886,7 @@ dependencies = [
 [[package]]
 name = "egui_glow"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1#72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1"
+source = "git+https://github.com/storytold/egui.git?rev=b9770908e0f304896f9658d239a7b29cf8af1564#b9770908e0f304896f9658d239a7b29cf8af1564"
 dependencies = [
  "bytemuck",
  "egui",
@@ -2884,7 +2899,7 @@ dependencies = [
 [[package]]
 name = "egui_kittest"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1#72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1"
+source = "git+https://github.com/storytold/egui.git?rev=b9770908e0f304896f9658d239a7b29cf8af1564#b9770908e0f304896f9658d239a7b29cf8af1564"
 dependencies = [
  "dify",
  "eframe",
@@ -2910,7 +2925,7 @@ checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 [[package]]
 name = "emath"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1#72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1"
+source = "git+https://github.com/storytold/egui.git?rev=b9770908e0f304896f9658d239a7b29cf8af1564#b9770908e0f304896f9658d239a7b29cf8af1564"
 dependencies = [
  "bytemuck",
 ]
@@ -2991,7 +3006,7 @@ dependencies = [
 [[package]]
 name = "epaint"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1#72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1"
+source = "git+https://github.com/storytold/egui.git?rev=b9770908e0f304896f9658d239a7b29cf8af1564#b9770908e0f304896f9658d239a7b29cf8af1564"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -3017,7 +3032,7 @@ dependencies = [
 [[package]]
 name = "epaint_default_fonts"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1#72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1"
+source = "git+https://github.com/storytold/egui.git?rev=b9770908e0f304896f9658d239a7b29cf8af1564#b9770908e0f304896f9658d239a7b29cf8af1564"
 
 [[package]]
 name = "equivalent"
@@ -3032,7 +3047,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3306,7 +3321,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94e7099f6313ecacbe1256e8ff9d617b75d1bcb16a6fddef94866d225a01a14a"
 dependencies = [
  "io-lifetimes 2.0.4",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "windows-sys 0.59.0",
 ]
 
@@ -3430,7 +3445,7 @@ version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1bd49230192a3797a9a4d6abe9b3eed6f7fa4c8a8a4947977c6f80025f92cbd8"
 dependencies = [
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "windows-link",
 ]
 
@@ -4613,7 +4628,7 @@ dependencies = [
  "libc",
  "libspa-sys",
  "nom 8.0.0",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "system-deps",
 ]
 
@@ -4640,7 +4655,7 @@ dependencies = [
  "image",
  "khronos-egl",
  "memmap2",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "thiserror 2.0.21",
  "tracing",
  "wayland-backend",
@@ -5561,7 +5576,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5799,7 +5814,7 @@ dependencies = [
  "libspa",
  "libspa-sys",
  "pipewire-sys",
- "rustix 1.1.5",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -5874,7 +5889,7 @@ dependencies = [
  "concurrent-queue",
  "hermit-abi",
  "pin-project-lite",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "windows-sys 0.61.2",
 ]
 
@@ -6116,7 +6131,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6432,6 +6447,9 @@ dependencies = [
  "raw-window-handle",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
  "web-sys",
  "windows-sys 0.61.2",
 ]
@@ -6504,15 +6522,15 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.5"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags 2.13.2",
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6522,7 +6540,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2fc84bf7e9aa16c4f2c758f27412dc9841341e16aa682d9c7ac308fe3ee12056"
 dependencies = [
  "once_cell",
- "rustix 1.1.5",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -6581,7 +6599,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7176,7 +7194,7 @@ dependencies = [
  "libc",
  "log",
  "memmap2",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "thiserror 2.0.21",
  "wayland-backend",
  "wayland-client",
@@ -7450,8 +7468,8 @@ dependencies = [
  "fastrand",
  "getrandom 0.4.3",
  "once_cell",
- "rustix 1.1.5",
- "windows-sys 0.61.2",
+ "rustix 1.1.6",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -8198,7 +8216,7 @@ checksum = "38a91b4eaddff87b1cd1074985e3713da4af2c49742d1b356b2c01670a67a078"
 dependencies = [
  "cc",
  "downcast-rs",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "scoped-tls",
  "smallvec",
  "wayland-sys",
@@ -8211,7 +8229,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3c36a0f861ad76d0901f2800b46321410d9f73f2ea88aac0650d86c32688073"
 dependencies = [
  "bitflags 2.13.2",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "wayland-backend",
  "wayland-scanner",
 ]
@@ -8233,7 +8251,7 @@ version = "0.31.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a52d18780be9b1314328a3de5f930b73d2200112e3849ca6cb11822793fb34d"
 dependencies = [
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "wayland-client",
  "xcursor",
 ]
@@ -8321,7 +8339,7 @@ checksum = "0dde9c29be0f723a573977de51ee455bf3dfa03652730a74f9dd3b337e374d75"
 dependencies = [
  "bitflags 2.13.2",
  "downcast-rs",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "wayland-backend",
  "wayland-scanner",
 ]
@@ -8595,7 +8613,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -8942,7 +8960,7 @@ dependencies = [
  "libc",
  "log",
  "os_pipe",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "thiserror 2.0.21",
  "tree_magic_mini",
  "wayland-backend",
@@ -8960,10 +8978,13 @@ dependencies = [
  "eframe",
  "egui",
  "log",
+ "rfd",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.21",
  "winit",
  "winresource",
+ "winsafe",
  "wordcraft-control-key",
  "wordcraft-doc",
  "wordcraft-engine",
@@ -8988,6 +9009,7 @@ dependencies = [
  "wordcraft-geom",
  "wordcraft-mcp",
  "wordcraft-render",
+ "wordcraft-validate",
  "wordcraft-zotero",
 ]
 
@@ -9064,7 +9086,7 @@ dependencies = [
  "log",
  "regex",
  "regex-automata",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -9211,7 +9233,7 @@ dependencies = [
  "cfb",
  "chrono",
  "craft",
- "craft-fonts-build 0.1.0 (git+https://github.com/storytold/craft-libs?rev=750a9bdd575b494055d7fb65b91f978b8eff651a)",
+ "craft-fonts-build",
  "craft-ui-test-kit",
  "craft-zip",
  "eframe",
@@ -9235,6 +9257,21 @@ dependencies = [
  "wordcraft-render",
  "wordcraft-zotero",
  "zbus",
+]
+
+[[package]]
+name = "wordcraft-validate"
+version = "0.18.1"
+dependencies = [
+ "craft-image-codecs",
+ "craft-tiff",
+ "craft-xml",
+ "png 0.18.1",
+ "quick-xml 0.41.0",
+ "rayon",
+ "serde",
+ "serde_json",
+ "zip 3.0.0",
 ]
 
 [[package]]
@@ -9345,7 +9382,7 @@ dependencies = [
  "libc",
  "libloading",
  "once_cell",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "x11rb-protocol",
 ]
 
@@ -9387,7 +9424,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
 dependencies = [
  "libc",
- "rustix 1.1.5",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -9538,7 +9575,7 @@ dependencies = [
  "hex",
  "libc",
  "ordered-stream",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "serde",
  "serde_repr",
  "tracing",
@@ -9722,6 +9759,20 @@ dependencies = [
 
 [[package]]
 name = "zip"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12598812502ed0105f607f941c386f43d441e00148fce9dec3ca5ffb0bde9308"
+dependencies = [
+ "arbitrary",
+ "crc32fast",
+ "flate2",
+ "indexmap",
+ "memchr",
+ "zopfli",
+]
+
+[[package]]
+name = "zip"
 version = "9.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2886b00003a72c4ccee3f42cfc34908d33b2508a74d827dc2a4244706475c704"
@@ -9747,6 +9798,18 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+
+[[package]]
+name = "zopfli"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aaf7fc5d30c28483d93805c4a5e12b05bbb52407fa67c5f8bd552374cd01fb11"
+dependencies = [
+ "bumpalo",
+ "crc32fast",
+ "log",
+ "simd-adler32",
+]
 
 [[package]]
 name = "zune-core"
@@ -9825,17 +9888,17 @@ dependencies = [
 [[patch.unused]]
 name = "egui_demo_lib"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1#72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1"
+source = "git+https://github.com/storytold/egui.git?rev=b9770908e0f304896f9658d239a7b29cf8af1564#b9770908e0f304896f9658d239a7b29cf8af1564"
 
 [[patch.unused]]
 name = "egui_inspection"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1#72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1"
+source = "git+https://github.com/storytold/egui.git?rev=b9770908e0f304896f9658d239a7b29cf8af1564#b9770908e0f304896f9658d239a7b29cf8af1564"
 
 [[patch.unused]]
 name = "egui_system_font_provider"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1#72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1"
+source = "git+https://github.com/storytold/egui.git?rev=b9770908e0f304896f9658d239a7b29cf8af1564#b9770908e0f304896f9658d239a7b29cf8af1564"
 
 [[patch.unused]]
 name = "hayro"
