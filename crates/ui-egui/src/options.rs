@@ -9,7 +9,7 @@ use craft::behavior::{EditEvent, MotionMode, keyed};
 use craft::ui::buttons::Button;
 use craft::ui::contract::{Bind, Entry, Props as _, Show, ShowCollection, ShowContainer};
 use craft::ui::display::{Elide, Shade, Text};
-use craft::ui::layout_components::Row;
+use craft::ui::layout_components::{Row, Stack};
 use craft::ui::list::{List, ListRow};
 use craft::ui::patterns::preferences::{GroupSpec, PageSpec, PrefValue, PreferencesModel, PreferencesPage, RowKind, RowSpec};
 use craft::ui::runtime::env::{LengthUnits, UnitKind, Units};
@@ -126,8 +126,25 @@ struct Strings {
     paper_id: String,
     numerals: Vec<(String, String)>,
     numeral_id: String,
+    default_proofing_languages: Vec<(String, String)>,
+    default_proofing_id: String,
     proofing_language: String,
     autosave_reason: String,
+}
+
+/// The default proofing language choice list and active id for File › Options › Language.
+fn default_proofing_choices(app: &WordApp) -> (Vec<(String, String)>, String) {
+    let default_tag = app
+        .session
+        .prefs
+        .default_language
+        .clone()
+        .or_else(|| app.session.editing_lang.clone())
+        .or_else(|| app.session.doc.styles.default_chr.lang.clone())
+        .unwrap_or_else(|| "en-US".to_string());
+    let list = crate::ribbon::language_list(&default_tag);
+    let id = list.iter().find(|(tag, _)| crate::ribbon::same_language(&default_tag, tag)).map_or(default_tag, |(tag, _)| tag.clone());
+    (list, id)
 }
 
 impl Strings {
@@ -174,6 +191,7 @@ impl Strings {
             .collect();
         let numeral_id = id_of(&app.session.view.numeral);
 
+        let (default_proofing_languages, default_proofing_id) = default_proofing_choices(app);
         let lang = crate::ribbon::caret_language(app);
         let proofing_language = if crate::ribbon::caret_no_proof(app) {
             tl!("The text at the insertion point is marked Do not check spelling or grammar.").to_string()
@@ -196,6 +214,8 @@ impl Strings {
             paper_id,
             numerals,
             numeral_id,
+            default_proofing_languages,
+            default_proofing_id,
             proofing_language,
             autosave_reason: crate::AutoSaveBlock::Browser.reason().to_string(),
         }
@@ -480,7 +500,15 @@ impl PreferencesModel for OptionsModel<'_> {
                 ),
                 GroupSpec::new(
                     Some(tl!("Proofing language")),
-                    vec![custom("language.proofingLanguage", tl!("Proofing language")).keywords(&s.proofing_language)],
+                    vec![
+                        RowSpec::new(
+                            "language.defaultProofing",
+                            tl!("Default proofing language:"),
+                            RowKind::choice(&s.default_proofing_id, owned(&s.default_proofing_languages)),
+                        )
+                        .help(tl!("New blank documents start in this language. English variants (US, UK, Canada, Australia) use built-in dictionaries.")),
+                        custom("language.proofingLanguage", tl!("This document:")).keywords(&s.proofing_language).visible(app.has_document()),
+                    ],
                 ),
                 GroupSpec::new(Some(tl!("Your languages")), vec![custom("language.yourLanguages", tl!("Your languages"))]),
                 GroupSpec::new(
@@ -674,6 +702,7 @@ impl PreferencesModel for OptionsModel<'_> {
             ("save.removePersonalInfo", Bool(v)) => self.run("file.privacyOptions", json!({"removePersonalInfo": v})),
             ("save.removeDateTime", Bool(v)) => self.run("file.privacyOptions", json!({"removeDateTime": v})),
             ("language.interface", Choice(c)) => self.run("ui.language", json!({"value": c})),
+            ("language.defaultProofing", Choice(c)) => self.run("review.language.preferred", json!({"lang": c})),
             ("proofing.customDictionaryFile", Text(t)) => {
                 let t = t.trim();
                 self.options(json!({"customDictionary": if t.is_empty() { "auto" } else { t }}));
@@ -712,8 +741,13 @@ impl PreferencesModel for OptionsModel<'_> {
             "proofing.customDictionaryFile" => self.custom_dictionary_file(ui),
             "proofing.customDictionary" => self.custom_dictionary(ui),
             "language.proofingLanguage" => {
-                Text::new(self.strings.proofing_language.clone()).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
-                false
+                let status = self.strings.proofing_language.clone();
+                let mut clicked = false;
+                Stack::new().show(ui, |ui, _| {
+                    Text::new(status.clone()).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
+                    clicked = self.command_button(ui, tl!("Set Proofing Language…"), "review.language");
+                });
+                clicked
             }
             // PLAN: assumed `your_languages(app: &mut WordApp, ui: &mut Ui)` (chrome-w12)
             "language.yourLanguages" => {

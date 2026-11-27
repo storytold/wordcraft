@@ -1222,6 +1222,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "font.remove"
             | "readAloud.speed"
             | "readAloud.skipCitations"
+            | "review.language.preferred"
             | "tools.autocorrect"
             | "tools.customizeKeyboard"
             | "tools.customizeRibbon"

@@ -1,7 +1,7 @@
 use serde_json::json;
 use wordcraft_geom::Unit;
 
-use craft::ui::patterns::preferences::{PrefValue, PreferencesModel};
+use craft::ui::patterns::preferences::{PrefValue, PreferencesModel, RowKind};
 
 use super::{OptionsModel, length, unit_suffix};
 use crate::prefs::{Prefs, legacy_ui_json};
@@ -453,4 +453,76 @@ fn escape_does_not_commit_the_custom_dictionary_path() {
     assert_eq!(h.state().session.prefs.custom_dictionary, None);
     assert_eq!(dictionary_field_text(&h), "", "the field shows the saved (empty) path");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #7833: Options › Language offers Default proofing language (including English variants and
+/// other languages) even with no document open, and hides This document when no document is open.
+#[test]
+fn language_options_sets_default_proofing_language_including_english_variants_and_without_document() {
+    let mut a = app();
+    let choices: Vec<String> = with_model(&mut a, true, |m| {
+        let pages = m.pages();
+        let row = pages
+            .iter()
+            .flat_map(|p| p.groups.iter())
+            .flat_map(|g| g.rows.iter())
+            .find(|r| r.key == "language.defaultProofing")
+            .expect("defaultProofing row");
+        assert!(row.visible);
+        let RowKind::Choice { options, .. } = &row.kind else { panic!("defaultProofing must be a Choice row") };
+        options.iter().filter_map(|e| e.value().map(|v| (*v).to_string())).collect()
+    });
+    for tag in ["en-US", "en-CA", "en-GB", "en-AU", "fr-FR"] {
+        assert!(choices.iter().any(|c| c == tag), "{tag} offered in Default proofing language");
+    }
+    for tag in ["en-CA", "en-GB", "fr-FR"] {
+        with_model(&mut a, true, move |m| m.set("language.defaultProofing", PrefValue::Choice(tag.into())));
+        assert_eq!(a.session.prefs.default_language.as_deref(), Some(tag));
+    }
+    let mut start = app();
+    start.start_screen();
+    assert!(!start.has_document());
+    let (default_visible, doc_visible) = with_model(&mut start, true, |m| {
+        let pages = m.pages();
+        let rows: Vec<_> = pages.iter().flat_map(|p| p.groups.iter()).flat_map(|g| g.rows.iter()).collect();
+        let def = rows.iter().find(|r| r.key == "language.defaultProofing").expect("defaultProofing row").visible;
+        let doc = rows.iter().find(|r| r.key == "language.proofingLanguage").expect("proofingLanguage row").visible;
+        (def, doc)
+    });
+    assert!(default_visible && !doc_visible, "Default proofing is visible without a document; This document is hidden");
+    with_model(&mut start, true, |m| m.set("language.defaultProofing", PrefValue::Choice("en-CA".into())));
+    assert_eq!(start.session.prefs.default_language.as_deref(), Some("en-CA"));
+}
+
+/// #7833: Options › Language shows Default proofing language and Set Proofing Language…, opens the
+/// Language dialog from Options, and reflects the document's proofing language in the caption.
+#[test]
+fn language_options_proofing_button_opens_language_dialog() {
+    use egui_kittest::kittest::Queryable;
+    let mut a = app();
+    a.run("ui.backstage", json!({"value": true, "page": "options", "pane": "language"})).unwrap();
+    let mut h = crate::test_harness::builder().build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    options_frames(&mut h, 3);
+    assert!(h.query_by_label_contains("Default proofing language:").is_some(), "Default proofing language control is shown");
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Set Proofing Language…").click();
+    options_frames(&mut h, 3);
+    assert!(
+        h.state().dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("language")),
+        "Set Proofing Language… opens the Language dialog"
+    );
+    h.key_press(egui::Key::Escape);
+    options_frames(&mut h, 3);
+    h.state_mut().run("review.language", json!({"lang": "en-CA", "default": true})).unwrap();
+    options_frames(&mut h, 3);
+    assert!(
+        h.query_by_label("Spelling and grammar are checked in English (Canada).").is_some(),
+        "the caption reflects the document's updated proofing language"
+    );
 }
