@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use super::{
     Arc, Block, CharProps, CmdError, CmdResult, Document, InlineObject, Paragraph, RevisionKind, Selection, Session, StoryRef, Value, json, p,
     para_block,
@@ -90,14 +88,6 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         ["moves", "comments", "headersFooters", "footnotes", "textBoxes", "fields"].into_iter().filter(|k| v.get(*k).is_some()).collect();
     let author = p::str(v, "author").map(str::trim).filter(|a| !a.is_empty()).map(str::to_string).unwrap_or_else(|| s.author.clone());
     let date = crate::cmd::now_iso();
-    // Adopt media referenced by the revised body and reachable text boxes into the original
-    // document: identical bytes reuse the original's key (deduplicated by content), while
-    // replaced or new media receives a fresh key in s.doc.media so both media parts are
-    // preserved in the result (#6086). Unreferenced media in uncompared parts (e.g. headers
-    // and footers) is not imported.
-    let mut revised = revised;
-    let mut raw_media = std::mem::take(&mut revised.media);
-    let mut media_map = BTreeMap::new();
     let old: Vec<Arc<Block>> = s.doc.body.clone();
     // The notes and comments the original shows: those the result no longer does go with it.
     let shown_before = note_and_comment_refs(&s.doc);
