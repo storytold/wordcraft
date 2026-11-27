@@ -297,16 +297,22 @@ fn object_value_to_shared(source: &wordcraft_doc::para::InlineObject) -> Result<
     use wordcraft_doc::para::InlineObject as Source;
 
     match source {
-        Source::Image { media, w, h, alt, float, crop, fx, ole } => Ok(Target::Image {
-            media: media.clone(),
-            w: finite(*w),
-            h: finite(*h),
-            alt: alt.clone(),
-            float: convert_ref(float)?,
-            crop: [finite(crop[0]), finite(crop[1]), finite(crop[2]), finite(crop[3])],
-            fx: convert_ref(fx)?,
-            ole: ole.as_ref().map(|o| convert_ref(o.as_ref()).map(Arc::new)).transpose()?,
-        }),
+        Source::Image { media, w, h, alt, float, crop, fx, ole } => {
+            let mut float = float.clone();
+            for (e, ext) in float.effect.iter_mut().zip(float.pic_effects.extent()) {
+                *e = finite(*e).max(ext);
+            }
+            Ok(Target::Image {
+                media: media.clone(),
+                w: finite(*w),
+                h: finite(*h),
+                alt: alt.clone(),
+                float: convert_ref(&float)?,
+                crop: [finite(crop[0]), finite(crop[1]), finite(crop[2]), finite(crop[3])],
+                fx: convert_ref(fx)?,
+                ole: ole.as_ref().map(|o| convert_ref(o.as_ref()).map(Arc::new)).transpose()?,
+            })
+        }
         Source::Group { w, h, float, ch_w, ch_h, children, canvas } => Ok(Target::Group {
             w: *w,
             h: *h,
