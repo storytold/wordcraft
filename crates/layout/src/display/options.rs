@@ -49,6 +49,9 @@ pub struct DisplayOptions {
     /// Leave this object out of the page: while it is dragged, the preview under the pointer
     /// stands in for it, so the page must not also show it where it was.
     pub hide_object: Option<wordcraft_doc::Pos>,
+    /// Paper colour replacing `doc.settings.page_color` for automatic contrast (e.g. Read Mode's
+    /// Page Color). `None` uses `doc.settings.page_color`.
+    pub paper_override: Option<Rgb>,
 }
 
 impl Default for DisplayOptions {
@@ -63,7 +66,15 @@ impl Default for DisplayOptions {
             hide_ink: false,
             revisions: MarkupOptions::default(),
             hide_object: None,
+            paper_override: None,
         }
+    }
+}
+
+impl DisplayOptions {
+    /// The page background colour effective for automatic text and border contrast.
+    pub(super) fn page_background(&self, doc: &Document) -> Option<Rgb> {
+        self.paper_override.or(doc.settings.page_color)
     }
 }
 

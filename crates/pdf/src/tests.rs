@@ -3423,3 +3423,42 @@ fn chart_and_equation_text_keep_their_pdf_bytes() {
         ["B", "o", "d", "y", " ", "t", "e", "x", "R", "v", "n", "u", "2", "0", "4", "+", "1", equation_x].into_iter().map(String::from).collect();
     assert_eq!(shown, expected, "math face: {}", math_face.family);
 }
+
+#[test]
+fn dark_page_color_pdf_draws_white_auto_text_and_black_in_light_shaded_cell() {
+    use wordcraft_doc::props::{Border, Borders};
+    let mut d = Document::new();
+    d.settings.page_color = Some(Rgb(0x00, 0x12, 0x36));
+    let mut t = wordcraft_doc::Table::new(2, 1, 300.0);
+    let b = Some(Border::single(0.5));
+    t.props.borders = Some(Borders { top: b, bottom: b, left: b, right: b, between: b, inside_v: b });
+    t.rows[0].cells[0].props.shading = Some(Rgb(0xC0, 0xC0, 0xC0));
+    let mut hp = Paragraph::with_text("Header", Default::default());
+    hp.props.borders = Some(Borders { bottom: b, ..Default::default() });
+    t.rows[0].cells[0].blocks = vec![para_block(hp)];
+    t.rows[1].cells[0].blocks = vec![para_block(Paragraph::with_text("Value", Default::default()))];
+    d.body = vec![para_block(Paragraph::with_text("Body", Default::default())), Arc::new(wordcraft_doc::Block::Table(t))];
+
+    let lay = wordcraft_layout::layout(&d, &mut wordcraft_layout::LayoutCache::new(), &wordcraft_layout::LayoutOptions::default());
+    let opts = PdfOptions { compress: false, ..Default::default() };
+    let pdf = export_layout(&d, &lay, &opts).unwrap();
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.contains("1 1 1 rg"), "expected white automatic text fill on dark page");
+    assert!(text.contains("1 1 1 RG"), "expected white automatic outer table border stroke on dark page");
+    assert!(text.contains("0 0 0 rg"), "expected black automatic text fill inside light-shaded header cell");
+    assert!(text.contains("0 0 0 RG"), "expected black automatic w:pBdr stroke inside light-shaded header cell");
+
+    // On a white page, a navy header cell draws white automatic text while outer table borders
+    // stay black (never white-on-white).
+    d.settings.page_color = None;
+    if let wordcraft_doc::Block::Table(tbl) = Arc::make_mut(&mut d.body[1]) {
+        tbl.rows[0].cells[0].props.shading = Some(Rgb(0x00, 0x12, 0x36));
+        tbl.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("Header", Default::default()))];
+    }
+    let lay_white = wordcraft_layout::layout(&d, &mut wordcraft_layout::LayoutCache::new(), &wordcraft_layout::LayoutOptions::default());
+    let pdf_white = export_layout(&d, &lay_white, &opts).unwrap();
+    let text_white = String::from_utf8_lossy(&pdf_white);
+    assert!(text_white.contains("1 1 1 rg"), "expected white automatic text fill inside navy header cell on white page");
+    assert!(text_white.contains("0 0 0 RG"), "expected black automatic outer table border stroke on white page");
+    assert!(!text_white.contains("1 1 1 RG"), "navy header cell on white page must not emit white-on-white border strokes");
+}

@@ -192,6 +192,7 @@ fn table_gridlines_include_header_and_footer_tables() {
         cell: 0,
         story,
         clip: false,
+        fill: None,
     };
     let page = Page {
         items: vec![cell(100.0, false, StoryRef::Body), cell(110.0, true, StoryRef::Body)],
@@ -222,8 +223,9 @@ fn table_gridlines_skip_edges_a_border_draws() {
         cell: 0,
         story: StoryRef::Body,
         clip: false,
+        fill: None,
     };
-    let rule = |x0, y0, x1, y1, border| Placed::Rule { x0, y0, x1, y1, border };
+    let rule = |x0, y0, x1, y1, border| Placed::Rule { x0, y0, x1, y1, border, surface: Default::default() };
     let line = wordcraft_doc::props::Border::single(0.5);
     let none = wordcraft_doc::props::Border::single(0.0);
     let page = Page {
@@ -290,10 +292,11 @@ fn table_gridlines_of_a_many_row_table_are_fast() {
             cell: 0,
             story: StoryRef::Body,
             clip: false,
+            fill: None,
         });
         // One border piece per row on each side, so both vertical lines carry a rule per row.
         for x in [0.0, 10.0] {
-            items.push(Placed::Rule { x0: x, y0: y, x1: x, y1: y + 10.0, border: line });
+            items.push(Placed::Rule { x0: x, y0: y, x1: x, y1: y + 10.0, border: line, surface: Default::default() });
         }
     }
     let page = Page { items, ..Default::default() };

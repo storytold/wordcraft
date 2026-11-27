@@ -1,5 +1,16 @@
 use super::{Arc, Border, ParaLayout, Path, Rect, Rgb, Spin, StoryRef, TextDirection, Wrap};
 
+/// Background context for a [`Placed::Rule`], used to resolve automatic border colours
+/// (`Border { color: None }`) against the rule's effective surface.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct RuleSurface {
+    /// Owning story (`Some(StoryRef::Part(id))` lets display resolve the owning text-box frame
+    /// fill at the rule's position; `None` for page/margin chrome).
+    pub story: Option<StoryRef>,
+    /// Opaque shading of the enclosing table cell behind the rule, if any.
+    pub fill: Option<Rgb>,
+}
+
 /// Something placed on a page (page coordinates, points, y down).
 #[derive(Clone, Debug)]
 pub enum Placed {
@@ -26,6 +37,8 @@ pub enum Placed {
         x1: f32,
         y1: f32,
         border: Border,
+        /// Owning story and enclosing cell shading for automatic border contrast.
+        surface: RuleSurface,
     },
     /// A picture in `rect`, turned about the rect's centre by `spin` (as are shapes and charts).
     Image {
@@ -89,6 +102,8 @@ pub enum Placed {
         /// Its row is exactly as tall as it says and the content is taller: what runs past the
         /// cell is cut off when drawn, as in Word.
         clip: bool,
+        /// Resolved cell shading (cell's own or table style's), for automatic text contrast.
+        fill: Option<Rgb>,
     },
     /// The area of a picture, shape or text box, for hit testing, selection handles and dragging
     /// (drawn by `Image`/`Shape`/`Lines`). The object is the U+FFFC at byte `off` of paragraph

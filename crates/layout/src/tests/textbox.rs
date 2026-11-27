@@ -408,6 +408,7 @@ fn a_clipped_line_in_a_turned_box_is_drawn_once_turned_and_clipped() {
         cell: 0,
         story: StoryRef::Part(b),
         clip: true,
+        fill: None,
     });
     let draws = display::page_display(&d, &page, &display::DisplayOptions::default());
     let upright_clips = draws.iter().filter(|x| matches!(x, display::Draw::Clip { .. })).count();

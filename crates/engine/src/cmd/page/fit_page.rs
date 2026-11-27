@@ -1163,6 +1163,7 @@ mod tests {
                 cell: 0,
                 story: StoryRef::Body,
                 clip: false,
+                fill: None,
             }],
             ..Default::default()
         };
