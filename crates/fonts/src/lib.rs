@@ -13,6 +13,8 @@ mod fontdb;
 pub mod math;
 mod script;
 mod ui_fallback;
+#[cfg(test)]
+mod web_fonts;
 pub mod word;
 
 pub use fontdb::{
