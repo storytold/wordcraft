@@ -8745,6 +8745,26 @@ fn no_line_break_right_after_a_slash() {
     assert!(lines > 10, "{lines} lines");
 }
 
+#[test]
+fn a_line_breaks_after_a_space_before_closing_punctuation() {
+    // UAX #14 (LB13) keeps a space with the ":", ")" or "," after it, so "status := 1" moved down
+    // whole with the word before it; Word breaks at the space and starts the next line with ":="
+    // (measured in Word for Mac and Windows: ":=", ";", ",", ")", "}", "!" all start a line).
+    let text: String =
+        (1..80).map(|i| format!("{} := 1; {} ); {} , ", "w".repeat(i % 9 + 1), "v".repeat(i % 7 + 1), "u".repeat(i % 5 + 1))).collect();
+    let lines = body_lines(&lay(&Document::from_text(&text)), &text);
+    assert!(lines.len() > 5, "{lines:?}");
+    assert!(lines.iter().any(|l| l.starts_with([':', ')', ','])), "no line starts with the punctuation: {lines:?}");
+}
+
+#[test]
+fn a_line_breaks_after_the_space_of_an_opening_bracket() {
+    // UAX #14 (LB14) keeps "( " with the word after it; Word breaks after the space.
+    let text: String = (1..60).map(|i| format!("{} ( word ", "w".repeat(i % 9 + 1))).collect();
+    let lines = body_lines(&lay(&Document::from_text(&text)), &text);
+    assert!(lines.iter().any(|l| l.trim_end().ends_with('(')), "no line ends with the bracket: {lines:?}");
+}
+
 /// The text of every laid-out line.
 fn body_lines(l: &DocLayout, text: &str) -> Vec<String> {
     l.pages
