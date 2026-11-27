@@ -1,0 +1,446 @@
+{
+  "base": "8dc309af",
+  "base_rows": 195,
+  "current_rows": 197,
+  "added_helpers": [
+    "package.rs::canonical",
+    "package.rs::content_unavailable"
+  ],
+  "removed_helpers": [],
+  "changed_helpers": {
+    "lib.rs::check_content_types": {
+      "before": [
+        [
+          "lib.rs::check_content_types",
+          "CT-DUP-DEFAULT,CT-DUP-MAIN,CT-DUP-OVERRIDE,CT-MAIN-TYPE,CT-UNDECLARED",
+          "field.content_types*7,field.dup_defaults*1,field.dup_overrides*1,field.entries*1,field.incomplete*2",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "CT-UNDECLARED,CT-MAIN-TYPE"
+        ]
+      ],
+      "after": [
+        [
+          "lib.rs::check_content_types",
+          "CT-DUP-DEFAULT,CT-DUP-MAIN,CT-DUP-OVERRIDE,CT-MAIN-TYPE,CT-UNDECLARED",
+          "field.content_types*7,field.dup_defaults*1,field.dup_overrides*1,field.entries*1,field.incomplete*2,lookup.content_unavailable*1",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "CT-UNDECLARED,CT-MAIN-TYPE"
+        ]
+      ]
+    },
+    "lib.rs::check_custom_xml": {
+      "before": [
+        [
+          "lib.rs::check_custom_xml",
+          "CUSTOMXML-SCHEMA",
+          "access.into_complete_set*2,access.missing*1,field.content_types*3,field.contexts*2,field.entries*3,parser.parse_attached_schemas*1,parser.parse_custom_xml_schemas*1,type.CompleteSet*1,type.HashSet*3,type.Observed*2,type.Vec*3",
+          "DECLARED EXCEPTION: PackageRegistryContext for established-unowned own declarations; reached declarations keep their selected registry; never grants story ownership",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "unknown membership or registry source suppresses dependent absence; custom-XML Errors and informational unused-comment coverage retain the shipped package-registry policy",
+          "CUSTOMXML-SCHEMA"
+        ]
+      ],
+      "after": [
+        [
+          "lib.rs::check_custom_xml",
+          "CUSTOMXML-SCHEMA",
+          "access.into_complete_set*2,access.missing*1,field.content_types*3,field.contexts*2,field.entries*3,lookup.content_unavailable*1,parser.parse_attached_schemas*1,parser.parse_custom_xml_schemas*1,type.CompleteSet*1,type.HashSet*3,type.Observed*2,type.Vec*3",
+          "DECLARED EXCEPTION: PackageRegistryContext for established-unowned own declarations; reached declarations keep their selected registry; never grants story ownership",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "unknown membership or registry source suppresses dependent absence; custom-XML Errors and informational unused-comment coverage retain the shipped package-registry policy",
+          "CUSTOMXML-SCHEMA"
+        ]
+      ]
+    },
+    "lib.rs::check_rels": {
+      "before": [
+        [
+          "lib.rs::check_rels",
+          "REL-DANGLING,REL-DUP-ID,REL-TYPED",
+          "field.references*1,field.rels*3",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "REL-DANGLING"
+        ]
+      ],
+      "after": [
+        [
+          "lib.rs::check_rels",
+          "REL-DANGLING,REL-DUP-ID,REL-TYPED",
+          "field.references*1,field.rels*3,lookup.canonical_entry*1",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "REL-DANGLING"
+        ]
+      ]
+    },
+    "lib.rs::check_typed_content": {
+      "before": [
+        [
+          "lib.rs::check_typed_content",
+          "CT-MISMATCH",
+          "access.into_complete_set*1,access.missing*1,field.content_types*1,field.rels*2,type.HashSet*2,type.Observed*1",
+          "per owning XML part consumption; first-bound contentPart relationship only; skipped text/xml and native InkML exemptions separate",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "suppress customXml pairing when consumption unavailable; keep other relationships and independent contentPart presence/type findings",
+          "independent"
+        ]
+      ],
+      "after": [
+        [
+          "lib.rs::check_typed_content",
+          "CT-MISMATCH",
+          "access.into_complete_set*1,access.missing*1,field.content_types*1,field.rels*2,lookup.canonical_entry*1,type.HashSet*2,type.Observed*1",
+          "per owning XML part consumption; first-bound contentPart relationship only; skipped text/xml and native InkML exemptions separate",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "suppress customXml pairing when consumption unavailable; keep other relationships and independent contentPart presence/type findings",
+          "independent"
+        ]
+      ]
+    },
+    "lib.rs::check_typed_image_refs": {
+      "before": [
+        [
+          "lib.rs::check_typed_image_refs",
+          "REL-TYPED",
+          "field.content_types*2,field.incomplete*1,field.rels*1,type.HashSet*2,type.Vec*1",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "REL-TYPED"
+        ]
+      ],
+      "after": [
+        [
+          "lib.rs::check_typed_image_refs",
+          "REL-TYPED",
+          "field.content_types*2,field.incomplete*1,field.rels*1,lookup.content_unavailable*1,type.HashSet*2,type.Vec*1",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "REL-TYPED"
+        ]
+      ]
+    },
+    "lib.rs::check_typed_targets": {
+      "before": [
+        [
+          "lib.rs::check_typed_targets",
+          "REL-TYPED",
+          "field.content_types*2,field.incomplete*1,field.rels*2",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "REL-TYPED"
+        ]
+      ],
+      "after": [
+        [
+          "lib.rs::check_typed_targets",
+          "REL-TYPED",
+          "field.content_types*2,field.incomplete*1,field.rels*2,lookup.content_unavailable*1",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "REL-TYPED"
+        ]
+      ]
+    },
+    "lib.rs::content_consumption": {
+      "before": [
+        [
+          "lib.rs::content_consumption",
+          "-",
+          "access.invalidate*1,access.is_complete*1,access.prefix*1,access.project*1,field.content*1,field.content_types*1,field.exemptions*2,field.parts*1,type.HashSet*3,type.Observed*3",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "independent"
+        ]
+      ],
+      "after": [
+        [
+          "lib.rs::content_consumption",
+          "-",
+          "access.invalidate*1,access.is_complete*1,access.prefix*1,access.project*1,field.content*1,field.content_types*1,field.exemptions*2,field.parts*1,lookup.entry_by_name*1,type.HashSet*3,type.Observed*3",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "independent"
+        ]
+      ]
+    },
+    "lib.rs::discovery_unavailable": {
+      "before": [
+        [
+          "lib.rs::discovery_unavailable",
+          "-",
+          "field.content_types*1,field.incomplete*1",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "independent"
+        ]
+      ],
+      "after": [
+        [
+          "lib.rs::discovery_unavailable",
+          "-",
+          "field.content_types*1,field.incomplete*1,lookup.content_unavailable*1",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "independent"
+        ]
+      ]
+    },
+    "lib.rs::owner_rel_part": {
+      "before": [
+        [
+          "lib.rs::owner_rel_part",
+          "-",
+          "field.rels*2",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "independent"
+        ]
+      ],
+      "after": [
+        [
+          "lib.rs::owner_rel_part",
+          "-",
+          "field.rels*2,lookup.entry_by_name*1",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "independent"
+        ]
+      ]
+    },
+    "lib.rs::owner_roots_supported": {
+      "before": [
+        [
+          "lib.rs::owner_roots_supported",
+          "-",
+          "type.Vec*1",
+          "every independently established main/glossary owner root; Transitional namespace and expected root element",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "independent"
+        ]
+      ],
+      "after": [
+        [
+          "lib.rs::owner_roots_supported",
+          "-",
+          "lookup.entry_by_name*1,type.Vec*1",
+          "every independently established main/glossary owner root; Transitional namespace and expected root element",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "independent"
+        ]
+      ]
+    },
+    "lib.rs::ownership_discovery_complete": {
+      "before": [
+        [
+          "lib.rs::ownership_discovery_complete",
+          "-",
+          "field.content_types*1,field.incomplete*2,field.rels*1",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "independent"
+        ]
+      ],
+      "after": [
+        [
+          "lib.rs::ownership_discovery_complete",
+          "-",
+          "field.content_types*1,field.incomplete*2,field.rels*1,lookup.content_unavailable*1",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "independent"
+        ]
+      ]
+    },
+    "lib.rs::process_numbering_part": {
+      "before": [
+        [
+          "lib.rs::process_numbering_part",
+          "NUM-DANGLING",
+          "access.into_complete_set*2,access.missing*1,field.abstract_ids*2,field.num_ids*2,field.num_to_abstract*1,parser.parse_numbering*1,type.CompleteSet*1,type.HashSet*2,type.Observed*2",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "NUM-DANGLING"
+        ]
+      ],
+      "after": [
+        [
+          "lib.rs::process_numbering_part",
+          "NUM-DANGLING",
+          "access.into_complete_set*2,access.missing*1,field.abstract_ids*2,field.num_ids*2,field.num_to_abstract*1,lookup.entry_by_name*1,parser.parse_numbering*1,type.CompleteSet*1,type.HashSet*2,type.Observed*2",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "NUM-DANGLING"
+        ]
+      ]
+    },
+    "lib.rs::report_style_num_refs": {
+      "before": [
+        [
+          "lib.rs::report_style_num_refs",
+          "NUM-DANGLING",
+          "access.missing*1,parser.parse_style_num_ids*1,type.CompleteSet*1,type.HashSet*1",
+          "each established owner and its selected supporting sources; shared parts in every owner; unowned references excluded; explicit no-root fallback only",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap; unknown or ambiguous source discovery; source-local pooled-budget loss",
+          "suppress only dependent absence directions and report Incomplete; independent owner and prefix findings survive",
+          "NUM-DANGLING"
+        ]
+      ],
+      "after": [
+        [
+          "lib.rs::report_style_num_refs",
+          "NUM-DANGLING",
+          "access.missing*1,lookup.entry_by_name*1,parser.parse_style_num_ids*1,type.CompleteSet*1,type.HashSet*1",
+          "each established owner and its selected supporting sources; shared parts in every owner; unowned references excluded; explicit no-root fallback only",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap; unknown or ambiguous source discovery; source-local pooled-budget loss",
+          "suppress only dependent absence directions and report Incomplete; independent owner and prefix findings survive",
+          "NUM-DANGLING"
+        ]
+      ]
+    },
+    "lib.rs::story_roles": {
+      "before": [
+        [
+          "lib.rs::story_roles",
+          "-",
+          "field.content_types*1,field.entries*1,field.rels*2,type.HashMap*2",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "independent"
+        ]
+      ],
+      "after": [
+        [
+          "lib.rs::story_roles",
+          "-",
+          "field.content_types*1,field.entries*1,field.rels*2,lookup.canonical_entry*1,type.HashMap*2",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "independent"
+        ]
+      ]
+    },
+    "package.rs::canonical_entry": {
+      "before": [
+        [
+          "package.rs::canonical_entry",
+          "-",
+          "field.entries*1",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "independent"
+        ]
+      ],
+      "after": [
+        [
+          "package.rs::canonical_entry",
+          "-",
+          "field.entries*1",
+          "package entry identity and stored spelling; named unreadable entries remain present",
+          "archive entry cap or unreadable entry with unrecoverable identity; named byte/decode loss preserves presence",
+          "One for observed identity; Absent only after complete entry discovery; otherwise Unknown",
+          "independent"
+        ]
+      ]
+    },
+    "package.rs::entry_by_name": {
+      "before": [
+        [
+          "package.rs::entry_by_name",
+          "-",
+          "field.entries*1",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "independent"
+        ]
+      ],
+      "after": [
+        [
+          "package.rs::entry_by_name",
+          "-",
+          "field.entries*1",
+          "package entry identity and retained entry reference; named unreadable entries remain present",
+          "archive entry cap or unreadable entry with unrecoverable identity; named byte/decode loss preserves presence",
+          "One for observed identity; Absent only after complete entry discovery; otherwise Unknown",
+          "independent"
+        ]
+      ]
+    },
+    "package.rs::entry_point_profile": {
+      "before": [
+        [
+          "package.rs::entry_point_profile",
+          "-",
+          "field.incomplete*1,field.rels*3",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "independent"
+        ]
+      ],
+      "after": [
+        [
+          "package.rs::entry_point_profile",
+          "-",
+          "field.incomplete*1,field.rels*3,lookup.content_unavailable*1",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "independent"
+        ]
+      ]
+    },
+    "package.rs::relationships_incomplete": {
+      "before": [
+        [
+          "package.rs::relationships_incomplete",
+          "-",
+          "field.incomplete*1,field.rels*1",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "independent"
+        ]
+      ],
+      "after": [
+        [
+          "package.rs::relationships_incomplete",
+          "-",
+          "field.incomplete*1,field.rels*1,lookup.content_unavailable*1",
+          "source-local bounded extraction; no implicit document owner",
+          "source unavailable or malformed; XML event/depth budget; category allocation cap",
+          "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set",
+          "independent"
+        ]
+      ]
+    }
+  },
+  "representation_contracts_unchanged": true,
+  "generated_rust_unchanged": true
+}

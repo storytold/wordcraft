@@ -76,6 +76,27 @@ fn moving_a_joined_shape_reroutes_its_connector() {
     assert_eq!(connector_ends(&mut s), ((172.0, 248.0), (300.0, 218.0)));
 }
 
+/// A target on another page, or a missing target, leaves the connector's end free.
+#[test]
+fn rerouting_keeps_off_page_and_missing_targets_at_their_free_ends() {
+    let mut s = joined();
+    let mut connector = s.doc.para_at(&Pos::body(0, 11)).unwrap().object_at(11).unwrap().clone();
+    let InlineObject::Shape { extra, .. } = &mut connector else { panic!("connector") };
+    extra.end = Some(ConnEnd { id: 404, site: 2 });
+    let mut p = Paragraph::new();
+    p.props.page_break_before = Some(true);
+    p.insert_object(0, connector.clone(), &Default::default()).unwrap();
+    s.doc.body.push(para_block(p));
+    s.touch();
+    select(&mut s, 5);
+    run(&mut s, "arrange.nudge", json!({"dx": 10, "dy": 30}));
+    assert_eq!(s.layout().pages.len(), 2);
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).unwrap().object_at(0), Some(&connector));
+    assert_eq!(connector_ends(&mut s), ((182.0, 248.0), (300.0, 218.0)));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).unwrap().object_at(0), Some(&connector));
+}
+
 /// A command that changes nothing but reroutes a stale connector is still an edit: the
 /// reroute must not be left without an undo step (#23).
 #[test]
@@ -118,6 +139,63 @@ fn dragging_a_connector_end_glues_it_to_the_nearest_site() {
     run(&mut s, "text.delete", json!({}));
     select(&mut s, 5);
     run(&mut s, "arrange.nudge", json!({"dx": 1}));
+}
+
+/// A plain line's ends move to points the way a connector's free ends do, but never glue: not
+/// even dropped on a shape's connection site, nor by reference. A turned line's ends are where
+/// it is drawn, and moving one leaves the other there.
+#[test]
+fn dragging_a_line_end_moves_it_freely() {
+    let float =
+        |x: f32, y: f32, rot: f32| Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x, y, rot, ..Default::default() };
+    let shape = |kind, w, h, float, extra| InlineObject::Shape {
+        kind,
+        w,
+        h,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float,
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        extra,
+    };
+    let mut p = Paragraph::with_text("Body ", CharProps::default());
+    for o in [
+        shape(ShapeKind::Rectangle, 72.0, 36.0, float(100.0, 200.0, 0.0), ShapeExtra { id: 1, ..Default::default() }),
+        shape(ShapeKind::Line, 200.0, 0.0, float(300.0, 300.0, 0.0), ShapeExtra::default()),
+        shape(ShapeKind::Line, 200.0, 0.0, float(300.0, 500.0, 90.0), ShapeExtra::default()),
+    ] {
+        let end = p.len();
+        p.insert_object(end, o, &CharProps::default()).unwrap();
+    }
+    let mut d = Document::new();
+    d.body = vec![para_block(p)];
+    let mut s = Session::new(d);
+    let line_ends = |s: &mut Session, off: usize| {
+        let pos = Pos::body(0, off);
+        let hit = s.layout().object(&pos, 0).unwrap();
+        let Some(InlineObject::Shape { float, extra, .. }) = s.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)).cloned() else { panic!() };
+        let (a, b) = crate::cmd::connectors::page_ends(hit.rect, float.flip_h, float.flip_v, hit.spin.deg);
+        let round = |p: (f32, f32)| ((p.0 * 100.0).round() / 100.0, (p.1 * 100.0).round() / 100.0);
+        (round(a), round(b), extra)
+    };
+    select(&mut s, 8);
+    run(&mut s, "shape.connect", json!({"end": {"x": 500.0, "y": 350.0}}));
+    assert_eq!(line_ends(&mut s, 8).0, (300.0, 300.0), "the start stays");
+    assert_eq!(line_ends(&mut s, 8).1, (500.0, 350.0));
+    // Right on the rectangle's left site (100, 218): a connector would glue; the line doesn't.
+    run(&mut s, "shape.connect", json!({"start": {"x": 101.0, "y": 217.0}}));
+    let (a, _, extra) = line_ends(&mut s, 8);
+    assert_eq!((a, extra.start, extra.end), ((101.0, 217.0), None, None));
+    assert!(s.run("shape.connect", &json!({"end": {"path": [0], "off": 5}})).is_err(), "a line doesn't glue by reference");
+    // Turned a quarter: drawn from (400, 400) to (400, 600). Its end moves down; its start stays.
+    select(&mut s, 11);
+    assert_eq!(line_ends(&mut s, 11).0, (400.0, 400.0));
+    run(&mut s, "shape.connect", json!({"end": {"x": 400.0, "y": 650.0}}));
+    let (a, b, _) = line_ends(&mut s, 11);
+    assert_eq!((a, b), ((400.0, 400.0), (400.0, 650.0)));
 }
 
 #[test]
@@ -178,4 +256,13 @@ fn wordart_reflection_and_outline_none_options() {
     let outline = props.text_effects.as_ref().unwrap().outline.unwrap();
     assert_eq!(outline.color, None);
     assert_eq!(outline.width, 1.5);
+}
+
+#[test]
+fn descriptive_feature_labels_keep_existing_command_ids() {
+    let s = Session::new(Document::new());
+    for (id, label) in [("insert.smartArt", "Diagram"), ("insert.wordArt", "Decorative Text"), ("wordArt.style", "Decorative Text Styles")] {
+        assert_eq!(s.registry.get(id).map(|spec| spec.label), Some(label));
+    }
+    assert!(s.registry.get("smartArt.colors").unwrap().location.starts_with("SmartArt Design › "));
 }
