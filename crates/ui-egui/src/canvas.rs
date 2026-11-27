@@ -28,6 +28,8 @@ use wordcraft_layout::{DocLayout, Page, Placed};
 
 use crate::WordApp;
 
+mod empty;
+pub(crate) use empty::empty_state;
 mod balloons;
 mod caret;
 mod column_ruler;

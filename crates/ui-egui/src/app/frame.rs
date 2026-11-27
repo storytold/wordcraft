@@ -108,7 +108,14 @@ impl WordApp {
             .top(Slot::new("languagePack").size(SlotSize::Content).visible(language_packs::bar_offer(self)), language_packs::pack_bar)
             .status(true, chrome::status_bar::show)
             .body(|ui, _cx, app: &mut WordApp| {
-                if !app.has_document() || stale(app) {
+                if stale(app) {
+                    return;
+                }
+                if !app.has_document() {
+                    // The page area offers Blank document, Browse… and Home, so the empty window
+                    // is not a dead end (#3126). The page itself stays empty until one is made or
+                    // opened, as #1129 has it.
+                    crate::canvas::empty_state(app, ui);
                     return;
                 }
                 panes::show(app, ui, |ui, _cx, app| {

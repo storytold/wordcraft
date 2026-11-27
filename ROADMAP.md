@@ -442,6 +442,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-20: Restrict Editing: with Filling in forms enforced, the Developer tab's content-control buttons and Properties grey out in the ribbon, their tooltips saying why, as in Word; before, they looked live and only refused when clicked.
 - 2026-10-20: The page tip shown while dragging the vertical scrollbar stays on one line; it broke into two or three lines ("Page 10 of" / "40") as the page number grew during the drag (#3341).
 - 2026-10-20: Layout: text in Apple's Times and Courier takes Times New Roman's and Courier New's single-line spacing, as in Word for Mac; in a corpus of 180 real manuscripts, the five set in Times no longer gain a page.
+- 2026-10-19: The empty window (no document, as after Esc on the Start screen or File › Close) says no document is open in the page area and offers Blank document, Browse… and Home; Home returns to the Start screen without making a document (#3126).
 - 2026-10-19: Restrict Editing: with Filling in forms enforced, inserting content controls, their Properties and Remove Content Control are refused, as in Word (it greys them out), so a form's fields stay as they are and only their content is filled in.
 - 2026-10-19: Content controls: text typed over a placeholder takes the control's own run properties (`w:sdtPr/w:rPr`, ECMA-376 §17.5.2.27), as in Word, and the placeholder style is recognised by its built-in name "Placeholder Text" whatever its localized id (German Word: `Platzhaltertext`), so entries in forms from localized Word no longer stay grey.
 
@@ -1213,6 +1214,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-10-20 | trivial | Progress log: the scrollbar page tip stays on one line (#3341) |
 | 2026-10-20 | trivial | Progress log: Times and Courier take their Windows counterparts' line spacing |
 | 2026-10-20 | trivial | Progress log: saving to a NAS share mounted by GVFS (#3003) |
+| 2026-10-19 | trivial | Empty window (#3126): with no document open (Esc on the Start screen, File › Close), the page area says no document is open and offers Blank document, Browse… and Home; Home goes back to the Start screen without making a document |
 | 2026-10-19 | trivial | Progress log: Linux display server setting (#2184) |
 | 2026-10-19 | trivial | Progress log: the status bar's count can be words, characters or characters without spaces (#2797) |
 | 2026-10-19 | trivial | Text context menus include the existing formatting mini toolbar (#2959); paste options remain in PR #2599. Readiness estimates unchanged. |

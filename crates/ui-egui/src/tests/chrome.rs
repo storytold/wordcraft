@@ -389,6 +389,45 @@ fn blank_document_opens_a_document_from_the_start_screen() {
     assert!(title.starts_with(&a.title_stem()), "{title}");
 }
 
+/// #3126: the empty window (Esc on the Start screen, File › Close) is not a dead end: its
+/// page area offers Blank document, Browse… and Home. Home returns to the Start screen and
+/// makes nothing; Blank document makes one and the empty state gives way to the page.
+#[test]
+fn empty_window_offers_ways_to_make_or_open_a_document() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut a = app();
+    a.start_screen();
+    let mut h = harness(a);
+    h.run_steps(4);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(4);
+    assert!(!h.state().has_document() && !h.state().ui.backstage, "the empty window");
+    assert!(h.query_by_label("No document is open. Create a document or open one first.").is_some(), "the page area says what to do");
+    assert!(h.query_by_role_and_label(Role::Button, "Blank document").is_some(), "Blank document is offered");
+    assert!(h.query_by_role_and_label(Role::Button, "Browse…").is_some(), "Browse… is offered");
+    // Home in the page area (the ribbon's Home tab shares the label but sits above it) goes
+    // back to the Start screen and creates no document.
+    let home = h
+        .get_all_by_role_and_label(Role::Button, "Home")
+        .max_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+        .expect("a Home button in the page area");
+    home.click();
+    h.run_steps(4);
+    assert!(h.state().ui.backstage && h.state().ui.backstage_page == "home", "Home reaches the Start screen");
+    assert!(!h.state().has_document(), "Home alone makes no document");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(4);
+    // Blank document makes one, ready for typing, and the empty state is gone.
+    h.get_by_role_and_label(Role::Button, "Blank document").click();
+    h.run_steps(4);
+    assert!(h.query_by_label("No document is open. Create a document or open one first.").is_none(), "the page takes over");
+    let a = h.state_mut();
+    assert!(a.has_document() && !a.ui.backstage, "Blank document opens one");
+    a.run("text.insert", json!({"text": "Hello"})).unwrap();
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "Hello");
+}
+
 /// #1129: a template or a file opened from the Start screen (or handed over later) is the
 /// document; a failed open leaves the window empty.
 #[test]
