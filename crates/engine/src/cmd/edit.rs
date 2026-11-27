@@ -161,7 +161,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"tab"?: "find|replace|goto" (default replace)}"#)
         .pure(),
         CommandSpec::new("edit.replaceAll", "Replace All", "Home › Editing › Replace", replace_all)
-            .params(r#"{"text": string, "with": string (^p ^t ^& ^c …; \\1 with wildcards; with regex also $1 ${n} ${name} $0 $$ \\1 \\n (paragraph mark) \\t), …options of edit.find} (with AutoFormat's smart quotes on, a " or ' typed in `with` goes in curly by the character before it, as typing does, except with regex; ^034 and ^039 stay straight; a match that already reads so, curled the same kind, is left and not counted)"#),
+            .params(r#"{"text": string, "with": string (^p ^t ^& ^c …; \\1 with wildcards; with regex also $1 ${n} ${name} $0 $$ \\1 \\n (paragraph mark) \\t), …options of edit.find} (with AutoFormat's smart quotes on, a " or ' typed in `with` goes in curly by the character before it, as typing does, except with regex or special: false (taken as written); ^034 and ^039 stay straight; a match that already reads so, curled the same kind, is left and not counted)"#),
         CommandSpec::new("edit.goto", "Go To", "Home › Editing › Find", goto)
             .key("Mod+Alt+G / F5")
             .params(r#"{"page"?: n, "pageBy"?: int (pages forward, negative back, from the caret's page), "bookmark"?: string (selects its text), "paragraph"?: n}; none opens Find and Replace on its Go To tab"#)
@@ -538,6 +538,13 @@ fn find_opts(f: &crate::session::FindState) -> find_pattern::Opts {
 /// wildcard groups). A pattern that can match a paragraph mark (`^p`) reads runs of sibling
 /// paragraphs as one text with a mark between them; otherwise each paragraph is read alone.
 pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Result<Vec<Found>, CmdError> {
+    search_matches(s, story, with_rep, false)
+}
+
+/// [`search_full`]. With `chain` (Replace All, which replaces every match), a quote typed in
+/// Replace with curls by the previous match's replacement when the two touch; without it, by the
+/// text as it is, since Replace changes only the selected match (#7307).
+fn search_matches(s: &Session, story: StoryRef, with_rep: bool, chain: bool) -> Result<Vec<Found>, CmdError> {
     use regex_automata::{Input, meta, util::syntax};
     let f = &s.find;
     if f.query.is_empty() {
@@ -645,10 +652,11 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
                 }
                 let (Some(a), Some(b)) = (pos_of(m.start(), false), pos_of(m.end(), true)) else { continue };
                 let found = hay.get(m.range()).unwrap_or("");
-                // A quote curls by the character in front of the match as it will read: the
-                // previous match's replacement when the two touch. A section mark starts a paragraph.
+                // A quote curls by the character in front of the match as it will read: with
+                // `chain`, the previous match's replacement when the two touch. A section mark
+                // starts a paragraph.
                 let before = match last {
-                    Some((end, c)) if end == m.start() => c,
+                    Some((end, c)) if chain && end == m.start() => c,
                     _ => hay.get(..m.start()).and_then(|t| t.chars().next_back()),
                 }
                 .filter(|c| *c != find_pattern::SECT_MARK);
@@ -821,7 +829,7 @@ fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
     read_opts(s, v);
     let story = s.sel.focus.story;
     // Matches already curled as the replacement would curl them are left and not counted (#7307).
-    let results: Vec<Found> = search_full(s, story, true)?.into_iter().filter(|f| !f.keep).collect();
+    let results: Vec<Found> = search_matches(s, story, true, true)?.into_iter().filter(|f| !f.keep).collect();
     let n = results.len();
     super::controls::check_deletions(s, story, results.iter().map(|f| (&f.a, &f.b)))?;
     for Found { a, b, rep, .. } in results.into_iter().rev() {

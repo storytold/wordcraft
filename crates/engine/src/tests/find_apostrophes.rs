@@ -114,6 +114,14 @@ fn a_quote_typed_in_replace_with_is_curled_by_smart_quotes() {
     run(&mut s, "document.setText", json!({"text": "xx"}));
     assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "x", "with": "'\""}))["replaced"], 2);
     assert_eq!(text(&s), "‘“‘“");
+
+    // Replace (one at a time) changes only the selected match, so the text before it as it is
+    // decides: the second `x` follows an unreplaced `x` and closes.
+    let mut s = super::s();
+    run(&mut s, "document.setText", json!({"text": "xx"}));
+    run(&mut s, "select.range", json!({"anchor": wordcraft_doc::Pos::body(0, 1), "focus": wordcraft_doc::Pos::body(0, 2)}));
+    assert_eq!(run(&mut s, "edit.replace", json!({"text": "x", "with": "'\""}))["replaced"], 1);
+    assert_eq!(text(&s), "x’”");
 }
 
 /// #7307: a typed `'` in Find what also finds curly apostrophes. A match that already is a curly
@@ -158,6 +166,13 @@ fn coded_quotes_and_smart_quotes_off_replace_with_straight_quotes() {
     assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "\"", "with": "\"", "regex": false, "wildcards": false}))["replaced"], 0);
     assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "[“”]", "with": "\"", "regex": true}))["replaced"], 2);
     assert_eq!(text(&s), "\"hi\"");
+
+    // Special characters off takes Replace with as written: with codes off it is the way, besides
+    // turning smart quotes off, to put a straight quote in.
+    let mut s = super::s();
+    run(&mut s, "document.setText", json!({"text": "“hi”"}));
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "“", "with": "\"", "special": false}))["replaced"], 1);
+    assert_eq!(text(&s), "\"hi”");
 
     let mut s = super::s();
     s.prefs.autocorrect.smart_quotes = false;

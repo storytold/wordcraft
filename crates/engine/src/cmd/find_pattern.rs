@@ -359,8 +359,9 @@ pub enum Piece {
     Named(String),
     /// `^c`: the clipboard.
     Clip,
-    /// A straight `"` or `'` typed as itself (not a regex, and not given by its code such as
-    /// `^034`): curled with smart quotes on, as typing curls it ([`Quotes`]).
+    /// A straight `"` or `'` typed as itself (not a regex, not with special characters off, which
+    /// takes the text as written, and not given by its code such as `^034`): curled with smart
+    /// quotes on, as typing curls it ([`Quotes`]).
     Quote(char),
 }
 
