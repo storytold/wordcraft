@@ -251,6 +251,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | 2026-11-04 | trivial | #4501 refactor regressions restored: per-section header/footer grid, ODT default font, link tooltip (#4683); no ranked gap changed; readiness estimates unchanged |
 | 2026-11-04 | trivial | Field argument import and page-format-aware layout/cache follow-ups; no ranked gap changed |
 | 2026-11-04 | trivial | CLI input paths keep their native filename when a value-taking option comes first; regression coverage includes conversion to Flat OPC and rejection of non-Unicode option values. |
+| 2026-10-29 | trivial | PDF figure tagging reuses requested paragraph prefixes within each export (#3614); alternative text, decorative roles and drawing/page order stay unchanged; synthetic controls, readiness estimates unchanged. |
 | 2026-11-04 | trivial | #19: ODT settings for what the standard leaves open removed: one choice for each case |
 | 2026-11-04 | trivial | #19: ODT element audit; files from other applications checked |
 | 2026-11-04 | trivial | PR #4609: relative REF keeps context already displayed by the own or a needed ancestor label; six synthetic legal-template cases and separate-list context follow the Word for Windows measurements reported by @pakiat in PR discussion. Existing unknown-switch/cache boundaries and readiness estimates unchanged; no new native Word run. |

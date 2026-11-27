@@ -324,6 +324,13 @@ CSL and library import are separate work.
 
 For field results, the engine parser treats a backslash in quoted arguments as escaping the next character, as Word does. The DOCX HYPERLINK target reader applies the same rule; escaped asterisks remain argument text instead of starting a format switch. Engine parser and DOCX import tests cover these cases.
 
+## PDF figure lookup work
+
+Floating picture and graphic tags reuse each requested paragraph prefix within one PDF export.
+Reordered or repeated pages retain their Figure/Artifact roles and alternative text; a lone early
+figure does not scan the unused paragraph suffix. Original synthetic scaling and tag regressions
+cover this part of #3614. PDF layout, saved content and format-readiness estimates are unchanged.
+
 ## Revision history
 
 > 2026-11-08 · `convert --strict` for PDF and PNG output, and the pictures a DOCX open leaves out are recorded (#6005); recorded in the progress log, readiness unchanged.
@@ -519,6 +526,7 @@ For field results, the engine parser treats a backslash in quoted arguments as e
 | 2026-10-28 | trivial | Preserve custom-property bookmark link targets through saves, value edits and dialog renames (#4767); no linked-value evaluation or readiness change |
 | 2026-10-28 | trivial | Note conversion preserves content with an ordered reference/run walk, #4750; readiness estimates unchanged. |
 | 2026-10-29 | trivial | DOCX comment IDs use ordered paragraph lookup and one durable-ID reservation set; threading and ID rules unchanged |
+| 2026-10-29 | trivial | PDF figure tagging reuses requested paragraph prefixes within each export (#3614); alternative text, decorative roles and drawing/page order stay unchanged; synthetic controls, readiness estimates unchanged. |
 | 2026-10-28 | trivial | Built-in heading styles (`heading 1`…`heading 9`) have their outline level when `styles.xml` leaves out `w:outlineLvl`, as in Word: their headings show in the Navigation pane (#4696) |
 | 2026-10-29 | trivial | DOCX: comments.xml is read before footnotes and endnotes, so a comment range inside a note keeps its comment (it was dropped) (#4548) |
 | 2026-10-28 | trivial | #4658: bound Markdown reference-label rejection work, preserving literal source and ordinary link matching |
