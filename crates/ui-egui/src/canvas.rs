@@ -62,7 +62,7 @@ pub(crate) use links::follow_link;
 use links::{field_link, is_followable_link, is_generated_bookmark_link};
 pub use navigation::page_to_screen;
 use navigation::viewed_page;
-pub(crate) use pages::{PageKeys, dark_page, page_doc, page_screen_scale, preview_sel, screen_render_options};
+pub(crate) use pages::{PageKeys, dark_page, page_doc, page_screen_scale, preview_sel, screen_render_options, table_preview_active, visible_layout};
 use pages::{page_render_options, shown_layout};
 use reading::{reading_anchor_page, reading_page_start, web_layout_width};
 use story::dims_body;
@@ -98,6 +98,8 @@ pub struct CanvasState {
     /// The page view's state: zoom, fit, offset and current page. The session's view settings are copied in at the
     /// start of each pass and the zoom the framework changed is written back after it.
     pub(crate) view: PageViewState,
+    /// The frosted ribbon's page thumbnails and strip slot (File › Options › General).
+    pub(crate) blur: crate::ribbon_blur::BlurState,
     /// Read Mode's column state.
     pub(crate) reading: ReadingState,
     /// What the last pass showed.
@@ -386,6 +388,7 @@ impl Default for CanvasState {
     fn default() -> Self {
         CanvasState {
             view: PageViewState::default(),
+            blur: Default::default(),
             reading: ReadingState::default(),
             shown: ShownPages::default(),
             focus_pending: true,

@@ -245,6 +245,7 @@ impl<'a> OptionsModel<'a> {
                 ("general.paperColor", Choice(id_of(&prefs.paper_color))),
                 ("general.miniToolbar", Bool(ui.mini_toolbar)),
                 ("general.darkPage", Bool(view.dark_mode)),
+                ("general.ribbonBlur", Bool(ui.ribbon_blur)),
                 ("general.showCommunity", Bool(ui.show_discord)),
                 ("general.fontDownloadNotice", Bool(ui.font_download_notice)),
                 ("general.startScreen", Bool(ui.start_screen)),
@@ -338,6 +339,9 @@ impl PreferencesModel for OptionsModel<'_> {
                         b("general.miniToolbar", tl!("Show the mini toolbar when text is selected"), app.ui.mini_toolbar),
                         b("general.darkPage", tl!("Dark page (white text on black)"), app.session.view.dark_mode)
                             .help(tl!("Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.")),
+                        b("general.ribbonBlur", tl!("Blur the page under the ribbon"), app.ui.ribbon_blur).help(tl!(
+                            "On: the page scrolling up under the ribbon shows through it as a soft blur. Off: the ribbon is solid."
+                        )),
                         b("general.showCommunity", tl!("Show the community button in the title bar"), app.ui.show_discord),
                         b(
                             "general.fontDownloadNotice",
@@ -640,6 +644,7 @@ impl PreferencesModel for OptionsModel<'_> {
             ("general.showCommunity", Bool(v)) => self.app.ui.show_discord = v,
             ("general.fontDownloadNotice", Bool(v)) => self.app.ui.font_download_notice = v,
             ("general.darkPage", Bool(v)) => self.run("view.darkMode", json!({"value": v})),
+            ("general.ribbonBlur", Bool(v)) => self.run("ui.ribbonBlur", json!({"value": v})),
             ("general.startScreen", Bool(v)) => self.run("ui.startScreen", json!({"value": v})),
             ("general.userName", Text(t)) => {
                 if !wordcraft_engine::cmd::protect::enforced(&self.app.session.doc) {

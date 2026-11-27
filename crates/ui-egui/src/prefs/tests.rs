@@ -93,7 +93,8 @@ fn the_old_window_entry_reaches_the_restore_store() {
 #[test]
 fn a_setting_changed_by_command_survives_a_restart() {
     type Check = fn(&WordApp) -> bool;
-    let rows: [(&str, serde_json::Value, Check); 4] = [
+    let rows: [(&str, serde_json::Value, Check); 5] = [
+        ("ui.ribbonBlur", json!({"value": true}), |a| a.ui.ribbon_blur),
         ("ui.alignmentGuides", json!({"value": false}), |a| !a.ui.alignment_guides),
         ("ui.interfaceSize", json!({"percent": 150}), |a| a.ui.interface_size.percent() == Some(150)),
         ("ui.theme", json!({"value": "Dark"}), |a| a.ui.theme == crate::theme::Appearance::Dark),

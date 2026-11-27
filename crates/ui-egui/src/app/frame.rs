@@ -95,12 +95,20 @@ impl WordApp {
             // tabs and collapsed every one of them.
             .top(Slot::new("ribbonDrop").drops().size(SlotSize::Content), |ui, _cx, app: &mut WordApp| {
                 if !stale(app) {
+                    let blur_slot = app.ribbon_glass().then(|| crate::ribbon_blur::BlurState::reserve(ui));
                     *ribbon_out.borrow_mut() = Some(ribbon::show(app, ui));
+                    if let Some(slot) = blur_slot {
+                        app.canvas.blur.set_ribbon(slot, ui.min_rect());
+                    }
                 }
             })
             .top(Slot::new("ribbon").size(SlotSize::Content), |ui, _cx, app: &mut WordApp| {
                 if !stale(app) {
+                    let blur_slot = app.ribbon_glass().then(|| crate::ribbon_blur::BlurState::reserve(ui));
                     *ribbon_out.borrow_mut() = Some(ribbon::show(app, ui));
+                    if let Some(slot) = blur_slot {
+                        app.canvas.blur.set_ribbon(slot, ui.min_rect());
+                    }
                 }
             })
             // As tall as the bar: a failure's line under the message puts Install below the first line, and a slot of
@@ -128,6 +136,7 @@ impl WordApp {
         if stale(self) {
             return ShellRegions::new(egui::Rect::NOTHING);
         }
+        crate::ribbon_blur::update(self, ui.ctx());
         // `follow_screen_mode` maps one mode onto three view flags: write it back only on a change.
         if out.screen_mode != mode {
             self.follow_screen_mode(out.screen_mode);

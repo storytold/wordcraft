@@ -116,6 +116,8 @@ pub struct Prefs {
     /// fades, as Word's does on Windows (on, the default), or it jumps and blinks on and off
     /// (off).
     pub caret_animation: bool,
+    /// File › Options › General: the page scrolling up under the ribbon shows through it as a blur. Off by default.
+    pub ribbon_blur: bool,
     /// Custom keyboard shortcuts (Customize Keyboard, #368); the session owns them while running.
     pub keyboard: Shortcuts,
     /// Custom ribbon tabs and groups, hidden tabs and the Quick Access Toolbar (Customize Ribbon,
@@ -209,6 +211,7 @@ impl Default for Prefs {
             dark_page: false,
             check_spelling: true,
             caret_animation: true,
+            ribbon_blur: false,
             keyboard: Shortcuts::default(),
             ribbon: wordcraft_engine::RibbonLayout::default(),
             caption_labels: Vec::new(),

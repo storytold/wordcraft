@@ -151,6 +151,17 @@ mod tests {
         (a, dir)
     }
 
+    /// Markdown Source replaces the canvas, so the ribbon stays solid instead of showing stale page thumbnails.
+    #[test]
+    fn markdown_source_disables_ribbon_blur() {
+        let (mut app, dir) = opened("ribbon-blur");
+        app.ui.ribbon_blur = true;
+        assert!(app.ribbon_glass(), "the document view can use the blur");
+        app.run("view.markdownSource", json!({})).unwrap();
+        assert!(!app.ribbon_glass(), "Markdown Source replaces the document view");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// Whether the board resolves the edit command `id` as enabled for the focused field.
     fn enabled(ctx: &egui::Context, id: &str) -> bool {
         craft::ui::runtime::commands::resolve(ctx, id).enabled
