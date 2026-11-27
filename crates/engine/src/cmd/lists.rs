@@ -303,6 +303,7 @@ fn define(s: &mut Session, v: &Value) -> CmdResult {
         let Some(id) = l.style.as_deref().map(|st| s.doc.styles.find(st).map(|x| x.id.clone()).unwrap_or_else(|| st.to_string())) else { continue };
         if let Some(st) = Arc::make_mut(&mut s.doc.styles).get_mut(&id) {
             st.para.numbering = Some(NumRef { num, level: i as u8 });
+            st.numbering_from_base = false;
             linked.push(id);
         }
     }
@@ -397,6 +398,7 @@ fn preset(s: &mut Session, v: &Value) -> CmdResult {
         let id = super::para::ensure_heading_style(s, n);
         if let Some(st) = Arc::make_mut(&mut s.doc.styles).get_mut(&id) {
             st.para.numbering = Some(NumRef { num, level: n - 1 });
+            st.numbering_from_base = false;
             linked.push(id);
         }
     }

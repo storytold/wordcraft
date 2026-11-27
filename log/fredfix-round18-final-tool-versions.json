@@ -1,0 +1,14 @@
+{
+  "cargo": {
+    "exit": 0,
+    "output": "cargo 1.99.1 (5f94df478 2026-08-27)\n"
+  },
+  "rustc": {
+    "exit": 0,
+    "output": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\n"
+  },
+  "python3": {
+    "exit": 0,
+    "output": "Python 3.15.2\n"
+  }
+}

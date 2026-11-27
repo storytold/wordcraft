@@ -224,9 +224,11 @@ impl Recorder<'_> {
                 let own = b.para_change.as_ref().filter(|c| self.own(c.rev));
                 a.old_numbering_from_base = if own.is_some() { b.old_numbering_from_base } else { b.numbering_from_base };
                 a.para_change = want;
+                a.para.fmt_change = None;
             }
             if let Some(Replacement(want)) = self.change_values(b.chr.formatting(), a.chr.formatting(), &b.chr_change, &a.chr_change) {
                 a.chr_change = want;
+                a.chr.fmt_change = None;
             }
             if prior_style_rid.is_some() {
                 self.rid = command_rid;
@@ -320,22 +322,6 @@ pub(crate) fn compare_formatting(old: &Paragraph, new: &mut Paragraph, revisions
     r.para(old, new);
 }
 
-/// Compare Documents: record paragraph-level property differences between `old` and `new` without
-/// touching run formatting (for paired paragraphs whose text was word-diffed).
-pub(crate) fn compare_para_props(old: &Paragraph, new: &mut Paragraph, revisions: &mut Vec<Revision>, author: &str, date: &str) {
-    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None };
-    if let Some(Replacement(w)) = r.change(&old.props, &new.props, ParaProps::formatting, |p| &p.fmt_change) {
-        new.props.fmt_change = w;
-    }
-}
-
-/// Compare Documents: record formatting changes between `old` table and `new` table as
-/// tracked formatting changes by `author`.
-pub(crate) fn compare_table_formatting(old: &Table, new: &mut Table, revisions: &mut Vec<Revision>, author: &str, date: &str) {
-    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None };
-    r.table_with(old, new, 0, true);
-}
-
 /// Compare Documents: record how style `new` is formatted differently from `old` as
 /// tracked formatting changes by `author`.
 ///
@@ -380,8 +366,8 @@ pub(crate) fn compare_style(
             // matching provenance so rejecting writes the right list.
             let from_old_change = old_para_ch.is_some() && (same_para || own.is_some());
             new.old_numbering_from_base = if from_old_change { old.old_numbering_from_base } else { old.numbering_from_base };
-            new.para_change = want.clone();
-            new.para.fmt_change = want;
+            new.para_change = want;
+            new.para.fmt_change = None;
             changed = true;
         }
         if same_para && new.para.num_change.is_none() && old.para.num_change.is_some() {
@@ -393,8 +379,8 @@ pub(crate) fn compare_style(
     if new.kind != wordcraft_doc::StyleKind::Numbering
         && let Some(Replacement(want)) = r.change_values(old.chr.formatting(), new.chr.formatting(), &old_chr_ch, &new_chr_ch)
     {
-        new.chr_change = want.clone();
-        new.chr.fmt_change = want;
+        new.chr_change = want;
+        new.chr.fmt_change = None;
         changed = true;
     }
     changed

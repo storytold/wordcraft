@@ -131,6 +131,9 @@ pub(super) fn modify_style(s: &mut Session, v: &Value) -> CmdResult {
         st.chr.overlay(&c);
     }
     if let Some(pp) = para {
+        if pp.numbering.is_some() {
+            st.numbering_from_base = false;
+        }
         st.para.overlay(&pp);
     }
     if let Some(n) = next {
