@@ -3,7 +3,7 @@
 use craft::i18n::Direction;
 use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _, Sizing, clicked};
+use craft::ui::contract::{Bind, Gap, LeastWidth, Props as _, Show as _, ShowContainer as _, Sizing, clicked};
 use craft::ui::display::Text;
 use craft::ui::form::{Field, FieldGroup};
 use craft::ui::layout_components::{Row, Stack};
@@ -16,7 +16,6 @@ use crate::WordApp;
 
 /// Recovery is a separate copy. Leaving this page never discards it.
 pub(super) fn recovery(ui: &mut Ui, app: &mut WordApp) {
-    let ctx = ui.ctx().clone();
     heading(ui, "Recover documents");
     let _ = Text::new(label("Restore opens an unsaved copy. Your original file stays unchanged.")).show(ui);
     if app.session.password.is_some() {
@@ -48,7 +47,7 @@ pub(super) fn recovery(ui: &mut Ui, app: &mut WordApp) {
     let _ = Row::new().gap(Gap::Tight).show(ui, |ui, _| {
         if clicked(&Button::new(label("Continue without restoring")).id_salt("recover-continue").show(ui)) {
             let _ = app.run("ui.backstage", json!({"value": false}));
-            app.canvas.focus_page(&ctx);
+            app.canvas.focus_page_after_pass();
         }
         if clicked(&Button::new(label("Refresh")).id_salt("recover-refresh").enabled(!busy && app.session.recovery_ready()).show(ui)) {
             let _ = app.run("file.recover", json!({"refresh": true}));
@@ -209,5 +208,9 @@ pub(super) fn export(ui: &mut Ui, app: &mut WordApp) {
     }
     heading(ui, "Export");
     let _ = Text::new(label("Save a copy in another format. Printing goes through a PDF you can print from any viewer.")).show(ui);
-    crate::print_page::export_formats(app, ui);
+    // The Print page's settings column: the format buttons fill it, not the page (as production's 320 pt rows).
+    // The row keeps the page's width from reaching the column, so the column is as wide as its least width.
+    let _ = Row::new().show(ui, |ui, _| {
+        let _ = Stack::new().least_width(LeastWidth::Dialog).gap(Gap::Stack).show(ui, |ui, _| crate::print_page::export_formats(app, ui));
+    });
 }

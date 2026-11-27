@@ -144,15 +144,24 @@ pub(crate) const PAGES_PER_SHEET: [(&str, &str); 8] = [
     ("bookletReverse", "Booklet (right binding)"),
 ];
 
-/// What the preview's layout is made from besides the document's text: the revision, Print
-/// Markup, the file name and path FILENAME fields show (#6282: Save As and Rename change them
-/// without an edit), and the font database generation the app has seen (#6283:
-/// `WordApp::watch_fonts` moves it when fonts are added or removed).
-type LayoutKey = (u64, bool, (String, String), u64);
+/// The settings that decide how tracked changes and comments look in the print preview:
+/// Print Markup and Track Changes Options.
+type MarkupKey = (bool, wordcraft_layout::display::MarkupOptions);
+
+/// The [`MarkupKey`] now.
+fn markup_key(app: &WordApp) -> MarkupKey {
+    (app.session.prefs.print_markup, app.session.prefs.markup.clone())
+}
+
+/// What the preview's layout is made from besides the document's text: the document id, the
+/// revision, Print Markup and Track Changes Options, the file name and path FILENAME fields show
+/// (#6282: Save As and Rename change them without an edit), and the font database generation the
+/// app has seen (#6283: `WordApp::watch_fonts` moves it when fonts are added or removed).
+type LayoutKey = (u64, u64, MarkupKey, (String, String), u64);
 
 /// The [`LayoutKey`] now.
 fn layout_key(app: &WordApp) -> LayoutKey {
-    (app.session.rev(), app.session.prefs.print_markup, app.session.resolved_filenames(), app.font_generation)
+    (app.session.document_id(), app.session.rev(), markup_key(app), app.session.resolved_filenames(), app.font_generation)
 }
 
 /// The output layout, kept in `cache` while what it is made from ([`LayoutKey`]) is unchanged.
@@ -164,9 +173,19 @@ fn layout_of(app: &WordApp, cache: &mut Option<(LayoutKey, Arc<DocLayout>)>) -> 
     {
         return l.clone();
     }
-    let l = app.session.export_layout_with(app.session.prefs.print_markup);
+    let l = app.session.print_layout(app.session.prefs.print_markup);
     *cache = Some((key, l.clone()));
     l
+}
+
+/// How the preview draws a page: tracked changes marked as the print job marks them, headers and
+/// footers at full strength (the preview is the printed page, not the editing view).
+pub(super) fn preview_options(app: &WordApp) -> wordcraft_render::RenderOptions {
+    let mut opts = wordcraft_render::RenderOptions::default();
+    opts.display.markup = app.session.prefs.print_markup;
+    opts.display.revisions = app.session.prefs.markup.clone();
+    opts.display.dim_header = false;
+    opts
 }
 
 /// One choice list over `(id, label)` pairs, named `label`; true when the choice changed.
@@ -583,5 +602,48 @@ mod tests {
         };
         let (sparse, dense) = (at(1.0), at(2.0));
         assert!(sparse > 0 && dense > sparse * 2, "{dense} {sparse}");
+    }
+
+    /// The preview pages as the print job does (#5269 review): without Print Markup tracked
+    /// deletions take no space, whatever Track Changes Options mark them with.
+    #[test]
+    fn the_preview_pages_as_the_print_job() {
+        let text: Vec<String> = (0..200).map(|i| format!("Line {i} of the old text")).collect();
+        let doc = wordcraft_doc::Document::from_text(&text.join("\n"));
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
+        let mut cache = None;
+        app.run("review.trackChanges", json!({"value": true})).unwrap();
+        app.run("select.all", json!({})).unwrap();
+        app.run("text.insert", json!({"text": "Kept"})).unwrap();
+        // The preview is the printed page: headers and footers draw at full strength (#6267).
+        assert!(!preview_options(&app).display.dim_header);
+        let mut pages = |app: &crate::WordApp| (layout_of(app, &mut cache).pages.len(), app.session.print_pdf(&json!({})).unwrap().1.chosen);
+        app.run("file.printMarkup", json!({"value": true})).unwrap();
+        let (marked, job) = pages(&app);
+        assert!(marked > 1 && marked == job, "{marked} vs {job}");
+        app.run("file.printMarkup", json!({"value": false})).unwrap();
+        assert_eq!(pages(&app), (1, 1));
+        // The cached layout follows the Delete mark option too (it changes the layout with markup).
+        app.run("file.printMarkup", json!({"value": true})).unwrap();
+        app.run("review.trackingOptions", json!({"deleteMark": "hidden"})).unwrap();
+        assert_eq!(pages(&app), (1, 1));
+        // Changing revision colours refreshes the preview revision even on the same page count.
+        let rev_before = preview::inputs(&app);
+        app.run("review.trackingOptions", json!({"insertColor": "0000FF", "deleteColor": "FF0000"})).unwrap();
+        let rev_after = preview::inputs(&app);
+        assert_ne!(rev_before, rev_after, "tracking colours refresh preview revision");
+    }
+
+    /// Two documents at the same revision drawn in one window's context (#5270 review): each
+    /// preview gets its own layout, not the other's cached one.
+    #[test]
+    fn the_preview_cache_tells_documents_apart() {
+        let long: Vec<String> = (0..200).map(|i| format!("Line {i}")).collect();
+        let app = |text: &str| crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(text)), Default::default());
+        let (long, short) = (app(&long.join("\n")), app("One line"));
+        assert_eq!(long.session.rev(), short.session.rev(), "the test needs equal revisions");
+        let mut cache = None;
+        assert!(layout_of(&long, &mut cache).pages.len() > 1);
+        assert_eq!(layout_of(&short, &mut cache).pages.len(), 1);
     }
 }
