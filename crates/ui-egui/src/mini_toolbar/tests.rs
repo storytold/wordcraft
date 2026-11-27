@@ -50,6 +50,28 @@ fn anchor_skips_rects_scrolled_offscreen_and_clips_partial_ones() {
     assert_eq!(visible_anchor([nan], clip, false), None);
 }
 
+/// #7317: a viewport narrower than the bar still places the mini toolbar inside the canvas and viewport on all four sides.
+#[test]
+fn a_viewport_narrower_than_the_bar_still_yields_a_rect() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "The quick brown fox"})).unwrap();
+    a.run("select.text", json!({"text": "quick"})).unwrap();
+    let viewport = Rect::from_min_size(pos2(0.0, 0.0), Vec2::new(220.0, 480.0));
+    let mut h = crate::test_harness::builder().with_size(viewport.size()).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h);
+    let bold = member(&h, "Bold").expect("mini toolbar Bold inside canvas");
+    assert!(bold.is_finite() && bold.is_positive(), "bar control placed at {bold:?}");
+    assert!(canvas(&h).contains_rect(bold), "bar stays inside canvas: {bold:?} vs {:?}", canvas(&h));
+    assert!(viewport.contains_rect(bold), "bar stays inside narrow viewport: {bold:?} vs {viewport:?}");
+}
+
 /// The whole window over a document with `pick` selected, run until the bar is up.
 fn bar_over(pick: &str) -> H {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
