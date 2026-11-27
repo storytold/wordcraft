@@ -298,3 +298,213 @@ fn headings_show_their_list_numbers() {
     let texts: Vec<String> = nav_headings(&doc).into_iter().map(|(_, _, t)| t).collect();
     assert_eq!(texts, ["1. Intro", "1.1. Scope", "1.3. Terms", "2. Method", "Appendix"]);
 }
+
+/// #7907: a reply typed in the Comments pane stays a draft while it is typed and is posted once when it is sent, and
+/// the keys that send it never change the body. Driven by pointer clicks and key events, as a person uses the pane.
+#[cfg(not(target_arch = "wasm32"))]
+mod comment_replies {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    use wordcraft_doc::StoryRef;
+
+    type H = egui_kittest::Harness<'static, crate::WordApp>;
+
+    const REPLY: &str = "One reply should be posted.";
+
+    /// A window whose first word carries one comment, with the Comments pane open. Each frame hands the runtime the app's
+    /// input first, as the app's driver does, so a key chord reaches the command board as it does in the app.
+    fn commented_pane() -> H {
+        let mut app = crate::WordApp::new(
+            wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Alpha paragraph one.\n\nBeta paragraph two.")),
+            crate::Services::default(),
+        );
+        app.run("select.text", serde_json::json!({"text": "Alpha"})).unwrap();
+        app.run("review.newComment", serde_json::json!({"text": "Parent comment."})).unwrap();
+        app.run("view.commentsPane", serde_json::json!({"value": true})).unwrap();
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut crate::WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        crate::test_harness::frames(&mut h, 6);
+        h
+    }
+
+    /// A primary click at `at`: press and release a frame apart, then frames to settle.
+    fn click_at(h: &mut H, at: egui::Pos2) {
+        h.event(egui::Event::PointerMoved(at));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+            crate::test_harness::frame(h);
+        }
+        crate::test_harness::frames(h, 3);
+    }
+
+    /// A press and release of `key` with `modifiers`, then frames for what it fired to run.
+    fn press_key(h: &mut H, key: egui::Key, modifiers: egui::Modifiers) {
+        for pressed in [true, false] {
+            h.event(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers });
+        }
+        crate::test_harness::frames(h, 4);
+    }
+
+    /// A click on the middle of the first page, which leaves the field that has the keyboard.
+    fn click_page(h: &mut H) {
+        let page = h.state().canvas.page_rects().next().map(|(_, r)| r.center()).expect("a page is shown");
+        click_at(h, page);
+    }
+
+    /// Whether the pane's field named `label`, single- or multi-line, has the keyboard.
+    fn has_keyboard(h: &H, label: &str) -> bool {
+        [Role::TextInput, Role::MultilineTextInput].into_iter().any(|role| h.query_by_role_and_label(role, label).is_some_and(|n| n.is_focused()))
+    }
+
+    /// Clicks the pane's Reply button and types [`REPLY`] into the reply field it opens.
+    fn type_reply(h: &mut H) {
+        let reply = h.get_by_role_and_label(Role::Button, "Reply").rect().center();
+        click_at(h, reply);
+        assert!(has_keyboard(h, "Reply"), "the reply field has the keyboard");
+        h.event(egui::Event::Text(REPLY.into()));
+        crate::test_harness::frames(h, 4);
+    }
+
+    /// The text of every reply in the document.
+    fn replies(h: &H) -> Vec<String> {
+        let doc = &h.state().session.doc;
+        doc.comments.values().filter(|c| c.parent.is_some()).map(|c| doc.plain_text(StoryRef::Part(c.part))).collect()
+    }
+
+    fn body(h: &H) -> String {
+        h.state().session.doc.plain_text(StoryRef::Body)
+    }
+
+    /// Typing a reply posts nothing: the text stays in the field, as a draft the document keeps for Save and Close.
+    #[test]
+    fn typing_a_reply_in_the_comments_pane_posts_nothing() {
+        let mut h = commented_pane();
+        type_reply(&mut h);
+        assert_eq!(replies(&h), Vec::<String>::new(), "nothing is posted while the reply is typed");
+        assert!(has_keyboard(&h, "Reply"), "the reply field keeps the keyboard");
+        assert!(crate::panes::has_comment_drafts(h.state()), "the typed reply is a draft");
+    }
+
+    /// Enter posts the reply once; leaving the field afterwards posts nothing more.
+    #[test]
+    fn enter_posts_a_pane_reply_once() {
+        let mut h = commented_pane();
+        type_reply(&mut h);
+        press_key(&mut h, egui::Key::Enter, egui::Modifiers::NONE);
+        assert_eq!(replies(&h), [REPLY], "Enter posted it once");
+        click_page(&mut h);
+        assert_eq!(replies(&h), [REPLY], "nothing more was posted");
+    }
+
+    /// Ctrl+Enter (Cmd+Enter on a Mac) posts the reply once. While the field has the keyboard the chord is the field's:
+    /// the document's Page Break, bound to the same chord, doesn't run.
+    #[test]
+    fn ctrl_enter_posts_a_pane_reply_once_and_leaves_the_body_alone() {
+        let mut h = commented_pane();
+        let before = body(&h);
+        type_reply(&mut h);
+        press_key(&mut h, egui::Key::Enter, egui::Modifiers::COMMAND);
+        assert_eq!(replies(&h), [REPLY], "Ctrl+Enter posted it once");
+        assert_eq!(body(&h), before, "no page break in the body, and no text replaced");
+        click_page(&mut h);
+        assert_eq!(replies(&h), [REPLY], "nothing more was posted");
+        assert_eq!(body(&h), before, "the click changed nothing in the body");
+    }
+
+    /// Leaving the field with a click on the page posts what was typed, once, and changes nothing in the body.
+    #[test]
+    fn clicking_away_from_a_pane_reply_posts_it_once() {
+        let mut h = commented_pane();
+        let before = body(&h);
+        type_reply(&mut h);
+        click_page(&mut h);
+        assert_eq!(replies(&h), [REPLY], "leaving the field posted it once");
+        assert_eq!(body(&h), before, "the body is unchanged");
+    }
+
+    /// Ctrl+Enter in a comment's own field writes the edit, as one undo step, and the document's Page Break doesn't run.
+    #[test]
+    fn ctrl_enter_in_a_pane_comment_field_writes_the_edit_and_leaves_the_body_alone() {
+        let mut h = commented_pane();
+        let (before, depth) = (body(&h), h.state().session.undo_depth());
+        let field = [Role::TextInput, Role::MultilineTextInput]
+            .into_iter()
+            .find_map(|role| h.query_by_role_and_label(role, "Comment").map(|n| n.rect().center()))
+            .expect("the comment's field");
+        click_at(&mut h, field);
+        assert!(has_keyboard(&h, "Comment"), "the comment's field has the keyboard");
+        press_key(&mut h, egui::Key::End, egui::Modifiers::NONE);
+        h.event(egui::Event::Text(" Edited.".into()));
+        crate::test_harness::frames(&mut h, 4);
+        press_key(&mut h, egui::Key::Enter, egui::Modifiers::COMMAND);
+        let doc = &h.state().session.doc;
+        let text = doc.comments.values().next().map(|c| doc.plain_text(StoryRef::Part(c.part))).unwrap_or_default();
+        assert_eq!(text, "Parent comment. Edited.", "Ctrl+Enter wrote the edit");
+        assert_eq!(h.state().session.undo_depth(), depth + 1, "as one undo step");
+        assert_eq!(body(&h), before, "no page break in the body");
+    }
+
+    /// A reply field left open when the pane closed under it doesn't keep the balloons from writing back: an edit typed
+    /// in a balloon of that thread survives the pane opening again and an edit then typed in another comment there.
+    #[test]
+    fn a_balloon_edit_survives_a_reply_field_left_open_when_the_pane_closed() {
+        let mut app = crate::WordApp::new(
+            wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Alpha paragraph one.\n\nBeta paragraph two.")),
+            crate::Services::default(),
+        );
+        app.run("select.text", serde_json::json!({"text": "Alpha"})).unwrap();
+        let first = app.run("review.newComment", serde_json::json!({"text": "First comment."})).unwrap()["id"].as_u64().unwrap() as u32;
+        app.run("select.text", serde_json::json!({"text": "Beta"})).unwrap();
+        let second = app.run("review.newComment", serde_json::json!({"text": "Second comment."})).unwrap()["id"].as_u64().unwrap() as u32;
+        app.run("view.commentsPane", serde_json::json!({"value": true})).unwrap();
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut crate::WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        crate::test_harness::frames(&mut h, 6);
+        let text = |h: &H, id: u32| {
+            let doc = &h.state().session.doc;
+            doc.comments.get(&id).map(|c| doc.plain_text(StoryRef::Part(c.part))).unwrap_or_default()
+        };
+        let mut reply_buttons: Vec<egui::Rect> = h.query_all_by_role_and_label(Role::Button, "Reply").map(|n| n.rect()).collect();
+        reply_buttons.sort_by(|a, b| a.min.y.total_cmp(&b.min.y));
+        click_at(&mut h, reply_buttons[0].center());
+        assert!(has_keyboard(&h, "Reply"), "the first comment's reply field is open");
+        // The pane closes under the open field, which is not drawn again to notice.
+        h.state_mut().run("view.commentsPane", serde_json::json!({"value": false})).unwrap();
+        crate::test_harness::frames(&mut h, 4);
+        let balloon = h.state().canvas.balloon_rects.iter().find(|(id, _)| *id == first).map(|(_, r)| *r).expect("the first balloon");
+        click_at(&mut h, balloon.left_top() + egui::vec2(30.0, 8.0));
+        let edit = [Role::MultilineTextInput, Role::TextInput]
+            .into_iter()
+            .find_map(|role| h.query_by_role_and_label(role, "Edit").map(|n| n.rect().center()));
+        click_at(&mut h, edit.expect("the balloon's own edit"));
+        press_key(&mut h, egui::Key::End, egui::Modifiers::NONE);
+        h.event(egui::Event::Text(" Balloon edit.".into()));
+        crate::test_harness::frames(&mut h, 4);
+        h.state_mut().run("view.commentsPane", serde_json::json!({"value": true})).unwrap();
+        crate::test_harness::frames(&mut h, 4);
+        let mut fields: Vec<egui::Rect> = Vec::new();
+        for role in [Role::TextInput, Role::MultilineTextInput] {
+            fields.extend(h.query_all_by_role_and_label(role, "Comment").map(|n| n.rect()));
+        }
+        fields.sort_by(|a, b| a.min.y.total_cmp(&b.min.y));
+        click_at(&mut h, fields[1].center());
+        press_key(&mut h, egui::Key::End, egui::Modifiers::NONE);
+        h.event(egui::Event::Text(" Pane edit.".into()));
+        crate::test_harness::frames(&mut h, 4);
+        click_page(&mut h);
+        assert_eq!(text(&h, first), "First comment. Balloon edit.", "the balloon's edit is kept");
+        assert_eq!(text(&h, second), "Second comment. Pane edit.", "the pane's edit is written");
+    }
+}

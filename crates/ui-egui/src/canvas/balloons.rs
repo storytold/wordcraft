@@ -36,7 +36,12 @@ pub(crate) fn balloons(app: &mut WordApp, ui: &mut Ui, out: &craft::pages::ui::P
     app.canvas.balloon_rects.clear();
     let mw = markup_width(app);
     let float = floating_comments(app);
-    if app.canvas.selected_balloon().is_some_and(|id| (mw <= 0.0 && !float) || !app.session.doc.comments.contains_key(&id)) {
+    // With no balloon on screen the selected one is left, writing back what was typed in it, unless a reply field of
+    // the open Comments pane in that thread has the keyboard: the reply typed there is the pane's to post (#7907).
+    let gone = |app: &WordApp, id: u32| {
+        ((mw <= 0.0 && !float) && !crate::panes::replying_in_pane(app, ui.ctx(), id)) || !app.session.doc.comments.contains_key(&id)
+    };
+    if app.canvas.selected_balloon().is_some_and(|id| gone(app, id)) {
         deselect_balloon(app);
     }
     if mw <= 0.0 && !float {

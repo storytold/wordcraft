@@ -1,4 +1,5 @@
 use craft::behavior::{EditEvent, IconId, Selection};
+use craft::keymap::{Chord, Key, Mods};
 use craft::review::ThreadId;
 use craft::review::ui::CommentsPanelState;
 use craft::ui::buttons::Button;
@@ -46,7 +47,7 @@ fn card(app: &mut WordApp, ui: &mut Ui, ctx: &egui::Context, document: u64, id: 
     });
     // Editable comment text (one undo step per edit, like the balloons).
     comment_field(app, ui, document, id);
-    let open_key = egui::Id::unique(("comment_reply_open", document, id));
+    let open_key = reply_open_key(document, id);
     let mut replying = ui.data(|d| d.get_temp::<bool>(open_key)).unwrap_or(false);
     Row::new().wrap(true).show(ui, |ui, _| {
         if Button::new(tl!("Go to").to_owned()).show(ui).clicked()
@@ -159,6 +160,20 @@ fn comment_field(app: &mut WordApp, ui: &mut Ui, document: u64, id: u32) {
             _ => {}
         }
     }
+    if command_enter(ui.ctx(), field) {
+        // Each `Update` put the typed text in the draft. A refusal is on the status line, and the draft stays.
+        let _ = commit_comment(app, id);
+    }
+}
+
+/// Holds Ctrl+Enter (Cmd+Enter on a Mac) for the pane's comment or reply field `field` while it has the keyboard, and
+/// says whether it was pressed in this pass: it sends the field's text, as a comment box does. The document binds the
+/// chord to Page Break, and a chord the app binds runs even while a field is typed in, so without the hold it would
+/// also put a page break in the body (#7907).
+fn command_enter(ctx: &egui::Context, field: egui::Id) -> bool {
+    let chord = Chord::new(Mods::CMD, Key::Enter);
+    craft::ui::runtime::keys::claim(ctx, field, chord);
+    craft::ui::runtime::keys::take_claimed(ctx, field, chord)
 }
 
 /// Write a comment's draft text back, when it has one that differs from the comment. The draft
@@ -187,9 +202,25 @@ fn reply_id(document: u64, id: u32) -> egui::Id {
     egui::Id::unique(("comment_reply", document, id))
 }
 
-/// A field for replying to a comment. When its value lands a non-empty reply is posted with
-/// `review.reply`; returns true when the field is done (posted, left empty or abandoned). A refused reply
-/// keeps the field open with its text.
+/// Where comment `id`'s card notes that it shows its reply field.
+fn reply_open_key(document: u64, id: u32) -> egui::Id {
+    egui::Id::unique(("comment_reply_open", document, id))
+}
+
+/// Whether a reply field of the open Comments pane in the thread rooted at `root` has the keyboard. The reply typed
+/// there is the selected thread's draft, and the pane posts it when the field is done with it, so the balloons leave it
+/// alone. A reply field still open from before the pane was closed doesn't count: the balloons then write back what was
+/// typed in their own fields of that thread, as when the pane opens over a selected balloon.
+pub(crate) fn replying_in_pane(app: &WordApp, ctx: &egui::Context, root: u32) -> bool {
+    let document = app.session.document_id();
+    let open = |id: u32| ctx.data(|d| d.get_temp::<bool>(reply_open_key(document, id))).unwrap_or(false);
+    let typing = |id: u32| open(id) && focus::has(ctx, reply_id(document, id));
+    app.session.view.comments_pane && app.session.doc.comments.keys().any(|&id| thread_root(app, id) == root && typing(id))
+}
+
+/// A field for replying to a comment. A non-empty reply is posted with `review.reply` when the field's value lands
+/// (Enter, focus leaving it) or on Ctrl+Enter (Cmd+Enter on a Mac); returns true when the field is done (posted, left
+/// empty or abandoned). A refused reply keeps the field open with its text.
 fn reply_field(app: &mut WordApp, ui: &mut Ui, document: u64, id: u32) -> bool {
     let thread = thread_of(app, id);
     let selected = app.canvas.comments.selected.lead.as_ref().is_some_and(|t| t.0 == thread.0);
@@ -226,6 +257,9 @@ fn reply_field(app: &mut WordApp, ui: &mut Ui, document: u64, id: u32) -> bool {
             }
             _ => {}
         }
+    }
+    if command_enter(ui.ctx(), field) {
+        done = commit_reply(app, id).is_ok();
     }
     done
 }
