@@ -94,15 +94,19 @@ fn flag(v: &Value, k: &str, default: bool) -> bool {
     v.get(k).and_then(Value::as_bool).unwrap_or(default)
 }
 
-/// Opens Manage Styles with `params["style"]` selected (the first style when none); `None` for another name.
+/// Opens Manage Styles with `params["style"]` (or the caret's current style when omitted, falling back to the first style) selected; `None` for another name.
 pub(crate) fn open(app: &mut WordApp, name: &str, params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
     if name != KEY {
         return None;
     }
+    let selected =
+        params.get("style").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string).unwrap_or_else(|| {
+            wordcraft_engine::cmd::format::state(&app.session).get("style").and_then(Value::as_str).unwrap_or_default().to_string()
+        });
     let dialog = ManageStylesDialog {
         id: dialog_id(KEY),
         alphabetical: false,
-        selected: params.get("style").and_then(Value::as_str).unwrap_or_default().to_string(),
+        selected,
         styles: Vec::new(),
         preview: None,
         made: 0,
