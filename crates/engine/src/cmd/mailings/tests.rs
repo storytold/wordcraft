@@ -650,6 +650,19 @@ fn people() -> Session {
     s
 }
 
+#[test]
+fn blank_find_recipient_does_not_move_the_preview() {
+    let mut s = people();
+    let command = "mailings.findRecipient";
+    assert_eq!(s.run(command, &json!({"text": "gRaCe"})).unwrap()["record"], 3);
+    let before = (s.merge.record, s.merge.preview);
+
+    for text in ["", " \t"] {
+        assert!(matches!(s.run(command, &json!({"text": text})), Err(CmdError::Params(_))));
+        assert_eq!((s.merge.record, s.merge.preview), before);
+    }
+}
+
 fn names(s: &Session) -> Vec<String> {
     s.merge.rows.iter().map(|r| r[0].clone()).collect()
 }

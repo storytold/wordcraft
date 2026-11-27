@@ -180,7 +180,11 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"record": n (1 = the first; past either end goes to the first or last record)}"#)
         .when(has_recipients),
         CommandSpec::new("mailings.findRecipient", "Find Recipient", "Mailings › Preview Results", |s, v| {
-            let q = p::req_str(v, "text")?.to_lowercase();
+            let text = p::req_str(v, "text")?;
+            if text.trim().is_empty() {
+                return Err(CmdError::Params("`text` must not be blank".into()));
+            }
+            let q = text.to_lowercase();
             let idx = s
                 .merge
                 .rows
