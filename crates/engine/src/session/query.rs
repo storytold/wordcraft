@@ -330,6 +330,44 @@ impl Session {
         let (a, b) = self.sel.ordered();
         self.doc.copy_range(&a, &b).plain_text()
     }
+
+    /// Selected plain text with tracked deletions dropped: what the selection reads with every
+    /// change accepted.
+    pub fn selected_final_text(&self) -> String {
+        if let Some(segs) = self.column_segments() {
+            return segs.iter().map(|(a, b)| self.doc.copy_range(a.min(b), a.max(b)).final_text()).collect::<Vec<_>>().join("\n");
+        }
+        let (a, b) = self.sel.ordered();
+        self.doc.copy_range(&a, &b).final_text()
+    }
+
+    /// The tracked-deleted byte ranges the selection covers, as stored-text offsets from the
+    /// selection's start (the units `select.range` takes; `document.inspect` names them in
+    /// `deleted`): `selected_text` keeps what they hold, `selected_final_text` drops it, so an
+    /// offset in `anchor`/`focus`/`deleted` and one in `text` are different coordinates.
+    /// Paragraphs run on as one stored text: a break counts one byte, as the `\n` a paragraph
+    /// break is in `selected_text`.
+    pub fn selected_deleted_ranges(&self) -> Vec<std::ops::Range<usize>> {
+        let mut frags: Vec<_> = if let Some(segs) = self.column_segments() {
+            segs.iter().map(|(a, b)| self.doc.copy_range(a.min(b), a.max(b))).collect()
+        } else {
+            let (a, b) = self.sel.ordered();
+            vec![self.doc.copy_range(&a, &b)]
+        };
+        let mut out = Vec::new();
+        let mut base = 0usize;
+        for f in frags.iter_mut() {
+            for b in f.blocks.iter_mut() {
+                crate::cmd::paste::each_para(b, 0, &mut |p| {
+                    for d in p.deleted_ranges() {
+                        out.push(base + d.start..base + d.end);
+                    }
+                    base += p.text.len() + 1;
+                });
+            }
+        }
+        out
+    }
 }
 
 /// A new blank document on `region`'s paper (see [`Session::blank_document`]).

@@ -62,6 +62,11 @@ impl Fragment {
         }
         text
     }
+    /// [`Self::plain_text`] without tracked-deleted runs: the text as it reads with every change
+    /// accepted.
+    pub fn final_text(&self) -> String {
+        self.to_document().final_text(crate::StoryRef::Body)
+    }
     /// The fragment as the body of a new document (default styles).
     pub fn to_document(&self) -> Document {
         let mut d = Document::new();

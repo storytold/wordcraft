@@ -178,21 +178,31 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("file.privacy", "Privacy Settings", "File › Options › Save", |s, _| Ok(privacy(s)))
             .params(r#"{} → {"removePersonalInfo": bool, "removeDateTime": bool} (file.privacyOptions changes them)"#)
             .pure(),
-        CommandSpec::new("document.inspect", "Inspect Document", "Agents", inspect).params(r#"{"text"?: bool}"#).pure(),
+        CommandSpec::new("document.inspect", "Inspect Document", "Agents", inspect).params(r#"{"text"?: bool, "raw"?: bool (the stored text, tracked deletions included)} — text is the final text (deletions dropped); len, runs and deleted are stored-text offsets, what select.range takes; in a paragraph with fields, text offsets don't map to stored ones; objects are the kept ones unless raw"#).pure(),
         CommandSpec::new("document.text", "Document Text", "Agents", |s, v| {
             let story = super::story_param(s, v);
             Ok(json!({"text": s.doc.final_text(story)}))
         })
         .pure(),
         CommandSpec::new("document.paragraph", "Paragraph Details", "Agents", paragraph).params(r#"{"path": [n], "story"?: Story}"#).pure(),
-        CommandSpec::new("document.selection", "Selection", "Agents", |s, _| {
+        CommandSpec::new("document.selection", "Selection", "Agents", |s, v| {
+            let raw = p::bool(v, "raw").unwrap_or(false);
             let mut r = sel_result(s)?;
             if let Some(o) = r.as_object_mut() {
-                o.insert("text".into(), json!(s.selected_text()));
+                let text = if raw { s.selected_text() } else { s.selected_final_text() };
+                o.insert("text".into(), json!(text));
                 o.insert("format".into(), super::format::state(s));
+                // The tracked-deleted runs the selection covers, as offsets from the selection's
+                // start in the stored text: anchor, focus and deleted are stored coordinates,
+                // text (unless raw) is the final text, where the deletions are already gone.
+                let del = s.selected_deleted_ranges();
+                if !del.is_empty() {
+                    o.insert("deleted".into(), json!(del.iter().map(|r| json!({"start": r.start, "end": r.end})).collect::<Vec<_>>()));
+                }
             }
             Ok(r)
         })
+        .params(r#"{"raw"?: bool (the stored text, tracked deletions included)} — text is the final text otherwise (deletions dropped); anchor and focus are stored-text offsets (what select.range takes), so with fields they are not offsets in text; deleted names the tracked deletions the selection covers, as stored offsets from the selection's start"#)
         .pure(),
         CommandSpec::new("document.layout", "Layout Summary", "Agents", layout_summary).pure(),
         CommandSpec::new("document.setText", "Replace Document Text", "Agents", |s, v| {
@@ -732,6 +742,13 @@ fn field_json(instr: &str, result: &str) -> Value {
 /// Structure for agents: blocks with text and formatting summary, selection, stats.
 fn inspect(s: &mut Session, v: &Value) -> CmdResult {
     let with_text = p::bool(v, "text").unwrap_or(true);
+    // The text the document reads (tracked deletions dropped) unless raw asks for the
+    // stored text: an agent that verifies what a document holds must not be told of text
+    // that a rejected change removed.
+    let raw = p::bool(v, "raw").unwrap_or(false);
+    let para_text = |p: &wordcraft_doc::Paragraph| {
+        if raw { p.plain_text() } else { p.final_text() }
+    };
     let mut blocks = Vec::new();
     for (i, b) in s.doc.body.iter().enumerate().take(2000) {
         match &**b {
@@ -739,7 +756,7 @@ fn inspect(s: &mut Session, v: &Value) -> CmdResult {
                 let style = p.props.style.clone().unwrap_or_else(|| "Normal".into());
                 let mut o = json!({"index": i, "type": "paragraph", "style": style, "len": p.len()});
                 if with_text {
-                    o["text"] = json!(p.plain_text());
+                    o["text"] = json!(para_text(p));
                 }
                 if let Some(n) = p.props.numbering.filter(|n| n.num != 0) {
                     o["list"] = json!({"num": n.num, "level": n.level});
@@ -756,8 +773,21 @@ fn inspect(s: &mut Session, v: &Value) -> CmdResult {
                 if !runs.is_empty() {
                     o["runs"] = json!(runs);
                 }
+                // The two coordinate systems, named: text is the final text; len, runs and
+                // deleted are stored-text offsets — what select.range takes. With fields the
+                // final text is not an offset-for-offset image of the stored text minus the
+                // deleted ranges: a field's anchor character stands for its result text, of a
+                // different length.
+                let del = p.deleted_ranges();
+                if !del.is_empty() {
+                    o["deleted"] = json!(del.iter().map(|r| json!({"start": r.start, "end": r.end})).collect::<Vec<_>>());
+                }
                 if !p.objects.is_empty() {
-                    o["objects"] = serde_json::to_value(&p.objects).unwrap_or(Value::Null);
+                    o["objects"] = if raw {
+                        serde_json::to_value(&p.objects).unwrap_or(Value::Null)
+                    } else {
+                        serde_json::to_value(p.final_objects()).unwrap_or(Value::Null)
+                    };
                 }
                 if p.section.is_some() {
                     o["sectionBreak"] = json!(true);
@@ -769,10 +799,7 @@ fn inspect(s: &mut Session, v: &Value) -> CmdResult {
                     .rows
                     .iter()
                     .map(|r| {
-                        r.cells
-                            .iter()
-                            .map(|c| c.blocks.iter().filter_map(|b| b.as_para().map(|p| p.plain_text())).collect::<Vec<_>>().join("\n"))
-                            .collect()
+                        r.cells.iter().map(|c| c.blocks.iter().filter_map(|b| b.as_para().map(para_text)).collect::<Vec<_>>().join("\n")).collect()
                     })
                     .collect();
                 blocks.push(json!({"index": i, "type": "table", "rows": t.rows.len(), "cols": t.cols(), "style": t.props.style, "cells": cells}));
@@ -780,12 +807,18 @@ fn inspect(s: &mut Session, v: &Value) -> CmdResult {
         }
     }
     let l = s.layout();
+    // A tracked-deleted box's anchor stays in the stored document, and pruning keeps its story
+    // for a rejected change, so the default view lists only the text boxes the final view still
+    // shows; `raw` asks for the stored text and lists every part. Headers, footers and footnotes
+    // have no anchor a tracked deletion can remove and always stay.
+    let shown = if raw { None } else { Some(s.doc.shown_text_boxes()) };
     let parts: Vec<Value> = s
         .doc
         .parts
         .iter()
+        .filter(|(id, p)| raw || p.kind != wordcraft_doc::PartKind::TextBox || shown.as_ref().is_some_and(|s| s.contains(id)))
         .map(|(id, p)| {
-            let mut o = json!({"id": id, "kind": p.kind, "text": s.doc.plain_text(StoryRef::Part(*id))});
+            let mut o = json!({"id": id, "kind": p.kind, "text": if raw { s.doc.plain_text(StoryRef::Part(*id)) } else { s.doc.final_text(StoryRef::Part(*id)) }});
             let mut fields = Vec::new();
             let complete = story_fields(&p.blocks, 0, &mut fields) && range_fields(&s.doc, StoryRef::Part(*id), &mut fields);
             if !fields.is_empty() {
@@ -800,7 +833,7 @@ fn inspect(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({
         "blocks": blocks,
         "parts": parts,
-        "selection": {"anchor": pos_json(&s.sel.anchor), "focus": pos_json(&s.sel.focus), "text": s.selected_text()},
+        "selection": {"anchor": pos_json(&s.sel.anchor), "focus": pos_json(&s.sel.focus), "text": if raw { s.selected_text() } else { s.selected_final_text() }},
         "pages": l.pages.len(),
         "words": s.doc.word_count(),
         "sections": s.doc.sections().iter().map(|(end, sp)| json!({"endBlock": end, "props": sp})).collect::<Vec<_>>(),
@@ -832,4 +865,148 @@ fn layout_summary(s: &mut Session, _: &Value) -> CmdResult {
         .collect();
     let caret = l.caret_on(&s.sel.focus, s.page_hint).map(|c| json!({"page": c.page, "x": c.x, "y": c.top, "h": c.height}));
     Ok(json!({"pages": pages, "caret": caret, "ms": l.ms}))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+    use wordcraft_doc::{Document, para::OBJ};
+
+    use crate::Session;
+
+    /// A tracked-deleted text is not in the document as it reads; the inspection reports
+    /// what the document holds, and `raw` gives the stored text with the deletions back.
+    #[test]
+    fn a_tracked_deleted_text_is_not_in_the_inspection_unless_raw() {
+        let mut s = Session::new(Document::new());
+        s.run("document.setText", &json!({"text": "Visible text.\nDELETED-SECRET-TEXT\n"})).unwrap();
+        s.run("file.setAuthor", &json!({"name": "Ana"})).unwrap();
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        let n = "DELETED-SECRET-TEXT".len();
+        s.run("select.range", &json!({"anchor": {"block": 1, "off": 0}, "focus": {"block": 1, "off": n}})).unwrap();
+        s.run("text.delete", &json!({})).unwrap();
+
+        let out = s.run("document.inspect", &json!({})).unwrap();
+        let dumped = out.to_string();
+        assert!(!dumped.contains("DELETED-SECRET-TEXT"), "the inspection leaks tracked-deleted text: {dumped}");
+        assert!(dumped.contains("Visible text."), "the visible text is still in the inspection");
+
+        let raw: Value = s.run("document.inspect", &json!({"raw": true})).unwrap();
+        assert!(raw.to_string().contains("DELETED-SECRET-TEXT"), "raw gives the stored text back");
+    }
+
+    /// A field inside a tracked deletion must not reach the default inspection either way:
+    /// neither its result through `text` nor the object through `objects` — the object was
+    /// deleted with its anchor run.
+    #[test]
+    fn a_field_in_a_tracked_deletion_is_not_in_the_inspection_unless_raw() {
+        let mut s = Session::new(Document::new());
+        // A DOCPROPERTY field whose computed result is the secret text (insert.field
+        // evaluates fields on insert; an unresolvable one would give an empty result).
+        s.run("file.properties", &json!({"custom": {"ProjectCode": "SECRET-FIELD-TEXT"}})).unwrap();
+        s.run("text.insert", &json!({"text": "Project: "})).unwrap();
+        s.run("insert.field", &json!({"instr": "DOCPROPERTY \"ProjectCode\"", "result": "SECRET-FIELD-TEXT"})).unwrap();
+        s.run("file.setAuthor", &json!({"name": "Ana"})).unwrap();
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        // Delete the field's whole anchor: from the object character to the end.
+        let at = s.doc.body.iter().filter_map(|b| b.as_para()).next().map(|p| p.text.find(OBJ).unwrap_or(p.text.len())).unwrap_or(0);
+        let len = s.doc.body.iter().filter_map(|b| b.as_para()).next().map(|p| p.text.len()).unwrap_or(0);
+        s.run("select.range", &json!({"anchor": {"block": 0, "off": at}, "focus": {"block": 0, "off": len}})).unwrap();
+        s.run("text.delete", &json!({})).unwrap();
+
+        let out = s.run("document.inspect", &json!({})).unwrap();
+        let dumped = out.to_string();
+        assert!(!dumped.contains("SECRET-FIELD-TEXT"), "the inspection leaks a deleted field: {dumped}");
+        // The stored text keeps the deletion (that is what track changes means); raw shows it.
+        let raw: Value = s.run("document.inspect", &json!({"raw": true})).unwrap();
+        assert!(raw.to_string().contains("SECRET-FIELD-TEXT"), "raw gives the stored text back");
+        // The two coordinate systems are named: the deleted ranges are in stored offsets.
+        let del = out["blocks"][0]["deleted"].as_array().expect("deleted ranges are reported");
+        assert!(!del.is_empty(), "the deletion is reported in stored offsets");
+    }
+
+    /// A tracked-deleted text box's anchor stays in the stored document — pruning keeps the
+    /// story so a rejected change can restore it — but a reader no longer sees the box, so the
+    /// default inspection must not list the part; `raw` gives the stored parts back. Headers,
+    /// footers and footnotes have no anchor a tracked deletion can remove and always stay.
+    #[test]
+    fn a_tracked_deleted_text_box_is_not_in_the_inspection_unless_raw() {
+        let mut s = Session::new(Document::new());
+        s.run("document.setText", &json!({"text": "Visible text.\n"})).unwrap();
+        s.run("insert.textBox", &json!({"text": "BOX-SECRET-TEXT"})).unwrap();
+        s.run("file.setAuthor", &json!({"name": "Ana"})).unwrap();
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        // Delete the box's anchor object (the caret went into the box; find the anchor in the
+        // body) with tracking on, so the stored document keeps it inside a tracked deletion.
+        let mut at = None;
+        for (i, b) in s.doc.body.iter().enumerate() {
+            if let Some(p) = b.as_para()
+                && let Some(o) = p.text.find(OBJ)
+            {
+                at = Some((i, o));
+                break;
+            }
+        }
+        let (bi, off) = at.expect("the box's anchor is in a body paragraph");
+        s.run("select.range", &json!({"anchor": {"block": bi, "off": off}, "focus": {"block": bi, "off": off + 1}})).unwrap();
+        s.run("text.delete", &json!({})).unwrap();
+
+        let out = s.run("document.inspect", &json!({})).unwrap();
+        let dumped = out.to_string();
+        assert!(!dumped.contains("BOX-SECRET-TEXT"), "the inspection leaks a tracked-deleted text box: {dumped}");
+        assert!(dumped.contains("Visible text."), "the visible text is still in the inspection");
+
+        let raw: Value = s.run("document.inspect", &json!({"raw": true})).unwrap();
+        assert!(raw.to_string().contains("BOX-SECRET-TEXT"), "raw gives the stored parts back");
+    }
+
+    /// `document.selection` names its coordinates: anchor, focus and `deleted` are stored-text
+    /// offsets, `text` (unless raw) is the final text. A tracked-deleted run the selection
+    /// covers is named in `deleted`, as stored offsets from the selection's start.
+    #[test]
+    fn the_selection_names_its_tracked_deletions_in_stored_offsets() {
+        let mut s = Session::new(Document::new());
+        s.run("document.setText", &json!({"text": "Keep this. DROP-SECRET-TEXT Keep that.\n"})).unwrap();
+        s.run("file.setAuthor", &json!({"name": "Ana"})).unwrap();
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        let a = "Keep this. ".len();
+        let b = a + "DROP-SECRET-TEXT".len();
+        s.run("select.range", &json!({"anchor": {"block": 0, "off": a}, "focus": {"block": 0, "off": b}})).unwrap();
+        s.run("text.delete", &json!({})).unwrap();
+        // Select across the deletion: from the kept text before it into the kept text after.
+        s.run("select.range", &json!({"anchor": {"block": 0, "off": 5}, "focus": {"block": 0, "off": b}})).unwrap();
+
+        let out = s.run("document.selection", &json!({})).unwrap();
+        // text is the final text: what the deletion holds is gone from it.
+        let text = out["text"].as_str().unwrap();
+        assert!(!text.contains("DROP-SECRET-TEXT"), "final text leaks a tracked deletion: {out}");
+        // deleted names the covered deletion, in stored offsets from the selection's start:
+        // the run sits at {a}..{b} in the stored text, the selection starts at 5.
+        assert_eq!(out["deleted"], json!([{"start": a - 5, "end": b - 5}]), "{out}");
+
+        // raw keeps the deleted text in `text`, the stored one.
+        let raw = s.run("document.selection", &json!({"raw": true})).unwrap();
+        assert!(raw["text"].as_str().unwrap().contains("DROP-SECRET-TEXT"), "raw gives the stored text back: {raw}");
+    }
+
+    /// Deleted ranges run across paragraphs as one stored text: a paragraph break counts one
+    /// byte, as the `\n` a paragraph break is in the selected text.
+    #[test]
+    fn the_selection_deleted_ranges_run_across_paragraphs() {
+        let mut s = Session::new(Document::new());
+        s.run("document.setText", &json!({"text": "First line.\nSecond SECRET line.\n"})).unwrap();
+        s.run("file.setAuthor", &json!({"name": "Ana"})).unwrap();
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        let a = "Second ".len();
+        let b = a + "SECRET".len();
+        s.run("select.range", &json!({"anchor": {"block": 1, "off": a}, "focus": {"block": 1, "off": b}})).unwrap();
+        s.run("text.delete", &json!({})).unwrap();
+        // Select from the first paragraph into the second, past the deletion's end: the
+        // trimmed first paragraph is "line." (5 bytes), then the break (1), then the run's
+        // offset in the second paragraph.
+        s.run("select.range", &json!({"anchor": {"block": 0, "off": 6}, "focus": {"block": 1, "off": b + 4}})).unwrap();
+
+        let out = s.run("document.selection", &json!({})).unwrap();
+        assert_eq!(out["deleted"], json!([{"start": 5 + 1 + a, "end": 5 + 1 + b}]), "{out}");
+    }
 }
