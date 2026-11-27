@@ -43,8 +43,18 @@ pub const CHECK_BOX_INSET: f32 = 1.16;
 pub fn check_box(frame: Rect, checked: bool, color: Rgb, alpha: f32, out: &mut Vec<Draw>) {
     let i = CHECK_BOX_INSET.min(frame.w / 4.0).min(frame.h / 4.0).max(0.0);
     let sq = Rect::new(frame.x + i, frame.y + i, (frame.w - 2.0 * i).max(0.5), (frame.h - 2.0 * i).max(0.5));
-    let line =
-        |x0: f32, y0: f32, x1: f32, y1: f32, width: f32| Draw::Line { x0, y0, x1, y1, width, color, stroke: Stroke::Solid, alpha, text_bg: None };
+    let line = |x0: f32, y0: f32, x1: f32, y1: f32, width: f32| Draw::Line {
+        x0,
+        y0,
+        x1,
+        y1,
+        width,
+        color,
+        stroke: Stroke::Solid,
+        alpha,
+        text_bg: None,
+        rule: false,
+    };
     let (l, t, r, b) = (sq.x, sq.y, sq.x + sq.w, sq.y + sq.h);
     out.push(Draw::Shape {
         rect: sq,

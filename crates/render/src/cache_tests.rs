@@ -73,6 +73,7 @@ fn triple_strokes_draw_three_lines() {
         stroke,
         alpha: 1.0,
         text_bg: None,
+        rule: false,
     };
     // Dark runs met walking across the line at its middle.
     let runs = |it: Draw, vertical: bool| {

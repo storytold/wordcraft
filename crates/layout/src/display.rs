@@ -77,6 +77,12 @@ pub enum Draw {
         /// The text background this line (an underline or strikethrough) is drawn on, as for
         /// [`Draw::Glyphs`]; `None` for every other line.
         text_bg: Option<Rgb>,
+        /// A line layout places as a rule (`Placed::Rule`, drawn by `rule()`): a paragraph,
+        /// table, page or character border, a note separator, a line between columns, and the
+        /// rules of Print Markup's comment balloons and of the Outline view's heading symbols. The
+        /// renderer closes these at corners and may draw them lighter on screen. `false` for
+        /// underlines, strikethrough and every other line.
+        rule: bool,
     },
     Image {
         rect: Rect,

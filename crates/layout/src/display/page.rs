@@ -404,6 +404,7 @@ fn change_bars(doc: &Document, page: &Page, items: &[Placed], m: &MarkupOptions,
                     stroke: Stroke::Solid,
                     alpha,
                     text_bg: None,
+                    rule: false,
                 });
             }
         }
@@ -429,7 +430,18 @@ pub(crate) fn rule_width(b: &Border) -> f32 {
 
 /// A border line from `(x0, y0)` to `(x1, y1)` (paragraph rules and character borders).
 fn rule(x0: f32, y0: f32, x1: f32, y1: f32, b: &Border, alpha: f32) -> Draw {
-    Draw::Line { x0, y0, x1, y1, width: rule_width(b), color: b.color.unwrap_or(Rgb::BLACK), stroke: border_stroke(b.style), alpha, text_bg: None }
+    Draw::Line {
+        x0,
+        y0,
+        x1,
+        y1,
+        width: rule_width(b),
+        color: b.color.unwrap_or(Rgb::BLACK),
+        stroke: border_stroke(b.style),
+        alpha,
+        text_bg: None,
+        rule: true,
+    }
 }
 
 /// Closed box around one line segment of a character-border group, widened by `space`.
