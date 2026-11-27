@@ -2283,3 +2283,33 @@ fn modal_dialog_with_open_popup_does_not_shake_on_inside_click_but_shakes_on_out
     let key2 = chrome::nudge_id(&h.ctx, id2);
     assert!(h.ctx.data(|d| d.get_temp::<f64>(key2)).is_none(), "reopened dialog starts still");
 }
+
+// ---------------------------------------------------------------- Manage Styles
+
+/// Manage Styles opens on the paragraph style at the caret when no explicit `style` parameter is given,
+/// and honors an explicit `params["style"]` when provided.
+#[test]
+fn manage_styles_opens_on_caret_style() {
+    let mut app = app_with("Title line\nBody line");
+    app.run("para.style", json!({"style": "Heading2"})).unwrap();
+    let list = wordcraft_engine::cmd::para::manage_list(&app.session, false);
+    let first_id = list.as_array().and_then(|a| a.first()).and_then(|v| v.get("id")).and_then(Json::as_str).unwrap_or_default();
+    assert_ne!(first_id, "Heading2", "Heading2 must not be the first style so the test checks caret selection");
+
+    let mut h = app_harness(app);
+    h.run_steps(2);
+    let _ = h.state_mut().run("styles.manage", json!({}));
+    h.run_steps(3);
+    assert!(is_open(h.state(), "manageStyles"), "styles.manage opens Manage Styles");
+    assert_eq!(fields_of(h.state(), "manageStyles")["selected"], "Heading2", "Manage Styles starts on the caret's style");
+    assert!(!h.get_by_label("New Style…").accesskit_node().is_disabled());
+    assert!(
+        h.query_all(egui_kittest::kittest::By::new()).any(|n| n.accesskit_node().label().is_some_and(|l| l.contains("Based on: Normal"))),
+        "the dialog body renders the selected Heading 2 style's description"
+    );
+    let manage_id = id_of(h.state(), "manageStyles");
+    cancel(&mut h, manage_id);
+
+    open_named(&mut h, "manageStyles", json!({"style": "Heading1"}));
+    assert_eq!(fields_of(h.state(), "manageStyles")["selected"], "Heading1", "explicit style param still overrides caret style");
+}
