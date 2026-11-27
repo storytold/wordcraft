@@ -1198,10 +1198,8 @@ fn space_and_enter_on_the_canvas_do_not_interrupt_ime() {
     let key = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
     let ime_interrupted = |h: &H| h.output().platform_output.ime.as_ref().map(|ime| ime.should_interrupt_composition);
 
-    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "に".into(), active_range_chars: None }));
-    h.app_frame();
-    assert_eq!(h.state().canvas.ime_preedit.as_str(), "に");
-
+    // 1. No-pre-edit leg (fcitx on X11 with no active pre-edit): Space and Enter edit the document without interrupting IME.
+    let paras_before = h.state().session.doc.body.len();
     h.event(key(egui::Key::Space));
     h.event(egui::Event::Text(" ".into()));
     h.app_frame();
@@ -1212,24 +1210,19 @@ fn space_and_enter_on_the_canvas_do_not_interrupt_ime() {
     h.event(key(egui::Key::Enter));
     h.app_frame();
     assert_eq!(ime_interrupted(&h), Some(false), "enter must not recreate the XIM context");
+    assert!(h.state().session.doc.body.len() > paras_before, "enter inserts a paragraph break");
     assert!(h.state().canvas.focused(&h.ctx.clone()), "enter leaves the canvas focused");
 
+    // 2. Active pre-edit leg: Space and Enter do not recreate the XIM context while a pre-edit is active.
     h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "に".into(), active_range_chars: None }));
     h.app_frame();
     assert_eq!(h.state().canvas.ime_preedit.as_str(), "に");
-
-    let at = h.state().canvas.page_rects().next().map(|(_, r)| r.center()).expect("a page");
-    h.event(egui::Event::PointerMoved(at));
+    h.event(key(egui::Key::Space));
     h.app_frame();
-    let mut interrupted = false;
-    for pressed in [true, false] {
-        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
-        h.app_frame();
-        interrupted |= ime_interrupted(&h) == Some(true);
-    }
-    assert!(interrupted, "a real pointer click interrupts the composition");
-    assert!(h.state().canvas.ime_preedit.is_empty(), "the pointer click clears/commits the pre-edit");
-    assert!(h.state().canvas.focused(&h.ctx.clone()), "canvas remains focused after click");
+    assert_eq!(ime_interrupted(&h), Some(false), "space during pre-edit must not recreate the XIM context");
+    h.event(key(egui::Key::Enter));
+    h.app_frame();
+    assert_eq!(ime_interrupted(&h), Some(false), "enter during pre-edit must not recreate the XIM context");
 }
 
 /// A harness of `app` for the composition tests, past the frames the canvas needs to take focus.

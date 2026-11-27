@@ -184,13 +184,6 @@ pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body:
     };
     let ink = |app: &mut WordApp| caret_color_at(app, &doc, pl.page, pl.probe.0, pl.probe.1, zoom_key, dim_body);
 
-    if matches!(&pass.press.phase, craft::behavior::press::PressPhase::Down { start, .. } if start.button == craft::behavior::PointerButton::Primary)
-        && (!app.canvas.ime_preedit.is_empty() || app.canvas.ime_preedit_range.is_some())
-    {
-        app.canvas.ime_preedit.clear();
-        app.canvas.ime_preedit_range = None;
-        pass.ime_interrupt(&ctx);
-    }
     let shown = pl.collapsed && focused;
     let mut bars: Vec<(Bar, Color32)> = Vec::new();
     let mut composition = None;
