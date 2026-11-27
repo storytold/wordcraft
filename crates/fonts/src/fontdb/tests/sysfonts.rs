@@ -866,6 +866,106 @@ fn circle_checks_face_coverage() {
     assert_eq!(db.fallback_for('●', primary.id()).unwrap().family, FALLBACK_FAMILY);
 }
 
+/// A bundled Source Sans 3 Regular named `family` that maps ☒ (U+2612) too: its ☐–☑ cmap group
+/// runs on one character further (the next group starts at U+2615, so the groups stay sorted).
+fn with_every_ballot_box(family: &str) -> Vec<u8> {
+    let mut data = named_face("SourceSans3-Regular.ttf", family);
+    let (from, to) = ([0x2610_u32, 0x2611].map(u32::to_be_bytes).concat(), [0x2610_u32, 0x2612].map(u32::to_be_bytes).concat());
+    let mut patched = 0;
+    while let Some(at) = data.windows(from.len()).position(|w| w == from) {
+        data[at..at + to.len()].copy_from_slice(&to);
+        patched += 1;
+    }
+    assert!(patched > 0);
+    data
+}
+
+#[test]
+fn a_check_box_draws_every_state_in_one_face() {
+    // #7863: with the check box's font missing, ☐ and ☑ came from the UI fallback, which has no
+    // ☒, and ☒ from another face, so ticking a box changed how it looked.
+    let db = FontDb::with_font_dirs(Vec::new());
+    db.set_system_fallback(false);
+    let primary = db.face("Inter", "Regular");
+    assert!(!primary.covers('☐'), "the requested face lacks the boxes");
+    // A listed symbol face with ☐ and ☑ only, then a later one with all three.
+    db.add_document_fonts(vec![
+        (named_face("SourceSerif4-Regular.ttf", "Apple Symbols"), "Apple Symbols".to_string()),
+        (with_every_ballot_box("DejaVu Sans"), "DejaVu Sans".to_string()),
+    ]);
+    let faces: Vec<u32> = ['☐', '☑', '☒'].iter().map(|c| db.fallback_for(*c, primary.id()).expect("a face has it").id()).collect();
+    assert!(faces.iter().all(|f| *f == faces[0]), "one face for every state: {faces:?}");
+    let run = db.fallback_for_run(&['☐', '☑'], primary.id(), false, false).expect("a face has them");
+    assert_eq!(run.id(), faces[0], "a run of them takes the same face");
+}
+
+#[test]
+fn a_bold_check_box_draws_every_state_in_one_face() {
+    // The listed family's Regular face has all three boxes and its Bold face only ☐ and ☑: bold ☐
+    // and ☑ took the Bold face, and ☒ the Regular one.
+    let db = FontDb::with_font_dirs(Vec::new());
+    db.set_system_fallback(false);
+    let primary = db.face("Inter", "Regular");
+    db.add_document_fonts(vec![
+        (with_every_ballot_box("DejaVu Sans"), "DejaVu Sans".to_string()),
+        (named_face("SourceSans3-Bold.ttf", "DejaVu Sans"), "DejaVu Sans".to_string()),
+    ]);
+    let faces: Vec<u32> = ['☐', '☑', '☒'].iter().map(|c| db.fallback_styled(*c, primary.id(), true, false).expect("a face has it").id()).collect();
+    assert!(faces.iter().all(|f| *f == faces[0]), "one face for every state: {faces:?}");
+    let run = db.fallback_for_run(&['☐', '☑'], primary.id(), true, false).expect("a face has them");
+    assert_eq!(run.id(), faces[0], "a bold run of them takes the same face");
+}
+
+#[test]
+fn ballot_boxes_load_an_installed_symbol_face() {
+    let dir = font_dir("ballot-boxes");
+    std::fs::write(dir.join("Symbols-Regular.ttf"), with_every_ballot_box("DejaVu Sans")).unwrap();
+    // An earlier listed family with only two of the boxes: never loaded for them.
+    std::fs::write(dir.join("TwoBoxes-Regular.ttf"), named_face("SourceSerif4-Regular.ttf", "Apple Symbols")).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    let primary = db.face("Inter", "Regular");
+    db.set_system_fallback(false);
+    assert!(db.fallback_for('☐', primary.id()).is_some());
+    assert!(!db.is_loaded("DejaVu Sans"), "nothing is loaded with the system fallback off");
+    db.set_system_fallback(true);
+    let found = db.fallback_for('☐', primary.id()).unwrap();
+    assert_eq!(found.family, "DejaVu Sans", "the installed face with all three");
+    assert_eq!(db.fallback_for('☒', primary.id()).unwrap().id(), found.id());
+    assert!(!db.is_loaded("Apple Symbols"), "a listed family without all three is not loaded");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_check_box_keeps_one_face_when_a_symbol_face_loads_during_its_search() {
+    // A search for ☐ passed Apple Symbols, not loaded yet, and was loading the installed Segoe UI
+    // Symbol when another thread loaded Apple Symbols. Its answer was remembered for the face count
+    // after both loads, so ☐ kept Segoe UI Symbol while ☑ and ☒ took Apple Symbols, the first
+    // listed face with all three.
+    let dir = font_dir("ballot-box-race");
+    std::fs::write(dir.join("Symbols-Regular.ttf"), with_every_ballot_box("Segoe UI Symbol")).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    let primary = db.face("Inter", "Regular");
+    let reads = || db.coverage.lock().unwrap().reads;
+    let unread = reads();
+    let loading = db.loading.lock().unwrap();
+    std::thread::scope(|s| {
+        let search = s.spawn(|| db.fallback_for('☐', primary.id()));
+        // Past Apple Symbols, the search reads the installed file's character map, then waits for
+        // `loading` to load the file. (A search that finishes without reading it ends the wait too.)
+        while reads() == unread && !search.is_finished() {
+            std::thread::yield_now();
+        }
+        // Another thread loads Apple Symbols meanwhile, as a font load adds faces (`loading` is
+        // held here).
+        db.add_fonts(vec![(with_every_ballot_box("Apple Symbols"), None)]);
+        drop(loading);
+        assert!(search.join().unwrap().is_some());
+    });
+    let faces: Vec<String> = ['☐', '☑', '☒'].iter().map(|c| db.fallback_for(*c, primary.id()).expect("a face has it").family.clone()).collect();
+    assert_eq!(faces, ["Apple Symbols"; 3], "the first listed face with all three, for every state");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn catalog_postscript_names() {
     let dir = font_dir("postscript");

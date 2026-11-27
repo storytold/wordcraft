@@ -1,9 +1,10 @@
 use super::face::{FALLBACK_FAMILY, FontFace};
+use super::fallback_data::{
+    BALLOT_BOXES, DiagramFallbackKey, FALLBACK_CACHE_MAX, RTL_FALLBACKS, RUN_FALLBACK_CACHE_CHARS, RUN_FALLBACK_CACHE_MAX, arabic_block,
+    fallback_order,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use super::fallback_data::{CoverageIndex, IndexedFile, SYS_MISSES_MAX, SYSTEM_FALLBACKS, file_stamp, ranges_hold, read_fallback_file};
-use super::fallback_data::{
-    DiagramFallbackKey, FALLBACK_CACHE_MAX, RTL_FALLBACKS, RUN_FALLBACK_CACHE_CHARS, RUN_FALLBACK_CACHE_MAX, arabic_block, fallback_order,
-};
 use super::{Arc, FontDb};
 #[cfg(not(target_arch = "wasm32"))]
 use super::{HashMap, Ordering};
@@ -28,7 +29,11 @@ impl FontDb {
             _ => "Italic",
         };
         let styled = self.face(&base.family, style);
-        Some(if styled.family.eq_ignore_ascii_case(&base.family) && styled.covers(c) && styled.id != exclude { styled } else { base })
+        Some(if styled.family.eq_ignore_ascii_case(&base.family) && styled_covers(&styled, &base, &[c]) && styled.id != exclude {
+            styled
+        } else {
+            base
+        })
     }
 
     /// The fallback search, cached per (character, excluded face) until loaded faces or font
@@ -70,6 +75,9 @@ impl FontDb {
         if let Some(face) = self.circle_fallback(c, exclude) {
             return (Some(face), self.read_faces().len());
         }
+        if let Some((face, n)) = self.ballot_box_fallback(c, exclude) {
+            return (Some(face), n);
+        }
         let (found, n) = self.loaded_fallback(c, exclude);
         if found.is_some() {
             return (found, n);
@@ -95,6 +103,38 @@ impl FontDb {
             }
         }
         find()
+    }
+
+    /// A ballot box (☐ ☑ ☒, a check box's symbols) the face lacks: the first of the symbol faces
+    /// ([`crate::word::SYMBOL`], in that order) that has all three, so a check box looks the same
+    /// ticked and unticked (#7863). The UI fallback has ☐, drawn with a drop shadow, and ☑ but no
+    /// ☒, which put a box's two states in different fonts. `None` when no listed face has all
+    /// three: the ordinary fallback then. With the face, the number of loaded faces before the
+    /// search: a face loaded during it (by it, or by another thread for a family it had passed)
+    /// leaves that number behind, so the answer isn't cached for the new face list.
+    fn ballot_box_fallback(&self, c: char, exclude: u32) -> Option<(Arc<FontFace>, usize)> {
+        if !BALLOT_BOXES.contains(&c) {
+            return None;
+        }
+        let n = self.read_faces().len();
+        let all = |f: &Arc<FontFace>| f.id != exclude && BALLOT_BOXES.iter().all(|b| f.covers(*b));
+        for family in crate::word::SYMBOL {
+            if let Some(face) = self.find(family, "Regular").filter(all) {
+                return Some((face, n));
+            }
+            // An installed family is loaded only when its files map all three.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let enabled = self.sys.lock().unwrap_or_else(std::sync::PoisonError::into_inner).enabled;
+                if enabled && !self.is_loaded(family) && BALLOT_BOXES.iter().all(|b| self.family_maps(family, *b)) {
+                    self.load_cataloged(family);
+                    if let Some(face) = self.find(family, "Regular").filter(all) {
+                        return Some((face, n));
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// [`Self::search_fallback`] when no loaded face covers `c`: load a system font that does,
@@ -199,8 +239,13 @@ impl FontDb {
 
     /// The face for a run, and the number of loaded faces the search last chose from.
     fn search_run(&self, chars: &[char], exclude: u32, bold: bool, italic: bool) -> (Option<Arc<FontFace>>, usize) {
+        // A run of ballot boxes draws in their one face, as each of them alone does (#7863).
+        let ballot = chars.first().filter(|_| chars.iter().all(|c| BALLOT_BOXES.contains(c))).and_then(|c| self.ballot_box_fallback(*c, exclude));
         #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
-        let (mut base, mut checked) = self.loaded_covering(chars, exclude);
+        let (mut base, mut checked) = match ballot {
+            Some((face, n)) => (Some(face), n),
+            None => self.loaded_covering(chars, exclude),
+        };
         #[cfg(not(target_arch = "wasm32"))]
         if base.is_none() {
             // A character no loaded face covers: load a system font for it, then retry (the run's
@@ -240,7 +285,7 @@ impl FontDb {
         if before_style == checked {
             checked = self.read_faces().len();
         }
-        let face = if styled.family.eq_ignore_ascii_case(&base.family) && chars.iter().all(|c| styled.covers(*c)) && styled.id != exclude {
+        let face = if styled.family.eq_ignore_ascii_case(&base.family) && styled_covers(&styled, &base, chars) && styled.id != exclude {
             styled
         } else {
             base
@@ -556,4 +601,12 @@ impl FontDb {
         }
         false
     }
+}
+
+/// Can `styled`, a bold or italic face of `base`'s family, draw `chars` in its place? It must map
+/// them all, and all three ballot boxes when they are ballot boxes and `base` has all three, so a
+/// check box's states stay in one face in bold or italic text too (#7863).
+fn styled_covers(styled: &FontFace, base: &FontFace, chars: &[char]) -> bool {
+    let boxes = chars.iter().all(|c| BALLOT_BOXES.contains(c)) && BALLOT_BOXES.iter().all(|b| base.covers(*b));
+    chars.iter().chain(BALLOT_BOXES.iter().filter(|_| boxes)).all(|c| styled.covers(*c))
 }

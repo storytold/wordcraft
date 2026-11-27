@@ -40,6 +40,11 @@ pub fn has_named_substitutes(family: &str) -> bool {
 
 const SANS: &[&str] = &["Carlito", "Helvetica Neue", "Arial", "Liberation Sans", "Noto Sans", "DejaVu Sans", "Source Sans 3"];
 
+/// Word's symbol fonts (Symbol, Wingdings…) are proprietary: their characters are drawn as their
+/// Unicode equivalents (`wordcraft_doc::symbol_fonts`) from these faces or any face that has them.
+/// A check box's ballot boxes take their face from this list too (`FontDb::fallback_for`, #7863).
+pub(crate) const SYMBOL: &[&str] = &["Apple Symbols", "Segoe UI Symbol", "DejaVu Sans", "Noto Sans Symbols", "Noto Sans Symbols 2", "Source Sans 3"];
+
 /// Serif faces known by name with no open clone of their own (lowercase): they take the generic
 /// serif list, but as fonts we know, not by a guess from the name ([`has_own_substitutes`]).
 const KNOWN_SERIFS: &[&str] = &[
@@ -75,9 +80,6 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
     const ARIAL: &[&str] = &["Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
     const ARIAL_UNICODE: &[&str] = &["Arial", "Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
     const TIMES: &[&str] = &["Liberation Serif", "Times", "Tinos", "Source Serif 4"];
-    // Word's symbol fonts (Symbol, Wingdings…) are proprietary: their characters are drawn as their
-    // Unicode equivalents (`wordcraft_doc::symbol_fonts`) from these faces or any face that has them.
-    const SYMBOL: &[&str] = &["Apple Symbols", "Segoe UI Symbol", "DejaVu Sans", "Noto Sans Symbols", "Noto Sans Symbols 2", "Source Sans 3"];
     // Persian / Arabic document fonts. Naskh (book) faces such as B Nazanin, B Lotus, B Zar and
     // Traditional Arabic, then the sans faces (B Yekan, B Titr, IRANSans) people use for
     // headings and screens. Open fonts with full Persian coverage first.
