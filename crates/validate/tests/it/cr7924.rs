@@ -463,31 +463,50 @@ fn with_comment(mut zip: Vec<u8>, comment: &[u8]) -> Vec<u8> {
     zip
 }
 
-/// An EOCD-like record whose directory start lies beyond itself, so no reader accepts it as a footer.
-fn implausible_footer() -> Vec<u8> {
+/// An EOCD-like record with one 46-byte directory at `start`.
+fn implausible_footer(start: u32) -> Vec<u8> {
     let mut record = b"PK\x05\x06".to_vec();
     for value in [0u16, 0, 1, 1] {
         record.extend(value.to_le_bytes());
     }
     record.extend(46u32.to_le_bytes());
-    record.extend(1_000_000u32.to_le_bytes());
+    record.extend(start.to_le_bytes());
     record.extend(0u16.to_le_bytes());
     record
 }
 
+/// A lookalike in the last comment whose directory start is beyond itself (no reader accepts it) or zero (a
+/// local header, which the reader still treats as a competing footer) must not hide the real second footer.
 #[test]
 fn a_footer_lookalike_in_the_last_comment_does_not_hide_the_real_second_footer() {
     let ordinary = Doc::minimal().build();
-    for padding in [0usize, 10] {
-        let comment = [vec![b'y'; padding], implausible_footer()].concat();
-        let second = with_comment(ordinary.clone(), &comment);
-        let report = validate_bytes(&[ordinary.as_slice(), second.as_slice()].concat());
-        assert!(concatenated(&report), "padding {padding}: {report:?}");
-        assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
+    for start in [1_000_000u32, 0] {
+        for padding in [0usize, 10] {
+            let comment = [vec![b'y'; padding], implausible_footer(start)].concat();
+            let second = with_comment(ordinary.clone(), &comment);
+            let report = validate_bytes(&[ordinary.as_slice(), second.as_slice()].concat());
+            assert!(concatenated(&report), "start {start} padding {padding}: {report:?}");
+            assert_eq!(report.verdict, Verdict::Fail, "start {start} padding {padding}: {report:?}");
+        }
+        // A single archive carrying the same lookalike has no second archive to find.
+        let single = validate_bytes(&with_comment(ordinary.clone(), &implausible_footer(start)));
+        assert!(!concatenated(&single), "start {start}: {single:?}");
+        if start == 0 {
+            assert_eq!(single.verdict, Verdict::Incomplete, "{single:?}");
+        }
     }
-    // A single archive carrying the same lookalike has no second archive to find.
-    let single = validate_bytes(&with_comment(ordinary.clone(), &implausible_footer()));
-    assert!(!concatenated(&single), "{single:?}");
+}
+
+/// Identical slices share one load, which must not skip the relationships check the second archive needs.
+#[test]
+fn identical_archives_with_a_malformed_relationships_part_are_not_certified_complete() {
+    let mut doc = Doc::minimal();
+    doc.set("_rels/.rels", [package_rels_xml(), b"trailing text".to_vec()].concat());
+    let bad = doc.build();
+    let report = validate_bytes(&[bad.as_slice(), bad.as_slice()].concat());
+    assert!(!concatenated(&report), "{report:?}");
+    assert!(report.findings.iter().any(|f| f.rule == "XML-MALFORMED"), "{report:?}");
+    assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
 }
 
 #[test]
@@ -507,8 +526,9 @@ fn a_second_archive_with_a_malformed_relationships_part_is_not_certified_complet
 }
 
 /// One entry `a` whose directory and local header both claim a data descriptor, with a ZIP64 compressed
-/// size of `size` (so the descriptor is looked for `size` bytes into the file).
-fn descriptor_claim(size: u64, descriptor: bool, zip64: bool) -> Vec<u8> {
+/// size of `size` (so the descriptor is looked for `size` bytes into the file) and `comment` as the archive
+/// comment. A comment makes the footer an anchor candidate, so the scan walks its directory instead of skipping it.
+fn descriptor_claim_with(size: u64, descriptor: bool, zip64: bool, comment: &[u8]) -> Vec<u8> {
     let flags: u16 = if descriptor { 8 } else { 0 };
     let mut out = b"PK\x03\x04".to_vec();
     for value in [20u16, flags, 0, 0, 0] {
@@ -545,7 +565,8 @@ fn descriptor_claim(size: u64, descriptor: bool, zip64: bool) -> Vec<u8> {
     }
     out.extend((central.len() as u32).to_le_bytes());
     out.extend((start as u32).to_le_bytes());
-    out.extend(0u16.to_le_bytes());
+    out.extend(u16::try_from(comment.len()).unwrap().to_le_bytes());
+    out.extend(comment);
     out
 }
 
@@ -553,10 +574,12 @@ fn descriptor_claim(size: u64, descriptor: bool, zip64: bool) -> Vec<u8> {
 fn a_data_descriptor_far_beyond_the_file_never_overflows_the_offset_arithmetic() {
     // Run in an overflow-checked build, an offset that wraps would panic; it must only mean "no descriptor".
     let end_of_space = u64::MAX - 1 - 31;
-    let control = validate_bytes(&descriptor_claim(3, true, true));
-    let huge = validate_bytes(&descriptor_claim(end_of_space, true, true));
-    assert_eq!(huge.verdict, control.verdict, "{huge:?}");
-    assert_ne!(huge.verdict, Verdict::Pass);
+    for comment in [&b""[..], b"c"] {
+        let control = validate_bytes(&descriptor_claim_with(3, true, true, comment));
+        let huge = validate_bytes(&descriptor_claim_with(end_of_space, true, true, comment));
+        assert_eq!(huge.verdict, control.verdict, "comment {comment:?}: {huge:?}");
+        assert_ne!(huge.verdict, Verdict::Pass);
+    }
 }
 
 /// Hostile-input sweep for the footer walk: descriptor claims at every size near the ends of the address
@@ -566,8 +589,11 @@ fn descriptor_size_sweep_never_panics_or_passes() {
     let edges = [0u64, 1, 3, 4, 31, 32, u32::MAX as u64 - 1, u32::MAX as u64, 1 << 32, 1 << 40, 1 << 62, u64::MAX / 2];
     for base in edges.into_iter().chain((0..64).map(|k| u64::MAX - k)) {
         for (descriptor, zip64) in [(true, true), (true, false), (false, true)] {
-            let report = validate_bytes(&descriptor_claim(base, descriptor, zip64));
-            assert_ne!(report.verdict, Verdict::Pass, "size {base} descriptor {descriptor} zip64 {zip64}: {report:?}");
+            // The nonempty comment sends the footer through the directory walk.
+            for comment in [&b""[..], b"c"] {
+                let report = validate_bytes(&descriptor_claim_with(base, descriptor, zip64, comment));
+                assert_ne!(report.verdict, Verdict::Pass, "size {base} descriptor {descriptor} zip64 {zip64} comment {comment:?}: {report:?}");
+            }
         }
     }
 }
