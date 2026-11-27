@@ -1,5 +1,5 @@
-use super::nav::nav_headings;
 use super::Pane;
+use super::nav::nav_headings;
 use craft::ui::patterns::dock::{PanePlace, PaneRequest};
 use craft::ui::runtime::env::PaneEdge;
 use egui::vec2;
@@ -279,7 +279,7 @@ fn a_long_comment_card_keeps_its_buttons_and_the_next_card_in_view() {
 fn headings_show_their_list_numbers() {
     use std::sync::Arc;
     use wordcraft_doc::props::NumRef;
-    use wordcraft_doc::{para_block, CharProps, Document, ListKind, Paragraph};
+    use wordcraft_doc::{CharProps, Document, ListKind, Paragraph, para_block};
     let mut doc = Document::new();
     let num = Arc::make_mut(&mut doc.numbering).add_list(ListKind::Legal);
     let para = |text: &str, style: &str, level: Option<u8>| {
