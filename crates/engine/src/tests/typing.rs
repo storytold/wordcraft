@@ -27,6 +27,30 @@ fn s() -> Session {
     Session::new(wordcraft_doc::Document::new())
 }
 
+/// #6188: distinct IME commits remain one insertion when the earlier commit's timestamp
+/// is from another second. The old timestamp is deterministic; no test sleeps or global clock.
+#[test]
+fn continuous_revision_typing_keeps_identity_across_clock_seconds() {
+    let mut s = s();
+    s.author = "Alice".into();
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "text.insert", json!({"text": "是吗", "raw": true}));
+    s.doc.revisions[0].date = "2000-01-01T00:00:00Z".into();
+    for text in ["？", "我总觉得", "有点问题"] {
+        run(&mut s, "review.changes", json!({}));
+        run(&mut s, "text.insert", json!({"text": text, "raw": true}));
+    }
+    assert_eq!(s.doc.revisions.len(), 1);
+    assert_eq!(s.doc.revisions[0].date, "2000-01-01T00:00:00Z");
+    let para = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(para.text, "是吗？我总觉得有点问题");
+    assert!(para.run_ranges().all(|(_, p)| p.ins == Some(0)));
+    assert!(s.undo());
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "");
+    assert!(s.redo());
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "是吗？我总觉得有点问题");
+}
+
 /// Execute a registry command and report its id on a test failure.
 fn run(s: &mut Session, id: &str, v: serde_json::Value) {
     s.run(id, &v).unwrap_or_else(|e| panic!("{id}: {e}"));

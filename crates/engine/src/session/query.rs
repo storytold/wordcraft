@@ -89,6 +89,7 @@ impl Session {
     /// The counter fails closed: if it were ever exhausted (unreachable in practice), the
     /// document owner id advances too, so a cached IME context still cannot be reused.
     pub fn note_body_replaced(&mut self) {
+        self.revision_group = None;
         self.ime_body_epoch = match self.ime_body_epoch.checked_add(1) {
             Some(epoch) => epoch,
             None => {

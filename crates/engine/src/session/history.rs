@@ -130,6 +130,7 @@ impl Session {
     /// Close an open typing group (caret moved, other command).
     pub fn close_typing(&mut self) {
         self.typing_open = false;
+        self.revision_group = None;
     }
 
     pub fn can_undo(&self) -> bool {
@@ -274,6 +275,7 @@ impl Session {
 
     /// Drop history (after open / new).
     pub fn reset_history(&mut self) {
+        self.revision_group = None;
         self.autocap = None;
         self.history.clear();
         self.redo.clear();
