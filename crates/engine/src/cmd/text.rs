@@ -20,6 +20,11 @@ use enter_tab::{back_tab, new_paragraph, tab};
 use unicode::{ins_char, insert_code, toggle_unicode};
 pub use unicode::{oem_code_page, system_code_pages, system_oem_code_page};
 
+/// Append `n` empty paragraphs at the end of the body, for Click and Type.
+pub(crate) fn append_paragraphs(s: &mut Session, n: usize) -> Result<(), CmdError> {
+    enter_tab::append_paragraphs(s, n)
+}
+
 /// The text-entry commands: typing, Enter, breaks, Tab, deleting and typed symbols.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
