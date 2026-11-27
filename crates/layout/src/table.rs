@@ -798,6 +798,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             };
             let end = (c.vmerge != VMerge::Continue && c.turned.is_none()).then_some(c.end + dy);
             let mut cell_items = c.items;
+            let turned = c.turned.is_some();
             if let Some(tn) = c.turned {
                 dy = 0.0;
                 let m = c.margins;
@@ -833,9 +834,48 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                 }
             }
             let content = items.len();
-            for mut it in cell_items {
+            // A nested table wider than the cell (a percentage of more than 100%, say) is cut off
+            // at the cell's edges, as Word draws it: its fills, lines and cell areas end there, and
+            // its text is clipped when drawn.
+            // A floating table can sit anywhere: a cell holding one is left alone.
+            let (lo, hi) = (c.x, c.x + c.w);
+            let blocks = t.rows.get(ri).and_then(|r| r.cells.get(ci)).map_or(&[][..], |cell| &cell.blocks[..]);
+            let floats = blocks.iter().any(|b| matches!(&**b, wordcraft_doc::Block::Table(nt) if nt.props.float.is_some()));
+            // Word leaves a table that starts the cell whole, running on over the next cell, and
+            // cuts one only after something else (a paragraph, even an empty one, or a table that
+            // fits; measured in Word for Windows). The items of a first table come first, up to
+            // the area of its last cell.
+            let lead = if blocks.first().is_some_and(|b| matches!(&**b, wordcraft_doc::Block::Table(_))) {
+                let mut table = path.to_vec();
+                table.extend([ri as u32, ci as u32, 0]);
+                cell_items.iter().rposition(|it| matches!(it, Placed::Cell { table: tp, .. } if tp.0 == table)).map_or(0, |k| k + 1)
+            } else {
+                0
+            };
+            // Only a table whose own cells run past the edges is cut: half a thick border reaching
+            // over the edge isn't.
+            let wider = !turned
+                && !floats
+                && cell_items
+                    .get(lead..)
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|it| matches!(it, Placed::Cell { rect, .. } if rect.x < lo - 0.01 || rect.right() > hi + 0.01));
+            let mut cut = false;
+            for (k, mut it) in cell_items.into_iter().enumerate() {
                 it.translate(0.0, dy);
-                items.push(it);
+                if wider && k >= lead {
+                    match crop_to_cell(it, lo, hi) {
+                        Cropped::Kept(it) => items.push(it),
+                        Cropped::Cut(Some(it)) => {
+                            cut = true;
+                            items.push(it);
+                        }
+                        Cropped::Cut(None) => cut = true,
+                    }
+                } else {
+                    items.push(it);
+                }
             }
             let align = (dy > 0.0).then_some(CellAlign { content: content..items.len(), valign: c.valign, dy, height: align_h });
             let b = c.borders;
@@ -867,7 +907,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                 story,
                 // A fixed table's cell too narrow for any text (its lines are laid out 4 pt wide)
                 // clips them, as Word does, rather than letting them run past its edges.
-                clip: (exact && c.h > span_h + 0.01) || (t.props.fixed && c.w - c.margins[1] - c.margins[3] < 4.0),
+                clip: (exact && c.h > span_h + 0.01) || cut || (t.props.fixed && c.w - c.margins[1] - c.margins[3] < 4.0),
             });
             let top = c.margins[0] + c.borders.top.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
             parts.push(CellPart { top, items: first..items.len(), end, align });
@@ -881,6 +921,44 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
         });
     }
     TableLayout { x, width: total, rows: out }
+}
+
+/// What [`crop_to_cell`] did to an item.
+enum Cropped {
+    /// Inside the cell, left as it was.
+    Kept(Placed),
+    /// It ran past the cell's edges: the part inside, if any.
+    Cut(Option<Placed>),
+}
+
+/// A fill, line or cell area inside a table cell cut to the cell's left and right edges `lo` and
+/// `hi`: what a nested table wider than the cell draws there. Text and objects are left as they
+/// are (the cell clips the text when drawn).
+fn crop_to_cell(it: Placed, lo: f32, hi: f32) -> Cropped {
+    const SLACK: f32 = 0.01;
+    let past = |a: f32, b: f32| a < lo - SLACK || b > hi + SLACK;
+    match it {
+        Placed::Fill { rect, color } if past(rect.x, rect.right()) => {
+            let (a, b) = (rect.x.max(lo), rect.right().min(hi));
+            Cropped::Cut((b > a).then(|| Placed::Fill { rect: Rect::new(a, rect.y, b - a, rect.h), color }))
+        }
+        // A nested cell keeps its own clipping: its text is cut at the outer cell's edges, not at
+        // the cropped nested cell's (text indented past its own cell still shows inside the outer).
+        Placed::Cell { rect, covered, table, row, cell, story, clip } if past(rect.x, rect.right()) => {
+            let (a, b) = (rect.x.max(lo), rect.right().min(hi));
+            Cropped::Cut((b > a).then(|| Placed::Cell { rect: Rect::new(a, rect.y, b - a, rect.h), covered, table, row, cell, story, clip }))
+        }
+        Placed::Rule { x0, y0, x1, y1, border } if past(x0.min(x1), x0.max(x1)) => {
+            if (x0 - x1).abs() < SLACK {
+                // A vertical line past the edge isn't drawn at all.
+                Cropped::Cut(None)
+            } else {
+                let (a, b) = (x0.min(x1).max(lo), x0.max(x1).min(hi));
+                Cropped::Cut((b > a).then_some(Placed::Rule { x0: a, y0, x1: b, y1, border }))
+            }
+        }
+        it => Cropped::Kept(it),
+    }
 }
 
 /// Split a row at `cut` (points below the row's top) so the part above fits on this page.

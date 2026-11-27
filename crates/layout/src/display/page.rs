@@ -1,5 +1,5 @@
 use super::glyphs::{Authors, upright_east_asian};
-use super::lines::{LineRender, lines};
+use super::lines::{LineRender, lines, lines_apart};
 use super::objects::{ShapeLook, effects_in, graphic_draws, object_draws, shape_draws, spun};
 use super::options::{DisplayOptions, Hidden, MarkupOptions};
 use super::paint::Stroke;
@@ -135,13 +135,27 @@ fn stories_display(
             }
             // A line in a clipped cell is drawn in its clip; in a turned text box, with the box's
             // other lines (clipped there), so it is drawn once.
-            if let Placed::Lines { story, path, .. } = it
-                && let Some(rect) = cell_clip(clips, *story, &path.0)
+            if let Placed::Lines { story, path, para, l0, l1, x, y, .. } = it
+                && let Some((rect, outer)) = cell_clip(clips, *story, &path.0)
                 && turned_frame(&frames, it).is_none()
             {
                 let mut inner = Vec::new();
-                item(doc, it, opts, authors, a, &mut inner);
-                out.push(Draw::Clip { rect, items: inner });
+                if outer {
+                    // A line of a nested table clipped by the cell around it: Word cuts its text at
+                    // that cell's sides but not its inline pictures, which run on past them
+                    // (measured in Word for Windows). They are still cut at its top and bottom.
+                    let mut objects = Vec::new();
+                    let input =
+                        LineRender { doc, story: *story, path, pl: para, range: *l0..*l1, origin: (*x, *y), opts, authors, alpha: a, down: false };
+                    lines_apart(input, &mut inner, &mut objects);
+                    out.push(Draw::Clip { rect, items: inner });
+                    if !objects.is_empty() {
+                        out.push(Draw::Clip { rect: Rect::new(rect.x - 4000.0, rect.y, rect.w + 8000.0, rect.h), items: objects });
+                    }
+                } else {
+                    item(doc, it, opts, authors, a, &mut inner);
+                    out.push(Draw::Clip { rect, items: inner });
+                }
                 continue;
             }
             match it {
@@ -170,7 +184,7 @@ fn stories_display(
                             let mut inner = Vec::new();
                             for line in items.iter().filter(|i| turned_frame(&frames, i) == Some(k)) {
                                 if let Placed::Lines { story, path, .. } = line
-                                    && let Some(rect) = cell_clip(clips, *story, &path.0)
+                                    && let Some((rect, _)) = cell_clip(clips, *story, &path.0)
                                 {
                                     let mut clipped = Vec::new();
                                     item(doc, line, opts, authors, a, &mut clipped);
@@ -259,17 +273,20 @@ fn clipped_cells(items: &[Placed]) -> Clips {
     clips
 }
 
-/// The area to clip a line at `path` of `story` to: its cell's, when that cell is clipped. Only
-/// the cells holding the line are looked up, not every clipped cell on the page.
-fn cell_clip(clips: &Clips, story: StoryRef, path: &[u32]) -> Option<Rect> {
+/// The area to clip a line at `path` of `story` to: its cell's, when that cell is clipped, and
+/// whether it is a cell around the line's own (a table the line's table is nested in). Only the
+/// cells holding the line are looked up, not every clipped cell on the page.
+fn cell_clip(clips: &Clips, story: StoryRef, path: &[u32]) -> Option<(Rect, bool)> {
     let cells = clips.get(&story)?;
+    // A cell around the line's own leaves at least a nested table's block, row and cell, and the
+    // paragraph, after its path (a content control between adds a level but no cell).
     (0..=path.len())
         .filter_map(|n| {
             crate::work::steps(1);
-            cells.get(path.get(..n)?)
+            cells.get(path.get(..n)?).map(|&(i, r)| (i, r, path.len() >= n + 4))
         })
-        .min_by_key(|(i, _)| *i)
-        .map(|(_, r)| *r)
+        .min_by_key(|(i, ..)| *i)
+        .map(|(_, r, outer)| (r, outer))
 }
 
 /// The text boxes among `items` whose text is warped (Text Effects › Transform, drawn bent): their
@@ -537,7 +554,7 @@ mod tests_clips {
 
     /// Which cell (by its `x`) clips a line at `path` of `story`.
     fn found(clips: &Clips, story: StoryRef, path: &[u32]) -> Option<f32> {
-        cell_clip(clips, story, path).map(|r| r.x)
+        cell_clip(clips, story, path).map(|(r, _)| r.x)
     }
 
     /// A line in a cell cut off at its edge is drawn with that cell's clip, found by path in an
@@ -561,6 +578,9 @@ mod tests_clips {
         assert_eq!(found(&clips, StoryRef::Body, &[2, 0, 0, 0]), None, "another row");
         assert_eq!(found(&clips, StoryRef::Part(7), &[0, 0, 0, 2]), Some(4.0));
         assert_eq!(found(&clips, StoryRef::Body, &[0, 0, 0, 2]), None, "another story");
+        // Whether the clip is the line's own cell's or a cell's around it (its table nested there).
+        assert_eq!(cell_clip(&clips, StoryRef::Body, &[2, 1, 0, 0]).map(|(_, outer)| outer), Some(false), "its own cell");
+        assert_eq!(cell_clip(&clips, StoryRef::Body, &[2, 1, 0, 3, 0, 0, 1]).map(|(_, outer)| outer), Some(true), "a cell around a nested table");
     }
 
     /// Thousands of clipped cells and as many lines: a lookup each, not a pass over the cells each.
