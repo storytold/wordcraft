@@ -2609,21 +2609,50 @@ fn part_rel_ids(pkg: &Package, part: &str) -> HashSet<RelId> {
     }
 }
 
-/// Whether several archive entries (a case collision, a duplicate name or a collapsed record) share one package identity.
-fn identity_ambiguous(pkg: &Package, name: &str) -> bool {
-    observation_contract! {
-        rules: "-";
-        collections: "field.collapsed_names*1,field.entries*1,field.rels*1";
-        scope: "one package identity shared by several ZIP entries";
-        loss: "case collision, duplicate entry or undecodable sibling";
-        fallback: "an ambiguous identity has no trustworthy source; its consumption is undecided";
-        package_loss: "independent";
+/// Package identities shared by several archive entries (a case collision, a duplicate name or a collapsed record), computed once.
+struct AmbiguousIdentities(Vec<PartId>);
+
+impl AmbiguousIdentities {
+    /// One pass over the collapsed names, the entries and the relationships parts.
+    fn new(pkg: &Package) -> Self {
+        observation_contract! {
+            rules: "-";
+            collections: "field.collapsed_names*1,field.entries*1,field.rels*1,type.HashMap*4,type.Vec*1";
+            scope: "one package identity shared by several ZIP entries";
+            loss: "case collision, duplicate entry or undecodable sibling";
+            fallback: "an ambiguous identity has no trustworthy source; its consumption is undecided";
+            package_loss: "independent";
+        }
+
+        let mut ids: Vec<PartId> = pkg.collapsed_names.iter().map(|n| PartId::new(n)).collect();
+        let mut entry_counts: HashMap<PartId, usize> = HashMap::new();
+        for e in pkg.entries.iter().filter(|e| !e.is_dir) {
+            *entry_counts.entry(PartId::new(&e.name)).or_insert(0) += 1;
+        }
+        let mut rels_counts: HashMap<PartId, usize> = HashMap::new();
+        for rp in &pkg.rels {
+            *rels_counts.entry(PartId::new(&rp.name)).or_insert(0) += 1;
+        }
+        ids.extend(entry_counts.into_iter().chain(rels_counts).filter(|(_, n)| *n > 1).map(|(id, _)| id));
+        ids.sort();
+        ids.dedup();
+        Self(ids)
     }
 
-    let id = PartId::new(name);
-    pkg.collapsed_names.iter().any(|n| PartId::new(n) == id)
-        || pkg.entries.iter().filter(|e| !e.is_dir && PartId::new(&e.name) == id).count() > 1
-        || pkg.rels.iter().filter(|rp| PartId::new(&rp.name) == id).count() > 1
+    /// Whether `name` normalizes to an ambiguous identity; a lookup that allocates nothing.
+    fn contains(&self, name: &str) -> bool {
+        observation_contract! {
+            rules: "-";
+            collections: "field.bytes*2";
+            scope: "one package identity shared by several ZIP entries";
+            loss: "case collision, duplicate entry or undecodable sibling";
+            fallback: "an ambiguous identity has no trustworthy source; its consumption is undecided";
+            package_loss: "independent";
+        }
+
+        let key = || name.trim_start_matches('/').bytes().map(|b| b.to_ascii_lowercase());
+        self.0.binary_search_by(|id| id.as_str().bytes().cmp(key())).is_ok()
+    }
 }
 
 /// Check missing targets package-wide and check declared target types on the main story.
@@ -2643,6 +2672,7 @@ fn check_typed_targets(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
     {
         acc.note(format!("the main part {main} has no relationships part; typed targets were not checked"));
     }
+    let ambiguous = AmbiguousIdentities::new(pkg);
     let mut images = FallbackImages::new(pkg, acc.limits);
     let mut warnings = Vec::new();
     for rp in &pkg.rels {
@@ -2654,7 +2684,7 @@ fn check_typed_targets(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
         let owner_name =
             source.map(|s| s.name.as_str()).or(owner_entry.map(|e| e.name.as_str())).or(owner_text.as_deref()).unwrap_or(rp.name.as_str());
         // Several entries mapping to the owner's or the declarations' identity leave both without one trustworthy source.
-        let ambiguous_identity = identity_ambiguous(pkg, &rp.name) || owner_text.as_deref().is_some_and(|owner| identity_ambiguous(pkg, owner));
+        let ambiguous_identity = ambiguous.contains(&rp.name) || owner_text.as_deref().is_some_and(|owner| ambiguous.contains(owner));
         let mut consumers = None;
         let bindings = package::relationship_bindings(rp);
         let is_main = main_rels.as_ref().is_some_and(|main| main.eq_ignore_ascii_case(&rp.name));

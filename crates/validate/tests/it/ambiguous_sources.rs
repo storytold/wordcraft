@@ -433,3 +433,34 @@ fn malformed_settings_without_notes_fail_independently_of_suppressed_note_joins(
     assert!(findings(&report, &["NOTE-PR-LISTING", "NOTE-PR-DANGLING"]).is_empty(), "{report:?}");
     assert!(report.coverage_notes.iter().any(|n| n.contains("footnotePr")), "{report:?}");
 }
+
+/// A package with hundreds of relationships parts and one shared identity keeps the pre-existing decision:
+/// the ambiguous source's missing target is undecided, never a dangling Error.
+#[test]
+fn ambiguous_identity_stays_undecided_in_a_package_with_many_relationships_parts() {
+    let build = |ambiguous: bool| {
+        let mut d = Doc::minimal();
+        let blip = r#"<w:p><w:r><w:drawing><a:blip xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" r:embed="rIdMissing"/></w:drawing></w:r></w:p>"#;
+        d.set_document(blip);
+        d.set_doc_rels(&rel("rIdMissing", "image", "media/missing.png"));
+        for i in 0..250 {
+            let part = format!("word/extra{i}.xml");
+            d.add_with_override(&part, CT_HEADER, format!(r#"<w:hdr {NS}><w:p/></w:hdr>"#));
+            d.set(&format!("word/_rels/extra{i}.xml.rels"), rels_xml(&rel("r1", "image", &format!("media/gone{i}.png"))));
+        }
+        if ambiguous {
+            // A second relationships part under the same package identity.
+            d.entries.push(("word/_rels/Document.xml.rels".to_string(), rels_xml(&rel("rIdMissing", "image", "media/missing.png"))));
+        }
+        validate_bytes(&d.build())
+    };
+    let dangling_main = |r: &Report| r.findings.iter().any(|f| f.rule == "REL-DANGLING" && f.message.contains("rIdMissing"));
+
+    let clean = build(false);
+    assert!(dangling_main(&clean), "control: without the shared identity the missing target dangles: {clean:?}");
+
+    let report = build(true);
+    assert!(!dangling_main(&report), "{report:?}");
+    assert!(report.coverage_notes.iter().any(|n| n.contains("rIdMissing") && n.contains("was not decided")), "{report:?}");
+    assert!(!report.findings.iter().any(|f| f.rule == "REL-DANGLING"), "{report:?}");
+}
