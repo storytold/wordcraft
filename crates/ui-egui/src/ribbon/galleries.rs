@@ -11,7 +11,6 @@ use craft::ui::contract::{
 };
 use craft::ui::list::{ThumbAspect, ThumbSize};
 use craft::ui::menu::{Menu, MenuItem};
-use craft::ui::primitives::IconSpec;
 use craft::ui::primitives::textures::Revision;
 use craft::ui::runtime::commands::resolve;
 use craft::ui::runtime::env::Env;
@@ -283,7 +282,7 @@ pub(crate) fn shapes(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
         .enabled(enabled)
         .show_items(ui, &Indexed(SHAPE_TILES.len()), &mut |at, _| {
             let (label, _, icon) = SHAPE_TILES.get(*at).copied().unwrap_or(("", "", "shape.rectangle"));
-            Tile::new(crate::tl!(label)).icon(IconSpec::svg(crate::icons::id(icon)))
+            Tile::new(crate::tl!(label)).icon(crate::icons::spec(icon))
         });
     if let Some((_, kind, _)) = picked(&out.response.events).and_then(|at| SHAPE_TILES.get(at))
         && app.run("insert.shape", json!({"kind": kind})).is_ok()

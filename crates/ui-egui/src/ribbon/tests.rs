@@ -703,6 +703,70 @@ fn shading_options() -> String {
     crate::i18n::fmt(tl!("{name} options"), &[("name", tl!("Shading"))])
 }
 
+#[test]
+fn table_shading_label_is_painted_beside_its_arrow() {
+    use egui::accesskit::Role;
+    // Vietnamese and German labels need the embedded catalogs (CI has them); English always runs in both themes.
+    let cases: &[(&str, egui::Theme)] = if crate::i18n::catalogs_embedded() {
+        &[("en", egui::Theme::Light), ("en", egui::Theme::Dark), ("vi", egui::Theme::Light), ("de", egui::Theme::Light)]
+    } else {
+        &[("en", egui::Theme::Light), ("en", egui::Theme::Dark)]
+    };
+    let ctx = crate::test_harness::context();
+    ctx.enable_accesskit();
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 100.0));
+    for (idx, &(language, theme)) in cases.iter().enumerate() {
+        app.run("ui.language", json!({"value": language})).unwrap();
+        app.run("ui.theme", json!({"value": if theme == egui::Theme::Dark { "dark" } else { "light" }})).unwrap();
+        ctx.set_theme(theme);
+        let raw = egui::RawInput { focused: true, time: Some(idx as f64 * 0.1), screen_rect: Some(screen), ..Default::default() };
+        craft::ui::shell::embed::before_input(&ctx, |out| app.frame_input(out));
+        let mut out = ctx.run_ui(raw, |ui| {
+            let _ = crate::colors::shading_split(
+                ui,
+                &mut app,
+                tl!("Shading").to_string(),
+                crate::colors::Target::cmd("table.shading").remember(crate::colors::Remember::Shading),
+            );
+        });
+        out.textures_delta.clear();
+        assert_eq!(ctx.global_style().visuals.dark_mode, theme == egui::Theme::Dark, "{language}/{theme:?}: palette active");
+        let label = tl!("Shading");
+        let arrow_label = shading_options();
+        let nodes = &out.platform_output.accesskit_update.as_ref().expect("accesskit update").nodes;
+        let button_rect = |name: &str| {
+            nodes
+                .iter()
+                .find_map(|(_, n)| {
+                    (n.role() == Role::Button && n.label() == Some(name))
+                        .then(|| {
+                            n.bounds().map(|b| egui::Rect::from_min_max(egui::pos2(b.x0 as f32, b.y0 as f32), egui::pos2(b.x1 as f32, b.y1 as f32)))
+                        })
+                        .flatten()
+                })
+                .unwrap_or_else(|| panic!("{language}: missing button {name:?}"))
+        };
+        let main = button_rect(label);
+        let arrow = button_rect(&arrow_label);
+        assert!((main.top() - arrow.top()).abs() < 0.01 && (main.bottom() - arrow.bottom()).abs() < 0.01);
+        assert!((main.right() - arrow.right()).abs() < 0.01 && arrow.left() > main.left(), "{language}: {main:?}, {arrow:?}");
+        let text = out
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.text() == label => Some(t),
+                _ => None,
+            })
+            .expect("Shading is drawn as text, not just a hover tip");
+        let text_rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+        assert!(main.contains_rect(text_rect), "{language}: {text_rect:?} outside {main:?}");
+        assert!(text_rect.left() >= main.left() + 24.0, "the label starts after the icon");
+        assert!(text_rect.right() <= arrow.left(), "{language}: label {text_rect:?} overlaps arrow {arrow:?}");
+    }
+    crate::i18n::apply_language(crate::i18n::Lang::EN);
+}
+
 fn first_cell_shading(app: &WordApp) -> Option<wordcraft_doc::Rgb> {
     app.session.doc.body.iter().find_map(|b| b.as_table()).unwrap().rows[0].cells[0].props.shading
 }
@@ -1230,4 +1294,31 @@ fn the_styles_gallery_reads_from_the_right_in_a_right_to_left_interface() {
             rtl.tiles
         );
     }
+}
+
+#[test]
+fn a_combo_field_reached_with_tab_shows_its_hint_after_a_delay() {
+    use egui::accesskit::Role;
+
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Sample")), crate::Services::default());
+    let mut h = tab_harness(app, "Home");
+
+    // Focus the Font box right before Font Size, then Tab onto Font Size.
+    h.get(By::new().role(Role::ComboBox).label("Font")).focus();
+    h.step();
+    for _ in 0..4 {
+        h.key_press(egui::Key::Tab);
+        h.step();
+        if h.query(By::new().role(Role::ComboBox).label("Font Size")).is_some_and(|n| n.is_focused()) {
+            break;
+        }
+    }
+    assert!(h.get(By::new().role(Role::ComboBox).label("Font Size")).is_focused(), "Tab should focus Font Size");
+    assert_eq!(h.query_all_by_label("Font Size").count(), 1, "hint must not show immediately before delay");
+
+    let frames = ((craft::ui::contract::tooltip::DELAY * 60.0).ceil() as usize) + 5;
+    for _ in 0..frames {
+        h.step();
+    }
+    assert!(h.query_all_by_label("Font Size").count() >= 2, "hint must show after tooltip delay");
 }

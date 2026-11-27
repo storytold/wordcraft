@@ -125,7 +125,7 @@ pub(super) fn styles(app: &mut WordApp, ui: &mut Ui) {
     let mut asked = None;
     for event in &out.events {
         match event {
-            CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+            CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
                 if let Some((id, ..)) = keys.first().and_then(|k| list.get(*k)) {
                     let _ = app.run("para.style", json!({"style": id}));
                     app.canvas.focus_page(&ctx);
