@@ -146,6 +146,9 @@ pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body:
     let ctx = ui.ctx().clone();
     let focused = app.canvas.focused(&ctx);
     crate::dialogs_smart_art::end_typing_run(app, focused);
+    // The page keeps the keyboard focus while another window is active, but the caret shows and blinks only in the
+    // active window: a window in the background asks for no frames to blink it (#7674).
+    let active = focused && ctx.input(|input| input.focused);
     let doc = app.session.layout();
     let Some(pl) = place(app, &doc, body.pages) else { return };
 
@@ -184,7 +187,7 @@ pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body:
     };
     let ink = |app: &mut WordApp| caret_color_at(app, &doc, pl.page, pl.probe.0, pl.probe.1, zoom_key, dim_body);
 
-    let shown = pl.collapsed && focused;
+    let shown = pl.collapsed && active;
     let mut bars: Vec<(Bar, Color32)> = Vec::new();
     let mut composition = None;
     if focused && !pl.in_equation && !app.canvas.ime_preedit.is_empty() {
@@ -211,7 +214,7 @@ pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body:
             ctx.request_repaint();
         } else if shown && blink_fading(since_ms / 1000.0, app.canvas.glide.secs()) {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
-        } else if focused {
+        } else if active {
             ctx.request_repaint_after(std::time::Duration::from_millis(530 - (since_ms as u64 % 530)));
         }
     }
