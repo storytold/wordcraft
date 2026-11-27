@@ -66,6 +66,156 @@ fn myanmar_without_spaces_wraps_between_syllables() {
     assert!(pl.lines[0].c1 - pl.lines[0].c0 > 10);
 }
 
+#[test]
+fn thai_issue_1548_breaks_at_expected_word_boundaries() {
+    let text = "[A] การประชุมคณะกรรมการบริหารโครงการพัฒนาระบบสารสนเทศเพื่อการบริหารจัดการทรัพยากรบุคคลขององค์กรปกครองส่วนท้องถิ่นได้มีมติเห็นชอบให้ดำเนินการจัดซื้อจัดจ้างเครื่องคอมพิวเตอร์แม่ข่ายพร้อมอุปกรณ์จัดเก็บข้อมูลสำรองภายในปีงบประมาณพุทธศักราชสองพันห้าร้อยหกสิบเก้าเพื่อรองรับการขยายตัวของระบบงานและลดความเสี่ยงจากการสูญหายของข้อมูลสำคัญซึ่งอาจส่งผลกระทบต่อการให้บริการประชาชน";
+    let l = lay(&Document::from_text(text));
+    let pl = para_layout(&l, 0);
+    let first = pl.lines.first().and_then(|line| text.get(line.start..line.stop)).unwrap_or("");
+    assert!(first.starts_with("[A] ") && first.len() > "[A] ".len(), "the [A] label must share its line with Thai text: {first:?}");
+    let resource = text.find("บุคคลของ").unwrap_or(text.len());
+    let server = text.find("พร้อมอุปกรณ์").unwrap_or(text.len());
+    assert!(pl.clusters.iter().any(|c| c.end == resource && c.break_after), "expected the reported ทรัพยากร | บุคคล boundary at byte {resource}");
+    assert!(pl.clusters.iter().any(|c| c.end == server && c.break_after), "expected the reported แม่ข่าย | พร้อม boundary at byte {server}");
+    for word in ["ทรัพยากร", "อุปกรณ์", "ประชาชน"] {
+        let start = text.find(word).unwrap_or(text.len());
+        assert!(!pl.lines.iter().skip(1).any(|line| start < line.start && line.start < start + word.len()), "a line starts inside {word}");
+    }
+}
+
+#[test]
+fn thai_mixed_scripts_digits_and_punctuation_keep_unicode_boundaries() {
+    let sample = "ไทย123 ภาษาไทย ๐๑๒๓, ไทย! ";
+    let text = sample.repeat(55);
+    let l = lay(&Document::from_text(&text));
+    let pl = para_layout(&l, 0);
+    assert!(pl.lines.len() > 1, "the mixed-script paragraph wraps");
+    for word in ["123", "๐๑๒๓"] {
+        let start = text.find(word).unwrap_or(text.len());
+        assert!(!pl.lines.iter().skip(1).any(|line| start < line.start && line.start < start + word.len()), "a line starts inside {word}");
+    }
+    for marker in ["ภาษาไทย", "ไทย!"] {
+        let boundary = text.find(marker).unwrap_or(text.len());
+        assert!(
+            pl.clusters.iter().any(|c| c.end == boundary && c.break_after),
+            "the existing space/punctuation boundary before {marker:?} remains usable"
+        );
+    }
+    for line in pl.lines.iter().skip(1) {
+        assert!(crate::kinsoku::is_safe_line_break(&text, line.start), "mixed-script line starts at unsafe byte {}", line.start);
+    }
+}
+
+#[test]
+fn thai_wrap_off_and_emergency_breaks_keep_safe_units() {
+    let text = "เก่งกำลัง";
+    for (sample, off) in [("เก", 3), ("กิ่", 3), ("กิ่", 6), ("กำ", 3)] {
+        assert!(!crate::kinsoku::is_safe_line_break(sample, off), "Thai grapheme/prefix-vowel boundary at {off} in {sample:?} is unsafe");
+    }
+    for sample in ["กิ่", "กำ"] {
+        assert!(crate::kinsoku::is_safe_line_break(sample, sample.len()), "the complete Thai unit is safe");
+    }
+    let mut opportunities = Vec::new();
+    crate::kinsoku::apply(text, &mut opportunities, true, false);
+    // UTF-8 offsets: after เ (3) and ก before its tone mark (15) are unsafe; after each complete
+    // grapheme is allowed, including after the sara am in กำ.
+    assert!(!opportunities.contains(&3), "do not separate a preposed vowel from its consonant: {opportunities:?}");
+    assert!(!opportunities.contains(&6), "do not separate a consonant from its tone mark: {opportunities:?}");
+    assert!(opportunities.contains(&12), "the boundary after เก่ง is safe: {opportunities:?}");
+    assert!(!opportunities.contains(&15), "do not separate ก from sara am: {opportunities:?}");
+    assert!(opportunities.contains(&18), "the boundary after sara am is safe: {opportunities:?}");
+
+    let text = "เก่งกำลังดี".repeat(16);
+    for size in [11.0, 32.0] {
+        for word_wrap in [true, false] {
+            let mut d = Document::from_text("");
+            let mut p = wordcraft_doc::Paragraph::with_text(&text, Default::default());
+            p.props.word_wrap = Some(word_wrap);
+            d.body = vec![wordcraft_doc::para_block(p)];
+            d.last_section.margin_left = 285.0;
+            d.last_section.margin_right = 285.0;
+            d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), &|c| c.size = Some(size)).unwrap();
+            // Force run boundaries inside a Thai shaping unit, as can happen with imported formatting.
+            d.format_range(&Pos::body(0, 6), &Pos::body(0, 9), &|c| {
+                c.bold = Some(true);
+                c.font = Some("WordCraft Thai Boundary Test".to_string());
+            })
+            .unwrap();
+            let l = lay(&d);
+            let pl = para_layout(&l, 0);
+            assert!(pl.lines.len() > 1, "the narrow column should wrap at {size} pt");
+            assert_eq!(pl.lines.last().map(|line| line.stop), Some(text.len()), "wrapping makes progress through the full paragraph");
+            for line in pl.lines.iter().skip(1) {
+                assert!(
+                    crate::kinsoku::is_safe_line_break(&text, line.start),
+                    "line starts at unsafe byte {} (word_wrap={word_wrap}, size={size})",
+                    line.start
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn thai_safe_unit_wider_than_column_overflows_and_makes_progress() {
+    let text = "กำก";
+    let mut d = Document::from_text(text);
+    d.last_section.margin_left = 297.0;
+    d.last_section.margin_right = 297.0;
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), &|c| c.size = Some(72.0)).unwrap();
+    let l = lay(&d);
+    let pl = para_layout(&l, 0);
+    let first = pl.clusters.first().map(|c| c.adv).unwrap_or(0.0);
+    assert!(first > 18.0, "the first safe Thai unit must exceed the minimum text column: {first}");
+    assert_eq!(pl.lines.first().map(|line| line.stop), Some("กำ".len()));
+    assert_eq!(pl.lines.get(1).map(|line| line.start), Some("กำ".len()));
+    assert_eq!(pl.lines.last().map(|line| line.stop), Some(text.len()), "overflow still advances through all text");
+}
+
+#[test]
+fn thai_emergency_wrapping_preserves_latin_ligatures() {
+    let text = "ffiffiffi ภาษาไทย";
+    let mut d = Document::from_text(text);
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, 9), &|c| c.font = Some("Source Serif 4".into())).unwrap();
+    d.last_section.margin_left = 297.0;
+    d.last_section.margin_right = 297.0;
+    let l = lay(&d);
+    let pl = para_layout(&l, 0);
+    assert!(pl.clusters.iter().any(|c| c.start < 9 && c.g1 <= c.g0), "the Latin prefix contains ligatures");
+    for line in &pl.lines {
+        if let Some(next) = pl.clusters.get(line.c1).filter(|c| c.start < 9) {
+            assert!(next.g1 > next.g0, "Thai emergency wrapping must not start a line inside a Latin ligature");
+        }
+    }
+    assert_eq!(pl.lines.last().map(|line| line.stop), Some(text.len()), "overwide ligatures still make progress");
+}
+
+#[test]
+fn thai_dictionary_context_skips_hidden_text_and_tracked_deletions() {
+    let text = "การประชุXmคณะกรรมการบริหารโครงการ";
+    let hidden = text.find('X').unwrap_or(text.len());
+    let boundary = text.find("กรรมการ").unwrap_or(text.len());
+    for deleted in [false, true] {
+        let mut d = Document::from_text(text);
+        d.format_range(&Pos::body(0, hidden), &Pos::body(0, hidden + 1), &|c| {
+            if deleted {
+                c.del = Some(0);
+            } else {
+                c.hidden = Some(true);
+            }
+        })
+        .unwrap();
+        let opts = LayoutOptions { hide_deleted: deleted, ..Default::default() };
+        let mut cache = LayoutCache::new();
+        let l = layout(&d, &mut cache, &opts);
+        let pl = para_layout(&l, 0);
+        assert!(
+            pl.clusters.iter().any(|c| c.end == boundary && c.break_after),
+            "visible Thai context maps its word boundary back to source byte {boundary} (deleted={deleted})"
+        );
+    }
+}
+
 /// A face with Myanmar letters (an installed system font), or `None` to skip.
 fn myanmar_face() -> Option<wordcraft_fonts::FaceRef> {
     crate::test_fonts();
@@ -354,4 +504,66 @@ fn khmer_ignores_the_ligature_setting() {
     let hd = Ligatures { historical: true, discretional: true, ..Default::default() };
     assert_eq!(gids(Some(hd)), gids(None));
     assert_eq!(gids(Ligatures::from_ooxml("none")), gids(None));
+}
+
+/// Measured in Word for Windows: Thai in a run that isn't complex script breaks only at its
+/// spaces (and anywhere when a stretch is too long for the line), whatever its language; with
+/// `w:cs` it breaks between words. That's for documents read from Word files: elsewhere Thai
+/// breaks between words in any run.
+#[test]
+fn thai_outside_a_complex_script_run_breaks_only_at_spaces_in_word_files() {
+    let text = "เอกสารต้นทางเพื่อให้ผู้เสนอพิสูจน์เส้นทางข้อมูล การนำเข้าและจัดมาตรฐาน";
+    let breaks_inside = |cs: Option<bool>, word: bool| {
+        let mut d = Document::from_text("");
+        d.settings.word_thai_breaks = word;
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, wordcraft_doc::CharProps { cs, ..Default::default() }))];
+        let l = lay(&d);
+        let pl = para_layout(&l, 0);
+        let thai = |k: usize| {
+            text.get(pl.clusters[k].start..pl.clusters[k].end).and_then(|t| t.chars().next()).is_some_and(|c| ('\u{0E00}'..='\u{0E7F}').contains(&c))
+        };
+        (1..pl.clusters.len()).filter(|&k| pl.clusters[k - 1].break_after && thai(k - 1) && thai(k)).count()
+    };
+    assert_eq!(breaks_inside(None, true), 0, "a plain run breaks only at its space");
+    assert_eq!(breaks_inside(Some(false), true), 0, "nor one that says it isn't complex script");
+    assert!(breaks_inside(Some(true), true) > 3, "w:cs: between words");
+    assert!(breaks_inside(None, false) > 3, "not read from Word: between words");
+}
+
+/// A plain Thai run in a Word file too long for the line still wraps, between letters.
+#[test]
+fn a_long_plain_thai_run_in_a_word_file_still_wraps() {
+    let text = "เอกสารต้นทางเพื่อให้ผู้เสนอพิสูจน์เส้นทางข้อมูล".repeat(8);
+    let mut d = Document::from_text(&text);
+    d.settings.word_thai_breaks = true;
+    let l = lay(&d);
+    let pl = para_layout(&l, 0);
+    assert!(pl.lines.len() > 1, "it wraps: {} line(s)", pl.lines.len());
+    let shown: String = pl.lines.iter().map(|l| &text[l.start..l.stop]).collect();
+    assert_eq!(shown, text, "no text is lost");
+}
+
+/// Measured in Word for Windows (runs as in a real file, the year in a plain run): a `w:cs` stop
+/// breaks before the year ("พ.ศ." | "2564"), a plain one doesn't, and a plain stop before Thai
+/// still does ("แล้ว." | "ต่อไป").
+#[test]
+fn a_plain_full_stop_keeps_a_year_after_it_in_word_files() {
+    let break_after_stop = |runs: &[(&str, bool)]| {
+        let mut p = wordcraft_doc::Paragraph::new();
+        p.text = runs.iter().map(|(t, _)| *t).collect();
+        p.runs = runs
+            .iter()
+            .map(|&(t, cs)| wordcraft_doc::Run { len: t.len(), props: wordcraft_doc::CharProps { cs: Some(cs), ..Default::default() } })
+            .collect();
+        let text = p.text.clone();
+        let mut d = Document::from_text("");
+        d.settings.word_thai_breaks = true;
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        let pl = para_layout(&l, 0);
+        pl.clusters.iter().any(|c| c.break_after && text.get(c.start..c.end) == Some("."))
+    };
+    assert!(break_after_stop(&[("ประกาศพ.ศ.", true), ("2564", false), ("เรื่องงานบริหาร", true)]), "a w:cs stop");
+    assert!(!break_after_stop(&[("ประกาศพ.ศ", true), (".", false), ("2564", false), ("เรื่องงานบริหาร", true)]), "a plain stop");
+    assert!(break_after_stop(&[("งานจบแล้ว", true), (".", false), ("ต่อไปอีกนาน", true)]), "a plain stop before Thai");
 }

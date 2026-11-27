@@ -431,7 +431,25 @@ fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>)
         if !part.is_empty() {
             inserted = true;
             let starts_para = direction_unset(s, &at);
-            at = s.doc.insert_text(&at, &part, &props)?;
+            for (piece, script) in script_pieces(&part) {
+                // Word marks the Thai it types complex script (`w:cs`), where Thai breaks between
+                // words; elsewhere it breaks only at spaces (`Settings::word_thai_breaks`). Latin
+                // letters typed after it aren't (Word types them with another keyboard), so they
+                // don't take the Thai run's mark; digits, spaces and marks go with the run.
+                let marked;
+                let props = match script {
+                    Script::Thai if props.cs != Some(true) => {
+                        marked = wordcraft_doc::CharProps { cs: Some(true), ..props.clone() };
+                        &marked
+                    }
+                    Script::Latin if props.cs == Some(true) => {
+                        marked = wordcraft_doc::CharProps { cs: None, ..props.clone() };
+                        &marked
+                    }
+                    _ => &props,
+                };
+                at = s.doc.insert_text(&at, piece, props)?;
+            }
             // Typing Arabic, Hebrew… as the first letters of a paragraph whose direction nothing
             // sets makes it a right-to-left paragraph, so the caret and text start at the right
             // margin. Paragraphs that already have letters, or a direction, keep theirs.
@@ -452,6 +470,44 @@ fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>)
     s.goal_x = None;
     let content_changed = deletion.content_changed || inserted;
     Ok(InsertEffect { content_changed, state_changed: deletion.state_changed || content_changed || placeholder_changed })
+}
+
+/// What typed text is, for marking it complex script as Word does.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Script {
+    Thai,
+    /// Letters of a script that isn't complex (Latin, Greek, Cyrillic…).
+    Latin,
+    /// Digits, spaces, marks, and the other complex scripts: they keep the run's formatting.
+    Other,
+}
+
+/// `text` cut where its [`Script`] changes.
+fn script_pieces(text: &str) -> Vec<(&str, Script)> {
+    let script = |c: char| {
+        if matches!(c, '\u{0E00}'..='\u{0E7F}') {
+            Script::Thai
+        } else if c.is_alphabetic() && !wordcraft_doc::bidi::is_complex_script(c) {
+            Script::Latin
+        } else {
+            Script::Other
+        }
+    };
+    let mut out: Vec<(&str, Script)> = Vec::new();
+    let mut start = 0;
+    let mut current = None;
+    for (i, c) in text.char_indices() {
+        let k = script(c);
+        if let Some(prev) = current.filter(|&p| p != k) {
+            out.push((&text[start..i], prev));
+            start = i;
+        }
+        current = Some(k);
+    }
+    if let Some(k) = current {
+        out.push((&text[start..], k));
+    }
+    out
 }
 
 /// Is the paragraph at `at` still without letters (empty, or only spaces, digits and

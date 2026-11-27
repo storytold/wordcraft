@@ -1651,6 +1651,8 @@ fn settings_core_theme_round_trip() {
     d.core.created = "2026-01-01T00:00:00Z".into();
     d.core.modified = "2026-02-01T00:00:00Z".into();
     d.core.revision = 7;
+    // Read back from a Word file, it breaks Thai as Word does.
+    d.settings.word_thai_breaks = true;
     let r = rt(&d);
     assert_eq!(r.settings, d.settings);
     assert_eq!(r.core, d.core);
