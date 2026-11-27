@@ -131,7 +131,7 @@ pub(crate) const COMMENT_ROWS: usize = 10;
 /// A comment's text, editable in place. Typing stays in a draft until the field's value lands (focus leaves it);
 /// then [`commit_comment`] writes it back with one `review.editComment`, so each editing session is one undo step.
 /// Escape gives back the text from before, so the draft goes.
-pub(crate) fn comment_field(app: &mut WordApp, ui: &mut Ui, document: u64, id: u32) {
+fn comment_field(app: &mut WordApp, ui: &mut Ui, document: u64, id: u32) {
     let Some(part) = app.session.doc.comments.get(&id).map(|c| c.part) else { return };
     let (thread, index) = (thread_of(app, id), message_index(app, id));
     let shown = draft_of(app, id).unwrap_or_else(|| app.session.doc.plain_text(StoryRef::Part(part)));

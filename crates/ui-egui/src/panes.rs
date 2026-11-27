@@ -19,8 +19,6 @@ mod nav;
 mod side;
 mod state;
 
-#[cfg(test)]
-pub(crate) use comments::comment_field;
 use comments::comments;
 pub(crate) use comments::{commit_comment, commit_reply, flush_comment_drafts, has_comment_drafts, state_has_drafts};
 use host::Content;

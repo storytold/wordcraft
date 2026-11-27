@@ -377,41 +377,53 @@ fn a_refused_comment_edit_keeps_the_draft() {
     assert!(text.contains("Edited"), "the typed text survived the refusal: {text:?}");
 }
 
-/// #1348: Escape in a comment field throws the draft away and shows the comment's text again.
+/// #1348: Escape in a balloon throws the draft away and shows the comment's text again, and leaving the field writes nothing.
 #[test]
 fn escape_reverts_a_comment_draft() {
+    use egui::accesskit::Role;
+
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     a.run("text.insert", json!({"text": "Some text here"})).unwrap();
     a.run("select.text", json!({"text": "text"})).unwrap();
     let id = a.run("review.newComment", json!({"text": "Original"})).unwrap()["id"].as_u64().unwrap() as u32;
-    let doc_id = a.session.document_id();
-    let ctx = crate::test_harness::context();
-    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0));
-    let step = |a: &mut WordApp, events: Vec<egui::Event>| -> egui::Rect {
-        let mut rect = egui::Rect::NOTHING;
-        craft::ui::shell::embed::before_input(&ctx, |out| a.frame_input(out));
-        let input = egui::RawInput { events, screen_rect: Some(screen), ..Default::default() };
-        ctx.run_ui(input, |ui| {
-            rect = ui
-                .scope(|ui| {
-                    crate::panes::comment_field(a, ui, doc_id, id);
-                })
-                .response
-                .rect;
-        })
-        .drop_without_applying_deltas();
-        rect
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(800.0, 450.0)).with_step_dt(0.25).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h, 2);
+    let click_fast = |h: &mut H, at: Pos2| {
+        h.event(egui::Event::PointerMoved(at));
+        h.event(button(at, egui::PointerButton::Primary, true));
+        h.app_frame();
+        h.event(button(at, egui::PointerButton::Primary, false));
+        h.app_frame();
     };
-    let field_rect = step(&mut a, Vec::new());
-    let at = field_rect.left_top() + egui::vec2(20.0, 12.0);
-    step(&mut a, vec![egui::Event::PointerMoved(at), button(at, egui::PointerButton::Primary, true)]);
-    step(&mut a, vec![button(at, egui::PointerButton::Primary, false), egui::Event::Text("Discarded ".into())]);
-    assert!(draft_text(&a).is_some_and(|d| d.contains("Discarded")), "the draft was recorded before Escape");
-    step(&mut a, vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }]);
-    assert_eq!(draft_text(&a), None, "the draft is gone");
-    assert_eq!(comment_text(&a, id), "Original", "nothing was written");
-    super::balloons::deselect_balloon(&mut a);
-    assert_eq!(comment_text(&a, id), "Original", "and nothing is written later");
+    let card = h.state().canvas.balloon_rects.iter().find(|(i, _)| *i == id).map(|(_, r)| *r).expect("the comment has a balloon");
+    click_fast(&mut h, card.left_top() + vec2(30.0, 8.0));
+    assert_eq!(h.state().canvas.selected_balloon(), Some(id), "the click selected the balloon");
+    h.app_frame();
+    let field = h
+        .query_by_role_and_label(Role::MultilineTextInput, "Edit")
+        .or_else(|| h.query_by_role_and_label(Role::TextInput, "Edit"))
+        .expect("balloon Edit field")
+        .rect()
+        .center();
+    click_fast(&mut h, field);
+    type_in(&mut h, "Discarded ");
+    assert!(draft_text(h.state()).is_some_and(|d| d.contains("Discarded")), "the draft was recorded before Escape");
+    h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
+    h.app_frame();
+    assert_eq!(draft_text(h.state()), None, "the draft is gone");
+    assert_eq!(comment_text(h.state(), id), "Original", "nothing was written");
+    let page = h.state().canvas.page_rects().next().map(|(_, r)| r.center()).expect("a page is shown");
+    click_fast(&mut h, page);
+    h.app_frame();
+    assert_eq!(comment_text(h.state(), id), "Original", "and nothing is written later");
 }
 
 /// #3268: clicking a balloon's Reply button, typing a reply and clicking away posts it as a
