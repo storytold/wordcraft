@@ -14,23 +14,13 @@ use wordcraft_doc::wordart::{TextEffects, TextFill, TextOutline, TextWarp};
 use wordcraft_fonts::FaceRef;
 use wordcraft_geom::Rect;
 
-/// How a layer is painted.
-#[derive(Clone, Debug, PartialEq)]
-pub enum ArtPaint {
-    Solid(Rgb, f32),
-    /// A linear gradient from `p0` to `p1` (page points); stops are (offset 0..1, colour, opacity).
-    Linear {
-        p0: (f32, f32),
-        p1: (f32, f32),
-        stops: Vec<(f32, Rgb, f32)>,
-    },
-}
+use crate::display::Paint;
 
 /// One fill (`stroke: None`) or stroke (its width, points) of a path.
 #[derive(Clone, Debug)]
 pub struct ArtLayer {
     pub path: BezPath,
-    pub paint: ArtPaint,
+    pub paint: Paint,
     pub stroke: Option<f32>,
     /// The letters themselves (fill, outline), not a shadow, glow or reflection of them: a dark
     /// page inks these against the text's background.
@@ -73,10 +63,10 @@ pub fn art_layers(path: &BezPath, fx: &TextEffects, color: Rgb, alpha: f32) -> V
     let Some(b) = bbox(path) else { return Vec::new() };
     let mut out = Vec::new();
     let fill = fx.fill.clone().unwrap_or(TextFill::Solid { color, transparency: 0.0 });
-    let fill_paint = |path: &BezPath| -> Option<ArtPaint> {
+    let fill_paint = |path: &BezPath| -> Option<Paint> {
         match &fill {
             TextFill::None => None,
-            TextFill::Solid { color, transparency } => Some(ArtPaint::Solid(*color, alpha * (1.0 - transparency / 100.0))),
+            TextFill::Solid { color, transparency } => Some(Paint::Solid(*color, alpha * (1.0 - transparency / 100.0))),
             TextFill::Gradient { stops, angle } => {
                 let b = bbox(path)?;
                 let (s, c) = (f64::from(*angle).to_radians().sin(), f64::from(*angle).to_radians().cos());
@@ -84,7 +74,7 @@ pub fn art_layers(path: &BezPath, fx: &TextEffects, color: Rgb, alpha: f32) -> V
                 let ctr = b.center();
                 let p0 = ((ctr.x - d * c) as f32, (ctr.y - d * s) as f32);
                 let p1 = ((ctr.x + d * c) as f32, (ctr.y + d * s) as f32);
-                Some(ArtPaint::Linear {
+                Some(Paint::Linear {
                     p0,
                     p1,
                     stops: stops.iter().map(|g| (g.pos / 100.0, g.color, alpha * (1.0 - g.transparency / 100.0))).collect(),
@@ -106,7 +96,7 @@ pub fn art_layers(path: &BezPath, fx: &TextEffects, color: Rgb, alpha: f32) -> V
         let a = alpha * (1.0 - r.transparency / 100.0);
         out.push(ArtLayer {
             path: mirror,
-            paint: ArtPaint::Linear { p0: (x, top), p1: (x, bottom), stops: vec![(0.0, ink, a), (1.0, ink, 0.0)] },
+            paint: Paint::Linear { p0: (x, top), p1: (x, bottom), stops: vec![(0.0, ink, a), (1.0, ink, 0.0)] },
             stroke: None,
             letters: false,
         });
@@ -115,7 +105,7 @@ pub fn art_layers(path: &BezPath, fx: &TextEffects, color: Rgb, alpha: f32) -> V
         let (dx, dy) = sh.offset();
         let moved = Affine::translate((f64::from(dx), f64::from(dy))) * path.clone();
         for (g, a) in wordcraft_doc::effects::bands(0.0, sh.blur / 2.0, sh.opacity() * alpha) {
-            let paint = ArtPaint::Solid(sh.color, a);
+            let paint = Paint::Solid(sh.color, a);
             out.push(ArtLayer { path: moved.clone(), paint: paint.clone(), stroke: None, letters: false });
             if g > 0.05 {
                 out.push(ArtLayer { path: moved.clone(), paint, stroke: Some(2.0 * g), letters: false });
@@ -125,7 +115,7 @@ pub fn art_layers(path: &BezPath, fx: &TextEffects, color: Rgb, alpha: f32) -> V
     if let Some(gl) = fx.glow {
         for (g, a) in wordcraft_doc::effects::bands(0.0, gl.size, gl.opacity() * alpha) {
             if g > 0.05 {
-                out.push(ArtLayer { path: path.clone(), paint: ArtPaint::Solid(gl.color, a), stroke: Some(2.0 * g), letters: false });
+                out.push(ArtLayer { path: path.clone(), paint: Paint::Solid(gl.color, a), stroke: Some(2.0 * g), letters: false });
             }
         }
     }
@@ -133,7 +123,7 @@ pub fn art_layers(path: &BezPath, fx: &TextEffects, color: Rgb, alpha: f32) -> V
         out.push(ArtLayer { path: path.clone(), paint: p, stroke: None, letters: true });
     }
     if let Some((c, w, a)) = outline {
-        out.push(ArtLayer { path: path.clone(), paint: ArtPaint::Solid(c, a), stroke: Some(w), letters: true });
+        out.push(ArtLayer { path: path.clone(), paint: Paint::Solid(c, a), stroke: Some(w), letters: true });
     }
     out
 }
@@ -346,6 +336,7 @@ mod tests {
 
     #[test]
     fn arch_baselines_lie_on_the_arc() {
+        crate::test_fonts();
         let frame = Rect::new(10.0, 20.0, 200.0, 100.0);
         let w = Warp::new(&TextWarp::new("textArchUp").unwrap(), frame, 0.25).unwrap();
         let (cx, cy, rx, ry) = (110.0, 70.0, 100.0, 50.0);
@@ -373,6 +364,7 @@ mod tests {
     /// #2534: the legacy font effects become text effects, under any WordArt effects.
     #[test]
     fn legacy_font_effects_are_drawn_as_text_effects() {
+        crate::test_fonts();
         use wordcraft_doc::CharProps;
         let rc = |c: CharProps| wordcraft_doc::styles::StyleSheet::default().resolve_char(None, &CharProps { size: Some(20.0), ..c });
         let red = Rgb(200, 0, 0);
@@ -404,6 +396,7 @@ mod tests {
     /// #2534: synthetic bold widens the outline, or adds one in the fill's colour.
     #[test]
     fn embolden_widens_or_adds_the_outline() {
+        crate::test_fonts();
         let red = Rgb(200, 0, 0);
         let mut plain = TextEffects::default();
         embolden(&mut plain, red, 20.0);
@@ -428,6 +421,7 @@ mod tests {
     /// draws its glyphs plainly.
     #[test]
     fn effects_on_tracked_and_turned_text() {
+        crate::test_fonts();
         use crate::display::{DisplayOptions, Draw, InsertMark, page_display};
         use wordcraft_doc::props::TextDirection;
         use wordcraft_doc::{CharProps, Document, Paragraph, Revision, RevisionKind, para_block};
@@ -466,6 +460,7 @@ mod tests {
 
     #[test]
     fn flat_and_unknown_warps_draw_flat() {
+        crate::test_fonts();
         let frame = Rect::new(0.0, 0.0, 100.0, 50.0);
         assert!(Warp::new(&TextWarp::new("textPlain").unwrap(), frame, 0.2).is_none());
         assert!(Warp::new(&TextWarp::new("textCanUp").unwrap(), frame, 0.2).is_none());

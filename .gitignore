@@ -8,3 +8,7 @@ plan/
 /.claude/
 /target-*/
 /craft-fonts/
+/.nightly-tools
+/.nightly-input
+/craft-i18n
+__pycache__/
