@@ -3,3 +3,14 @@
 * text=auto
 
 craft-i18n.rev text eol=lf
+
+# These model sources and generated tables have byte hashes recorded in model/README.md.
+# Keep checkout bytes stable even when core.autocrlf=true.
+crates/validate/model/extract_content_model.py text eol=lf
+crates/validate/model/generate_model.py text eol=lf
+crates/validate/model/content_model_v2.json text eol=lf
+crates/validate/model/content_model_v2_transitional.json text eol=lf
+crates/validate/model/content_model_dml_v2.json text eol=lf
+crates/validate/model/content_model_dml_v2_transitional.json text eol=lf
+crates/validate/src/model.rs text eol=lf
+crates/validate/model/extract_model_lf.py text eol=lf
