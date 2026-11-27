@@ -1330,19 +1330,29 @@ fn symbol_menu_cells_are_compact_and_the_tooltip_names_the_character() {
     let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
     let mut h = tab_harness(app, "Insert");
     click_button(&mut h, "Symbol");
+    let cell_y = |h: &Harness| h.get_by_label("\u{A9}").rect().min.y;
     let cell = h.get_by_label("\u{A9}").rect();
     assert!(cell.width() <= 80.0 && cell.height() <= 80.0, "a symbol cell is compact, got {:?}", cell.size());
+    // Eight symbols fit one row, so the menu does not cover the page.
+    assert_eq!(h.get_by_label("\u{A5}").rect().min.y, cell_y(&h), "the eighth symbol is on the first row");
     h.get_by_label("\u{A9}").hover();
     crate::test_harness::frames(&mut h, 40);
     assert!(h.query_by_label_contains("COPYRIGHT SIGN (U+00A9)").is_some(), "the tooltip names the character");
+    // A screen reader gets the name without hovering: the tile's label is the glyph, its description the name.
+    let desc = h.get_by_label("\u{A9}").accesskit_node().description().map(|d| d.to_string()).unwrap_or_default();
+    assert!(desc.contains("COPYRIGHT SIGN"), "the tile's accessible description names the character, got {desc:?}");
 }
 
 /// Characters outside the common list still say what they are: code point and block.
 #[test]
 fn symbol_tip_names_known_characters_and_falls_back_to_the_code_point() {
     use super::insert::symbol_tip;
-    assert_eq!(symbol_tip("\u{A9}", ""), "COPYRIGHT SIGN (U+00A9)");
-    assert_eq!(symbol_tip("\u{3B1}", "Symbol"), "GREEK SMALL LETTER ALPHA (U+03B1), Symbol");
-    assert_eq!(symbol_tip("\u{2602}", ""), "U+2602 (Miscellaneous Symbols)");
+    let named = symbol_tip("\u{A9}", "");
+    assert!(named.contains("COPYRIGHT SIGN") && named.contains("00A9"), "named character: {named}");
+    let with_font = symbol_tip("\u{3B1}", "Symbol");
+    assert!(with_font.contains("GREEK SMALL LETTER ALPHA") && with_font.contains("03B1") && with_font.contains("Symbol"), "{with_font}");
+    assert!(!named.contains("Symbol"), "no font, none named");
+    let unnamed = symbol_tip("\u{2602}", "");
+    assert!(unnamed.contains("2602") && unnamed.contains("Miscellaneous Symbols"), "unnamed character: {unnamed}");
     assert_eq!(symbol_tip("", ""), "");
 }

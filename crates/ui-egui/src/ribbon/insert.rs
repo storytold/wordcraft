@@ -286,9 +286,9 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     });
 }
 
-/// The Unicode names (Unicode Standard, UnicodeData.txt) of the characters the grid offers first. No Unicode-names
+/// The characters the grid offers after the recent ones, with their Unicode names (UnicodeData.txt). No Unicode-names
 /// crate is installed, and the one on crates.io is under Unicode-DFS-2016, which the licence allowlist lacks.
-const SYMBOL_NAMES: &[(char, &str)] = &[
+const DEFAULT_SYMBOLS: &[(char, &str)] = &[
     ('\u{A9}', "COPYRIGHT SIGN"),
     ('\u{AE}', "REGISTERED SIGN"),
     ('\u{2122}', "TRADE MARK SIGN"),
@@ -327,7 +327,7 @@ pub(super) fn symbol_tip(glyph: &str, font: &str) -> String {
     let mut chars = glyph.chars();
     let tip = match (chars.next(), chars.next()) {
         (Some(c), None) => {
-            let name = SYMBOL_NAMES.iter().find(|(n, _)| *n == c).map(|(_, name)| *name);
+            let name = DEFAULT_SYMBOLS.iter().find(|(n, _)| *n == c).map(|(_, name)| *name);
             let block = crate::dialogs_insert::subset_of(c);
             match (name, block) {
                 (Some(name), _) => format!("{name} (U+{:04X})", c as u32),
@@ -345,12 +345,10 @@ pub(super) fn symbol_tip(glyph: &str, font: &str) -> String {
 fn symbol_grid(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
     // Recently used symbols first (their font on hover), then common ones.
     let mut items: Vec<(String, String)> = app.ui.recent_symbols.iter().map(|r| (r.ch.clone(), r.font.clone())).collect();
-    for c in [
-        "©", "®", "™", "§", "¶", "€", "£", "¥", "°", "±", "≠", "≤", "≥", "÷", "×", "∞", "µ", "α", "β", "π", "Ω", "∑", "√", "→", "←", "✓", "★", "♥",
-        "—", "…",
-    ] {
-        if !items.iter().any(|(ch, f)| ch == c && f.is_empty()) {
-            items.push((c.to_string(), String::new()));
+    for (c, _) in DEFAULT_SYMBOLS {
+        let c = c.to_string();
+        if !items.iter().any(|(ch, f)| *ch == c && f.is_empty()) {
+            items.push((c, String::new()));
         }
     }
     items.truncate(30);
@@ -358,7 +356,6 @@ fn symbol_grid(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
         .select(SelectMode::None)
         .activate(ActivateOn::Click)
         .caption(CaptionPlace::None)
-        .card_columns(6)
         // Small cells (#7165): a glyph needs no more room than the small thumbnail step.
         .thumb_size(ThumbSize::Small)
         // At most thirty symbols, all shown; the menu's body is the one scroll.
