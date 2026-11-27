@@ -17,6 +17,7 @@ mod find_apostrophes;
 mod fit_one_page;
 mod font_sizes;
 mod fonts;
+mod format_painter;
 mod ime_noop;
 mod page_number_formats_in_lists;
 mod para_tools;
@@ -15244,7 +15245,7 @@ fn copied_paragraph_formatting_carries_no_tracked_changes() {
     let f = s.sel.focus.clone();
     assert!(s.doc.para_at(&f).unwrap().props.fmt_change.is_some(), "the source paragraph has a tracked formatting change");
     run(&mut s, "edit.copyFormat", json!({}));
-    let (_, para) = s.copied_format.clone().unwrap();
+    let (_, Some(para)) = s.copied_format.clone().unwrap() else { panic!("a whole source paragraph captures its properties") };
     assert!(para.fmt_change.is_none() && para.num_change.is_none());
     run(&mut s, "select.text", json!({"text": "two"}));
     run(&mut s, "edit.pasteFormat", json!({}));

@@ -997,6 +997,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-12 | trivial | Validator: competing official role targets produce coverage and suppress dependent findings; both-order, repeated-target, malformed-source and owner-isolation controls (#5875). No parity estimate changed. |
 | 2026-11-03 | trivial | Progress log: a picture inserted or pasted in a table cell fits the cell (#5428) |
 | 2026-11-10 | trivial | Save As on Linux: the desktop portal's Save dialog reports the file type picked, updating the extension so saving as PDF writes a .pdf (#6180) |
+| 2026-11-08 | trivial | #5964: Copy Formatting and Format Painter follow measured Mac paragraph-selection rules; synthetic mark cases do not establish real paragraph-mark selection coverage. Readiness unchanged. |
 | 2026-11-08 | trivial | Progress log: freestanding custom.dic dictionary file support in File › Options › Proofing (#5840) |
 | 2026-11-08 | trivial | Progress log: XML line ends in text normalised (#5897) |
 | 2026-11-08 | trivial | Progress log: contextual spacing drops the space after a cell's last Normal paragraph (#5450) |
