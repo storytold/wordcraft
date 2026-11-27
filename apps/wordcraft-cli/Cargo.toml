@@ -6,6 +6,9 @@ license.workspace = true
 publish = false
 description = "WordCraft command line: convert, inspect, render, run commands, MCP server"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "wordcraft-cli"
 path = "src/main.rs"
@@ -22,9 +25,14 @@ wordcraft-zotero = { workspace = true }
 wordcraft-validate = { workspace = true }
 serde_json = { workspace = true }
 sys-locale = "0.3"
+thiserror = { workspace = true }
+clap = { workspace = true }
 
 [dev-dependencies]
 wordcraft-fonts = { workspace = true }
 wordcraft-geom = { workspace = true, features = ["image"] }
 image = { workspace = true }
 craft-zip = { workspace = true }
+# The completions and man pages (examples/man-and-completions.rs), generated from the clap definition.
+clap_complete = { workspace = true }
+clap_mangen = { workspace = true }

@@ -3,7 +3,7 @@
 
 use std::process::{Command, Output};
 
-const SUBCOMMANDS: [&str; 10] = ["convert", "info", "text", "inspect", "render", "run", "commands", "parity", "mcp", "zotero"];
+const SUBCOMMANDS: [&str; 11] = ["convert", "info", "text", "inspect", "render", "run", "commands", "parity", "validate", "mcp", "zotero"];
 
 fn cli(args: &[&str]) -> Output {
     // `output()` gives the child no stdin, so `mcp` can't wait for a client.
@@ -14,7 +14,7 @@ fn assert_prints_usage(args: &[&str]) {
     let out = cli(args);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{args:?}: status {:?}, stderr: {stderr}", out.status);
-    assert!(String::from_utf8_lossy(&out.stdout).starts_with("wordcraft-cli — "), "{args:?}: stdout: {}", String::from_utf8_lossy(&out.stdout));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("wordcraft-cli"), "{args:?}: stdout: {}", String::from_utf8_lossy(&out.stdout));
     assert!(stderr.is_empty(), "{args:?}: stderr: {stderr}");
 }
 
@@ -39,9 +39,9 @@ fn help_comes_before_opening_files_and_folders() {
 #[test]
 fn misspelled_options_and_unknown_commands_still_fail() {
     let out = cli(&["info", "--hepl"]);
-    assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("info: unknown option --hepl"));
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--hepl"));
     let out = cli(&["frobnicate", "--help"]);
-    assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("unknown command `frobnicate`"));
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("frobnicate"));
 }

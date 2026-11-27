@@ -1,4 +1,4 @@
-//! `convert --strict` (#6005): exit 3 and a report when a PDF or PNG would silently lack a
+//! `convert --strict` (#6005): exit 1 and a report when a PDF or PNG would silently lack a
 //! character or a picture, nothing written; exit 0 otherwise.
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -145,9 +145,9 @@ fn an_uncovered_code_point_fails_strict_with_a_report_and_no_file() {
     for out in ["out.pdf", "out.png"] {
         let out = d.join(out);
         let r = convert(&input, &out, true);
-        assert_eq!(r.status.code(), Some(3), "{}", stderr(&r));
+        assert_eq!(r.status.code(), Some(1), "{}", stderr(&r));
         let text = stderr(&r);
-        assert!(text.contains(&format!("wordcraft-cli: strict: 1 character cannot be drawn: {cp} (×3)")), "{text}");
+        assert!(text.contains(&format!("error: strict: 1 character cannot be drawn: {cp} (×3)")), "{text}");
         let json = report_json(&r);
         assert_eq!(json["schema"], 1);
         assert_eq!(json["strict"], "failed");
@@ -186,7 +186,7 @@ fn a_corrupt_header_picture_fails_strict_naming_the_part_and_the_header() {
     for out in ["out.pdf", "out.png"] {
         let out = d.join(out);
         let r = convert(&input, &out, true);
-        assert_eq!(r.status.code(), Some(3), "{}", stderr(&r));
+        assert_eq!(r.status.code(), Some(1), "{}", stderr(&r));
         let text = stderr(&r);
         assert!(text.contains("word/media/image2.bin (header2.xml): unsupported format"), "{text}");
         let json = report_json(&r);
@@ -218,7 +218,7 @@ fn an_external_picture_target_is_never_fetched_and_is_reported_under_strict() {
     assert_eq!(lenient.status.code(), Some(0), "{}", stderr(&lenient));
     let out = d.join("strict.pdf");
     let strict = convert(&input, &out, true);
-    assert_eq!(strict.status.code(), Some(3), "{}", stderr(&strict));
+    assert_eq!(strict.status.code(), Some(1), "{}", stderr(&strict));
     let json = report_json(&strict);
     assert_eq!(json["missing_pictures"][0]["reason"], "external_target");
     assert!(stderr(&strict).contains("external target"));
@@ -246,19 +246,19 @@ fn bad_input_exits_1_with_the_usual_message_with_and_without_strict() {
         assert_eq!(plain.status.code(), Some(1), "{}", stderr(&plain));
         assert_eq!(strict.status.code(), Some(1), "{}", stderr(&strict));
         assert_eq!(stderr(&plain), stderr(&strict));
-        assert!(stderr(&plain).starts_with("wordcraft-cli: "), "{}", stderr(&plain));
+        assert!(stderr(&plain).starts_with("error: "), "{}", stderr(&plain));
         assert!(!d.join("a.pdf").exists() && !d.join("b.pdf").exists());
     }
     std::fs::remove_dir_all(d).unwrap();
 }
 
 #[test]
-fn strict_with_another_output_type_exits_1_before_the_input_is_read() {
+fn strict_with_another_output_type_exits_2_before_the_input_is_read() {
     let d = dir("wrong-output");
     let missing = d.join("does-not-exist.docx");
     for out in ["out.docx", "out.txt", "out.odt"] {
         let r = convert(&missing, &d.join(out), true);
-        assert_eq!(r.status.code(), Some(1));
+        assert_eq!(r.status.code(), Some(2));
         let text = stderr(&r);
         assert!(text.contains("--strict needs a .pdf or .png output"), "{text}");
         assert!(!d.join(out).exists());
@@ -291,11 +291,11 @@ fn render_strict_refuses_an_uncovered_character_on_the_page_with_no_stdout_or_fi
     let input = two_page_input(&d, &format!("a{c}b"));
     let out = d.join("p1.png");
     let r = render(&input, &out, &["--strict"]);
-    assert_eq!(r.status.code(), Some(3), "{}", stderr(&r));
+    assert_eq!(r.status.code(), Some(1), "{}", stderr(&r));
     assert!(r.stdout.is_empty(), "{}", String::from_utf8_lossy(&r.stdout));
     assert!(!out.exists());
     let text = stderr(&r);
-    assert!(text.contains(&format!("wordcraft-cli: strict: 1 character cannot be drawn: {cp} (×1)")), "{text}");
+    assert!(text.contains(&format!("error: strict: 1 character cannot be drawn: {cp} (×1)")), "{text}");
     assert_eq!(report_json(&r)["missing_glyphs"][0]["cp"], cp.as_str());
     eprintln!("{text}");
 
@@ -323,7 +323,7 @@ fn render_strict_refuses_a_corrupt_header_picture_and_bad_input_still_exits_1() 
     std::fs::write(&input, docx_with_header_picture(b"corrupt bytes, not a picture")).unwrap();
     let out = d.join("out.png");
     let r = render(&input, &out, &["--strict"]);
-    assert_eq!(r.status.code(), Some(3), "{}", stderr(&r));
+    assert_eq!(r.status.code(), Some(1), "{}", stderr(&r));
     assert!(r.stdout.is_empty());
     assert!(stderr(&r).contains("word/media/image2.bin (header2.xml)"), "{}", stderr(&r));
     assert!(!out.exists());
@@ -341,16 +341,16 @@ fn a_picture_target_with_a_newline_and_a_bidi_override_cannot_forge_a_report_lin
     let d = dir("escape");
     let input = d.join("in.docx");
     // XML character references put a newline and U+202E in the target.
-    std::fs::write(&input, docx_with_external_picture("http://example.invalid/a&#10;wordcraft-cli: strict: forged&#x202E;gnp.png")).unwrap();
+    std::fs::write(&input, docx_with_external_picture("http://example.invalid/a&#10;error: strict: forged&#x202E;gnp.png")).unwrap();
     let out = d.join("out.pdf");
     let r = convert(&input, &out, true);
-    assert_eq!(r.status.code(), Some(3), "{}", stderr(&r));
+    assert_eq!(r.status.code(), Some(1), "{}", stderr(&r));
     let text = stderr(&r);
     let lines: Vec<&str> = text.lines().collect();
     // One human line for the picture, then the JSON line.
     assert_eq!(lines.len(), 2, "{text}");
-    assert!(lines[0].starts_with("wordcraft-cli: strict: 1 picture(s) left out: "), "{text}");
-    assert!(lines[0].contains("\\nwordcraft-cli: strict: forged\\u{202e}gnp.png"), "{text}");
+    assert!(lines[0].starts_with("error: strict: 1 picture(s) left out: "), "{text}");
+    assert!(lines[0].contains("\\nerror: strict: forged\\u{202e}gnp.png"), "{text}");
     assert!(!text.contains('\u{202e}'), "the raw bidi override reached the terminal");
     // The JSON keeps the raw value, escaped by the JSON encoder.
     let json = report_json(&r);
@@ -363,14 +363,14 @@ fn a_picture_target_with_a_newline_and_a_bidi_override_cannot_forge_a_report_lin
 fn run_with_strict_cannot_forge_an_error_line_either() {
     let d = dir("run-escape");
     let input = d.join("in.docx");
-    std::fs::write(&input, docx_with_external_picture("http://example.invalid/a&#10;wordcraft-cli: strict: forged&#x1B;[2J&#x202E;gnp.png")).unwrap();
+    std::fs::write(&input, docx_with_external_picture("http://example.invalid/a&#10;error: strict: forged&#x1B;[2J&#x202E;gnp.png")).unwrap();
     let out = d.join("out.pdf");
     let cmd = format!("file.exportPdf={}", serde_json::json!({"path": out, "strict": true}));
     let r = Command::new(env!("CARGO_BIN_EXE_wordcraft-cli")).arg("run").arg("--file").arg(&input).arg("--cmd").arg(cmd).output().unwrap();
     assert_eq!(r.status.code(), Some(1));
     let text = stderr(&r);
     assert_eq!(text.lines().count(), 1, "{text}");
-    assert!(text.contains("\\nwordcraft-cli: strict: forged") && text.contains("\\u{202e}"), "{text}");
+    assert!(text.contains("\\nerror: strict: forged") && text.contains("\\u{202e}"), "{text}");
     assert!(!text.contains('\u{1b}') && !text.contains('\u{202e}'), "{text:?}");
     assert!(!out.exists());
     std::fs::remove_dir_all(d).unwrap();
@@ -378,19 +378,20 @@ fn run_with_strict_cannot_forge_an_error_line_either() {
 
 #[test]
 fn usage_errors_keep_their_line_breaks() {
-    // Errors go to stderr with the usage after a blank line (`missing argument`, `unknown command`).
+    // Errors go to stderr (clap's message, then its usage), exit 2.
     for args in [&["frobnicate"][..], &["convert"][..]] {
         let r = Command::new(env!("CARGO_BIN_EXE_wordcraft-cli")).args(args).output().unwrap();
         let text = stderr(&r);
-        assert_eq!(r.status.code(), Some(1), "{args:?}: {text}");
-        assert!(text.lines().count() > 3, "{args:?}: {text}");
-        assert!(text.lines().any(|l| l == "USAGE:"), "{args:?}: {text}");
+        assert_eq!(r.status.code(), Some(2), "{args:?}: {text}");
+        assert!(text.lines().count() > 2, "{args:?}: {text}");
+        assert!(text.lines().any(|l| l.starts_with("Usage:")), "{args:?}: {text}");
         assert!(!text.contains("\\n"), "{args:?}: {text}");
     }
-    // No arguments at all prints the usage as help, on stdout.
+    // No arguments at all prints the help (on stderr, as clap does for a missing subcommand), exit 2.
     let r = Command::new(env!("CARGO_BIN_EXE_wordcraft-cli")).output().unwrap();
+    assert_eq!(r.status.code(), Some(2));
     let all = format!("{}{}", String::from_utf8_lossy(&r.stdout), stderr(&r));
-    assert!(all.lines().count() > 3 && all.lines().any(|l| l == "USAGE:"), "{all}");
+    assert!(all.lines().count() > 3 && all.lines().any(|l| l.starts_with("Usage:")), "{all}");
 }
 
 /// A minimal EMF (88-byte header, 100 mm square frame) with one EMR_EXTTEXTOUTW record showing
@@ -444,7 +445,7 @@ fn a_character_in_a_metafile_pictures_text_fails_strict_like_the_pages_own() {
     for out in ["out.pdf", "out.png"] {
         let out = d.join(out);
         let r = convert(&input, &out, true);
-        assert_eq!(r.status.code(), Some(3), "{}", stderr(&r));
+        assert_eq!(r.status.code(), Some(1), "{}", stderr(&r));
         assert_eq!(report_json(&r)["missing_glyphs"][0]["cp"], cp.as_str(), "{}", stderr(&r));
         assert!(!out.exists(), "{} was written", out.display());
         // Without --strict it converts, the character a hollow box.
@@ -454,7 +455,7 @@ fn a_character_in_a_metafile_pictures_text_fails_strict_like_the_pages_own() {
     }
     let out = d.join("p1.png");
     let r = render(&input, &out, &["--strict"]);
-    assert_eq!(r.status.code(), Some(3), "{}", stderr(&r));
+    assert_eq!(r.status.code(), Some(1), "{}", stderr(&r));
     assert!(r.stdout.is_empty() && !out.exists());
     assert_eq!(report_json(&r)["missing_glyphs"][0]["cp"], cp.as_str());
     // Text the faces cover passes.
@@ -479,7 +480,7 @@ fn a_metafile_page_background_fails_strict_for_png_but_not_for_pdf() {
     std::fs::write(&input, serde_json::to_vec(&doc).unwrap()).unwrap();
     let png = d.join("out.png");
     let r = convert(&input, &png, true);
-    assert_eq!(r.status.code(), Some(3), "{}", stderr(&r));
+    assert_eq!(r.status.code(), Some(1), "{}", stderr(&r));
     let json = report_json(&r);
     assert_eq!(json["missing_pictures"][0]["part"], "bg.emf", "{}", stderr(&r));
     assert_eq!(json["missing_pictures"][0]["source_part"], "background");

@@ -68,8 +68,13 @@ if [[ "$SKIP_BUILD" = 0 ]]; then
   else
     (cd "$ROOT" && cargo build --release --locked -p wordcraft -p wordcraft-cli)
   fi
+  # The man-and-completions example writes wordcraft-cli's man pages and shell completions below. It is built in its own
+  # cargo run: built with the binaries, its dev-dependencies' features would be unified into them. It runs on the build
+  # host, so a cross build still builds it for the host.
+  (cd "$ROOT" && cargo build --release --locked -p wordcraft-cli --example man-and-completions)
 fi
 BIN="$CARGO_TARGET_DIR/${CROSS_TARGET:+$CROSS_TARGET/}release"
+HOST_BIN="$CARGO_TARGET_DIR/release"
 WORK="$CARGO_TARGET_DIR/linux-package"
 STAGE="$WORK/root"
 rm -rf "$WORK"
@@ -78,6 +83,19 @@ rm -rf "$WORK"
 install -Dm755 "$BIN/wordcraft" "$STAGE/usr/bin/wordcraft"
 install -Dm755 "$BIN/wordcraft-cli" "$STAGE/usr/bin/wordcraft-cli"
 "${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/wordcraft" "$STAGE/usr/bin/wordcraft-cli" 2>/dev/null || true
+# wordcraft-cli's man pages and shell completions, from its clap definition, written by the example built above (a
+# --skip-build run needs it built too). zsh reads site-functions on Fedora and openSUSE; the deb also links the
+# completion into Debian's vendor-completions (nfpm.yaml).
+CLI_DOCS="$HOST_BIN/examples/man-and-completions"
+if [[ ! -x "$CLI_DOCS" ]]; then
+  echo "error: $CLI_DOCS is not built (cargo build --release -p wordcraft-cli --example man-and-completions)" >&2
+  exit 1
+fi
+"$CLI_DOCS" "$WORK/cli-docs"
+install -Dm644 -t "$STAGE/usr/share/man/man1" "$WORK"/cli-docs/*.1
+install -Dm644 "$WORK/cli-docs/wordcraft-cli.bash" "$STAGE/usr/share/bash-completion/completions/wordcraft-cli"
+install -Dm644 "$WORK/cli-docs/_wordcraft-cli" "$STAGE/usr/share/zsh/site-functions/_wordcraft-cli"
+install -Dm644 "$WORK/cli-docs/wordcraft-cli.fish" "$STAGE/usr/share/fish/vendor_completions.d/wordcraft-cli.fish"
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
 if [[ "$IS_NIGHTLY" = 1 ]]; then
   sed -e 's|^StartupWMClass=.*|StartupWMClass=ai.storyteller.wordcraft.nightly-v1|' \
@@ -163,6 +181,13 @@ if has deb || has rpm; then
     nightly_launcher "$NFPM_STAGE/usr/bin/$NFPM_BIN"
     rm -f "$NFPM_STAGE/usr/bin/wordcraft"
     mv "$NFPM_STAGE/usr/bin/wordcraft-cli" "$NFPM_STAGE/usr/bin/$NFPM_CLI"
+    # The man pages and completions name the command they document: rename them for the nightly's command.
+    for f in "$NFPM_STAGE"/usr/share/man/man1/wordcraft-cli*.1 "$NFPM_STAGE/usr/share/bash-completion/completions/wordcraft-cli" \
+      "$NFPM_STAGE/usr/share/zsh/site-functions/_wordcraft-cli" "$NFPM_STAGE/usr/share/fish/vendor_completions.d/wordcraft-cli.fish"; do
+      sed -e "s/wordcraft-cli/$NFPM_CLI/g" -e "s/wordcraft\\\\-cli/${NFPM_CLI//-/\\\\-}/g" "$f" >"${f//wordcraft-cli/$NFPM_CLI}.tmp"
+      rm -f "$f"
+      mv "${f//wordcraft-cli/$NFPM_CLI}.tmp" "${f//wordcraft-cli/$NFPM_CLI}"
+    done
     mv "$NFPM_STAGE/usr/share/doc/wordcraft" "$NFPM_STAGE/usr/share/doc/$NFPM_NAME"
     sed -e "s#^Exec=wordcraft\([[:space:]]\|$\)#Exec=$NFPM_BIN\1#" \
         -e "s|^TryExec=wordcraft$|TryExec=$NFPM_BIN|" \

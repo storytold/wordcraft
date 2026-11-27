@@ -71,6 +71,9 @@ fi
 
 if [[ "$SKIP_BUILD" = 0 ]]; then
   (cd "$ROOT" && cargo build --release --locked ${CARGO_BUILD_TARGET:+--target "$CARGO_BUILD_TARGET"} -p wordcraft -p wordcraft-cli)
+  # The man-and-completions example writes wordcraft-cli's man pages and shell completions below. It is built in its own
+  # cargo run: built with the binaries, its dev-dependencies' features would be unified into them.
+  (cd "$ROOT" && cargo build --release --locked ${CARGO_BUILD_TARGET:+--target "$CARGO_BUILD_TARGET"} -p wordcraft-cli --example man-and-completions)
 fi
 # Cargo puts a cross build under target/<triple>/release.
 BIN="$CARGO_TARGET_DIR/${CARGO_BUILD_TARGET:+$CARGO_BUILD_TARGET/}release"
@@ -83,6 +86,21 @@ mkdir -p "$STAGE/bin" "$STAGE/share/applications" "$STAGE/share/mime/packages" "
   "$STAGE/share/icons" "$STAGE/share/doc/wordcraft"
 install -m 755 "$BIN/wordcraft" "$BIN/wordcraft-cli" "$STAGE/bin/"
 strip "$STAGE/bin/wordcraft" "$STAGE/bin/wordcraft-cli" 2>/dev/null || true
+# wordcraft-cli's man pages and shell completions, from its clap definition, written by the example built above (a
+# --skip-build run needs it built too). Under /usr/local, man pages go in man/ and the completions in the directories
+# bash, zsh and fish read there.
+CLI_DOCS="$BIN/examples/man-and-completions"
+if [[ ! -x "$CLI_DOCS" ]]; then
+  echo "error: $CLI_DOCS is not built (cargo build --release -p wordcraft-cli --example man-and-completions)" >&2
+  exit 1
+fi
+"$CLI_DOCS" "$WORK/cli-docs"
+mkdir -p "$STAGE/man/man1" "$STAGE/share/bash-completion/completions" "$STAGE/share/zsh/site-functions" \
+  "$STAGE/share/fish/vendor_completions.d"
+install -m 644 "$WORK"/cli-docs/*.1 "$STAGE/man/man1/"
+install -m 644 "$WORK/cli-docs/wordcraft-cli.bash" "$STAGE/share/bash-completion/completions/wordcraft-cli"
+install -m 644 "$WORK/cli-docs/_wordcraft-cli" "$STAGE/share/zsh/site-functions/_wordcraft-cli"
+install -m 644 "$WORK/cli-docs/wordcraft-cli.fish" "$STAGE/share/fish/vendor_completions.d/wordcraft-cli.fish"
 # The desktop entry, MIME type and metainfo are the freedesktop files the Linux packages use.
 install -m 644 "$LINUX/$APP_ID.desktop" "$STAGE/share/applications/$APP_ID.desktop"
 install -m 644 "$LINUX/$APP_ID.mime.xml" "$STAGE/share/mime/packages/$APP_ID.xml"

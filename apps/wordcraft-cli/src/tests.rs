@@ -1,5 +1,285 @@
 use super::*;
+use crate::launcher_profile_flag;
+use std::ffi::{OsStr, OsString};
 use std::io::Read;
+use std::path::PathBuf;
+
+/// A failed in-process run: the exit code and what stderr said (without its `error: ` prefix).
+#[derive(Debug, PartialEq)]
+struct Fail {
+    code: i32,
+    text: String,
+}
+
+impl std::fmt::Display for Fail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+/// Run the whole CLI in this process, as the binary does.
+fn exec<S: AsRef<OsStr>>(args: &[S]) -> (i32, String, String) {
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let code = crate::run(args.iter().map(|a| a.as_ref().to_owned()), &mut out, &mut err);
+    (code, String::from_utf8_lossy(&out).into_owned(), String::from_utf8_lossy(&err).into_owned())
+}
+
+/// `Ok` for exit 0, else the exit code and message.
+fn run<S: AsRef<OsStr>>(args: &[S]) -> std::result::Result<(), Fail> {
+    let (code, _, err) = exec(args);
+    if code == 0 { Ok(()) } else { Err(Fail { code, text: err.trim_end().strip_prefix("error: ").unwrap_or(err.trim_end()).to_owned() }) }
+}
+
+fn args(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).into()).collect()
+}
+
+/// A usage error: exit 2, the message on stderr, nothing on stdout, and no work done.
+fn usage(argv: &[&str]) -> String {
+    let (code, out, err) = exec(argv);
+    assert_eq!((code, out.as_str()), (2, ""), "{argv:?}: {err}");
+    err
+}
+
+#[test]
+fn page_and_scale_are_checked_before_any_file_is_opened() {
+    for sub in [vec!["render", "missing.docx", "out.png"], vec!["run", "--template", "sample", "--save", "out.png"]] {
+        let with = |extra: &[&str]| usage(&[&sub[..], extra].concat());
+        for missing in [&["--page"][..], &["--scale"], &["--page", "--scale", "2"], &["--scale", "--page", "1"]] {
+            with(missing);
+        }
+        assert!(with(&["--page", "banana"]).contains("invalid --page `banana`: not a valid integer"));
+        assert!(with(&["--page", "0"]).contains("invalid --page `0`: page numbers start at 1"));
+        with(&["--page", "-1"]);
+        assert!(with(&["--scale", "banana"]).contains("invalid --scale `banana`: not a number"));
+        for bad in ["0", "-2", "NaN", "inf"] {
+            assert!(with(&["--scale", bad]).contains(&format!("invalid --scale `{bad}`: scale must be a finite positive number")));
+        }
+        with(&["--page", "1", "--page", "2"]);
+        with(&["--scale", "1", "--scale", "2"]);
+    }
+}
+
+#[test]
+fn unknown_repeated_and_conflicting_options_are_usage_errors_before_file_access() {
+    assert!(usage(&["info", "missing.docx", "--passwrod", "x"]).contains("--passwrod"));
+    assert!(usage(&["render", "missing.docx", "out.png", "--sclae", "2"]).contains("--sclae"));
+    assert!(usage(&["zotero", "refresh", "missing.docx", "--prot", "1"]).contains("--prot"));
+    usage(&["convert", "missing.docx", "out.xml", "--format"]);
+    usage(&["convert", "missing.docx", "out.xml", "--format", "--markup"]);
+    usage(&["convert", "missing.docx", "out.xml", "--format", "flatopc", "--format", "wordml2003"]);
+    assert!(usage(&["convert", "missing.docx", "out.xml", "--format", "docx"]).contains("wordml2003"));
+    usage(&["convert", "missing.docx"]);
+    usage(&["convert", "a.docx", "b.docx", "c.docx"]);
+    usage(&["run", "--file", "a.docx", "--template", "blank"]);
+    usage(&["info"]);
+    usage(&["frobnicate"]);
+    assert!(usage(&["convert", "missing.docx", "out.docx", "--strict"]).contains("--strict needs a .pdf or .png output"));
+    // A valid single value reaches file access, rather than an option error.
+    let (code, _, err) = exec(&["convert", "missing.docx", "out.xml", "--format", "flatopc"]);
+    assert_eq!(code, 1);
+    assert!(err.starts_with("error: missing.docx:"), "{err}");
+}
+
+#[test]
+fn cmd_and_script_values_are_checked_by_the_parser() {
+    for argv in [
+        vec!["run", "--cmd"],
+        vec!["run", "--cmd", "--save", "out.docx"],
+        vec!["run", "--cmd", "caret.docEnd", "--cmd", "--print"],
+        vec!["run", "--cmd", "--bogus"],
+        vec!["run", "--script", "--cmd", "caret.docEnd"],
+    ] {
+        usage(&argv);
+    }
+    assert!(usage(&["run", "--cmd", "text.insert={nope"]).contains("bad JSON params"));
+    assert_eq!(run(&args(&["run", "--cmd", "caret.docEnd", "--cmd", "caret.docStart"])), Ok(()));
+}
+
+#[test]
+fn the_author_flag_names_the_headless_session() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    assert!(set_author(&mut s, " Claude (copyedit) ").is_ok());
+    assert_eq!(s.author, "Claude (copyedit)");
+    assert!(set_author(&mut s, "   ").is_err_and(|e| e.starts_with("--author:")));
+    assert_eq!(run(&args(&["run", "--author", "Claude", "--cmd", "review.trackChanges={\"value\":true}"])), Ok(()));
+    // The flag goes through the same protection check as the command.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("review.restrict", &json!({"mode": "readOnly"})).unwrap();
+    let before = s.author.clone();
+    assert!(set_author(&mut s, "Claude").is_err());
+    assert_eq!(s.author, before);
+    assert!(s.run("file.setAuthor", &json!({"name": "Claude"})).is_err());
+}
+
+#[test]
+fn the_password_comes_from_an_option_or_a_file_and_never_shows_in_an_error() {
+    let open = |password: Option<&str>, file: Option<&str>| Password { password: password.map(Into::into), password_file: file.map(PathBuf::from) };
+    assert_eq!(password_from(&open(None, None)), Ok(None));
+    assert_eq!(password_from(&open(Some("s3cret"), None)), Ok(Some("s3cret".into())));
+    // `--password` wins over the file.
+    assert_eq!(password_from(&open(Some("a"), Some("/nonexistent"))), Ok(Some("a".into())));
+    let path = std::env::temp_dir().join(format!("wordcraft-cli-password-test-{}.txt", std::process::id()));
+    std::fs::write(&path, "s3cret\r\n").unwrap();
+    let got = password_from(&open(None, path.to_str()));
+    std::fs::remove_file(&path).ok();
+    assert_eq!(got, Ok(Some("s3cret".into())), "only the trailing newline is lost");
+    let err = password_from(&open(None, Some("/nonexistent/secret.txt"))).unwrap_err().to_string();
+    assert!(err.contains("--password-file"), "{err}");
+}
+
+/// A password file on the command line beats the variable, a blank variable is unset, and `--help` shows neither value.
+#[test]
+fn the_password_variable_is_read_by_the_flag_and_hidden() {
+    let parse = |argv: &[&str]| crate::args::parse(&argv.iter().map(OsString::from).collect::<Vec<_>>());
+    let help = parse(&["info", "--help"]).unwrap_err().render().to_string();
+    assert!(help.contains("WORDCRAFT_PASSWORD") || help.contains("--password"), "{help}");
+    let Err(e) = parse(&["info", "--password"]) else { panic!("a missing value must not parse") };
+    assert_eq!(e.exit_code(), 2);
+    let top = parse(&["--help"]).unwrap_err().render().to_string();
+    assert!(top.contains("WORDCRAFT_PASSWORD") && top.contains("WORDCRAFT_REGION") && top.contains("Exit status"), "{top}");
+}
+
+#[test]
+fn mcp_needs_both_roots_and_refuses_connect() {
+    let scratch = Scratch::new("entry");
+    let base = scratch.0.clone();
+    std::fs::create_dir_all(base.join("in")).unwrap();
+    std::fs::create_dir_all(base.join("out")).unwrap();
+    let read = format!("--automation-read-root={}", base.join("in").display());
+    let write = format!("--automation-write-root={}", base.join("out").display());
+    for given in [vec![], vec![read.clone()], vec![write.clone()], vec!["--author".to_string(), "Claude".to_string()]] {
+        let line = [vec!["mcp".to_string()], given].concat();
+        let err = usage(&line.iter().map(String::as_str).collect::<Vec<_>>());
+        assert!(err.contains("--automation-read-root") || err.contains("--automation-write-root"), "{line:?}: {err}");
+    }
+    let missing = usage(&["mcp", "--automation-read-root", "a", "--automation-read-root=b", "--automation-write-root", "c"]);
+    assert!(missing.contains("--automation-read-root"), "{missing}");
+    usage(&["mcp", "--automation-read-root=", "--automation-write-root=x"]);
+    // A folder that does not exist is an error, not a server that quietly runs unconfined.
+    let (code, _, err) = exec(&["mcp", "--automation-read-root", "/definitely/not/a/folder", "--automation-write-root", "/definitely/not/a/folder"]);
+    assert_eq!(code, 1);
+    assert!(err.starts_with("error: mcp: cannot open the automation read root"), "{err}");
+    // `--connect` is refused whether or not it has roots, before anything connects (#3695, #5819).
+    let dir = base.to_string_lossy().into_owned();
+    for line in [
+        args(&["mcp", "--connect", "127.0.0.1:9"]),
+        args(&["mcp", "--connect=127.0.0.1:9", "--author", "Claude"]),
+        args(&["mcp", "--connect", "127.0.0.1:9", "--automation-read-root", &dir, "--automation-write-root", &dir]),
+    ] {
+        let (code, _, err) = exec(&line);
+        assert_eq!(code, 1, "{line:?}");
+        assert!(err.contains("--connect") && err.contains("#3695") && err.contains("#5819"), "{line:?}: {err}");
+    }
+}
+
+#[test]
+fn every_file_opening_subcommand_reaches_the_open_with_a_non_unicode_name_but_not_an_output() {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        let latin1 = || OsString::from_vec(b"/definitely/not/caf\xe9.docx".to_vec());
+        for argv in [
+            vec![OsString::from("convert"), latin1(), "out.pdf".into()],
+            vec!["info".into(), latin1()],
+            vec!["text".into(), latin1()],
+            vec!["inspect".into(), latin1()],
+            vec!["render".into(), latin1(), "out.png".into()],
+            vec!["run".into(), "--file".into(), latin1()],
+            vec!["zotero".into(), "refresh".into(), latin1()],
+        ] {
+            let (code, _, err) = exec(&argv);
+            assert_eq!(code, 1, "{argv:?}: {err}");
+            assert!(err.contains("No such file"), "{argv:?}: {err}");
+        }
+        // An output the engine takes as text must be Unicode: a failure, and nothing opened.
+        let out = OsString::from_vec(b"caf\xe9.png".to_vec());
+        let (code, _, err) = exec(&["render".into(), OsString::from("in.docx"), out]);
+        assert_eq!(code, 1);
+        assert!(err.contains("not valid Unicode"), "{err}");
+        // Elsewhere clap refuses it as usage.
+        assert_eq!(exec(&["run".into(), OsString::from("--template"), OsString::from_vec(b"caf\xe9".to_vec())]).0, 2);
+    }
+}
+
+/// `validate`: PASS is 0; FAIL, INCOMPLETE and a file that can't be read are 1 (RFC-0018 rule 1.2); usage is 2.
+#[test]
+fn validate_exits_0_for_pass_1_for_anything_else_and_2_for_usage() {
+    let dir = script_dir("validate-exit");
+    let good = dir.join("good.docx");
+    run(&args(&["run", "--template", "sample", "--save", &good.to_string_lossy()])).unwrap();
+    let good = good.to_string_lossy().into_owned();
+    let (code, out, _) = exec(&["validate", &good]);
+    assert_eq!((code, out.lines().next()), (0, Some("PASS")));
+    let (code, out, _) = exec(&["validate", "--json", &good]);
+    assert_eq!(code, 0);
+    assert!(out.contains("\"verdict\""), "{out}");
+    let broken = dir.join("broken.docx");
+    std::fs::write(&broken, b"not a zip").unwrap();
+    let (code, out, _) = exec(&["validate".to_string(), broken.to_string_lossy().into_owned()]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.starts_with("FAIL") || out.starts_with("INCOMPLETE"), "{out}");
+    let (code, _, err) = exec(&["validate", "/definitely/not/there.docx"]);
+    assert_eq!(code, 1);
+    assert!(err.starts_with("error: /definitely/not/there.docx:"), "{err}");
+    usage(&["validate"]);
+    usage(&["validate", &good, &good]);
+    usage(&["validate", &good, "--bogus"]);
+}
+
+#[test]
+fn help_and_version_go_to_stdout_with_exit_0() {
+    for argv in [vec!["--version"], vec!["-V"], vec!["--help"], vec!["-h"], vec!["help"], vec!["convert", "--help"], vec!["help", "validate"]] {
+        let (code, out, err) = exec(&argv);
+        assert_eq!((code, err.as_str()), (0, ""), "{argv:?}");
+        assert!(out.contains("wordcraft-cli"), "{argv:?}: {out}");
+    }
+    let (_, out, _) = exec(&["--version"]);
+    assert_eq!(out.trim(), format!("wordcraft-cli {}", env!("CARGO_PKG_VERSION")));
+    // The version is not a subcommand; with no arguments the help is shown as an error, exit 2.
+    usage(&["version"]);
+    assert_eq!(exec::<&str>(&[]).0, 2);
+    // Every subcommand's help ends with the exit status.
+    for sub in crate::command().get_subcommands().map(|c| c.get_name().to_owned()).filter(|n| n != "help") {
+        let (code, out, _) = exec(&[sub.as_str(), "--help"]);
+        assert_eq!(code, 0, "{sub}");
+        assert!(out.contains("Exit status"), "{sub}: {out}");
+    }
+}
+
+#[test]
+fn the_launcher_bootstrap_exits_2_before_anything_runs() {
+    let err = usage(&["--launch-profile=nightly-v1", "info", "x.docx"]);
+    assert!(err.starts_with("error: --launch-profile and --profile-root"), "{err}");
+}
+
+#[test]
+fn a_closed_stdout_ends_quietly_and_other_write_errors_fail() {
+    struct Closed(std::io::ErrorKind);
+    impl Write for Closed {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(self.0.into())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(self.0.into())
+        }
+    }
+    let mut err = Vec::new();
+    assert_eq!(crate::run(["commands"], &mut Closed(std::io::ErrorKind::BrokenPipe), &mut err), 0);
+    assert!(err.is_empty());
+    assert_eq!(crate::run(["commands"], &mut Closed(std::io::ErrorKind::PermissionDenied), &mut err), 1);
+    assert!(String::from_utf8_lossy(&err).starts_with("error: "));
+}
+
+#[test]
+fn convert_strict_and_render_strict_refusals_exit_1() {
+    // A document whose text can't be drawn is a refusal: exit 1 with the report on stderr and no file.
+    let dir = script_dir("strict-exit");
+    let out = dir.join("out.pdf");
+    let (code, _, err) = exec(&["convert", "/definitely/not/there.docx", &out.to_string_lossy(), "--strict"]);
+    assert_eq!(code, 1, "{err}");
+    assert!(!out.exists());
+}
 
 /// The desktop app's Nightly bootstrap is never a CLI option, in either spelling.
 #[test]
@@ -18,10 +298,6 @@ fn the_launcher_profile_bootstrap_is_refused_in_both_forms() {
     }
 }
 
-fn args(values: &[&str]) -> Vec<String> {
-    values.iter().map(|value| (*value).into()).collect()
-}
-
 #[test]
 fn peer_text_stays_on_one_visible_line() {
     let alert = "Done.\nwrote /etc/passwd\r\u{1b}[2J\u{9b}31m\u{202e}txt.exe\\n\tok é";
@@ -32,124 +308,9 @@ fn peer_text_stays_on_one_visible_line() {
 }
 
 #[test]
-fn validators_accept_only_the_documented_options() {
-    assert!(validate_options("info", &args(&["file.docx"]), PASSWORD_OPTIONS).is_ok());
-    assert!(validate_options("render", &args(&["in.docx", "out.png", "--page", "2", "--scale", "1.5"]), RENDER_OPTIONS).is_ok());
-    assert!(validate_options("run", &args(&["--cmd", "text.insert={}", "--cmd", "edit.undo", "--print"]), RUN_OPTIONS).is_ok());
-    assert!(validate_options("commands", &args(&["--json"]), COMMANDS_OPTIONS).is_ok());
-    assert!(validate_options("parity", &args(&["--markdown"]), PARITY_OPTIONS).is_ok());
-    assert!(validate_options("mcp", &args(&["--connect", "127.0.0.1:9000"]), MCP_OPTIONS).is_ok());
-    assert!(validate_options("render", &args(&["in.docx", "out.png", "--page"]), RENDER_OPTIONS).is_ok());
-    assert!(
-        validate_options(
-            "zotero",
-            &args(&["refresh", "in.docx", "--cmd", "caret.docEnd", "--save", "out.docx", "--trace", "--port", "23119"]),
-            ZOTERO_OPTIONS
-        )
-        .is_ok()
-    );
-}
-
-#[test]
-fn an_option_value_is_never_read_as_a_path() {
-    // `--password`'s value sits between the paths and would be taken for one without
-    // `positionals`, so `render` would write its picture over a file called after the password.
-    assert_eq!(positionals(&args(&["in.docx", "--password", "secret", "out.png"]), RENDER_OPTIONS), vec!["in.docx", "out.png"]);
-    assert_eq!(positionals(&args(&["in.docx", "out.png", "--page", "2"]), RENDER_OPTIONS), vec!["in.docx", "out.png"]);
-    // A bare flag takes no value, so the next argument stays a path.
-    assert_eq!(positionals(&args(&["--print", "in.docx"]), RUN_OPTIONS), vec!["in.docx"]);
-    // `convert` is the one with a value-taking flag between the two paths.
-    assert_eq!(positionals(&args(&["in.docx", "--format", "flatopc", "out.docx"]), CONVERT_OPTIONS), vec!["in.docx", "out.docx"]);
-}
-
-#[test]
-fn the_password_comes_from_an_option_a_file_or_the_environment() {
-    assert_eq!(password_from(&args(&["f.docx"])), Ok(None));
-    assert_eq!(password_from(&args(&["f.docx", "--password", "s3cret"])), Ok(Some("s3cret".into())));
-    // `--password` wins over the other two sources.
-    assert_eq!(password_from(&args(&["--password", "a", "--password-file", "/nonexistent"])), Ok(Some("a".into())));
-}
-
-#[test]
-fn a_password_file_loses_only_its_trailing_newline() {
-    let path = std::env::temp_dir().join("wordcraft-cli-password-test.txt");
-    std::fs::write(&path, "s3cret\r\n").unwrap();
-    let got = password_from(&args(&["f.docx", "--password-file", &path.to_string_lossy()]));
-    std::fs::remove_file(&path).ok();
-    assert_eq!(got, Ok(Some("s3cret".into())));
-}
-
-#[test]
-fn a_missing_password_file_is_named_without_the_password() {
-    let err = password_from(&args(&["f.docx", "--password-file", "/nonexistent/secret.txt"])).unwrap_err();
-    assert!(err.contains("--password-file"), "{err}");
-}
-
-#[test]
-fn unknown_options_are_rejected_before_file_access() {
-    assert_eq!(run(&args(&["info", "missing.docx", "--passwrod", "x"])), Err("info: unknown option --passwrod".into()));
-    assert_eq!(run(&args(&["render", "missing.docx", "out.png", "--sclae", "2"])), Err("render: unknown option --sclae".into()));
-    assert_eq!(run(&args(&["zotero", "refresh", "missing.docx", "--prot", "1"])), Err("zotero: unknown option --prot".into()));
-}
-
-#[test]
-fn convert_rejects_malformed_format_options_before_file_access() {
-    for (options, error) in [
-        (vec!["--format"], "convert: --format requires a value"),
-        (vec!["--format", "--markup"], "convert: --format requires a value"),
-        (vec!["--format", "flatopc", "--format", "wordml2003"], "convert: duplicate --format option"),
-    ] {
-        let mut argv = args(&["convert", "missing.docx", "out.xml"]);
-        argv.extend(args(&options));
-        assert_eq!(run(&argv), Err(error.into()), "{options:?}");
-    }
-    // A valid single value reaches file access, rather than a format-option error.
-    let error = run(&args(&["convert", "missing.docx", "out.xml", "--format", "flatopc"])).unwrap_err().to_string();
-    assert!(error.starts_with("missing.docx:"), "{error}");
-}
-
-#[test]
-fn help_or_h_after_a_subcommand_asks_for_the_usage() {
-    for cmd in SUBCOMMANDS {
-        assert!(wants_help(cmd, &args(&["in.docx", "--help"])), "{cmd}");
-        assert!(wants_help(cmd, &args(&["-h"])), "{cmd}");
-        assert!(!wants_help(cmd, &args(&["in.docx", "--hepl"])), "{cmd}");
-    }
-    assert!(!wants_help("frobnicate", &args(&["--help"])));
-}
-
-#[test]
-fn usage_lists_exactly_the_subcommands() {
-    let listed: Vec<&str> = USAGE
-        .lines()
-        .filter_map(|line| line.strip_prefix("  wordcraft-cli ")?.split_whitespace().next())
-        .filter(|word| !word.starts_with(['-', '[']))
-        .collect();
-    assert_eq!(listed, SUBCOMMANDS);
-}
-
-#[test]
 fn text_keeps_bullet_and_number_labels() {
     let doc = wordcraft_engine::io::open_bytes("lists.md", b"- alpha\n- beta\n\n1. first\n2. second\n").unwrap();
     assert_eq!(listed_text(&doc).unwrap(), "\u{2022}\talpha\n\u{2022}\tbeta\n1.\tfirst\n2.\tsecond");
-}
-
-#[test]
-fn author_flag_names_the_headless_session() {
-    assert!(validate_options("run", &args(&["--author", "Claude (copyedit)", "--cmd", "edit.undo"]), RUN_OPTIONS).is_ok());
-    assert!(validate_options("mcp", &args(&["--author", "Claude"]), MCP_OPTIONS).is_ok());
-    let mut s = Session::new(wordcraft_doc::Document::new());
-    assert!(set_author(&mut s, " Claude (copyedit) ").is_ok());
-    assert_eq!(s.author, "Claude (copyedit)");
-    assert!(set_author(&mut s, "   ").is_err_and(|e| e.starts_with("--author:")));
-    assert!(run(&args(&["run", "--author", "Claude", "--cmd", "review.trackChanges={\"value\":true}"])).is_ok());
-    // The flag goes through the same protection check as the command.
-    let mut s = Session::new(wordcraft_doc::Document::new());
-    s.run("review.restrict", &json!({"mode": "readOnly"})).unwrap();
-    let before = s.author.clone();
-    assert!(set_author(&mut s, "Claude").is_err());
-    assert_eq!(s.author, before);
-    assert!(s.run("file.setAuthor", &json!({"name": "Claude"})).is_err());
 }
 
 #[test]
@@ -168,91 +329,6 @@ fn author_flag_cannot_claim_a_named_exception_after_protection() {
 
     assert!(set_author(&mut s, "Alice").is_err(), "--author changed the identity used for a protected exception");
     assert!(s.run("text.insert", &json!({"text": "Changed"})).is_err());
-}
-
-#[test]
-fn automation_root_flags_are_taken_out_of_the_mcp_arguments() {
-    let base = std::env::temp_dir().join(format!("wc-cli-roots-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&base);
-    std::fs::create_dir_all(base.join("in")).unwrap();
-    std::fs::create_dir_all(base.join("out")).unwrap();
-    let (read, write) = (base.join("in").to_string_lossy().into_owned(), base.join("out").to_string_lossy().into_owned());
-
-    let (roots, left) =
-        automation_roots("mcp", &args(&["--automation-read-root", &read, "--author", "Claude", &format!("--automation-write-root={write}")]))
-            .unwrap();
-    let roots = roots.unwrap();
-    assert_eq!(left, args(&["--author", "Claude"]));
-    assert!(roots.read_root().is_some() && roots.write_root().is_some());
-    assert!(validate_options("mcp", &left, MCP_OPTIONS).is_ok());
-
-    // A root left out grants none of its access.
-    let (roots, _) = automation_roots("mcp", &args(&["--automation-read-root", &read])).unwrap();
-    let roots = roots.unwrap();
-    assert!(roots.write_root().is_none());
-    assert!(roots.check(&format!("{write}/x.docx"), wordcraft_engine::file_access::Access::Write).unwrap_err().contains("write authority is absent"));
-
-    // No flags: nothing is confined and the arguments pass through.
-    let (roots, left) = automation_roots("mcp", &args(&["--connect", "127.0.0.1:9"])).unwrap();
-    assert!(roots.is_none());
-    assert_eq!(left, args(&["--connect", "127.0.0.1:9"]));
-    let _ = std::fs::remove_dir_all(base);
-}
-
-#[test]
-fn automation_root_flags_reject_bad_operands_and_missing_folders() {
-    for bad in [
-        args(&["--automation-read-root"]),
-        args(&["--automation-read-root", "--author"]),
-        args(&["--automation-write-root="]),
-        args(&["--automation-read-root", "a", "--automation-read-root=b"]),
-    ] {
-        assert!(automation_roots("mcp", &bad).is_err(), "{bad:?}");
-    }
-    let e = automation_roots("mcp", &args(&["--automation-read-root", "/definitely/not/a/folder"])).err().unwrap();
-    assert!(e.starts_with("mcp: cannot open the automation read root"), "{e}");
-    // Through the command line: an error, not a server that quietly runs unconfined.
-    assert!(run(&args(&["mcp", "--automation-write-root", "/definitely/not/a/folder"])).is_err());
-}
-
-#[cfg(unix)]
-#[test]
-fn only_the_opened_file_may_be_other_than_unicode() {
-    use std::os::unix::ffi::OsStringExt;
-    let latin1 = || OsString::from_vec(b"caf\xe9.docx".to_vec());
-    let ok = |raw: Vec<OsString>| text_args(&raw).unwrap().1;
-    assert_eq!(ok(vec!["zotero".into(), "refresh".into(), latin1()]), Some(PathBuf::from(latin1())));
-    assert_eq!(ok(vec!["render".into(), latin1(), "out.png".into(), "--page".into(), "2".into()]), Some(PathBuf::from(latin1())));
-    assert_eq!(ok(vec!["render".into(), "--page".into(), "2".into(), latin1(), "out.png".into()]), Some(PathBuf::from(latin1())));
-    assert_eq!(ok(vec!["convert".into(), "--format".into(), "flatopc".into(), latin1(), "out.xml".into()]), Some(PathBuf::from(latin1())));
-    assert_eq!(ok(vec!["info".into(), "--password".into(), "secret".into(), latin1()]), Some(PathBuf::from(latin1())));
-    assert_eq!(ok(vec!["zotero".into(), "--port".into(), "23119".into(), "refresh".into(), latin1()]), Some(PathBuf::from(latin1())));
-    assert_eq!(ok(vec!["run".into(), "--print".into(), "--file".into(), latin1()]), Some(PathBuf::from(latin1())));
-    assert_eq!(ok(vec!["info".into(), "in.docx".into()]), None);
-    // Every command that opens a file reaches the open with it (no such file here), so
-    // `OPENS_FILE` and the commands' own arguments agree. `validate` takes exactly one path, so it
-    // is checked separately below, together with its exit-3 usage status.
-    let missing = || OsString::from_vec(b"/definitely/not/caf\xe9.docx".to_vec());
-    let mut opening: Vec<Vec<OsString>> = OPENS_FILE
-        .iter()
-        .filter(|(cmd, _)| *cmd != "validate")
-        .map(|(cmd, n)| [vec![(*cmd).into()], vec![OsString::from("refresh"); *n], vec![missing(), "out.png".into()]].concat())
-        .collect();
-    opening.push(vec!["run".into(), "--file".into(), missing()]);
-    for raw in opening {
-        let e = run(&raw).unwrap_err().to_string();
-        assert!(e.contains("No such file"), "{raw:?}: {e}");
-    }
-    assert!(matches!(run(&["validate".into(), missing()]), Err(Failure::Status(3))));
-    for (raw, n) in [
-        (vec!["zotero".into(), latin1(), "in.docx".into()], 2),
-        (vec!["render".into(), "in.docx".into(), latin1()], 3),
-        (vec!["render".into(), "--page".into(), latin1(), "in.docx".into(), "out.png".into()], 3),
-        (vec!["run".into(), "--save".into(), latin1()], 3),
-        (vec!["commands".into(), latin1()], 2),
-    ] {
-        assert_eq!(text_args(&raw).unwrap_err(), format!("argument {n} is not valid Unicode: caf\u{FFFD}.docx"));
-    }
 }
 
 /// An exclusively created scratch folder, removed on drop even when an assertion fails.
@@ -281,66 +357,6 @@ impl Drop for Scratch {
     }
 }
 
-/// Shared rule 18 (#7124): every agent entry point, a subcommand that serves a client's requests
-/// rather than running what the person typed and exiting, refuses to start without both
-/// automation roots. Each subcommand has a row, so a new one fails here until it is classified,
-/// and a new agent entry point fails until it refuses.
-#[test]
-fn every_agent_entry_point_refuses_to_start_without_both_roots() {
-    enum Kind {
-        Agent,
-        NotAgent(&'static str),
-    }
-    use Kind::{Agent, NotAgent};
-    let table = [
-        ("convert", NotAgent("converts the files named on its command line, then exits")),
-        ("info", NotAgent("reads the one file named on its command line, then exits")),
-        ("text", NotAgent("reads the one file named on its command line, then exits")),
-        ("inspect", NotAgent("reads the one file named on its command line, then exits")),
-        ("render", NotAgent("renders the file named on its command line, then exits")),
-        ("run", NotAgent("runs the commands and script named on its command line, then exits")),
-        ("commands", NotAgent("lists the commands; touches no file")),
-        ("parity", NotAgent("prints the feature catalog; touches no file")),
-        ("validate", NotAgent("validates the one file named on its command line, then exits")),
-        ("mcp", Agent),
-        ("zotero", NotAgent("runs one named Zotero command; Zotero's replies edit citations and name no file")),
-    ];
-    assert_eq!(table.iter().map(|(name, _)| *name).collect::<Vec<_>>(), SUBCOMMANDS);
-
-    let scratch = Scratch::new("entry");
-    let base = scratch.0.clone();
-    std::fs::create_dir_all(base.join("in")).unwrap();
-    std::fs::create_dir_all(base.join("out")).unwrap();
-    let read = format!("--automation-read-root={}", base.join("in").display());
-    let write = format!("--automation-write-root={}", base.join("out").display());
-    for (name, kind) in table {
-        if let NotAgent(why) = kind {
-            assert!(!why.is_empty(), "{name}: say why it is not an agent entry point");
-            continue;
-        }
-        for given in [vec![], vec![read.clone()], vec![write.clone()], vec!["--author".to_string(), "Claude".to_string()]] {
-            let line = [vec![name.to_string()], given].concat();
-            let e = run(&line).unwrap_err().to_string();
-            assert!(e.contains("--automation-read-root") && e.contains("--automation-write-root"), "{line:?}: {e}");
-        }
-    }
-}
-
-/// The desktop app doesn't confine its control channel to roots yet (#3695, #5819), so the bridge
-/// to it is refused, with roots or without, before anything connects.
-#[test]
-fn mcp_connect_is_refused_until_the_app_confines_its_control_channel() {
-    let dir = std::env::temp_dir().to_string_lossy().into_owned();
-    for line in [
-        args(&["mcp", "--connect", "127.0.0.1:9"]),
-        args(&["mcp", "--connect", "127.0.0.1:9", "--author", "Claude"]),
-        args(&["mcp", "--connect", "127.0.0.1:9", "--automation-read-root", &dir, "--automation-write-root", &dir]),
-    ] {
-        let e = run(&line).unwrap_err().to_string();
-        assert!(e.contains("--connect") && e.contains("#3695") && e.contains("#5819"), "{line:?}: {e}");
-    }
-}
-
 /// `mcp`'s headless session takes `--author` as the session's author, and refuses a blank one as `run` does.
 #[test]
 fn mcp_headless_session_takes_the_author_flag() {
@@ -350,120 +366,6 @@ fn mcp_headless_session_takes_the_author_flag() {
     assert!(headless_mcp(roots.clone(), Some("   ")).is_err_and(|e| e.starts_with("--author:")));
     let unnamed = headless_mcp(roots, None).unwrap();
     assert_eq!(unnamed.session.author, wordcraft_mcp::Headless::default().session.author, "no flag keeps the default author");
-}
-
-/// `--connect` is refused whether or not it has a value, written apart or as `--connect=…`, even with both roots valid.
-#[test]
-fn mcp_connect_is_refused_without_a_value_too() {
-    let scratch = Scratch::new("connect-bare");
-    let dir = scratch.0.to_string_lossy().into_owned();
-    let roots = ["--automation-read-root", &dir, "--automation-write-root", &dir];
-    for tail in [vec!["--connect"], vec!["--connect", "--author", "Claude"], vec!["--connect=127.0.0.1:9"], vec!["--connect="]] {
-        let line = args(&[&["mcp"][..], &roots, &tail].concat());
-        let e = run(&line).unwrap_err().to_string();
-        assert!(e.contains("--connect") && e.contains("#3695") && e.contains("#5819"), "{line:?}: {e}");
-    }
-}
-
-#[test]
-fn render_rejects_missing_or_invalid_page_and_scale() {
-    // Missing operands
-    assert_eq!(run(&args(&["render", "missing.docx", "out.png", "--page"])), Err("render: --page requires a value".into()));
-    assert_eq!(run(&args(&["render", "missing.docx", "out.png", "--scale"])), Err("render: --scale requires a value".into()));
-    assert_eq!(run(&args(&["render", "missing.docx", "out.png", "--page", "--scale", "2"])), Err("render: --page requires a value".into()));
-    assert_eq!(run(&args(&["render", "missing.docx", "out.png", "--scale", "--page", "1"])), Err("render: --scale requires a value".into()));
-
-    // Non-numeric operands
-    assert_eq!(
-        run(&args(&["render", "missing.docx", "out.png", "--page", "banana"])),
-        Err("render: invalid --page `banana`: not a valid integer".into())
-    );
-    assert_eq!(run(&args(&["render", "missing.docx", "out.png", "--scale", "banana"])), Err("render: invalid --scale `banana`: not a number".into()));
-
-    // Out-of-range values
-    assert_eq!(run(&args(&["render", "missing.docx", "out.png", "--page", "0"])), Err("render: invalid --page `0`: page numbers start at 1".into()));
-    assert_eq!(run(&args(&["render", "missing.docx", "out.png", "--page", "-1"])), Err("render: invalid --page `-1`: not a valid integer".into()));
-    assert_eq!(
-        run(&args(&["render", "missing.docx", "out.png", "--scale", "0"])),
-        Err("render: invalid --scale `0`: scale must be a finite positive number".into())
-    );
-    assert_eq!(
-        run(&args(&["render", "missing.docx", "out.png", "--scale", "-2"])),
-        Err("render: invalid --scale `-2`: scale must be a finite positive number".into())
-    );
-    assert_eq!(
-        run(&args(&["render", "missing.docx", "out.png", "--scale", "NaN"])),
-        Err("render: invalid --scale `NaN`: scale must be a finite positive number".into())
-    );
-    assert_eq!(
-        run(&args(&["render", "missing.docx", "out.png", "--scale", "inf"])),
-        Err("render: invalid --scale `inf`: scale must be a finite positive number".into())
-    );
-
-    // Duplicate options
-    assert_eq!(run(&args(&["render", "missing.docx", "out.png", "--page", "1", "--page", "2"])), Err("render: duplicate --page option".into()));
-    assert_eq!(run(&args(&["render", "missing.docx", "out.png", "--scale", "1", "--scale", "2"])), Err("render: duplicate --scale option".into()));
-}
-
-#[test]
-fn run_rejects_missing_or_invalid_page_and_scale() {
-    // Missing operands
-    assert_eq!(run(&args(&["run", "--template", "sample", "--save", "out.png", "--page"])), Err("run: --page requires a value".into()));
-    assert_eq!(run(&args(&["run", "--template", "sample", "--save", "out.png", "--scale"])), Err("run: --scale requires a value".into()));
-    assert_eq!(
-        run(&args(&["run", "--template", "sample", "--save", "out.png", "--page", "--scale", "2"])),
-        Err("run: --page requires a value".into())
-    );
-    assert_eq!(
-        run(&args(&["run", "--template", "sample", "--save", "out.png", "--scale", "--page", "1"])),
-        Err("run: --scale requires a value".into())
-    );
-
-    // Non-numeric operands
-    assert_eq!(
-        run(&args(&["run", "--template", "sample", "--save", "out.png", "--page", "banana"])),
-        Err("run: invalid --page `banana`: not a valid integer".into())
-    );
-    assert_eq!(
-        run(&args(&["run", "--template", "sample", "--save", "out.png", "--scale", "banana"])),
-        Err("run: invalid --scale `banana`: not a number".into())
-    );
-
-    // Out-of-range values
-    assert_eq!(
-        run(&args(&["run", "--template", "sample", "--save", "out.png", "--page", "0"])),
-        Err("run: invalid --page `0`: page numbers start at 1".into())
-    );
-    assert_eq!(
-        run(&args(&["run", "--template", "sample", "--save", "out.png", "--page", "-1"])),
-        Err("run: invalid --page `-1`: not a valid integer".into())
-    );
-    assert_eq!(
-        run(&args(&["run", "--template", "sample", "--save", "out.png", "--scale", "0"])),
-        Err("run: invalid --scale `0`: scale must be a finite positive number".into())
-    );
-    assert_eq!(
-        run(&args(&["run", "--template", "sample", "--save", "out.png", "--scale", "-1"])),
-        Err("run: invalid --scale `-1`: scale must be a finite positive number".into())
-    );
-    assert_eq!(
-        run(&args(&["run", "--template", "sample", "--save", "out.png", "--scale", "NaN"])),
-        Err("run: invalid --scale `NaN`: scale must be a finite positive number".into())
-    );
-    assert_eq!(
-        run(&args(&["run", "--template", "sample", "--save", "out.png", "--scale", "inf"])),
-        Err("run: invalid --scale `inf`: scale must be a finite positive number".into())
-    );
-
-    // Duplicate options
-    assert_eq!(
-        run(&args(&["run", "--template", "sample", "--save", "out.png", "--page", "1", "--page", "2"])),
-        Err("run: duplicate --page option".into())
-    );
-    assert_eq!(
-        run(&args(&["run", "--template", "sample", "--save", "out.png", "--scale", "1", "--scale", "2"])),
-        Err("run: duplicate --scale option".into())
-    );
 }
 
 #[test]
@@ -616,33 +518,6 @@ fn command_line_template_wins_over_the_scripts_file() {
 }
 
 #[test]
-fn cmd_value_missing_is_reported() {
-    let missing = std::env::temp_dir().join(format!(
-        "wc-cli-missing-cmd-{}-{}.docx",
-        std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()
-    ));
-    assert!(!missing.exists());
-    let missing = missing.to_string_lossy();
-    for argv in [
-        vec!["run", "--cmd"],
-        vec!["run", "--cmd", "--save", "out.docx"],
-        vec!["run", "--cmd", "caret.docEnd", "--cmd", "--print"],
-        vec!["run", "--cmd", "--bogus"],
-        vec!["run", "--cmd", "--file", &missing],
-    ] {
-        assert_eq!(run(&args(&argv)), Err("--cmd needs a value".into()), "{argv:?}");
-    }
-    assert!(run(&args(&["run", "--cmd", "caret.docEnd", "--cmd", "caret.docStart"])).is_ok());
-}
-
-#[test]
-fn script_value_missing_is_reported() {
-    let e = run(&args(&["run", "--script", "--cmd", "caret.docEnd"])).unwrap_err().to_string();
-    assert!(e.contains("--script requires a value"), "{e}");
-}
-
-#[test]
 fn script_reads_from_a_stream_and_caps_its_size() {
     let s = script::load_from(&br#"{"commands":["caret.docEnd"],"save":["o.docx"]}"#[..], "-", None).unwrap();
     assert_eq!((s.commands.len(), s.save), (1, vec!["o.docx".to_string()]));
@@ -702,34 +577,6 @@ fn script_parse_resolves_paths_against_the_base() {
     let s = script::parse(r#"{"commands":["caret.docEnd"],"save":["o.docx"]}"#, None).unwrap();
     assert_eq!(s.save, vec!["o.docx".to_string()]);
     assert_eq!(s.commands.len(), 1);
-}
-
-/// Finding 3: a surplus operand is a usage error (exit 3) rejected in the operand check, before any
-/// file is validated, so a valid first path can no longer make `validate a.docx b.docx` print PASS.
-/// The two paths are DIFFERENT files and validating either one would return `Ok`; the code path
-/// returns `Status(3)` from the `paths.len() != 1` check before `validate_path` runs, so no file was
-/// validated to produce it. (A `Status(3)` on its own does not prove that — `validate` also returns
-/// it for an I/O error after a single valid operand reaches the validator — which is why the
-/// operand check, not the status, is what establishes the rejection happened first.)
-#[test]
-fn validate_rejects_missing_or_surplus_operands_without_validating() {
-    let dir = std::env::temp_dir().join(format!("wc-cli-validate-args-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let first = dir.join("first.docx");
-    let second = dir.join("second.docx");
-    run(&args(&["run", "--template", "sample", "--save", &first.to_string_lossy()])).unwrap();
-    run(&args(&["run", "--template", "sample", "--save", &second.to_string_lossy()])).unwrap();
-    let (first, second) = (first.to_string_lossy().into_owned(), second.to_string_lossy().into_owned());
-    assert_ne!(first, second, "the two operands must be different files");
-    assert_eq!(run(&args(&["validate", &first])), Ok(()), "one valid path reports PASS");
-    assert_eq!(
-        run(&args(&["validate", &first, &second])),
-        Err(Failure::Status(3)),
-        "two different paths are a usage error; validating either would return Ok, so it validated neither"
-    );
-    assert_eq!(run(&args(&["validate"])), Err(Failure::Status(3)), "no path is a usage error");
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// Finding 4: `validate` is in `OPENS_FILE`, so a file name that is not valid Unicode reaches the
@@ -826,19 +673,4 @@ fn invisible_characters_are_escaped_and_json_lines_still_parse_back() {
     assert!(!line.chars().any(is_unsafe_char), "{line}");
     assert!(line.contains("\\ud800") || line.contains("\\udb40"), "{line}");
     assert_eq!(serde_json::from_str::<Value>(&line).unwrap(), value);
-}
-
-/// Native non-Unicode paths survive argument parsing and reach the validator's I/O error path.
-/// No file is created: APFS refuses invalid UTF-8 names. The original bytes, rather than their
-/// lossy display spelling, must be retained even when options precede the operand.
-#[cfg(unix)]
-#[test]
-fn validate_preserves_a_non_unicode_path_without_creating_a_file() {
-    use std::os::unix::ffi::OsStringExt;
-    let raw_path = OsString::from_vec(b"wordcraft-nonexistent-caf\xe9.docx".to_vec());
-    let raw = vec![OsString::from("validate"), OsString::from("--json"), raw_path.clone()];
-    let (_, parsed) = text_args(&raw).unwrap();
-    assert_eq!(parsed.as_deref(), Some(Path::new(&raw_path)));
-    assert!(parsed.as_deref().unwrap().to_str().is_none());
-    assert_eq!(run(&raw), Err(Failure::Status(3)), "native path reaches I/O handling");
 }

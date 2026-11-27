@@ -157,7 +157,7 @@ Command line:
 
 ```sh
 wordcraft-cli convert report.docx report.pdf        # docx, pdf, odt, rtf, html, md, tex, txt, png
-wordcraft-cli convert report.docx report.pdf --strict   # exit 3, no file, if a character or picture would be left out
+wordcraft-cli convert report.docx report.pdf --strict   # exit 1, no file, if a character or picture would be left out
 wordcraft-cli text report.docx                      # plain text
 wordcraft-cli inspect report.docx                   # structure as JSON
 wordcraft-cli run --template sample \
@@ -165,16 +165,27 @@ wordcraft-cli run --template sample \
 wordcraft-cli run --script job.json                 # the same from a file: commands, then save to docx and pdf
 ```
 
-`convert --strict` (a `.pdf` or `.png` output only) and `render --strict` (a PNG of one page) refuse a silently incomplete render: they exit 3
+`wordcraft-cli` follows [RFC-0018](https://github.com/storytold/craft-contrib/blob/main/rfcs/0018-cli-conventions.md)
+(command-line conventions); `wordcraft-cli --help` and `<subcommand> --help` are the reference for every flag. Exit status:
+0 success, 1 the command failed, 2 a usage error (an unknown or repeated flag, a bad value, flags that conflict or that a
+subcommand doesn't take, all checked before any file is opened), and 128 plus the signal number when a signal ends the
+process. Errors are `error: <message>` on stderr; results are on stdout. `--version`/`-V` work on every subcommand and there
+is no `version` subcommand. `WORDCRAFT_PASSWORD` is read by `--password` (a flag wins, an empty variable counts as unset,
+and `--help` never shows its value); `WORDCRAFT_REGION` sets the paper. The Linux packages (deb, rpm and tar.gz) and the
+FreeBSD package install the man pages and the bash, zsh and fish completions.
+
+`convert --strict` (a `.pdf` or `.png` output only) and `render --strict` (a PNG of one page) refuse a silently incomplete render: they exit 1
 and write nothing if the output would draw a character no font has (an empty box) or leave out a
-picture. Exit codes are 0 (written), 1 (unreadable input, usage error, or `--strict` with another
-output type, checked before the input is read) and 3 (strict refusal). On exit 3, stderr has one
-`wordcraft-cli: strict: …` line per kind, then one JSON line:
+picture. Exit codes are 0 (written) and 1 (unreadable input or a strict refusal); `--strict` with another
+output type is a usage error (2), checked before the input is read. On a strict refusal, stderr has one
+`error: strict: …` line per kind, then one JSON line. (Before RFC-0018 a strict refusal exited 3; RFC-0018 has no code 3.)
+`validate` exits 0 for PASS and 1 for FAIL, INCOMPLETE or a file it can't read: the verdict is the first line of the report
+(`verdict` with `--json`).
 
 ```sh
 wordcraft-cli convert in.docx out.pdf --strict
-# wordcraft-cli: strict: 1 character cannot be drawn: U+2D30 (×3)
-# wordcraft-cli: strict: 1 picture(s) left out: word/media/image2.bin (header2.xml): unsupported format
+# error: strict: 1 character cannot be drawn: U+2D30 (×3)
+# error: strict: 1 picture(s) left out: word/media/image2.bin (header2.xml): unsupported format
 # {"schema":1,"strict":"failed","missing_glyphs":[{"cp":"U+2D30","count":3}],"missing_pictures":[{"part":"word/media/image2.bin","source_part":"word/header2.xml","reason":"unsupported_format"}],"truncated":false,"total_missing_glyphs":1,"total_missing_pictures":1,"glyphs_truncated":false,"pictures_truncated":false}
 ```
 

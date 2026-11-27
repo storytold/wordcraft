@@ -59,7 +59,7 @@ fn validate_closed_stdout_preserves_verdict() {
     let bytes = wordcraft_engine::io::save_bytes("pass.docx", &wordcraft_doc::Document::from_text("Control")).unwrap();
     std::fs::write(&pass, bytes).unwrap();
     let mut results = Vec::new();
-    for (fixture, expected) in [(pass.clone(), 0), (corpus.join("14-comment-dup.docx"), 1), (sparse.clone(), 2)] {
+    for (fixture, expected) in [(pass.clone(), 0), (corpus.join("14-comment-dup.docx"), 1), (sparse.clone(), 1)] {
         for json in [false, true] {
             let mut open = cli();
             open.arg("validate").arg(&fixture);
@@ -87,7 +87,7 @@ fn validate_closed_stdout_preserves_verdict() {
     }
 }
 
-/// Other report-write failures are I/O status 3; a child-only file-size limit forces EFBIG on stdout.
+/// Other report-write failures are status 1 (RFC-0018: there is no 3); a child-only file-size limit forces EFBIG on stdout.
 #[test]
 fn validate_stdout_write_error_is_io_status() {
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates/validate/corpus/calibration/14-comment-dup.docx");
@@ -105,7 +105,7 @@ fn validate_stdout_write_error_is_io_status() {
     }
     std::fs::remove_file(stdout).unwrap();
     for (json, output) in results {
-        assert_eq!(output.status.code(), Some(3), "json={json}: {output:?}");
+        assert_eq!(output.status.code(), Some(1), "json={json}: {output:?}");
         assert!(!String::from_utf8_lossy(&output.stderr).contains("panicked"), "{output:?}");
     }
 }
