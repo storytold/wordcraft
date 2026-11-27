@@ -292,3 +292,165 @@ fn a_stub_prefixed_archive_followed_by_an_ordinary_archive_is_concatenated() {
         assert_eq!(report.verdict, Verdict::Fail, "{label}: {report:?}");
     }
 }
+
+// ---- Data descriptors: the directory alone never establishes one, and slack is never granted unproven. ----
+
+#[derive(Clone, Copy)]
+enum Descriptor {
+    Signed32,
+    Bare32,
+    Signed64,
+    Bare64,
+}
+
+const DESCRIPTORS: [(&str, Descriptor); 4] =
+    [("signed", Descriptor::Signed32), ("bare", Descriptor::Bare32), ("signed zip64", Descriptor::Signed64), ("bare zip64", Descriptor::Bare64)];
+
+/// A streamed archive: every local header defers its checksum and sizes to a descriptor after the data.
+fn streamed(doc: Doc, kind: Descriptor) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut central = Vec::new();
+    let count = doc.entries.len();
+    for (name, body) in doc.entries {
+        let (name, body) = (name.as_bytes().to_vec(), body.to_vec());
+        let offset = out.len() as u32;
+        let (crc, size) = (raw_zip::crc32(&body), body.len() as u32);
+        out.extend(0x04034b50u32.to_le_bytes());
+        for value in [20u16, 8, 0, 0, 0] {
+            out.extend(value.to_le_bytes());
+        }
+        out.extend([0u8; 12]);
+        out.extend((name.len() as u16).to_le_bytes());
+        out.extend(0u16.to_le_bytes());
+        out.extend(&name);
+        out.extend(&body);
+        if matches!(kind, Descriptor::Signed32 | Descriptor::Signed64) {
+            out.extend(0x08074b50u32.to_le_bytes());
+        }
+        out.extend(crc.to_le_bytes());
+        if matches!(kind, Descriptor::Signed32 | Descriptor::Bare32) {
+            out.extend(size.to_le_bytes());
+            out.extend(size.to_le_bytes());
+        } else {
+            out.extend(u64::from(size).to_le_bytes());
+            out.extend(u64::from(size).to_le_bytes());
+        }
+        central.extend(0x02014b50u32.to_le_bytes());
+        for value in [20u16, 20, 8, 0, 0, 0] {
+            central.extend(value.to_le_bytes());
+        }
+        for value in [crc, size, size] {
+            central.extend(value.to_le_bytes());
+        }
+        for value in [name.len() as u16, 0, 0, 0, 0] {
+            central.extend(value.to_le_bytes());
+        }
+        central.extend(0u32.to_le_bytes());
+        central.extend(offset.to_le_bytes());
+        central.extend(&name);
+    }
+    let start = out.len() as u32;
+    out.extend(&central);
+    out.extend(0x06054b50u32.to_le_bytes());
+    out.extend([0u8; 4]);
+    out.extend((count as u16).to_le_bytes());
+    out.extend((count as u16).to_le_bytes());
+    out.extend((central.len() as u32).to_le_bytes());
+    out.extend(start.to_le_bytes());
+    out.extend(0u16.to_le_bytes());
+    out
+}
+
+#[test]
+fn streamed_archives_with_real_descriptors_pass_alone_and_still_concatenate() {
+    let ordinary = Doc::minimal().build();
+    for (label, kind) in DESCRIPTORS {
+        let first = streamed(Doc::minimal(), kind);
+        let alone = validate_bytes(&first);
+        assert!(!concatenated(&alone) && !noted(&alone), "{label}: {alone:?}");
+        assert_eq!(alone.verdict, Verdict::Pass, "{label}: {alone:?}");
+        for report in [pair(&first, &ordinary), pair(&ordinary, &first)] {
+            assert!(concatenated(&report), "{label}: {report:?}");
+            assert_eq!(report.verdict, Verdict::Fail, "{label}: {report:?}");
+        }
+    }
+}
+
+/// An archive whose first entry is a blob holding a record set that claims a directory of one entry: the
+/// blob itself, with a data descriptor the central record asserts. `local_flag` says whether the blob's
+/// real local header agrees; `pad` bytes separate the claimed entry end from the claimed directory.
+/// The fake footer's comment runs 5 bytes short of the end of `rest`, across the real archive boundary.
+fn descriptor_decoy(rest: &[u8], local_flag: bool, pad: usize, pad_byte: u8) -> (Vec<u8>, Vec<u8>) {
+    const NAME: &str = "word/media/blob.bin";
+    let blob_at = 30 + NAME.len();
+    let make = |comment: u16| {
+        let mut blob = vec![pad_byte; pad];
+        let directory = blob_at + pad;
+        let mut central = 0x02014b50u32.to_le_bytes().to_vec();
+        for value in [20u16, 20, 8, 0, 0, 0] {
+            central.extend(value.to_le_bytes());
+        }
+        central.extend([0u8; 12]);
+        for value in [NAME.len() as u16, 0, 0, 0, 0] {
+            central.extend(value.to_le_bytes());
+        }
+        central.extend([0u8; 4]);
+        central.extend(0u32.to_le_bytes());
+        central.extend(NAME.as_bytes());
+        blob.extend(&central);
+        blob.extend(0x06054b50u32.to_le_bytes());
+        for value in [0u16, 0, 1, 1] {
+            blob.extend(value.to_le_bytes());
+        }
+        blob.extend((central.len() as u32).to_le_bytes());
+        blob.extend((directory as u32).to_le_bytes());
+        blob.extend(comment.to_le_bytes());
+        let mut recs = vec![Record::new(NAME, 0, &blob)];
+        recs.extend(records(Doc::minimal()));
+        let mut zip = raw_zip::build(&recs);
+        if local_flag {
+            zip[6] |= 8;
+        }
+        zip
+    };
+    let probe = make(0);
+    let fake_footer = blob_at + pad + 46 + NAME.len();
+    let total = probe.len() + rest.len();
+    let comment = u16::try_from(total - (fake_footer + 22) - 5).unwrap();
+    let first = make(comment);
+    assert_eq!(first.len(), probe.len());
+    let whole = [first.as_slice(), rest].concat();
+    (first, whole)
+}
+
+#[test]
+fn a_central_descriptor_claim_the_local_header_lacks_cannot_hide_a_boundary() {
+    let second = Doc::minimal().build();
+    for pad in [0, 10, 24] {
+        let (_, whole) = descriptor_decoy(&second, false, pad, 0);
+        let report = validate_bytes(&whole);
+        assert!(concatenated(&report), "pad {pad}: {report:?}");
+        assert_eq!(report.verdict, Verdict::Fail, "pad {pad}: {report:?}");
+    }
+}
+
+#[test]
+fn a_descriptor_both_records_claim_but_the_bytes_do_not_hold_cannot_hide_a_boundary() {
+    let second = Doc::minimal().build();
+    for pad in [0, 10, 24] {
+        let (_, whole) = descriptor_decoy(&second, true, pad, 0xA5);
+        let report = validate_bytes(&whole);
+        assert!(concatenated(&report) || noted(&report), "pad {pad}: {report:?}");
+        assert_ne!(report.verdict, Verdict::Pass, "pad {pad}: {report:?}");
+    }
+}
+
+#[test]
+fn a_local_descriptor_flag_the_directory_lacks_still_leaves_the_archive_splittable() {
+    let ordinary = Doc::minimal().build();
+    let mut first = Doc::minimal().build();
+    first[6] |= 8;
+    let report = pair(&first, &ordinary);
+    assert!(concatenated(&report) || noted(&report), "{report:?}");
+    assert_ne!(report.verdict, Verdict::Pass, "{report:?}");
+}

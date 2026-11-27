@@ -1117,8 +1117,8 @@ fn verify_footer(bytes: &[u8], footer: usize, limit: usize) -> Footer {
     if count > limit as u64 {
         return Footer::Undecided(count);
     }
-    // (local offset, end of local record, slack a data descriptor may occupy after it)
-    let mut spans: Vec<(usize, usize, usize)> = Vec::new();
+    // (local offset, end of entry data, descriptor lengths proven to follow it as a bit set, bit n for n bytes; zero when none)
+    let mut spans: Vec<(usize, usize, u32)> = Vec::new();
     // Every record's identity was established: its ZIP64 fields (central and local) resolved and compared.
     let mut identified = true;
     let mut at = start;
@@ -1140,11 +1140,10 @@ fn verify_footer(bytes: &[u8], footer: usize, limit: usize) -> Footer {
             }
             let extra = bytes.get(at + 46 + name_len..at + 46 + name_len + extra_len)?;
             // A ZIP64 record keeps its sizes or offset in the extra field; without them it proves nothing.
-            let Some((size, local)) = central_fields(extra, uncompressed, compressed, offset) else {
+            let Some((size, full_size, local)) = central_fields(extra, uncompressed, compressed, offset) else {
                 return Some((next, false));
             };
             let local = usize::try_from(local).ok()?;
-            let descriptor = flags & 0x8 != 0;
             if local >= start || u32_at(bytes, local)? != 0x0403_4B50 || usize::from(u16_at(bytes, local + 26)?) != name_len {
                 return None;
             }
@@ -1157,11 +1156,31 @@ fn verify_footer(bytes: &[u8], footer: usize, limit: usize) -> Footer {
             let Some(local_size) = local_compressed(local_extra, u32_at(bytes, local + 22)?, u32_at(bytes, local + 18)?) else {
                 return Some((next, false));
             };
-            if !descriptor && local_size != size {
+            // Descriptor status needs both records to agree; the directory alone never establishes it.
+            let descriptor = flags & 0x8 != 0;
+            if (u16_at(bytes, local + 6)? & 0x8 != 0) != descriptor {
+                return Some((next, false));
+            }
+            if descriptor {
+                // A streamed local header carries no sizes (or the same ones); anything else contradicts the directory.
+                if local_size != 0 && local_size != size {
+                    return Some((next, false));
+                }
+            } else if local_size != size {
                 return None;
             }
             let end = local.checked_add(30 + name_len + local_extra_len)?.checked_add(usize::try_from(size).ok()?)?;
-            spans.push((local, end, if descriptor { 24 } else { 0 }));
+            let lengths = if descriptor {
+                // The descriptor must sit at the end of the data and repeat the directory's checksum and sizes.
+                let found = descriptor_lengths(bytes, end, u32_at(bytes, at + 16)?, size, full_size);
+                if found == 0 {
+                    return Some((next, false));
+                }
+                found
+            } else {
+                0
+            };
+            spans.push((local, end, lengths));
             Some((next, true))
         })();
         match walked {
@@ -1176,15 +1195,16 @@ fn verify_footer(bytes: &[u8], footer: usize, limit: usize) -> Footer {
     // archive's extent is unproven (a prepended stub, or ZIP64 fields that could not be resolved).
     if identified {
         spans.sort_unstable();
-        let (mut cursor, mut slack) = (0, 0);
-        for (local, end, next_slack) in spans {
-            if local < cursor || local - cursor > slack {
+        let (mut cursor, mut lengths) = (0, 0u32);
+        for (local, end, next_lengths) in spans {
+            // The gap is empty, or exactly one validated descriptor.
+            if local < cursor || (local != cursor && !descriptor_fits(lengths, local - cursor)) {
                 return Footer::Unanchored(count);
             }
             cursor = end;
-            slack = next_slack;
+            lengths = next_lengths;
         }
-        if start < cursor || start - cursor > slack {
+        if start < cursor || (start != cursor && !descriptor_fits(lengths, start - cursor)) {
             return Footer::Unanchored(count);
         }
         Footer::Verified(count)
@@ -1210,9 +1230,9 @@ fn zip64_body(extra: &[u8]) -> Option<&[u8]> {
 
 /// Resolve a central record's compressed size and local header offset, reading each saturated field from
 /// the ZIP64 extra in the order uncompressed size, compressed size, offset.
-fn central_fields(extra: &[u8], uncompressed: u32, compressed: u32, offset: u32) -> Option<(u64, u64)> {
+fn central_fields(extra: &[u8], uncompressed: u32, compressed: u32, offset: u32) -> Option<(u64, u64, u64)> {
     if uncompressed != u32::MAX && compressed != u32::MAX && offset != u32::MAX {
-        return Some((u64::from(compressed), u64::from(offset)));
+        return Some((u64::from(compressed), u64::from(uncompressed), u64::from(offset)));
     }
     let body = zip64_body(extra)?;
     let mut cursor = 0;
@@ -1224,10 +1244,45 @@ fn central_fields(extra: &[u8], uncompressed: u32, compressed: u32, offset: u32)
         cursor += 8;
         Some(value)
     };
-    let _uncompressed = take(uncompressed)?;
+    let uncompressed = take(uncompressed)?;
     let compressed = take(compressed)?;
     let offset = take(offset)?;
-    Some((compressed, offset))
+    Some((compressed, uncompressed, offset))
+}
+
+/// Whether a gap of `gap` bytes is exactly one of the descriptor lengths in the bit set.
+fn descriptor_fits(lengths: u32, gap: usize) -> bool {
+    gap < 32 && lengths & (1 << gap) != 0
+}
+
+/// The byte lengths (as a bit set) a data descriptor at `at` may have, keeping only layouts whose checksum
+/// and sizes equal the central record's. Covers 32- and 64-bit sizes, each with and without the signature.
+fn descriptor_lengths(bytes: &[u8], at: usize, crc: u32, compressed: u64, uncompressed: u64) -> u32 {
+    let mut found = 0;
+    for signed in [true, false] {
+        let body = if signed {
+            if u32_at(bytes, at) != Some(0x0807_4B50) {
+                continue;
+            }
+            at + 4
+        } else {
+            at
+        };
+        if u32_at(bytes, body) != Some(crc) {
+            continue;
+        }
+        let narrow =
+            u32_at(bytes, body + 4).zip(u32_at(bytes, body + 8)).is_some_and(|(c, u)| u64::from(c) == compressed && u64::from(u) == uncompressed);
+        let wide = u64_at(bytes, body + 4).zip(u64_at(bytes, body + 12)).is_some_and(|(c, u)| c == compressed && u == uncompressed);
+        let head = body - at + 4;
+        if narrow {
+            found |= 1 << (head + 8);
+        }
+        if wide {
+            found |= 1 << (head + 16);
+        }
+    }
+    found
 }
 
 /// Resolve a local header's compressed size independently of the directory's representation. A local
