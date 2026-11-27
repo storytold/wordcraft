@@ -4357,3 +4357,34 @@ fn touchpad_and_mouse_scroll_speed_scaling_and_preferences() {
     assert_eq!(restored.ui.touchpad_scroll_speed, ScrollSpeed::Fast);
     assert_eq!(restored.ui.scroll_speed, ScrollSpeed::Fast);
 }
+
+/// #2256: holding the mouse still on the status bar's zoom slider keeps one zoom, wherever
+/// it is held. Holding it at 95% used to flip the zoom between 90% and 95% every frame.
+#[test]
+fn holding_the_zoom_slider_still_keeps_one_zoom() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness(app());
+    h.run_steps(6);
+    let r = h.get_by_role_and_label(egui::accesskit::Role::Slider, "Zoom").rect();
+    let mut flips = Vec::new();
+    let mut x = r.left() + 0.5;
+    while x < r.right() {
+        let p = egui::pos2(x, r.center().y);
+        h.hover_at(p);
+        h.drag_at(p);
+        h.run_steps(3);
+        let held: Vec<f32> = (0..8)
+            .map(|_| {
+                h.step();
+                h.state().session.view.zoom
+            })
+            .collect();
+        if held.windows(2).any(|w| (w[0] - w[1]).abs() > 1e-4) {
+            flips.push((x, held));
+        }
+        h.drop_at(p);
+        h.run_steps(2);
+        x += 1.0;
+    }
+    assert!(flips.is_empty(), "the zoom moved while the pointer held still: {flips:?}");
+}
