@@ -201,6 +201,29 @@ impl Session {
         done
     }
 
+    /// The number of redo steps.
+    pub fn redo_depth(&self) -> usize {
+        self.redo.len()
+    }
+
+    /// The Redo button's list (#7847): the undone steps' labels, the one Redo brings back next
+    /// first, at most [`UNDO_LIST_MAX`].
+    pub fn redo_history(&self) -> Vec<&str> {
+        self.redo.iter().rev().take(UNDO_LIST_MAX).map(|u| u.label.as_str()).collect()
+    }
+
+    /// Redo the next `count` undone steps in one go, as picking an entry in the Redo list does
+    /// (#7847). More than the redo depth redoes everything; a step that would take the
+    /// document's protection away stops it (only Stop Protection lifts it). Returns the steps
+    /// redone.
+    pub fn redo_steps(&mut self, count: usize) -> usize {
+        let mut done = 0;
+        while done < count && !self.step_lifts_protection(true) && self.redo() {
+            done += 1;
+        }
+        done
+    }
+
     /// Undoes the newest step: closes typing, records an AutoCorrect exception when the undone step
     /// was its automatic capital, swaps the document, selection, pending formatting and column with
     /// the redo snapshot, replaces the body identity, refreshes equation editing and touches layout.

@@ -18,6 +18,10 @@ pub(crate) struct ChromeOpen {
     pub(crate) undo: bool,
     /// The actions marked in the open Undo drop-down; back to none whenever the drop-down is closed.
     pub(crate) undo_mark: craft::ui::list::UndoMark,
+    /// The Redo drop-down (#7847).
+    pub(crate) redo: bool,
+    /// The actions marked in the open Redo drop-down; back to none whenever the drop-down is closed.
+    pub(crate) redo_mark: craft::ui::list::UndoMark,
     /// The command search.
     pub(crate) search: bool,
     /// How the title bar's controls at the end fit the room the leading controls leave them.
@@ -128,6 +132,11 @@ pub(crate) fn qat_enabled(ctx: &egui::Context, app: &WordApp, id: &str) -> bool 
 /// The Undo list's rows, newest first: each step named as the Undo button's tooltip names it.
 pub(crate) fn undo_list_rows(app: &WordApp) -> Vec<String> {
     app.session.undo_history().into_iter().map(|l| tl!(l).to_string()).collect()
+}
+
+/// The Redo list's rows (#7847), the step Redo brings back next first, named as the Undo list names them.
+pub(crate) fn redo_list_rows(app: &WordApp) -> Vec<String> {
+    app.session.redo_history().into_iter().map(|l| tl!(l).to_string()).collect()
 }
 
 /// What fills the screen (#1678): the usual window, Focus (the document on black, a slim bar to

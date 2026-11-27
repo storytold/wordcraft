@@ -189,6 +189,50 @@ fn undo_list_cancel_closes_without_undoing() {
     assert_eq!(h.query_all_by_role(Role::ListBoxOption).count(), 0, "Cancel closes the list");
 }
 
+/// #7847: the arrow beside Redo lists the undone steps, the next one first; clicking the third row redoes three
+/// steps at once and returns focus to the document.
+#[test]
+fn redo_list_matches_the_session_and_redoes_up_to_the_clicked_row() {
+    use egui::accesskit::Role;
+    let mut a = new_app();
+    a.run("text.insert", json!({"text": "Hello"})).unwrap();
+    a.run("select.all", json!({})).unwrap();
+    a.run("format.bold", json!({})).unwrap();
+    a.run("format.italic", json!({})).unwrap();
+    a.run("caret.docEnd", json!({})).unwrap();
+    a.run("text.insert", json!({"text": " world"})).unwrap();
+    a.run("edit.undoTo", json!({"count": 4})).unwrap();
+    let session: Vec<String> = a.session.redo_history().into_iter().map(str::to_string).collect();
+    assert_eq!(session, ["Typing", "Bold", "Italic", "Typing"]);
+    assert_eq!(redo_list_rows(&a), session);
+
+    let mut h = harness(a);
+    let arrow = h.get_by_label("Redo History").rect().center();
+    click_at(&mut h, arrow, egui::PointerButton::Primary);
+    assert_eq!(h.query_all_by_role(Role::ListBoxOption).count(), 4, "one row per undone step");
+    let row = h.get_by_role_and_label(Role::ListBoxOption, "Italic").rect().center();
+    click_at(&mut h, row, egui::PointerButton::Primary);
+    assert_eq!(h.state().session.redo_history(), ["Typing"], "three steps redone in one go");
+    assert_eq!(h.state().session.undo_history(), ["Italic", "Bold", "Typing"]);
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Hello");
+    assert_eq!(h.query_all_by_role(Role::ListBoxOption).count(), 0, "the list closes");
+    assert!(h.state().canvas.focused(&h.ctx), "the row click returns focus to the document");
+}
+
+/// #7847: with nothing undone the Redo list's arrow is disabled, as Redo is.
+#[test]
+fn redo_list_is_disabled_with_nothing_to_redo() {
+    use egui::accesskit::Role;
+    let mut a = new_app();
+    a.run("text.insert", json!({"text": "Hello"})).unwrap();
+    assert!(!a.session.can_redo());
+    let mut h = harness(a);
+    let arrow = h.get_by_label("Redo History").rect().center();
+    click_at(&mut h, arrow, egui::PointerButton::Primary);
+    assert_eq!(h.query_all_by_role(Role::ListBoxOption).count(), 0, "a disabled arrow opens no list");
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Hello");
+}
+
 /// #1975: the zoom percentage gains and loses digits (9% → 100% → 500%); the controls to its
 /// left must not shift with it.
 #[test]

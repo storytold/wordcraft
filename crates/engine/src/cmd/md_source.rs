@@ -371,7 +371,7 @@ pub(crate) fn refusal(s: &Session, id: &str, mutates: bool) -> Option<&'static s
         && id != TOGGLE
         && id != TEXT
         && !LEAVES.contains(&id)
-        && (mutates || matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo" | "edit.repeat")))
+        && (mutates || matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo" | "edit.redoTo" | "edit.repeat")))
     .then_some("leave Markdown Source first")
 }
 
