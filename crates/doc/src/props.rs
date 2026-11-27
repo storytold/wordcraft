@@ -48,6 +48,14 @@ mod tests {
     }
 
     #[test]
+    fn underline_reads_every_w_u_name() {
+        for u in Underline::ALL {
+            assert_eq!(serde_json::from_value::<Underline>(serde_json::json!(u.ooxml())).ok(), Some(u), "{}", u.ooxml());
+        }
+        assert_eq!(serde_json::to_value(Underline::DoubleWave).ok(), Some(serde_json::json!("doubleWave")), "written as before");
+    }
+
+    #[test]
     fn rgb_parse_rejects_non_hex() {
         assert_eq!(Rgb::parse("+1+2+3"), None);
         assert_eq!(Rgb::parse("-1-2-3"), None);

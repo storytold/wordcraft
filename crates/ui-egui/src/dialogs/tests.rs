@@ -1954,7 +1954,7 @@ fn font_dialog_effects_stand_two_to_a_line_and_kerning_on_one() {
     let check = egui::accesskit::Role::CheckBox;
     let same_line = |a: egui::Rect, b: egui::Rect| (a.center().y - b.center().y).abs() < 1.0 && a.max.x <= b.min.x;
     assert!(same_line(rect(&h, check, "Bold"), rect(&h, check, "Italic")), "Italic stands beside Bold");
-    assert!(same_line(rect(&h, check, "Underline"), rect(&h, check, "Strikethrough")), "Strikethrough stands beside Underline");
+    assert!(same_line(rect(&h, check, "Strikethrough"), rect(&h, check, "Double strikethrough")), "Double strikethrough stands beside Strikethrough");
     let kern = rect(&h, check, "Kerning for fonts:");
     // The size field and the text after it share the name; the field comes first.
     let size = h.query_all_by_label("Points and above").map(|node| node.rect()).min_by(|a, b| a.min.x.total_cmp(&b.min.x)).expect("the kerning size");
@@ -2282,4 +2282,175 @@ fn modal_dialog_with_open_popup_does_not_shake_on_inside_click_but_shakes_on_out
     h.run_steps(2);
     let key2 = chrome::nudge_id(&h.ctx, id2);
     assert!(h.ctx.data(|d| d.get_temp::<f64>(key2)).is_none(), "reopened dialog starts still");
+}
+
+/// Font dialog: Word's Underline style and Underline color boxes, and Double strikethrough.
+mod font_underline {
+    use super::*;
+    use wordcraft_doc::Rgb;
+    use wordcraft_doc::props::{CharProps, Underline};
+
+    fn char_at(app: &WordApp, i: usize) -> CharProps {
+        app.session.doc.para_at(&Pos::body(0, 0)).map(|p| p.props_of_char(i).clone()).unwrap_or_default()
+    }
+
+    /// `text` with every character selected, in a harness.
+    fn selected(text: &str, setup: &[Json]) -> egui_kittest::Harness<'static, WordApp> {
+        let mut app = app_with(text);
+        let _ = app.run("select.all", json!({}));
+        for props in setup {
+            let _ = app.run("format.set", json!({ "props": props }));
+        }
+        let mut h = app_harness(app);
+        h.run_steps(2);
+        h
+    }
+
+    /// Two runs with different underline styles: "Alpha " double, "beta" wave, all selected.
+    fn mixed_styles() -> egui_kittest::Harness<'static, WordApp> {
+        let mut app = app_with("Alpha beta");
+        let _ = app.run("select.all", json!({}));
+        let _ = app.run("format.set", json!({"props": {"underline": "double"}}));
+        let _ = app.run("select.text", json!({"text": "beta"}));
+        let _ = app.run("format.set", json!({"props": {"underline": "wave"}}));
+        let _ = app.run("select.all", json!({}));
+        let mut h = app_harness(app);
+        h.run_steps(2);
+        h
+    }
+
+    /// `format.state` names the selection's underline style, and says whether it is all double struck.
+    #[test]
+    fn format_state_reports_underline_style_and_double_strike() {
+        let mut app = app_with("Example");
+        let _ = app.run("select.all", json!({}));
+        let _ = app.run("format.set", json!({"props": {"underline": "dotDash", "doubleStrike": true}}));
+        let st = app.session.run("format.state", &json!({})).unwrap_or_default();
+        assert_eq!(st.get("underlineStyle"), Some(&json!("dotDash")));
+        assert_eq!(st.get("doubleStrike"), Some(&json!(true)));
+        assert_eq!(st.get("underline"), Some(&json!(true)), "the plain flag stays");
+    }
+
+    /// The dialog opens with the text's own underline style and colour and its double strikethrough.
+    #[test]
+    fn font_dialog_shows_the_underline_style_colour_and_double_strike() {
+        let mut h = selected("Example", &[json!({"underline": "double", "doubleStrike": true}), json!({"underlineColor": "C00000"})]);
+        assert_eq!(char_at(h.state(), 0).underline_color, Some(Rgb(0xC0, 0, 0)), "setup: red underline");
+        apply_font(&mut h, |f| {
+            assert_eq!((f.underline.as_str(), f.underline_color.as_str(), f.double_strike), ("double", "C00000", true));
+        });
+    }
+
+    /// Each entry of the Underline style box applies that style, not a single underline, in one undo step.
+    #[test]
+    fn font_dialog_applies_each_underline_style() {
+        for (name, u) in [
+            ("words", Underline::Words),
+            ("double", Underline::Double),
+            ("thick", Underline::Thick),
+            ("dotted", Underline::Dotted),
+            ("dash", Underline::Dash),
+            ("dotDash", Underline::DotDash),
+            ("dotDotDash", Underline::DotDotDash),
+            ("wave", Underline::Wave),
+            ("wavyDouble", Underline::DoubleWave),
+            ("none", Underline::None),
+        ] {
+            let mut h = selected("Example", &[json!({"underline": "single"})]);
+            let depth = h.state().session.undo_depth();
+            apply_font(&mut h, |f| f.underline = name.into());
+            assert_eq!(char_at(h.state(), 0).underline, Some(u), "{name}");
+            assert_eq!(h.state().session.undo_depth(), depth + 1, "one undo step, {name}");
+        }
+    }
+
+    /// Guard: OK after changing only the size keeps a red underline red.
+    #[test]
+    fn font_dialog_keeps_the_underline_colour() {
+        let mut h = selected("Example", &[json!({"underline": "single"}), json!({"underlineColor": "C00000"})]);
+        apply_font(&mut h, |f| f.size = Some(14.0));
+        let c = char_at(h.state(), 0);
+        assert_eq!((c.underline, c.underline_color, c.size), (Some(Underline::Single), Some(Rgb(0xC0, 0, 0)), Some(14.0)));
+    }
+
+    /// Automatic underline colour drops the run's own colour, in the same undo step as the rest of OK.
+    #[test]
+    fn font_dialog_automatic_underline_colour_drops_the_colour() {
+        let mut h = selected("Example", &[json!({"underline": "single"}), json!({"underlineColor": "C00000"})]);
+        let depth = h.state().session.undo_depth();
+        apply_font(&mut h, |f| {
+            f.underline_color = "auto".into();
+            f.size = Some(13.0);
+        });
+        let c = char_at(h.state(), 0);
+        assert_eq!((c.underline_color, c.size), (None, Some(13.0)));
+        assert_eq!(h.state().session.undo_depth(), depth + 1, "one undo step");
+    }
+
+    /// Ticking Double strikethrough clears Strikethrough, as in Word, and OK applies it.
+    #[test]
+    fn font_dialog_double_strikethrough_replaces_strikethrough() {
+        let mut h = selected("Example", &[json!({"strike": true})]);
+        let id = open_named(&mut h, "font", json!({}));
+        h.get_by_label("Double strikethrough").click();
+        h.run_steps(3);
+        confirm(&mut h, id);
+        let c = char_at(h.state(), 0);
+        assert_eq!(c.double_strike, Some(true));
+        assert_ne!(c.strike, Some(true), "strikethrough is off");
+    }
+
+    /// Guard: text whose runs have different underline styles keeps them when OK changes only the size.
+    #[test]
+    fn font_dialog_leaves_mixed_underline_styles_alone() {
+        let mut h = mixed_styles();
+        apply_font(&mut h, |f| {
+            assert_eq!(f.underline, "", "setup: the style box is blank");
+            f.size = Some(15.0);
+        });
+        assert_eq!((char_at(h.state(), 0).underline, char_at(h.state(), 0).size), (Some(Underline::Double), Some(15.0)));
+        assert_eq!((char_at(h.state(), 7).underline, char_at(h.state(), 7).size), (Some(Underline::Wave), Some(15.0)));
+    }
+
+    /// Double wave with a new size: OK applies both (the style box's `w:u` name is one `format.set`
+    /// reads), and the name `format.state` reports can be sent back.
+    #[test]
+    fn font_dialog_applies_double_wave_with_the_size() {
+        let mut h = selected("Example", &[]);
+        apply_font(&mut h, |f| {
+            f.underline = "wavyDouble".into();
+            f.size = Some(16.0);
+        });
+        assert_eq!((char_at(h.state(), 0).underline, char_at(h.state(), 0).size), (Some(Underline::DoubleWave), Some(16.0)));
+        let app = h.state_mut();
+        let st = app.session.run("format.state", &json!({})).unwrap_or_default();
+        let name = st.get("underlineStyle").cloned().unwrap_or_default();
+        assert_eq!(name, json!("wavyDouble"));
+        let _ = app.run("format.set", json!({"props": {"underline": "single"}}));
+        assert!(app.run("format.set", json!({"props": {"underline": name}})).is_ok(), "the reported name is accepted");
+        assert_eq!(char_at(app, 0).underline, Some(Underline::DoubleWave));
+    }
+
+    /// Text whose runs mix underline styles: a colour picked in Underline color applies to every run,
+    /// each keeping its own style.
+    #[test]
+    fn font_dialog_colours_mixed_underline_styles() {
+        let mut h = mixed_styles();
+        apply_font(&mut h, |f| f.underline_color = "FF0000".into());
+        let red = Some(Rgb(0xFF, 0, 0));
+        assert_eq!((char_at(h.state(), 0).underline, char_at(h.state(), 0).underline_color), (Some(Underline::Double), red));
+        assert_eq!((char_at(h.state(), 7).underline, char_at(h.state(), 7).underline_color), (Some(Underline::Wave), red));
+    }
+
+    /// Guard: text that already has both Strikethrough and Double strikethrough (from a file) keeps
+    /// both when OK is pressed without touching either.
+    #[test]
+    fn font_dialog_keeps_strike_and_double_strike_left_alone() {
+        let mut h = selected("Example", &[json!({"strike": true, "doubleStrike": true})]);
+        let id = open_named(&mut h, "font", json!({}));
+        h.run_steps(3);
+        confirm(&mut h, id);
+        let c = char_at(h.state(), 0);
+        assert_eq!((c.strike, c.double_strike), (Some(true), Some(true)));
+    }
 }
