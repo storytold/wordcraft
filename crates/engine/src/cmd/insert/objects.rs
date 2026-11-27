@@ -37,12 +37,34 @@ pub(super) fn table(s: &mut Session, v: &Value) -> CmdResult {
     if s.doc.para_at(&s.sel.focus).is_some_and(|p| s.doc.styles.resolve_para(&p.props).bidi) {
         t.props.bidi_visual = true;
     }
+    cells_in_language(&mut t, &s.typing_props());
     let story = s.sel.focus.story;
     let path = insert_block_at_caret(s, Block::Table(t))?;
     let mut first = path.0.clone();
     first.extend([0, 0, 0]);
     s.sel = Selection::caret(Pos { story, path: Path(first), off: 0 });
     Ok(json!({"table": path.0}))
+}
+
+/// Like Word, a new table is in the language of the text it is inserted in (#6013): each cell's
+/// paragraph mark takes `at`'s languages and Do not check spelling, so what is typed in the cells
+/// is proofed in that language rather than the document's default. Unset ones stay unset.
+fn cells_in_language(t: &mut Table, at: &CharProps) {
+    for cell in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+        for b in &mut cell.blocks {
+            if let Block::Para(p) = std::sync::Arc::make_mut(b) {
+                let mark = &mut p.mark;
+                for (to, from) in [(&mut mark.lang, &at.lang), (&mut mark.lang_ea, &at.lang_ea), (&mut mark.lang_bidi, &at.lang_bidi)] {
+                    if from.is_some() {
+                        to.clone_from(from);
+                    }
+                }
+                if at.no_proof.is_some() {
+                    mark.no_proof = at.no_proof;
+                }
+            }
+        }
+    }
 }
 
 /// Minimal base64 (standard alphabet, padding optional, whitespace ignored).
