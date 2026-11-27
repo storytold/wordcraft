@@ -29,6 +29,7 @@ fn a_legacy_ui_json_is_imported_with_its_junk_reset_to_defaults() {
     assert_eq!((ui.recent_count, ui.print_backgrounds, ui.options_pane.as_str()), (12, false, "general"));
     assert_eq!(ui.status_count, StatusCount::Words);
     assert_eq!(ui.legacy_dark, Some(true));
+    assert!(ui.ruler, "preferences written before ruler visibility was saved keep the default");
     assert_eq!(ui.editing.units, None);
     assert!(!ui.editing.typing_replaces_selection);
     assert!(ui.editing.marks.spaces && !ui.editing.marks.tabs);
@@ -113,6 +114,35 @@ fn a_setting_changed_by_command_survives_a_restart() {
         assert!(a.run("ui.alignmentGuides", junk).is_err());
     }
     assert!(a.ui.alignment_guides, "a rejected value keeps the setting");
+}
+
+/// #4027: both Ruler choices survive reopening the settings store.
+#[test]
+fn ruler_visibility_survives_restarts() {
+    let dir = store_dir("ruler");
+    let mut first = app().with_settings(open(&dir));
+    assert!(first.session.view.ruler, "the ruler is visible by default");
+
+    let root = first.windows.root_key();
+    first.run("view.newWindow", json!({})).unwrap();
+    assert_ne!(first.windows.shown(), root, "a second window is active");
+    let hidden = first.run("view.ruler", json!({})).unwrap();
+    assert_eq!(hidden["saved"], true, "hiding the ruler saves immediately");
+    first.show_window(root);
+    assert!(first.session.view.ruler, "the original window still has its own ruler visibility");
+    assert!(matches!(first.flush_prefs(), Some(Ok(()))));
+    drop(first);
+
+    let mut second = app().with_settings(open(&dir));
+    assert!(!second.session.view.ruler, "hiding the ruler survives a restart and a window switch");
+    let shown = second.run("view.ruler", json!({"value": true})).unwrap();
+    assert_eq!(shown["saved"], true, "showing the ruler saves immediately");
+    drop(second);
+
+    let third = app().with_settings(open(&dir));
+    assert!(third.session.view.ruler, "showing the ruler again survives an immediate restart");
+    drop(third);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #4368: a saved empty user name stays empty; one of only spaces keeps the default.
