@@ -2021,6 +2021,7 @@ fn title_and_account_buttons_work() {
         (Role::Button, "Undo"),
         (Role::Button, "Redo"),
         (Role::Button, "Undo History"),
+        (Role::Button, "Redo History"),
         (Role::Button, "Customize Quick Access Toolbar"),
         (Role::Button, "Document1 \u{2014} Not saved"),
         (Role::Button, "Discord"),

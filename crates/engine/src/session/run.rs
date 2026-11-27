@@ -212,7 +212,8 @@ impl Session {
             self.typing_open = false;
         }
         // Only the paste right after a tracked cut makes it a move.
-        if (spec.mutates || matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo")) && !matches!(id, "edit.cut" | "edit.paste" | "edit.pasteSpecial")
+        if (spec.mutates || matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo" | "edit.redoTo"))
+            && !matches!(id, "edit.cut" | "edit.paste" | "edit.pasteSpecial")
         {
             self.pending_move = None;
         }
@@ -466,7 +467,7 @@ impl Session {
             && (self.sel != *sel_before
                 || id.starts_with("select.")
                 || id.starts_with("caret.")
-                || matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo"))
+                || matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo" | "edit.redoTo"))
         {
             self.member = None;
         }

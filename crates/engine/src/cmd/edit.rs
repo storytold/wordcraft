@@ -34,6 +34,26 @@ fn undo_to(s: &mut Session, v: &Value) -> CmdResult {
     Ok(r)
 }
 
+/// Redo several steps at once: the Redo button's list (#7847). `count` is validated here and
+/// clamped to the redo depth, so hostile numbers never reach the stack.
+fn redo_to(s: &mut Session, v: &Value) -> CmdResult {
+    let n = p::u64(v, "count").ok_or_else(|| CmdError::Params("`count` (whole number, 1 or more) is required".into()))?;
+    if n == 0 {
+        return Err(CmdError::Params("`count` must be 1 or more".into()));
+    }
+    let n = usize::try_from(n).unwrap_or(usize::MAX).min(s.redo_depth());
+    if s.step_lifts_protection(true) {
+        return Err(CmdError::Disabled("edit.redoTo: use Stop Protection to lift the document's protection".into()));
+    }
+    let redone = s.redo_steps(n);
+    let mut r = sel_result(s)?;
+    if let Some(m) = r.as_object_mut() {
+        m.insert("redone".into(), json!(redone));
+        m.insert("redoDepth".into(), json!(s.redo_depth()));
+    }
+    Ok(r)
+}
+
 /// Something the Spike can collect: text (it doesn't take empty cells).
 fn has_text_sel(s: &Session) -> Option<&'static str> {
     if s.sel.is_collapsed() { Some("nothing is selected") } else { None }
@@ -59,8 +79,15 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"count": n (1 = the newest step, like edit.undo; n undoes the newest n steps at once; at most the undo depth)}"#)
             .when(|s| if s.can_undo() { None } else { Some("there is nothing to undo") })
             .pure(),
+        // `redo` names the step Redo brings back next; `redoList` is the Redo button's list (#7847).
         CommandSpec::new("edit.undoHistory", "Undo History", "Quick Access Toolbar", |s, _| {
-            Ok(json!({"undo": s.undo_history(), "depth": s.undo_depth(), "redo": s.redo_label()}))
+            Ok(json!({
+                "undo": s.undo_history(),
+                "depth": s.undo_depth(),
+                "redo": s.redo_label(),
+                "redoList": s.redo_history(),
+                "redoDepth": s.redo_depth(),
+            }))
         })
         .pure(),
         CommandSpec::new("edit.redo", "Redo", "Quick Access Toolbar", |s, _| {
@@ -72,6 +99,10 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .key("Mod+Y / Mod+Shift+Z")
         .pure(),
+        CommandSpec::new("edit.redoTo", "Redo Actions", "Quick Access Toolbar", redo_to)
+            .params(r#"{"count": n (1 = the next undone step, like edit.redo; n redoes the next n steps at once; at most the redo depth)}"#)
+            .when(|s| if s.can_redo() { None } else { Some("there is nothing to redo") })
+            .pure(),
         CommandSpec::new("edit.cut", "Cut", "Home › Clipboard", cut).key("Mod+X").when(has_sel),
         CommandSpec::new("edit.copy", "Copy", "Home › Clipboard", copy).key("Mod+C / Mod+Insert").pure().when(has_sel),
         // Word's Spike (Ctrl+F3, Ctrl+Shift+F3; ⌘ on the Mac): the AutoText entry "Spike", so Quick

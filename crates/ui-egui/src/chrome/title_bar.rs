@@ -26,7 +26,7 @@ use craft::ui::style::GlyphRole;
 use egui::Ui;
 use serde_json::json;
 
-use super::{QAT_MENU, qat_enabled, undo_list_rows};
+use super::{QAT_MENU, qat_enabled, redo_list_rows, undo_list_rows};
 use crate::WordApp;
 
 /// Fills the shell's title slot: the title bar, and what its title and Close report.
@@ -145,9 +145,14 @@ fn quick_access(app: &mut WordApp, ui: &mut Ui) -> Option<egui::Rect> {
             // The ribbon's command menu: on or off the toolbar, and the customize rows.
             let request = RibbonMenuRequest::new(Some(CommandRef::new(id.as_str())), out.response.rect.left_bottom());
             Menu::context(tl!("Quick Access Toolbar").to_string(), &out.response).show(ui, |ui, _| crate::ribbon::command_menu(ui, app, &request));
-            if id == "edit.undo" {
-                // The list is the document's steps, not the Markdown Source pane's typing.
-                rects.push(undo_arrow(app, ui, enabled && app.session.md_source.is_none()));
+            // The lists are the document's steps, not the Markdown Source pane's typing.
+            let history = match id.as_str() {
+                "edit.undo" => Some(History::Undo),
+                "edit.redo" => Some(History::Redo),
+                _ => None,
+            };
+            if let Some(history) = history {
+                rects.push(history_arrow(app, ui, history, enabled && app.session.md_source.is_none()));
             }
         }
     });
@@ -155,25 +160,79 @@ fn quick_access(app: &mut WordApp, ui: &mut Ui) -> Option<egui::Rect> {
     super::union(rects)
 }
 
-/// How many steps the undo list shows before it scrolls.
+/// How many steps the undo and redo lists show before they scroll.
 const UNDO_ROWS_SHOWN: u16 = 8;
 
-/// The small arrow beside Undo: a list of steps to undo several at once, with a footer that names how many a pick
-/// undoes, or Cancel while none is marked (#1903). Returns the arrow's rect.
-fn undo_arrow(app: &mut WordApp, ui: &mut Ui, enabled: bool) -> egui::Rect {
+/// The steps a list beside Undo or Redo shows: the undo steps (#701) or the undone ones (#7847).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum History {
+    Undo,
+    Redo,
+}
+
+impl History {
+    /// The arrow's and the list's accessible name.
+    fn name(self) -> String {
+        match self {
+            History::Undo => tl!("Undo History").to_string(),
+            History::Redo => tl!("Redo History").to_string(),
+        }
+    }
+
+    /// The rows, the step the button takes back or brings back next first.
+    fn rows(self, app: &WordApp) -> Vec<String> {
+        match self {
+            History::Undo => undo_list_rows(app),
+            History::Redo => redo_list_rows(app),
+        }
+    }
+
+    /// The command a pick runs with the count of steps it takes.
+    fn command(self) -> &'static str {
+        match self {
+            History::Undo => "edit.undoTo",
+            History::Redo => "edit.redoTo",
+        }
+    }
+
+    /// The footer that names how many steps a pick takes; none while no row is marked.
+    fn footer(self, words: &UndoWords, format: &craft::i18n::Format, mark: &UndoMark) -> Option<String> {
+        match self {
+            History::Undo => footer_text(words, format, mark),
+            History::Redo => {
+                let actions = mark.actions() as u64;
+                (actions > 0).then(|| crate::i18n::tn(actions, "Redo {n} Action", "Redo {n} Actions"))
+            }
+        }
+    }
+
+    /// Whether the list is open, and the rows marked in it, kept across passes.
+    fn state(self, chrome: &mut super::ChromeOpen) -> (&mut bool, &mut UndoMark) {
+        match self {
+            History::Undo => (&mut chrome.undo, &mut chrome.undo_mark),
+            History::Redo => (&mut chrome.redo, &mut chrome.redo_mark),
+        }
+    }
+}
+
+/// The small arrow beside Undo or Redo: a list of steps to undo or redo several at once, with a footer that names
+/// how many a pick takes, or Cancel while none is marked (#1903, #7847). Returns the arrow's rect.
+fn history_arrow(app: &mut WordApp, ui: &mut Ui, history: History, enabled: bool) -> egui::Rect {
+    let name = history.name();
     // The small filled triangle of the old toolbar.
-    let out = IconButton::new(IconSpec::glyph(&crate::ribbon::common::MENU_ARROW)).label(tl!("Undo History").to_string()).enabled(enabled).show(ui);
-    let labels = undo_list_rows(app);
-    let mut open = app.chrome.undo;
+    let out = IconButton::new(IconSpec::glyph(&crate::ribbon::common::MENU_ARROW)).label(name.clone()).enabled(enabled).show(ui);
+    let labels = history.rows(app);
+    let (open_state, mark_state) = history.state(&mut app.chrome);
+    let mut open = *open_state;
     if out.response.clicked() {
         open = !open;
     }
-    let mut mark = app.chrome.undo_mark;
+    let mut mark = *mark_state;
     let mut picked = None;
-    Popover::new(tl!("Undo History").to_string(), Bind::bound(&mut open)).opened_by(&out.response).show(ui, |ui, cx| {
+    Popover::new(name.clone(), Bind::bound(&mut open)).opened_by(&out.response).show(ui, |ui, cx| {
         let rows = UndoRows::new(&labels);
         // A collection owns its scroll: the popover's body scrolls, so the list caps its rows and scrolls the rest.
-        let events = UndoList::new(tl!("Undo History").to_string())
+        let events = UndoList::new(name.clone())
             .max_rows(UNDO_ROWS_SHOWN)
             .selection(Bind::bound(&mut mark))
             .show_items(ui, &rows, &mut |key, _| rows.row(*key))
@@ -185,7 +244,7 @@ fn undo_arrow(app: &mut WordApp, ui: &mut Ui, enabled: bool) -> egui::Rect {
         Divider::horizontal().show(ui);
         let env = Env::of(ui);
         let words = env.words::<UndoWords>();
-        match footer_text(&words, env.format(), &mark) {
+        match history.footer(&words, env.format(), &mark) {
             Some(text) => {
                 Text::new(text).show(ui);
             }
@@ -196,12 +255,13 @@ fn undo_arrow(app: &mut WordApp, ui: &mut Ui, enabled: bool) -> egui::Rect {
             }
         }
     });
-    app.chrome.undo = open;
-    app.chrome.undo_mark = if open { mark } else { UndoMark::default() };
+    let (open_state, mark_state) = history.state(&mut app.chrome);
+    *open_state = open;
+    *mark_state = if open { mark } else { UndoMark::default() };
     if let Some(count) = picked {
-        let _ = app.run("edit.undoTo", json!({"count": count}));
-        // Picking a row closes the Undo History popover on its foreground layer; return keyboard
-        // focus to the document both now and after the pass's overlay-close focus hook (#3040).
+        let _ = app.run(history.command(), json!({"count": count}));
+        // Picking a row closes the popover on its foreground layer; return keyboard focus to the document both now
+        // and after the pass's overlay-close focus hook (#3040).
         app.canvas.focus_page(ui.ctx());
         app.canvas.focus_page_after_pass();
         ui.ctx().request_repaint();
