@@ -84,6 +84,8 @@ pub fn border_sides(v: &Value, space_tb: f32, space_lr: f32) -> Result<Borders, 
         right: side("right", space_lr),
         between: side("between", space_tb),
         inside_v: None,
+        tl2br: None,
+        tr2bl: None,
     })
 }
 

@@ -576,6 +576,8 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 ),
                 between: None,
                 inside_v: None,
+                tl2br: cb.tl2br.or(rb.tl2br),
+                tr2bl: cb.tr2bl.or(rb.tr2bl),
             };
             // The logical start (left) and end (right) borders, drawn mirrored in an RTL table.
             if rtl {
