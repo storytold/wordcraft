@@ -213,3 +213,7 @@ real_name = "Ashok Ram"
 real_name = "Reuben Grinberg"
 [people.benandez]
 sync_github_name = true
+
+[people.d-0-t]
+real_name = "Dora Sukolova"
+sync_github_name = true
