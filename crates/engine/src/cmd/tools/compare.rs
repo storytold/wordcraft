@@ -229,7 +229,11 @@ fn diff_blocks(doc: &mut Document, old: &[Arc<Block>], new: &[Arc<Block>], ctx: 
                         (Some(Block::Para(pa)), Some(Block::Para(pb))) => out.push(para_block(word_diff(doc, pa, pb, ctx))),
                         _ => {
                             if let Some(x) = a {
-                                out.push(Arc::new(mark_block(x, &|c| c.del = Some(ctx.del))));
+                                out.push(Arc::new(mark_block(x, &|c| {
+                                    // An existing deletion is another author's: keep their revision
+                                    // stamp instead of re-attributing the paragraph to this compare.
+                                    c.del.get_or_insert(ctx.del);
+                                })));
                             }
                             if let Some(x) = b {
                                 out.push(Arc::new(mark_block(x, &|c| c.ins = Some(ctx.ins))));
@@ -550,8 +554,17 @@ fn block_text(b: &Block, depth: usize) -> String {
     }
 }
 
-/// Returns a copy of `b` with all text runs and paragraph marks across all nested table cells
-/// updated by `f` iteratively, without recursion or depth truncation.
+/// A copy of the block with every run (in tables, every cell's) changed by `f`, and a paragraph's
+/// mark along with them, so a whole inserted or deleted paragraph carries the revision even when
+/// the paragraph is empty (`format` returns early for a length-0 range). Walks nested tables
+/// iteratively, without recursion or depth truncation.
+///
+/// Known limitation: resolving a revision needs a following paragraph, so a paragraph inserted at
+/// the very end (rejected) or deleted from the very end (accepted) still leaves one empty
+/// paragraph. That is a separate follow-up, not handled here. A section-carrying inserted
+/// paragraph is not such a case: `resolve_para` removes the section break first (#5734, issue
+/// #5667), so rejecting it takes the paragraph out whole and the following paragraph keeps its
+/// own properties.
 fn mark_block(b: &Block, f: &dyn Fn(&mut CharProps)) -> Block {
     let mut out = b.clone();
     let mut todo = vec![&mut out];
