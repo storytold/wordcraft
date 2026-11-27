@@ -145,7 +145,7 @@ fn results(app: &mut WordApp, ui: &mut Ui) {
     }
     let rows: Vec<Place> = hits.iter().enumerate().map(|(at, hit)| (at, hit.text.clone())).collect();
     // The page is looked up only under the pointer, not for every listed match each frame.
-    let hover_id = egui::Id::new("nav_result_hover");
+    let hover_id = egui::Id::unique("nav_result_hover");
     let hovered = ui.data(|d| d.get_temp::<Option<usize>>(hover_id)).flatten();
     let out = List::<usize>::new(tl!("Results").to_owned()).natural_height(true).select(SelectMode::Single).show_items(
         ui,
