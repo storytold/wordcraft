@@ -1286,6 +1286,31 @@ impl PartFacts {
         }
     }
 }
+impl PartFacts {
+    /// An identity that several package entries map to has no single source: every observation stored under it is
+    /// incomplete, so no consumer can conclude absence or non-use from the surviving entry's facts.
+    fn poison(&mut self) {
+        observation_contract! {
+            rules: "-";
+            collections: "access.invalidate*7,field.content*1,field.exemptions*1,field.listings*2,field.references*1,field.special_notes*1";
+            scope: "one package identity shared by several ZIP entries";
+            loss: "case collision, duplicate entry or undecodable sibling";
+            fallback: "every observation under the identity is incomplete; no negative membership";
+            package_loss: "independent";
+        }
+
+        const REASON: &str = "ambiguous package identity";
+        self.syntax = Completeness::Incomplete(REASON);
+        self.drawing_refs_complete = false;
+        self.facts.invalidate(REASON);
+        self.references.invalidate(REASON);
+        self.content.invalidate(REASON);
+        self.exemptions.invalidate(REASON);
+        self.listings.0.invalidate(REASON);
+        self.listings.1.invalidate(REASON);
+        self.special_notes.invalidate(REASON);
+    }
+}
 impl XmlScan {
     /// Retained references, assembled from their contributing parts for presence checks.
     fn references(&self) -> Vec<(String, Vec<RefFact>)> {
@@ -1418,6 +1443,45 @@ fn xml_source_complete(xml: &XmlScan, entry: &package::Entry) -> bool {
     !entry.content_unavailable && xml.parts.get(&PartId::new(&entry.name)).is_some_and(|p| p.syntax == Completeness::Complete)
 }
 
+/// Package identities that more than one XML entry maps to (case collision or duplicate name).
+fn ambiguous_xml_identities(pkg: &Package) -> HashSet<PartId> {
+    observation_contract! {
+        rules: "-";
+        collections: "field.entries*1,type.HashSet*3";
+        scope: "one package identity shared by several ZIP entries";
+        loss: "case collision, duplicate entry or undecodable sibling";
+        fallback: "an ambiguous identity has no trustworthy source; its consumption is undecided";
+        package_loss: "independent";
+    }
+
+    let mut seen = HashSet::new();
+    let mut ambiguous = HashSet::new();
+    for e in pkg.entries.iter().filter(|e| !e.is_dir && package::is_xml_part(pkg, &e.name)) {
+        if !seen.insert(PartId::new(&e.name)) {
+            ambiguous.insert(PartId::new(&e.name));
+        }
+    }
+    ambiguous
+}
+
+/// Mark every observation stored under an ambiguous identity incomplete.
+fn poison_ambiguous(parts: &mut std::collections::BTreeMap<PartId, PartFacts>, ambiguous: &HashSet<PartId>) {
+    observation_contract! {
+        rules: "-";
+        collections: "type.BTreeMap*1,type.HashSet*1";
+        scope: "one package identity shared by several ZIP entries";
+        loss: "case collision, duplicate entry or undecodable sibling";
+        fallback: "an ambiguous identity has no trustworthy source; its consumption is undecided";
+        package_loss: "independent";
+    }
+
+    for id in ambiguous {
+        if let Some(part) = parts.get_mut(id) {
+            part.poison();
+        }
+    }
+}
+
 /// Scan all XML parts for well-formedness, undeclared prefixes, illegal characters, and extract story facts.
 fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     observation_contract! {
@@ -1445,6 +1509,7 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
         acc.set_incomplete();
     }
     let mut parts = std::collections::BTreeMap::new();
+    let ambiguous_identities = ambiguous_xml_identities(pkg);
     let mut fact_budget = [0usize; 14];
 
     let mut refs: Vec<(String, Vec<RefFact>)> = Vec::new();
@@ -1619,6 +1684,7 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     }
     store_note_observations(&mut parts, note_listings, special_notes, note_incomplete_parts, acc.limits.facts);
     store_relationship_observations(&mut parts, refs, content_parts, content_part_exemptions, content_part_incomplete_owners);
+    poison_ambiguous(&mut parts, &ambiguous_identities);
     let xml = XmlScan { graph, parts, compat };
     if !empty_xml.is_empty() {
         let stores = StoreConsumption::from_document(pkg, &xml, &roles);
@@ -2543,6 +2609,23 @@ fn part_rel_ids(pkg: &Package, part: &str) -> HashSet<RelId> {
     }
 }
 
+/// Whether several archive entries (a case collision, a duplicate name or a collapsed record) share one package identity.
+fn identity_ambiguous(pkg: &Package, name: &str) -> bool {
+    observation_contract! {
+        rules: "-";
+        collections: "field.collapsed_names*1,field.entries*1,field.rels*1";
+        scope: "one package identity shared by several ZIP entries";
+        loss: "case collision, duplicate entry or undecodable sibling";
+        fallback: "an ambiguous identity has no trustworthy source; its consumption is undecided";
+        package_loss: "independent";
+    }
+
+    let id = PartId::new(name);
+    pkg.collapsed_names.iter().any(|n| PartId::new(n) == id)
+        || pkg.entries.iter().filter(|e| !e.is_dir && PartId::new(&e.name) == id).count() > 1
+        || pkg.rels.iter().filter(|rp| PartId::new(&rp.name) == id).count() > 1
+}
+
 /// Check missing targets package-wide and check declared target types on the main story.
 fn check_typed_targets(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
     observation_contract! {
@@ -2567,7 +2650,11 @@ fn check_typed_targets(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
         // The part whose scan decides use: a scanned owner, else an XML owner present but never scanned (undecodable).
         let owner_entry = rels_owner_name(&rp.name).and_then(|owner| pkg.entries.iter().find(|e| !e.is_dir && e.name.eq_ignore_ascii_case(&owner)));
         let unscanned_owner = source.is_none() && owner_entry.is_some_and(|e| package::is_xml_part(pkg, &e.name));
-        let owner_name = source.map(|s| s.name.as_str()).or(owner_entry.map(|e| e.name.as_str())).unwrap_or(rp.name.as_str());
+        let owner_text = rels_owner_name(&rp.name);
+        let owner_name =
+            source.map(|s| s.name.as_str()).or(owner_entry.map(|e| e.name.as_str())).or(owner_text.as_deref()).unwrap_or(rp.name.as_str());
+        // Several entries mapping to the owner's or the declarations' identity leave both without one trustworthy source.
+        let ambiguous_identity = identity_ambiguous(pkg, &rp.name) || owner_text.as_deref().is_some_and(|owner| identity_ambiguous(pkg, owner));
         let mut consumers = None;
         let bindings = package::relationship_bindings(rp);
         let is_main = main_rels.as_ref().is_some_and(|main| main.eq_ignore_ascii_case(&rp.name));
@@ -2577,6 +2664,9 @@ fn check_typed_targets(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
             let mut use_of = || {
                 if !bindings.is_first(rel) {
                     return Consumption::Unused;
+                }
+                if ambiguous_identity {
+                    return Consumption::Undecided;
                 }
                 source.map_or(if unscanned_owner { Consumption::Undecided } else { Consumption::Unused }, |source| {
                     consumers.get_or_insert_with(|| Consumers::new(&source.usage, source.syntax == Completeness::Complete)).consumption(
