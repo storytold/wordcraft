@@ -7,14 +7,15 @@ use craft::behavior::{Mixed, Selection, keyed};
 use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
 use craft::ui::choice::{Checkbox, Radio, RadioGroup};
-use craft::ui::contract::{Bind, Politeness, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::contract::{Bind, Entry, Politeness, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::dialog::DialogId;
 use craft::ui::display::{Shade, Text};
 use craft::ui::layout_components::Stack;
 use craft::ui::list::{List, ListRow};
 use craft::ui::notices::{Notice, NoticeLayout};
 use craft::ui::patterns::form_dialogs::FormCx;
-use craft::ui::runtime::env::{Label, LengthUnits, UnitKind};
+use craft::ui::pickers::Select;
+use craft::ui::runtime::env::{Env, Label, LengthUnits, UnitKind};
 use craft::ui::sections::Section;
 use craft::ui::style::TypeRole;
 use craft::ui::text::{NumberField, TextField};
@@ -289,12 +290,16 @@ impl WordForm for CustomPropertiesForm {
     }
 }
 
-/// The Table Properties dialog's fields. Lengths are in points; the length fields show them in the interface unit.
+/// The Table Properties dialog's fields. Lengths are in points (the length fields show them in the interface unit);
+/// the preferred table width may instead be a percentage of the text column.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct TableForm {
     pub width_on: bool,
+    /// The preferred width: points, or a percentage of the text column when `width_unit` is `"percent"`.
     pub width: f32,
+    /// `"length"` (the interface unit) or `"percent"` (1-100): what `width` counts.
+    pub width_unit: String,
     /// `left`, `center` or `right`.
     pub align: String,
     pub indent: f32,
@@ -316,6 +321,9 @@ pub struct TableForm {
     /// The interface unit the length fields show, set when the dialog opens; not part of the dialog's values.
     #[serde(skip)]
     unit: Option<wordcraft_geom::Unit>,
+    /// The text column's width in points when the dialog opened, to convert the preferred width between units.
+    #[serde(skip)]
+    pub(crate) text_width: f32,
 }
 
 impl TableForm {
@@ -339,11 +347,13 @@ impl TableForm {
             .collect();
         let cell = t.rows.get(r).and_then(|x| x.cells.get(c)).map(|x| x.props.clone()).unwrap_or_default();
         let tw = wordcraft_engine::cmd::page::sect(s).text_width();
-        let width = t.props.width_pct.filter(|p| *p > 0.0).map(|p| tw * p.min(100.0) / 100.0).or(t.props.width.filter(|w| *w > 0.0));
+        let width_pct = t.props.width_pct.filter(|p| *p > 0.0).map(|p| p.min(100.0));
+        let width = width_pct.or(t.props.width.filter(|w| *w > 0.0));
         let fin = |v: f32| if v.is_finite() { v } else { 0.0 };
         Some(TableForm {
             width_on: width.is_some(),
             width: fin(width.unwrap_or(tw)),
+            width_unit: if width_pct.is_some() { "percent" } else { "length" }.into(),
             align: match t.props.align {
                 Some(Align::Center) => "center",
                 Some(Align::Right) => "right",
@@ -368,15 +378,44 @@ impl TableForm {
             }
             .into(),
             unit: Some(s.units()),
+            text_width: tw,
         })
+    }
+
+    /// Changes the preferred width's unit, converting `width` through the text column width: 300 points at
+    /// a 600-point text column is 50%. A text width that is zero or not finite converts as 100 points.
+    pub fn switch_width_unit(&mut self, unit: &str) {
+        let unit = if unit.is_empty() { "length" } else { unit };
+        if unit == self.width_unit {
+            return;
+        }
+        let text_width = if self.text_width.is_finite() && self.text_width > 0.0 { self.text_width } else { 100.0 };
+        self.width = if unit == "percent" {
+            (100.0 * self.width / text_width).clamp(1.0, 100.0)
+        } else {
+            (text_width * self.width / 100.0).clamp(7.2, 1584.0)
+        };
+        self.width_unit = unit.to_owned();
     }
 
     /// `table.properties` parameters for what differs from `basis` (empty when nothing does).
     pub fn changes(&self, basis: &TableForm) -> Value {
         let moved = |a: f32, b: f32| (a - b).abs() > 1e-4;
         let mut v = serde_json::Map::new();
-        if self.width_on != basis.width_on || (self.width_on && moved(self.width, basis.width)) {
-            v.insert("width".into(), if self.width_on { json!(self.width) } else { Value::Null });
+        // An empty unit is a length: an old serialized form leaves the field out.
+        let (self_unit, basis_unit) = (
+            if self.width_unit.is_empty() { "length" } else { self.width_unit.as_str() },
+            if basis.width_unit.is_empty() { "length" } else { basis.width_unit.as_str() },
+        );
+        let unit_changed = self_unit != basis_unit;
+        if self.width_on != basis.width_on || (self.width_on && (moved(self.width, basis.width) || unit_changed)) {
+            if !self.width_on {
+                v.insert("width".into(), Value::Null);
+            } else if self_unit == "percent" {
+                v.insert("widthPct".into(), json!(self.width.clamp(1.0, 100.0)));
+            } else {
+                v.insert("width".into(), json!(self.width));
+            }
         }
         if self.align != basis.align {
             v.insert("align".into(), json!(self.align));
@@ -470,7 +509,35 @@ impl WordForm for TableProperties {
         let (wide, row, indent) = ((7.2, 1584.0), (1.44, 1584.0), (-792.0, 1584.0));
         Section::fixed(Label::from(tl!("Table").to_string())).id_salt("table").show(ui, |ui, _| {
             flag(ui, "widthOn", tl!("Preferred width").to_string(), &mut f.width_on, true);
-            length(ui, "width", tl!("Width").to_string(), &mut f.width, wide, kind, f.width_on);
+            let units = Env::of(ui).units();
+            let unit_label = f.unit.map_or_else(|| units.symbol(UnitKind::Points), |u| units.symbol(crate::options::unit_kind(u)));
+            let unit_entries = [Entry::new("length".to_string(), unit_label), Entry::new("percent".to_string(), "%".to_string())];
+            if f.width_unit.is_empty() {
+                f.width_unit = "length".into();
+            }
+            let picked_unit = Select::new(tl!("Width in").to_string(), Bind::given(f.width_unit.clone()), &unit_entries)
+                .enabled(f.width_on)
+                .show(ui)
+                .events
+                .committed()
+                .cloned();
+            if let Some(unit) = picked_unit {
+                f.switch_width_unit(&unit);
+            }
+            if f.width_unit == "percent" {
+                let mut percent = Some(f64::from(f.width));
+                NumberField::new(tl!("Width").to_string(), Bind::bound(&mut percent))
+                    .id_salt("widthPct")
+                    .unit_kind(UnitKind::Percent)
+                    .range(1.0..=100.0)
+                    .enabled(f.width_on)
+                    .show(ui);
+                if let Some(next) = percent {
+                    f.width = next as f32;
+                }
+            } else {
+                length(ui, "width", tl!("Width").to_string(), &mut f.width, wide, kind, f.width_on);
+            }
             choose(
                 ui,
                 "align",
