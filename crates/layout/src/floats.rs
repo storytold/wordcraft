@@ -232,7 +232,10 @@ pub(crate) fn rel_exclusions(excl: &[WrapArea], x0: f32, y0: f32) -> Vec<para::E
             side: *side,
             table: *table,
         })
-        .filter(|e| e.bottom > 0.0)
+        // Top-and-Bottom areas above the first line can still take room: they sit in the
+        // paragraph's space before, which Word lays out again below them (#7143). Side-wrapping
+        // areas there are above the text and take no room, as before.
+        .filter(|e| e.bottom > 0.0 || e.top_bottom)
         .collect()
 }
 

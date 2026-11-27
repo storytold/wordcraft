@@ -8088,6 +8088,82 @@ fn top_and_bottom_float_pushes_its_own_first_line_down() {
     assert!((c.top - top).abs() < 2.0, "{c:?} vs {top}");
 }
 
+/// #7143: a Top-and-Bottom rectangle anchored to one paragraph that ends inside the *next*
+/// paragraph's space before (or reaches into its first line) pushes that paragraph down to the
+/// rectangle's bottom **plus** the space before. A rectangle in the previous paragraph's space
+/// after must move nothing.
+#[test]
+fn paragraph_drops_below_an_object_in_its_space_before() {
+    crate::test_fonts();
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    use wordcraft_doc::props::LineSpacing;
+
+    const BEFORE: f32 = 12.0;
+    const RULE_H: f32 = 1.0;
+
+    // Paragraph 0 holds the rule; paragraph 1 has the space before. Exact 14 pt lines keep the
+    // geometry steady. The gap between them is paragraph 1's space before, or (case 3) paragraph
+    // 0's space after.
+    let document = |rule_y: Option<f32>, before: f32, after: f32| {
+        let mut d = Document::from_text("Anchor line.\nProbe line with several words in it.");
+        for block in &mut d.body {
+            if let wordcraft_doc::Block::Para(p) = Arc::make_mut(block) {
+                p.props.space_before = Some(0.0);
+                p.props.space_after = Some(after);
+                p.props.line_spacing = Some(LineSpacing::Exactly(14.0));
+            }
+        }
+        if let Some(y) = rule_y {
+            let f = Float { wrap: Wrap::TopAndBottom, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, y, ..Default::default() };
+            d.insert_object(&Pos::body(0, 0), rect_shape(144.0, RULE_H, f), &Default::default()).unwrap();
+        }
+        if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(1).map(Arc::make_mut) {
+            p.props.space_before = Some(before);
+        }
+        d
+    };
+    let lines = |d: &Document| {
+        let l = lay(d);
+        let top = |block: u32| {
+            l.pages[0]
+                .items
+                .iter()
+                .find_map(|i| match i {
+                    Placed::Lines { story: StoryRef::Body, path, y, .. } if path.0 == [block] => Some(*y),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let rules = shapes(&l.pages[0].items);
+        (top(0), top(1), rules)
+    };
+    let (anchor, probe, _) = lines(&document(None, BEFORE, 0.0));
+    assert!(probe > anchor + 14.0, "the probe starts below the anchor line and its space before");
+
+    // Case 1: the rule ends 6 pt into the probe's 12 pt space before (wholly inside it).
+    // Case 2: the rule ends 6 pt into the probe's first line.
+    let mut failures = Vec::new();
+    for (rule_bottom, label) in [(probe - 6.0, "inside space before"), (probe + 6.0, "over first line")] {
+        let y = rule_bottom - RULE_H - anchor;
+        let (_, top, shapes) = lines(&document(Some(y), BEFORE, 0.0));
+        assert_eq!(shapes.len(), 1, "{label}: one rule drawn: {shapes:?}");
+        let bottom = shapes[0].bottom();
+        assert!((bottom - rule_bottom).abs() < 1.0, "{label}: rule bottom {bottom} vs {rule_bottom}");
+        if top < bottom + BEFORE - 0.01 {
+            failures.push(format!("{label}: probe first line {top} must start at rule bottom {bottom} + {BEFORE} space before"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("; "));
+
+    // Case 3: the same rule in the previous paragraph's 12 pt space after (the probe has no
+    // space before of its own) takes no room, as in Word.
+    let (anchor, plain, _) = lines(&document(None, 0.0, BEFORE));
+    let y = plain - 6.0 - RULE_H - anchor;
+    let (_, top, shapes) = lines(&document(Some(y), 0.0, BEFORE));
+    assert_eq!(shapes.len(), 1, "in space after: one rule drawn: {shapes:?}");
+    assert!((top - plain).abs() < 0.01, "in space after: probe first line {top} must not move from {plain}");
+}
+
 #[test]
 fn float_follows_its_paragraph_to_the_next_page() {
     crate::test_fonts();

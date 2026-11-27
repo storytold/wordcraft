@@ -262,6 +262,25 @@ impl<'e> Breaker<'e> {
         let mut guard = 0;
         loop {
             let lo = self.row_left(pl);
+            // A Top-and-Bottom object ending in the paragraph's space before (or reaching into
+            // its first line) is a block the first line must start below, with the space before
+            // laid out again under it (#7143). Exclusions are relative to the first line, so look
+            // `before` above it too; objects still further up (the previous paragraph's space
+            // after) fall outside this band and take no room.
+            if self.first && self.rp.space_before > 0.0 {
+                let before = self.rp.space_before.max(0.0);
+                let row = (self.top - before, self.est_h + before, self.table_h);
+                if let Some(below) = self
+                    .exclusions
+                    .iter()
+                    .filter(|e| e.top_bottom)
+                    .filter(|e| e.intersects_row(row.0, row.1, row.2, lo, self.base_right))
+                    .map(|e| e.bottom)
+                    .reduce(f32::max)
+                {
+                    self.top = self.top.max(below + before);
+                }
+            }
             let row = (self.top, self.est_h, self.table_h);
             match row_spans(self.exclusions, row, (lo, self.base_right), self.tight_indent).map(|mut spans| (spans.pop_front(), spans)) {
                 Ok((Some((a, b)), rest)) => {
