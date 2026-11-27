@@ -1652,6 +1652,102 @@ mod tests {
         assert!(backend.network.load(Ordering::Relaxed), "the person's click in the picker is the consent");
     }
 
+    /// The bounds of the first node whose label starts with `label`.
+    fn bounds_of(tree: &egui::accesskit::TreeUpdate, label: &str) -> Option<egui::accesskit::Rect> {
+        tree.nodes.iter().find(|(_, n)| n.label().is_some_and(|l| l.starts_with(label))).and_then(|(_, n)| n.bounds())
+    }
+
+    /// In the Add a language picker, the reason an agent's Install was refused shows in that row with its license,
+    /// whatever the license's length (Dutch's is one short line, Catalan's wraps).
+    #[test]
+    fn a_refused_install_says_why_in_its_own_row() {
+        let _g = BACKEND_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _reset = ResetBackend;
+        let (mut a, ctx, backend) = options_app("language", false);
+        // The fetch the click starts runs on a thread and reports its end here.
+        let (done, ended) = std::sync::mpsc::channel();
+        packs::set_background(Some(std::sync::Arc::new(move || {
+            let _ = done.send(());
+        })));
+        let add = spot(&settled(&mut a, &ctx), "Add a language").expect("the button");
+        user_click(&mut a, &ctx, add);
+        assert!(a.dialog_host.is_open::<super::AddLanguage>(), "the picker opens");
+        while packs::fetching() {
+            ended.recv().expect("the fetch reports its end");
+        }
+        backend.network.store(false, Ordering::Relaxed);
+        for (row, locale) in [("Dutch", "nl"), ("Catalan", "ca")] {
+            let tree = settled(&mut a, &ctx);
+            let shown = bounds_of(&tree, row).unwrap_or_else(|| panic!("{row} is listed: {:?}", labels(&tree)));
+            let install = tree
+                .nodes
+                .iter()
+                .filter(|(_, n)| n.label().is_some_and(|l| l.starts_with("Install")))
+                .filter_map(|(_, n)| n.bounds())
+                .find(|b| (b.y0 + b.y1) / 2.0 > shown.y0 && (b.y0 + b.y1) / 2.0 < shown.y1)
+                .unwrap_or_else(|| panic!("{row} offers Install"));
+            as_agent(&mut a, &ctx, "ui.click", json!({"x": (install.x0 + install.x1) / 2.0, "y": (install.y0 + install.y1) / 2.0}));
+            assert!(a.packs_rt.errors.get(locale).is_some_and(|e| e.contains("Only you")), "{row}: {:?}", a.packs_rt.errors);
+            let tree = settled(&mut a, &ctx);
+            let shown = bounds_of(&tree, row).expect("the row stays listed");
+            // The row's bounds stop at the list's visible edge, and the reason may run past it, so the reason starts
+            // inside the row. It is at least as wide as the row's Install, so it has room to be read.
+            let reason = tree.nodes.iter().find(|(_, n)| {
+                n.label().is_some_and(|l| l.contains("Only you"))
+                    && n.bounds()
+                        .is_some_and(|b| b.width() >= install.width() && b.x0 >= shown.x0 && b.x1 <= shown.x1 && b.y0 >= shown.y0 && b.y0 < shown.y1)
+            });
+            let why: Vec<_> = tree.nodes.iter().filter(|(_, n)| n.label().is_some_and(|l| l.contains("Only you"))).map(|(_, n)| n.bounds()).collect();
+            let reason =
+                reason.map(|(id, _)| *id).unwrap_or_else(|| panic!("{row}'s row ({shown:?}) says why, as wide as Install ({install:?}): {why:?}"));
+            // Scrolled into view, the whole reason fits inside the list's visible area: the list's bounds cut to the
+            // picker's, below the Search field and above the Close footer (the list's own bounds run on past the
+            // picker when it scrolls, and the picker's bounds take in its footer).
+            let visible = |tree: &egui::accesskit::TreeUpdate| {
+                let find = |role: egui::accesskit::Role, label: &str| {
+                    tree.nodes.iter().find(|(_, n)| n.role() == role && n.label() == Some(label)).and_then(|(_, n)| n.bounds())
+                };
+                let list = find(egui::accesskit::Role::List, "Languages").expect("the list");
+                let picker = find(egui::accesskit::Role::Dialog, "Add a language").expect("the picker");
+                let in_picker = |label: &str| {
+                    tree.nodes
+                        .iter()
+                        .filter(|(_, n)| n.label() == Some(label))
+                        .filter_map(|(_, n)| n.bounds())
+                        .find(|b| b.x0 >= picker.x0 && b.x1 <= picker.x1 && b.y0 >= picker.y0 && b.y1 <= picker.y1)
+                };
+                let search = in_picker("Search").expect("the picker's Search field");
+                let close = in_picker("Close").expect("the picker's Close button");
+                (list.y0.max(picker.y0).max(search.y1), list.y1.min(picker.y1).min(close.y0), list)
+            };
+            let mut tree = tree;
+            let mut seen = None;
+            for _ in 0..20 {
+                let (top, bottom, list) = visible(&tree);
+                let b = tree.nodes.iter().find(|(id, _)| *id == reason).and_then(|(_, n)| n.bounds()).expect("the reason stays shown");
+                seen = Some((b, top, bottom));
+                if b.y0 >= top && b.y1 <= bottom {
+                    break;
+                }
+                let delta = if b.y1 > bottom { bottom - b.y1 } else { top - b.y0 };
+                let center = egui::pos2(((list.x0 + list.x1) / 2.0) as f32, ((top + bottom) / 2.0) as f32);
+                let wheel = egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, delta as f32),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: Default::default(),
+                };
+                frame(&mut a, &ctx, vec![egui::Event::PointerMoved(center), wheel]);
+                tree = settled(&mut a, &ctx);
+            }
+            assert!(
+                seen.is_some_and(|(b, top, bottom)| b.y0 >= top && b.y1 <= bottom),
+                "{row}'s reason fits inside the list's visible area (reason, top, bottom): {seen:?}"
+            );
+        }
+    }
+
     /// Set as default sets only the saved default proofing language (`review.language.preferred`); the
     /// document, its undo history, the redo stack and the modified flag are untouched.
     #[test]
