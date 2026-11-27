@@ -6,16 +6,74 @@
 //! Renders now [`take`](ContextPool::take) the kept context, reset to their size, and
 //! [`give_back`](ContextPool::give_back) it when done.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::ops::{Deref, DerefMut};
 use std::sync::{Mutex, PoisonError};
 
 use vello_cpu::{RenderContext, RenderSettings};
 
-/// A render context kept between renders.
+const MAX_SPARES: usize = 6;
+/// Pixel area above a 100%-zoom page even at 2x HiDPI (~2000x2000). Contexts expanded past this
+/// (e.g. 200% zoom) are dropped once renders return to normal size so large buffers aren't pinned.
+const OVERSIZED_PIXELS: u64 = 4_000_000;
+const OVERSIZED_SHRINK_STREAK: u32 = 4;
+
+#[derive(Default)]
+struct State {
+    primary: Option<RenderContext>,
+    primary_out: bool,
+    primary_peak_pixels: u64,
+    primary_small_streak: u32,
+    spares: Vec<(RenderContext, u64)>,
+    /// How many contexts (both primary and single-threaded spares) were built.
+    built: usize,
+}
+
+/// Checked-out context from [`ContextPool`]. Dropping without [`ContextPool::give_back`] (e.g.
+/// on panic) discards the half-drawn context while still releasing the primary checkout slot.
+pub(crate) struct PooledContext<'a> {
+    pool: &'a ContextPool,
+    ctx: Option<RenderContext>,
+    is_primary: bool,
+    pixels: u64,
+}
+
+impl Deref for PooledContext<'_> {
+    type Target = RenderContext;
+
+    fn deref(&self) -> &Self::Target {
+        #[allow(clippy::expect_used)]
+        self.ctx.as_ref().expect("PooledContext accessed after give_back")
+    }
+}
+
+impl DerefMut for PooledContext<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        #[allow(clippy::expect_used)]
+        self.ctx.as_mut().expect("PooledContext accessed after give_back")
+    }
+}
+
+impl Drop for PooledContext<'_> {
+    fn drop(&mut self) {
+        if let Some(ctx) = self.ctx.take() {
+            if self.is_primary {
+                let mut state = self.pool.state.lock().unwrap_or_else(PoisonError::into_inner);
+                state.primary_out = false;
+                state.primary_peak_pixels = 0;
+                state.primary_small_streak = 0;
+            }
+            drop(ctx);
+        }
+    }
+}
+
+/// Render contexts kept between renders.
+///
+/// Keeps one multi-threaded primary context plus a bounded set of single-threaded spares for
+/// concurrent background page renders, avoiding spawning/tearing down extra rayon thread pools and
+/// retaining zoom-expanded buffers indefinitely.
 pub(crate) struct ContextPool {
-    slot: Mutex<Option<RenderContext>>,
-    /// How many contexts (so thread pools) were built: one, unless renders overlap.
-    built: AtomicUsize,
+    state: Mutex<State>,
 }
 
 /// The context page, area and icon renders share.
@@ -23,39 +81,96 @@ pub(crate) static CONTEXTS: ContextPool = ContextPool::new();
 
 impl ContextPool {
     pub(crate) const fn new() -> Self {
-        ContextPool { slot: Mutex::new(None), built: AtomicUsize::new(0) }
-    }
-
-    /// A context reset to `w`×`h`: the kept one, or a new one with [`crate::default_threads`]
-    /// workers while another render has it (another thread, or a render inside a render).
-    pub(crate) fn take(&self, w: u16, h: u16) -> RenderContext {
-        let kept = self.slot.lock().unwrap_or_else(PoisonError::into_inner).take();
-        match kept {
-            Some(mut ctx) => {
-                ctx.reset_and_resize(w, h);
-                ctx
-            }
-            None => {
-                self.built.fetch_add(1, Ordering::Relaxed);
-                RenderContext::new_with(w, h, RenderSettings { num_threads: crate::default_threads(), ..Default::default() })
-            }
+        ContextPool {
+            state: Mutex::new(State {
+                primary: None,
+                primary_out: false,
+                primary_peak_pixels: 0,
+                primary_small_streak: 0,
+                spares: Vec::new(),
+                built: 0,
+            }),
         }
     }
 
-    /// Keep `ctx` for the next [`take`](Self::take), unless one is kept already (then `ctx` and
-    /// its threads go). A render that panics never gets here, so a half-drawn context is dropped
-    /// rather than reused.
-    pub(crate) fn give_back(&self, ctx: RenderContext) {
-        let mut slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
-        if slot.is_none() {
-            *slot = Some(ctx);
+    /// A context reset to `w`×`h`: the kept multi-threaded primary context, a kept single-threaded
+    /// spare when renders overlap, or a newly built context when none is idle.
+    pub(crate) fn take(&self, w: u16, h: u16) -> PooledContext<'_> {
+        let pixels = u64::from(w) * u64::from(h);
+        let multi_threads = crate::default_threads();
+        enum Checkout {
+            PrimaryExisting(RenderContext),
+            PrimaryNew,
+            SpareExisting(RenderContext, u64),
+            SpareNew,
         }
+        let action = {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            if multi_threads > 0 && !state.primary_out {
+                state.primary_out = true;
+                state.primary_peak_pixels = state.primary_peak_pixels.max(pixels);
+                state.primary_small_streak = if pixels <= OVERSIZED_PIXELS / 2 { state.primary_small_streak.saturating_add(1) } else { 0 };
+                match state.primary.take() {
+                    Some(ctx) => Checkout::PrimaryExisting(ctx),
+                    None => {
+                        state.built += 1;
+                        Checkout::PrimaryNew
+                    }
+                }
+            } else if let Some((ctx, peak)) = state.spares.pop() {
+                Checkout::SpareExisting(ctx, peak)
+            } else {
+                state.built += 1;
+                Checkout::SpareNew
+            }
+        };
+        let (mut ctx, is_primary, tracked_pixels, reset) = match action {
+            Checkout::PrimaryExisting(ctx) => (ctx, true, pixels, true),
+            Checkout::PrimaryNew => {
+                (RenderContext::new_with(w, h, RenderSettings { num_threads: multi_threads, ..Default::default() }), true, pixels, false)
+            }
+            Checkout::SpareExisting(ctx, peak) => (ctx, false, peak.max(pixels), true),
+            Checkout::SpareNew => (RenderContext::new_with(w, h, RenderSettings { num_threads: 0, ..Default::default() }), false, pixels, false),
+        };
+        if reset {
+            ctx.reset_and_resize(w, h);
+        }
+        PooledContext { pool: self, ctx: Some(ctx), is_primary, pixels: tracked_pixels }
+    }
+
+    /// Keep `ctx` for the next [`take`](Self::take), dropping oversized contexts once renders return
+    /// to normal size or when the spare pool is full. A render that panics never gets here, so a
+    /// half-drawn context is dropped rather than reused.
+    pub(crate) fn give_back(&self, mut guard: PooledContext<'_>) {
+        let Some(ctx) = guard.ctx.take() else { return };
+        let drop_it = {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            if guard.is_primary {
+                state.primary_out = false;
+                if state.primary.is_some() {
+                    Some(ctx)
+                } else if state.primary_peak_pixels > OVERSIZED_PIXELS && state.primary_small_streak >= OVERSIZED_SHRINK_STREAK {
+                    state.primary_peak_pixels = 0;
+                    state.primary_small_streak = 0;
+                    Some(ctx)
+                } else {
+                    state.primary = Some(ctx);
+                    None
+                }
+            } else if guard.pixels <= OVERSIZED_PIXELS && state.spares.len() < MAX_SPARES {
+                state.spares.push((ctx, guard.pixels));
+                None
+            } else {
+                Some(ctx)
+            }
+        };
+        drop(drop_it);
     }
 
     /// How many contexts this pool has built.
     #[cfg(test)]
     fn built(&self) -> usize {
-        self.built.load(Ordering::Relaxed)
+        self.state.lock().unwrap_or_else(PoisonError::into_inner).built
     }
 }
 
@@ -269,5 +384,34 @@ mod tests {
         // Other tests render at the same time, so how many the shared pool built can't be pinned
         // down here; that it built any shows page renders go through it.
         assert!(CONTEXTS.built() >= 1, "page and icon renders take the shared context");
+    }
+
+    #[test]
+    fn concurrent_spares_are_reused_without_spawning_more_contexts() {
+        let pool = ContextPool::new();
+        for _ in 0..4 {
+            let a = pool.take(240, 160);
+            let b = pool.take(240, 160);
+            pool.give_back(a);
+            pool.give_back(b);
+        }
+        assert_eq!(pool.built(), 2, "primary + spare should be reused across overlapping rounds");
+    }
+
+    #[test]
+    fn oversized_contexts_are_dropped_after_returning_to_small_renders() {
+        let pool = ContextPool::new();
+        let big_p = pool.take(2500, 2500);
+        let big_s = pool.take(2500, 2500);
+        pool.give_back(big_p);
+        pool.give_back(big_s);
+        assert_eq!(pool.built(), 2);
+
+        for _ in 0..OVERSIZED_SHRINK_STREAK {
+            pooled(&pool, 400, 400);
+        }
+        // Oversized primary dropped at streak == OVERSIZED_SHRINK_STREAK; next take rebuilds a fresh one.
+        pooled(&pool, 400, 400);
+        assert_eq!(pool.built(), 3, "oversized primary should be replaced once back at normal sizes");
     }
 }

@@ -518,12 +518,18 @@ fn fill_headers_footers(
     None
 }
 
-/// Evict paragraph layouts that weren't used this pass if the cache grew large.
+/// Evict paragraph layouts that weren't used this pass if the cache accumulated too many stale entries.
 fn evict_unused(cache: &mut LayoutCache) {
-    if cache.paras.len() + cache.measures.len() > 4 * cache.used.len().max(1024) {
+    if cache.paras.len() + cache.measures.len() > cache.used.len() + cache.used.len().clamp(512, 1024) {
         let used = std::mem::take(&mut cache.used);
         cache.paras.retain(|k, _| used.contains(k));
         cache.measures.retain(|k, _| used.contains(k));
+        if cache.paras.capacity() > cache.paras.len().max(512) * 4 {
+            cache.paras.shrink_to(cache.paras.len() * 2);
+        }
+        if cache.measures.capacity() > cache.measures.len().max(256) * 4 {
+            cache.measures.shrink_to(cache.measures.len() * 2);
+        }
         cache.used = used;
     }
 }
