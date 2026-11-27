@@ -226,4 +226,64 @@ mod tests {
 
         control.shut_down();
     }
+
+    /// Post-#7101 adaptation of `params_key_is_only_a_secret_for_auth` (#124, tracked under #7317 / #7729):
+    /// `craft::automation::server` replaced legacy `"key"` / `params.key` secrets with one-time
+    /// per-connection `auth` using `params.token` (`docs/control-protocol.md`, Token).
+    #[test]
+    fn params_token_is_only_a_secret_for_auth() {
+        let (port, rx, control) = boot();
+
+        // Neither `params.token` on a non-`auth` method nor legacy `params.key` on
+        // `document.inspect` or `auth` authenticates.
+        for (id, line) in [
+            (1, format!(r#"{{"id":1,"method":"document.inspect","params":{{"token":"{TOKEN}"}}}}"#)),
+            (2, format!(r#"{{"id":2,"method":"document.inspect","params":{{"key":"{TOKEN}"}}}}"#)),
+            (3, format!(r#"{{"id":3,"method":"auth","params":{{"key":"{TOKEN}"}}}}"#)),
+        ] {
+            let mut c = Conn::open(port);
+            assert_eq!(c.call(&line), serde_json::json!({"id": id, "ok": false, "error": "authentication required"}));
+            assert!(c.closed());
+        }
+        assert!(rx.try_recv().is_err(), "refused requests must not reach the UI");
+
+        // Authenticate once with `params.token`; `params.key` and `params.token` on subsequent
+        // non-`auth` methods are forwarded untouched as ordinary parameters.
+        let mut c = Conn::open(port);
+        let auth_resp = c.call(&format!(r#"{{"id":1,"method":"auth","params":{{"token":"{TOKEN}"}}}}"#));
+        assert_eq!(auth_resp, serde_json::json!({"id": 1, "ok": true, "result": {"authenticated": true}}));
+
+        c.send(r#"{"id":2,"method":"ui.key","params":{"key":"Enter"}}"#);
+        let req = answer(&rx);
+        assert_eq!((req.method.as_str(), &req.params), ("ui.key", &serde_json::json!({"key": "Enter"})));
+        let r = c.recv();
+        assert_eq!((&r["ok"], &r["id"]), (&serde_json::json!(true), &serde_json::json!(2)));
+
+        c.send(r#"{"id":3,"method":"document.inspect","params":{"token":"ordinary"}}"#);
+        let req = answer(&rx);
+        assert_eq!((req.method.as_str(), &req.params), ("document.inspect", &serde_json::json!({"token": "ordinary"})));
+        let r = c.recv();
+        assert_eq!((&r["ok"], &r["id"]), (&serde_json::json!(true), &serde_json::json!(3)));
+        drop(c);
+
+        control.shut_down();
+    }
+
+    /// Post-#7101 adaptation of `a_wrong_key_is_refused_and_closed` (#124, tracked under #7317):
+    /// wrong, short, and long `params.token` values are refused and close the connection without
+    /// reaching the UI.
+    #[test]
+    fn a_wrong_token_is_refused_and_closed() {
+        let (port, rx, control) = boot();
+        let wrong = TOKEN.replace('0', "1");
+        let long = format!("{TOKEN}0");
+        for token in ["nope", wrong.as_str(), &TOKEN[..63], long.as_str()] {
+            let mut c = Conn::open(port);
+            let resp = c.call(&format!(r#"{{"id":1,"method":"auth","params":{{"token":"{token}"}}}}"#));
+            assert_eq!(resp, serde_json::json!({"id": 1, "ok": false, "error": "authentication required"}), "{token}");
+            assert!(c.closed(), "{token}");
+        }
+        assert!(rx.try_recv().is_err(), "refused auth attempts must not reach the UI");
+        control.shut_down();
+    }
 }

@@ -207,6 +207,37 @@ fn fonts_of_one_download_are_listed_together() {
     assert_eq!((g[1].fonts.as_slice(), g[1].url), (["Cascadia Code"].as_slice(), "https://c"));
 }
 
+/// As many downloads as the box lists, in a short window and a very short one: what is above
+/// the row with Close scrolls, so the opt-out and Close stay on screen and the box in the window.
+#[test]
+fn many_downloads_in_a_short_window_leave_the_opt_out_and_close_on_screen() {
+    for height in [600.0, 400.0] {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Lanterns")), crate::Services::default());
+        let fonts: Vec<Row> = (0..LISTED)
+            .map(|i| Row {
+                font: format!("Harbour Face {i}"),
+                shown_as: vec!["Carlito".into()],
+                download: format!("Harbour Face {i}"),
+                publisher: "Lantern Works".into(),
+                url: format!("https://example.org/{i}"),
+                restricted: false,
+            })
+            .collect();
+        open_with(&mut a, None, FontBox::new(fonts, false), DialogHooks { prepare: None, settle });
+        let h = harness_sized(a, egui::vec2(1000.0, height));
+        // The steps are still there, to scroll to.
+        assert!(h.query_by_label("Add Font…").is_some());
+        for label in ["Don't show this again", "Close"] {
+            // Close is also the window's close box: every match is on screen.
+            let rects: Vec<egui::Rect> = h.query_all_by_label(label).map(|n| n.rect()).collect();
+            assert!(!rects.is_empty(), "no {label}");
+            for r in rects {
+                assert!(r.min.y >= 0.0 && r.max.y <= height, "{label} is at {r:?}, outside the {height} pt window");
+            }
+        }
+    }
+}
+
 /// A font whose publisher limits its use says so on its card, and has a card of its own.
 #[test]
 fn a_font_with_a_limited_licence_says_so() {
