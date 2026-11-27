@@ -17,7 +17,13 @@ fn autoformat(s: &mut Session, text: &str) -> Option<String> {
     let f = &s.sel.focus;
     let para = s.doc.para_at(f)?;
     let before = para.text.get(..f.off)?;
-    let prev = before.chars().next_back();
+    smart_quote(before.chars().next_back(), c).map(String::from)
+}
+
+/// The curly form of a straight quote `c` that follows `prev` (`None` at a paragraph's start):
+/// opening after a space, an opening bracket, a dash or the other opening quote, else closing.
+/// A quote typed in Replace with goes in by the same rule (#7307).
+pub(crate) fn smart_quote(prev: Option<char>, c: char) -> Option<&'static str> {
     let opening = prev.is_none_or(|p| {
         p.is_whitespace()
             || "([{<\u{2014}\u{2013}\u{00AB}\u{2039}\u{201E}\u{201A}".contains(p)
@@ -25,8 +31,8 @@ fn autoformat(s: &mut Session, text: &str) -> Option<String> {
             || (c == '\'' && p == '\u{201C}')
     });
     match c {
-        '"' => Some(if opening { "\u{201C}" } else { "\u{201D}" }.into()),
-        '\'' => Some(if opening { "\u{2018}" } else { "\u{2019}" }.into()),
+        '"' => Some(if opening { "\u{201C}" } else { "\u{201D}" }),
+        '\'' => Some(if opening { "\u{2018}" } else { "\u{2019}" }),
         _ => None,
     }
 }
