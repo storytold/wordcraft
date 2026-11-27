@@ -54,7 +54,7 @@ struct Sec<'p> {
 
 /// Forget cached layouts made for another environment, and what the last pass used.
 fn reset_cache(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) {
-    let env = env_hash(doc, opts);
+    let env = env_hash(doc, cache, opts);
     if env != cache.env {
         cache.paras.clear();
         cache.measures.clear();

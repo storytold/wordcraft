@@ -1,4 +1,16 @@
+use std::fmt::Write as _;
+
 use super::{DocLayout, Hash, Hasher, Page, Placed, Pos, Rect, WordApp, json};
+
+/// Streams `Debug` formatting directly into a [`Hasher`] without intermediate `String` allocations.
+struct HashFmt<'a>(&'a mut std::collections::hash_map::DefaultHasher);
+
+impl std::fmt::Write for HashFmt<'_> {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.0.write(s.as_bytes());
+        Ok(())
+    }
+}
 
 /// Fingerprint of everything outside the layout that changes how pages render: the view's
 /// marks and markup, dark mode, the page colour and watermark, header/body dimming, the media,
@@ -13,8 +25,8 @@ pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>) -> u
     (v.read_mode, v.read_page_color, app.session.prefs.paper_color).hash(&mut h);
     app.session.prefs.markup.hash(&mut h);
     dim_body.hash(&mut h);
-    format!("{:?}{:?}{:?}", app.session.doc.settings.page_color, app.session.doc.settings.page_picture, app.session.doc.settings.watermark)
-        .hash(&mut h);
+    app.session.doc.settings.page_color.map(|c| (c.0, c.1, c.2)).hash(&mut h);
+    let _ = write!(HashFmt(&mut h), "{:?}|{:?}", app.session.doc.settings.page_picture, app.session.doc.settings.watermark);
     app.session.doc.media.len().hash(&mut h);
     // A page drawn without a dragged object must not pass for the page with it: the drag starts
     // and ends change the key once each, so the page is rendered again then and only then.
@@ -30,22 +42,39 @@ pub(super) fn page_content_key(page: &Page) -> u64 {
     for list in [&page.items, &page.header, &page.footer] {
         list.len().hash(&mut h);
         for it in list.iter() {
+            std::mem::discriminant(it).hash(&mut h);
             match it {
                 Placed::Lines { para, l0, l1, x, y, turn, .. } => {
                     (std::sync::Arc::as_ptr(para) as usize, l0, l1, x.to_bits(), y.to_bits(), turn).hash(&mut h);
                 }
-                Placed::Fill { rect, color } => format!("{rect:?}{color:?}").hash(&mut h),
-                Placed::Rule { x0, y0, x1, y1, border } => format!("{x0}{y0}{x1}{y1}{border:?}").hash(&mut h),
-                Placed::Image { rect, media, crop, spin, fx, .. } => format!("{rect:?}{media}{crop:?}{spin:?}{fx:?}").hash(&mut h),
+                Placed::Fill { rect, color } => {
+                    (rect.x.to_bits(), rect.y.to_bits(), rect.w.to_bits(), rect.h.to_bits(), color.0, color.1, color.2).hash(&mut h);
+                }
+                Placed::Rule { x0, y0, x1, y1, border } => {
+                    (x0.to_bits(), y0.to_bits(), x1.to_bits(), y1.to_bits()).hash(&mut h);
+                    let _ = write!(HashFmt(&mut h), "{border:?}");
+                }
+                Placed::Image { rect, media, crop, spin, fx, .. } => {
+                    (rect.x.to_bits(), rect.y.to_bits(), rect.w.to_bits(), rect.h.to_bits()).hash(&mut h);
+                    media.hash(&mut h);
+                    for c in crop {
+                        c.to_bits().hash(&mut h);
+                    }
+                    let _ = write!(HashFmt(&mut h), "{spin:?}|{fx:?}");
+                }
                 Placed::Shape { rect, kind, fill, stroke, stroke_width, effects, freeform, spin, extra, .. } => {
-                    format!("{rect:?}{kind:?}{fill:?}{stroke:?}{stroke_width}{effects:?}{spin:?}{extra:?}").hash(&mut h);
+                    (rect.x.to_bits(), rect.y.to_bits(), rect.w.to_bits(), rect.h.to_bits(), stroke_width.to_bits()).hash(&mut h);
                     freeform.as_ref().map(|f| std::sync::Arc::as_ptr(f) as usize).hash(&mut h);
+                    let _ = write!(HashFmt(&mut h), "{kind:?}|{fill:?}|{stroke:?}|{effects:?}|{spin:?}|{extra:?}");
                 }
                 Placed::Graphic { rect, graphic, spin, .. } => {
                     (std::sync::Arc::as_ptr(graphic) as usize, rect.x.to_bits(), rect.y.to_bits(), rect.w.to_bits(), rect.h.to_bits()).hash(&mut h);
-                    format!("{spin:?}").hash(&mut h)
+                    let _ = write!(HashFmt(&mut h), "{spin:?}");
                 }
-                Placed::Clip { rect, spin, items } => format!("{rect:?}{spin:?}{items:?}").hash(&mut h),
+                Placed::Clip { rect, spin, items } => {
+                    (rect.x.to_bits(), rect.y.to_bits(), rect.w.to_bits(), rect.h.to_bits()).hash(&mut h);
+                    let _ = write!(HashFmt(&mut h), "{spin:?}|{items:?}");
+                }
                 Placed::Cell { .. } | Placed::Object { .. } => {}
             }
         }

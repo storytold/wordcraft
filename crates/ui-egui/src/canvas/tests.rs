@@ -2442,3 +2442,25 @@ fn hostile_numbers_are_ignored() {
     assert!(h.state().canvas.view.zoom.is_finite() && h.state().canvas.view.zoom > 0.0);
     assert!(h.state().canvas.view.offset.0.is_finite() && h.state().canvas.view.offset.1.is_finite());
 }
+
+#[test]
+fn word_pages_reuses_doc_snapshot_across_unchanged_frames_and_invalidates_on_edit() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("hello")), Default::default());
+    let layout = app.session.layout();
+    let first = super::source::WordPages::new(&mut app, &layout, false, None);
+    let doc1 = first.doc();
+    app.canvas.page_keys = first.into_keys();
+
+    let second = super::source::WordPages::new(&mut app, &layout, false, None);
+    let doc2 = second.doc();
+    app.canvas.page_keys = second.into_keys();
+    assert!(std::sync::Arc::ptr_eq(&doc1, &doc2), "unchanged frame reuses cached Arc<Document> snapshot");
+
+    app.run("text.insert", json!({"text": " world"})).unwrap();
+    let layout2 = app.session.layout();
+    let third = super::source::WordPages::new(&mut app, &layout2, false, None);
+    let doc3 = third.doc();
+    app.canvas.page_keys = third.into_keys();
+    assert!(!std::sync::Arc::ptr_eq(&doc1, &doc3), "editing document invalidates cached snapshot");
+    assert_eq!(doc3.plain_text(wordcraft_doc::StoryRef::Body), " worldhello");
+}
