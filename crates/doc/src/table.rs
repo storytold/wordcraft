@@ -211,11 +211,12 @@ impl Table {
         if self.rows.len() >= MAX_ROWS {
             return;
         }
-        let mut row = Row { props: src.props.clone(), cells: Vec::with_capacity(src.cells.len()), controls: ControlWrap::default() };
+        let mut row =
+            Row { props: src.props.clone().without_revisions(), cells: Vec::with_capacity(src.cells.len()), controls: ControlWrap::default() };
         row.props.header = false;
         for c in &src.cells {
             let mut nc = Cell::empty();
-            nc.props = c.props.clone();
+            nc.props = c.props.clone().without_revisions();
             if nc.props.vmerge == VMerge::Restart {
                 nc.props.vmerge = VMerge::None;
             }
@@ -580,11 +581,12 @@ impl Table {
             }
         } else if k == 1 && rows > 1 {
             let Some(src) = self.rows.get_mut(top) else { return false };
-            let mut like = Row { props: src.props.clone(), cells: Vec::with_capacity(src.cells.len()), controls: ControlWrap::default() };
+            let mut like =
+                Row { props: src.props.clone().without_revisions(), cells: Vec::with_capacity(src.cells.len()), controls: ControlWrap::default() };
             like.props.header = false;
             for (i, cell) in src.cells.iter_mut().enumerate() {
                 let mut nc = Cell::empty();
-                nc.props = cell.props.clone();
+                nc.props = cell.props.clone().without_revisions();
                 if i == ci {
                     cell.props.vmerge = VMerge::None;
                     nc.props.vmerge = VMerge::None;
