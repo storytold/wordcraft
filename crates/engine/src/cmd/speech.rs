@@ -168,8 +168,12 @@ mod tests {
     fn cite(d: &mut Document, block: usize, off: usize, text: &str) {
         let c = CharProps::default();
         let p = d.para_mut(StoryRef::Body, &Path::top(block)).unwrap();
-        p.insert_object(off, InlineObject::FieldStart { instr: "ADDIN ZOTERO_ITEM CSL_CITATION {}".into(), locked: false, dirty: false }, &c)
-            .unwrap();
+        p.insert_object(
+            off,
+            InlineObject::FieldStart { instr: "ADDIN ZOTERO_ITEM CSL_CITATION {}".into(), locked: false, dirty: false, form: String::new() },
+            &c,
+        )
+        .unwrap();
         let n = p.insert_text(off + 3, text, &c).unwrap();
         p.insert_object(off + 3 + n, InlineObject::FieldEnd, &c).unwrap();
     }
@@ -183,7 +187,11 @@ mod tests {
         let c = CharProps::default();
         d.para_mut(StoryRef::Body, &Path::top(2))
             .unwrap()
-            .insert_object(0, InlineObject::FieldStart { instr: "ADDIN ZOTERO_BIBL {} CSL_BIBLIOGRAPHY".into(), locked: false, dirty: false }, &c)
+            .insert_object(
+                0,
+                InlineObject::FieldStart { instr: "ADDIN ZOTERO_BIBL {} CSL_BIBLIOGRAPHY".into(), locked: false, dirty: false, form: String::new() },
+                &c,
+            )
             .unwrap();
         let p3 = d.para_mut(StoryRef::Body, &Path::top(3)).unwrap();
         let end = p3.len();
