@@ -1,5 +1,7 @@
-//! WordCraft's icon set: SVG documents on a 20×20 view box, registered as the app icon set beside
-//! the framework's catalog, plus the Insert › Icons library glyph.
+//! WordCraft's icon set: SVG documents, registered as the app icon set beside the framework's
+//! catalog, plus the Insert › Icons library glyph. Most are the redraw from #500 on its 16×16 grid
+//! (one stroke weight, round caps and corners, one accent detail); the Insert › Shapes tiles and a
+//! few others keep a 20×20 view box.
 
 use std::borrow::Cow;
 
@@ -346,8 +348,9 @@ static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("zoomOut", include_bytes!("../icons/zoomOut.svg")),
 ];
 
-/// The app icon set. Every document is drawn with the pen width 1.25 of the 20-unit view box,
-/// which the framework scales to its own stroke.
+/// The app icon set. Every document draws its lines 1.25 units of its view box wide, the set's
+/// declared pen, which the framework scales to its own icon stroke; thinner and heavier details keep
+/// their ratio to it.
 pub static WORDCRAFT_ICONS: AppIcons = AppIcons::new("wordcraft", Some(1.25), WORDCRAFT_ICONS_TABLE);
 
 /// Registers the app icon set beside the framework's catalog; runs before the first pass.

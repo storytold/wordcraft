@@ -1,6 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="20" height="20">
-  <circle cx="7" cy="7" r="2.5" fill="#1E6FD9" class="accent"/>
-  <path d="M3 15 L3 13 L7 10.5 L11 13 L11 15" fill="none" stroke="currentColor" stroke-width="1.25"/>
-  <circle cx="13.5" cy="6" r="2" fill="currentColor"/>
-  <path d="M11.5 10 L13.5 9 L17 11 L17 14" fill="none" stroke="currentColor" stroke-width="1.25"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <polygon points="1.5 2.109 1.538 1.843 1.652 1.652 1.843 1.538 2.109 1.5 5.629 1.5 5.923 1.527 6.194 1.608 6.443 1.742 6.669 1.931 7.838 3.1 8.027 3.327 8.162 3.575 8.242 3.847 8.269 4.14 8.269 8.891 8.231 9.157 8.117 9.348 7.927 9.462 7.66 9.5 2.109 9.5 1.843 9.462 1.652 9.348 1.538 9.157 1.5 8.891" class="accent" fill="#1E6FD9" fill-opacity="0.161"/>
+  <polygon points="1.5 2.109 1.538 1.843 1.652 1.652 1.843 1.538 2.109 1.5 5.629 1.5 5.923 1.527 6.194 1.608 6.443 1.742 6.669 1.931 7.838 3.1 8.027 3.327 8.162 3.575 8.242 3.847 8.269 4.14 8.269 8.891 8.231 9.157 8.117 9.348 7.927 9.462 7.66 9.5 2.109 9.5 1.843 9.462 1.652 9.348 1.538 9.157 1.5 8.891" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="11.25 3.5 14.5 3.5" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="13.025 4.851 14.205 3.77 14.316 3.635 14.353 3.5 14.316 3.365 14.205 3.23 13.025 2.149" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="11.25 8.5 14.5 8.5" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="13.025 9.851 14.205 8.77 14.316 8.635 14.353 8.5 14.316 8.365 14.205 8.23 13.025 7.149" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="5 12 5 14.75" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="3.649 13.275 4.73 14.455 4.865 14.566 5 14.603 5.135 14.566 5.27 14.455 6.351 13.275" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

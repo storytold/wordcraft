@@ -1,13 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="20" height="20">
-  <path d="M3 2.5 L9 2.5 L13 6.5 L13 17.5 L3 17.5 Z" fill="none" stroke="currentColor" stroke-width="1.25"/>
-  <path d="M9 2.5 L9 6.5 L13 6.5" fill="none" stroke="currentColor" stroke-width="1.25"/>
-  <path d="M5 7.5 L10 7.5" fill="none" stroke="currentColor" stroke-width="1.25"/>
-  <path d="M5 10 L10 10" fill="none" stroke="currentColor" stroke-width="1.25"/>
-  <circle cx="14" cy="14" r="2.2" fill="none" stroke="#1E6FD9" class="accent" stroke-width="1.25"/>
-  <path d="M16.8 14 L18.2 14" fill="none" stroke="#1E6FD9" class="accent" stroke-width="1.25"/>
-  <path d="M15.4 16.425 L16.1 17.637" fill="none" stroke="#1E6FD9" class="accent" stroke-width="1.25"/>
-  <path d="M12.6 16.425 L11.9 17.637" fill="none" stroke="#1E6FD9" class="accent" stroke-width="1.25"/>
-  <path d="M11.2 14 L9.8 14" fill="none" stroke="#1E6FD9" class="accent" stroke-width="1.25"/>
-  <path d="M12.6 11.575 L11.9 10.363" fill="none" stroke="#1E6FD9" class="accent" stroke-width="1.25"/>
-  <path d="M15.4 11.575 L16.1 10.363" fill="none" stroke="#1E6FD9" class="accent" stroke-width="1.25"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <polygon points="1.5 2.109 1.538 1.843 1.652 1.652 1.843 1.538 2.109 1.5 5.629 1.5 5.923 1.527 6.194 1.608 6.443 1.742 6.669 1.931 7.838 3.1 8.027 3.327 8.162 3.575 8.242 3.847 8.269 4.14 8.269 8.891 8.231 9.157 8.117 9.348 7.927 9.462 7.66 9.5 2.109 9.5 1.843 9.462 1.652 9.348 1.538 9.157 1.5 8.891" class="accent" fill="#1E6FD9" fill-opacity="0.161"/>
+  <polygon points="1.5 2.109 1.538 1.843 1.652 1.652 1.843 1.538 2.109 1.5 5.629 1.5 5.923 1.527 6.194 1.608 6.443 1.742 6.669 1.931 7.838 3.1 8.027 3.327 8.162 3.575 8.242 3.847 8.269 4.14 8.269 8.891 8.231 9.157 8.117 9.348 7.927 9.462 7.66 9.5 2.109 9.5 1.843 9.462 1.652 9.348 1.538 9.157 1.5 8.891" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="12.25" cy="12.25" r="1.4" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="14.35 12.25 14.95 12.25" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="13.3 14.069 13.6 14.588" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="11.2 14.069 10.9 14.588" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="10.15 12.25 9.55 12.25" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="11.2 10.431 10.9 9.912" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="13.3 10.431 13.6 9.912" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

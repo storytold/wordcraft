@@ -1,11 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="20" height="20">
-  <rect x="2" y="3.5" width="16" height="13" rx="1" fill="none" stroke="currentColor" stroke-width="1.25"/>
-  <path d="M5 8.5 L5 6 L7.5 6" fill="none" stroke="#1E6FD9" class="accent" stroke-width="1.25"/>
-  <path d="M12.5 6 L15 6 L15 8.5" fill="none" stroke="#1E6FD9" class="accent" stroke-width="1.25"/>
-  <path d="M15 11.5 L15 14 L12.5 14" fill="none" stroke="#1E6FD9" class="accent" stroke-width="1.25"/>
-  <path d="M7.5 14 L5 14 L5 11.5" fill="none" stroke="#1E6FD9" class="accent" stroke-width="1.25"/>
-  <path d="M5 6 L8 8.5" fill="none" stroke="#1E6FD9" class="accent" stroke-width="1.25"/>
-  <path d="M15 6 L12 8.5" fill="none" stroke="#1E6FD9" class="accent" stroke-width="1.25"/>
-  <path d="M15 14 L12 11.5" fill="none" stroke="#1E6FD9" class="accent" stroke-width="1.25"/>
-  <path d="M5 14 L8 11.5" fill="none" stroke="#1E6FD9" class="accent" stroke-width="1.25"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <rect x="4.5" y="4.5" width="7" height="7" rx="1" class="accent" fill="#1E6FD9" fill-opacity="0.161"/>
+  <rect x="4.5" y="4.5" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="5.036 7 10.964 7" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="4 4 2.5 2.5" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="4.498 2.588 2.9 2.518 2.726 2.535 2.604 2.604 2.535 2.726 2.518 2.9 2.588 4.498" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="12 4 13.5 2.5" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="13.412 4.498 13.482 2.9 13.465 2.726 13.396 2.604 13.274 2.535 13.1 2.518 11.502 2.588" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="12 12 13.5 13.5" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="11.502 13.412 13.1 13.482 13.274 13.465 13.396 13.396 13.465 13.274 13.482 13.1 13.412 11.502" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="4 12 2.5 13.5" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="2.588 11.502 2.518 13.1 2.535 13.274 2.604 13.396 2.726 13.465 2.9 13.482 4.498 13.412" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

@@ -1,7 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="20" height="20">
-  <rect x="2.5" y="3" width="11.5" height="11.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.25"/>
-  <path d="M2.5 8.5 L14 8.5" fill="none" stroke="currentColor" stroke-width="1.25"/>
-  <path d="M8 3 L8 14.5" fill="none" stroke="currentColor" stroke-width="1.25"/>
-  <path d="M9.5 18 L17 10.5 L18.5 12 L11 19.5 L9 19.8 L9.5 18" fill="none" stroke="currentColor" stroke-width="1.25"/>
-  <path d="M17 10.5 L18 9.5 L19.5 11 L18.5 12 Z" fill="#1E6FD9" class="accent"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <rect x="1" y="1" width="9.5" height="2.558" rx="1" class="accent" fill="#1E6FD9" fill-opacity="0.502"/>
+  <rect x="1" y="1" width="9.5" height="8.038" rx="1" class="accent" fill="#1E6FD9" fill-opacity="0.161"/>
+  <rect x="1" y="1" width="9.5" height="8.038" rx="1" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="4.288 1.536 4.288 8.502" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="7.212 1.536 7.212 8.502" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="1.536 3.558 9.964 3.558" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="1.536 6.298 9.964 6.298" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polygon points="9.81 14.72 9.457 14.772 9.24 14.69 9.157 14.472 9.21 14.12 9.217 14.096 9.356 13.776 9.542 13.634 9.773 13.668 10.05 13.88 10.05 13.88 10.262 14.157 10.296 14.388 10.154 14.574 9.834 14.713" class="accent" fill="#1E6FD9"/>
+  <polygon points="10.722 13.208 10.497 12.908 10.422 12.608 10.497 12.308 10.722 12.008 12.69 10.04 12.99 9.815 13.29 9.74 13.59 9.815 13.89 10.04 13.89 10.04 14.115 10.34 14.19 10.64 14.115 10.94 13.89 11.24 11.922 13.208 11.622 13.433 11.322 13.508 11.022 13.433 10.722 13.208" class="accent" fill="#1E6FD9" fill-opacity="0.161"/>
+  <polygon points="10.722 13.208 10.497 12.908 10.422 12.608 10.497 12.308 10.722 12.008 12.69 10.04 12.99 9.815 13.29 9.74 13.59 9.815 13.89 10.04 13.89 10.04 14.115 10.34 14.19 10.64 14.115 10.94 13.89 11.24 11.922 13.208 11.622 13.433 11.322 13.508 11.022 13.433 10.722 13.208" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="12.666 10.064 13.866 11.264" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
