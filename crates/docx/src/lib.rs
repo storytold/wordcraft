@@ -6,6 +6,104 @@
 
 mod fit;
 mod model_bridge;
+pub mod units;
+
+/// Maximum nesting depth of DrawingML `wpg:wgp` / `wpg:grpSp` groups inside a top-level group:
+/// bounded well below the XML parser's 256-element recursion cap while supporting deep diagram/CAD
+/// group hierarchies.
+const MAX_DML_GROUP_DEPTH: usize = 64;
+
+const ZIP_LIMITS: craft_zip::Limits = craft_zip::Limits { max_entries: 10_000, max_total_bytes: 256 << 20 };
+
+fn normalize_deep_groups_el(el: &mut craft_xml::El, group_depth: usize) -> bool {
+    let mut changed = false;
+    let old_children = std::mem::take(&mut el.children);
+    let mut new_children = Vec::with_capacity(old_children.len());
+    for node in old_children {
+        match node {
+            craft_xml::Node::El(mut child) => {
+                let is_grp = child.name == "wpg:wgp" || child.name == "wpg:grpSp";
+                if is_grp {
+                    let next_depth = group_depth + 1;
+                    if next_depth > MAX_DML_GROUP_DEPTH + 1 {
+                        changed = true;
+                        continue;
+                    }
+                    if normalize_deep_groups_el(&mut child, next_depth) {
+                        changed = true;
+                    }
+                    if next_depth > 8 {
+                        changed = true;
+                        for grand in child.children {
+                            if let craft_xml::Node::El(ref g) = grand
+                                && (g.name == "wpg:cNvGrpSpPr" || g.name == "wpg:grpSpPr")
+                            {
+                                continue;
+                            }
+                            new_children.push(grand);
+                        }
+                    } else {
+                        new_children.push(craft_xml::Node::El(child));
+                    }
+                } else {
+                    if normalize_deep_groups_el(&mut child, group_depth) {
+                        changed = true;
+                    }
+                    new_children.push(craft_xml::Node::El(child));
+                }
+            }
+            other => new_children.push(other),
+        }
+    }
+    el.children = new_children;
+    changed
+}
+
+fn normalize_deep_groups_xml(data: &[u8]) -> Option<Vec<u8>> {
+    let s = std::str::from_utf8(data).ok()?;
+    if !s.contains("wpg:wgp") && !s.contains("wpg:grpSp") {
+        return None;
+    }
+    let mut root = craft_xml::parse(data).ok()?;
+    if !normalize_deep_groups_el(&mut root, 0) {
+        return None;
+    }
+    let mut out = String::with_capacity(data.len());
+    out.push_str(craft_xml::DECL_STANDALONE);
+    root.write_xml(&mut out);
+    Some(out.into_bytes())
+}
+
+fn preprocess_deep_groups(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut archive = craft_zip::Archive::open(bytes, ZIP_LIMITS).ok()?;
+    let mut any_changed = false;
+    let mut entries = Vec::with_capacity(archive.len());
+    for idx in 0..archive.len() {
+        let name = archive.entry_name(idx).ok()??;
+        if archive.entry_is_dir(idx).ok()?? {
+            continue;
+        }
+        let stored = archive.is_stored(&name).unwrap_or(false);
+        let mut data = archive.read(&name, craft_docx::MAX_XML_FILE as u64).ok()??;
+        if name.starts_with("word/")
+            && name.ends_with(".xml")
+            && let Some(rewritten) = normalize_deep_groups_xml(&data)
+        {
+            data = rewritten;
+            any_changed = true;
+        }
+        let comp = if stored { craft_zip::Compression::Stored } else { craft_zip::Compression::Deflated };
+        entries.push((name, data, comp));
+    }
+    if !any_changed {
+        return None;
+    }
+    let mut out = craft_zip::Writer::new();
+    for (name, data, comp) in entries {
+        out.add(&name, &data, comp).ok()?;
+    }
+    out.finish().ok()
+}
 
 pub use craft_docx::{
     DEFAULT_SPIN_COUNT, DocxError, EmbeddedFont, Flavor, MAX_PASSWORD_CHARS, MAX_SOURCES, MAX_XML_FILE, PASSWORD_REQUIRED, PasswordCheck,
@@ -63,6 +161,8 @@ pub fn read_with(bytes: &[u8], opts: &ReadOptions) -> Result<wordcraft_doc::Docu
     let shared_opts =
         craft_docx::ReadOptions { password: opts.password, chunks: opts.chunks.as_ref().map(|_| &bridge_importer as craft_docx::ChunkImporter) };
 
+    let rewritten = preprocess_deep_groups(bytes);
+    let bytes = rewritten.as_deref().unwrap_or(bytes);
     let shared = craft_docx::read_with(bytes, &shared_opts)?;
     from_shared_model(shared)
 }
