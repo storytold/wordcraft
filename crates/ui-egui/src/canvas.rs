@@ -520,6 +520,36 @@ fn dismiss_balloon_on_canvas_click(app: &mut WordApp, out: &craft::pages::ui::Pa
     }
 }
 
+/// Show the header and footer boundaries for the story being edited on each visible page.
+fn header_footer_guides(app: &WordApp, ui: &Ui, layout: &DocLayout, body: &PageBody<'_>) {
+    let StoryRef::Part(id) = app.session.sel.focus.story else { return };
+    let multi_section = app.session.doc.sections().len() > 1;
+    let painter = ui.painter().with_clip_rect(body.rect);
+    let selection = ui.visuals().selection;
+    for placed in body.pages {
+        let Some(page) = layout.pages.get(placed.page) else { continue };
+        if page.header_story != Some(id) && page.footer_story != Some(id) {
+            continue;
+        }
+        let left = placed.to_screen(Point::new(0.0, 0.0)).x;
+        let right = placed.to_screen(Point::new(f64::from(page.w - page.markup), 0.0)).x;
+        for (y, label, header) in [(page.body.y, "Header", true), (page.body.bottom(), "Footer", false)] {
+            let y = placed.to_screen(Point::new(0.0, f64::from(y))).y + if header { -4.0 } else { 4.0 };
+            painter.line_segment([pos2(left, y), pos2(right, y)], egui::Stroke::new(1.0, selection.stroke.color));
+            let label_rect = Rect::from_min_size(pos2(left + 2.0, if header { y } else { y - 18.0 }), vec2(52.0, 18.0));
+            painter.rect_filled(label_rect, 2.0, selection.bg_fill);
+            painter.text(label_rect.center(), egui::Align2::CENTER_CENTER, tl!(label), crate::theme::regular(11.0), selection.stroke.color);
+            if multi_section {
+                let section = crate::i18n::fmt(tl!("Section {n}"), &[("n", &page.section.saturating_add(1).to_string())]);
+                let text = painter.layout_no_wrap(section, crate::theme::regular(11.0), selection.stroke.color);
+                let badge = Rect::from_min_size(pos2(right - text.size().x - 14.0, label_rect.min.y), vec2(text.size().x + 12.0, 18.0));
+                painter.rect_filled(badge, 2.0, selection.bg_fill);
+                painter.galley(badge.center() - text.size() / 2.0, text, selection.stroke.color);
+            }
+        }
+    }
+}
+
 /// While the page shows a command preview the view stays where it was when the preview began:
 /// no scrolling to the caret, and the offset is held against the previewed text's reflow.
 fn hold_scroll_for_preview(app: &mut WordApp, offset: &mut (f64, f64)) -> bool {
@@ -831,6 +861,7 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
             body_view = Some(body.view);
             // Canvas controls take their presses first, then the tool host runs, then the caret shows over them.
             TextMarks::over(body.pages).areas(&areas).show_at(ui, body.rect);
+            header_footer_guides(app, ui, layout, body);
             gridlines::show(app, ui, layout, body);
             crate::content_controls::show(app, ui, layout, body);
             strip_click = equation_frame::show(app, ui, layout, body);

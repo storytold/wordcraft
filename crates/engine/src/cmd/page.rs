@@ -243,10 +243,18 @@ pub(crate) fn section_of_part(s: &Session, id: u32) -> usize {
     0
 }
 
+/// The top-level body block `Document::section_mut` uses to reach section `idx` (an index into
+/// `Document::sections()`).
+pub fn section_block(s: &Session, idx: usize) -> usize {
+    s.doc.sections().get(idx).map(|(end, _)| *end).unwrap_or(0)
+}
+
 pub fn section_index_of_focus(s: &Session) -> usize {
     match s.sel.focus.story {
         wordcraft_doc::StoryRef::Body => s.doc.section_index_of(s.sel.focus.path.0.first().copied().unwrap_or(0) as usize),
-        wordcraft_doc::StoryRef::Part(id) => section_of_part(s, id),
+        // The part may be stored on an earlier section (sections link to the previous one by
+        // default), so the section of the page being edited names it, not the part.
+        wordcraft_doc::StoryRef::Part(id) => s.page_hint_section().unwrap_or_else(|| section_of_part(s, id)),
     }
 }
 
