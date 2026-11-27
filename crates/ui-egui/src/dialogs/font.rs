@@ -82,11 +82,14 @@ pub(crate) struct FontForm {
     catalog: CatalogRef,
     #[serde(skip)]
     settings: FontPickerSettings,
-    /// The missing-font notes beside the two boxes, as of opening.
+    /// The missing-font notes beside the two boxes for the fonts currently in them.
     #[serde(skip)]
     shown_as: Option<String>,
     #[serde(skip)]
     shown_as_ea: Option<String>,
+    /// The `(font, font_ea, font_gen)` that `shown_as` and `shown_as_ea` were computed for.
+    #[serde(skip)]
+    notes_for: Option<(String, String, u64)>,
 }
 
 /// What opens the Font dialog over another dialog.
@@ -115,6 +118,7 @@ impl FontRequest {
             form.color = bullet.color;
             form.for_bullet = true;
             form.start = form.props();
+            form.sync_notes(app);
         }
         form
     }
@@ -186,18 +190,7 @@ impl FontForm {
         };
         let asian = ["zh", "ja", "ko"].iter().any(|l| lang.starts_with(l)) || !font_ea.is_empty() || text.chars().any(east_asian_char);
         let kern = st.get("kern").and_then(Value::as_f64);
-        let mut names = Vec::new();
-        let listed: Vec<String> = app.previews.families().into_iter().chain(app.previews.east_asian_families()).collect();
-        for shown in listed {
-            let stored = app.previews.font_stored(&shown);
-            if stored != shown {
-                names.push((shown, stored));
-            }
-        }
-        let stored_font = app.previews.font_stored(&font);
-        let stored_ea = app.previews.font_stored(&font_ea);
-        let latin_note = app.font_dialog_warning(&stored_font);
-        let ea_note = app.east_asian_font_box_warning(&stored_ea, &stored_font);
+        let names = Self::read_names(app);
         let mut form = FontForm {
             font_was: font.clone(),
             font,
@@ -222,12 +215,49 @@ impl FontForm {
             names,
             paper: Some(app.session.doc.settings.page_color.unwrap_or(Rgb(255, 255, 255))),
             dark: app.session.view.dark_mode,
-            shown_as: latin_note,
-            shown_as_ea: ea_note,
             ..FontForm::default()
         };
+        form.sync_notes(app);
         form.start = form.props();
         form
+    }
+
+    fn read_names(app: &mut WordApp) -> Vec<(String, String)> {
+        let mut names = Vec::new();
+        let listed: Vec<String> = app.previews.families().into_iter().chain(app.previews.east_asian_families()).collect();
+        for shown in listed {
+            let stored = app.previews.font_stored(&shown);
+            if stored != shown {
+                names.push((shown, stored));
+            }
+        }
+        names
+    }
+
+    /// Recomputes the missing-font notes when either font box or the font database changes.
+    fn sync_notes(&mut self, app: &mut WordApp) {
+        let font_gen = wordcraft_fonts::FontDb::global().generation();
+        if self.notes_for.as_ref().is_some_and(|(f, ea, g)| f == &self.font && ea == &self.font_ea && *g == font_gen) {
+            return;
+        }
+        if self.notes_for.as_ref().is_some_and(|(_, _, g)| *g != font_gen) {
+            self.names = Self::read_names(app);
+        }
+        let stored_font = app.previews.font_stored(self.font.trim());
+        let stored_ea = app.previews.font_stored(self.font_ea.trim());
+        self.shown_as = app.font_dialog_warning(&stored_font);
+        self.shown_as_ea = app.east_asian_font_box_warning(&stored_ea, &stored_font);
+        self.notes_for = Some((self.font.clone(), self.font_ea.clone(), font_gen));
+    }
+
+    #[cfg(test)]
+    pub(super) fn shown_as(&self) -> Option<&str> {
+        self.shown_as.as_deref()
+    }
+
+    #[cfg(test)]
+    pub(super) fn shown_as_ea(&self) -> Option<&str> {
+        self.shown_as_ea.as_deref()
     }
 
     /// The stored (English) name of a font as the box shows it.
@@ -350,6 +380,7 @@ impl WordForm for FontForm {
     }
 
     fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, asks: &mut Vec<Asks>) -> bool {
+        let (was_font, was_ea) = (self.font.clone(), self.font_ea.clone());
         // The old dialog's three framed boxes: an untitled one of label and control rows (labels at the start, controls
         // in the second column), Effects as two columns of check boxes, and Preview.
         Stack::new().surface(SurfaceKind::Frame).pad(Pad::Regular).fill_width().show(ui, |ui, _| {
@@ -449,6 +480,9 @@ impl WordForm for FontForm {
                 Text::new(Label::from(tl!("Hidden text is not shown unless you display it."))).show(ui);
             }
         });
+        if self.font != was_font || self.font_ea != was_ea {
+            ui.ctx().request_repaint();
+        }
         true
     }
 
@@ -475,6 +509,11 @@ impl WordForm for FontForm {
         self.catalog = CatalogRef(Some(app.font_catalog()));
         self.settings = app.font_picker_settings();
         self.palette = Palette::of(app);
+    }
+
+    fn prepare_mut(&mut self, app: &mut WordApp) {
+        self.prepare(app);
+        self.sync_notes(app);
     }
 
     fn write_back(&self, app: &mut WordApp) {
