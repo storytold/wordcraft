@@ -90,6 +90,76 @@ fn table_properties_dialog_sets_every_selected_row() {
     assert!(g.mixed.is_empty() && g.allow_break, "reopened, the box is plainly on");
 }
 
+/// #7885: a table's preferred width reads as its percentage, and the form sends `widthPct` or
+/// `width` by unit and `width: null` when the box is turned off.
+#[test]
+fn table_properties_percent_width_reads_and_writes() {
+    let mut a = app();
+    a.run("insert.table", json!({"rows": 1, "cols": 1})).unwrap();
+    a.run("table.properties", json!({"widthPct": 50.0})).unwrap();
+    let form = dialogs::TableForm::read(&a).expect("a table form");
+    assert!(form.width_on, "the table has a preferred width");
+    assert_eq!(form.width_unit, "percent");
+    assert_eq!(form.width, 50.0);
+
+    let mut next = form.clone();
+    next.width = 75.0;
+    assert_eq!(next.changes(&form)["widthPct"], json!(75.0));
+
+    let mut points = form.clone();
+    points.width_unit = "length".into();
+    points.width = 300.0;
+    assert_eq!(points.changes(&form)["width"], json!(300.0));
+
+    let mut off = form.clone();
+    off.width_on = false;
+    assert_eq!(off.changes(&form)["width"], Value::Null);
+}
+
+/// #7885: Table Properties' Width in select offers `%`; a percentage width is written as `widthPct`
+/// and reopens showing the percentage.
+#[test]
+fn table_properties_percent_width_dialog() {
+    use egui_kittest::kittest::Queryable;
+    let mut a = app();
+    a.run("insert.table", json!({"rows": 1, "cols": 1})).unwrap();
+    a.run("table.properties", json!({"width": 300.0})).unwrap();
+    a.run("table.properties", json!({})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| a);
+    h.run_steps(4);
+    // The unit select shows the interface unit; pick the percentage.
+    h.get_by_label("Width in").click();
+    h.run_steps(3);
+    h.get_by_label("%").click();
+    h.run_steps(3);
+    // The table's Width field: type 60 over the point width it shows.
+    let width = h.get_all_by_label("Width").next().expect("the table's Width field");
+    width.click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    h.get_all_by_label("Width").next().expect("the table's Width field").type_text("60");
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    let a = h.state();
+    assert!(a.dialog_host.open_dialogs().is_empty(), "OK closes the dialog");
+    let (tp, _, _) = a.session.sel.focus.path.cell().unwrap();
+    let t = a.session.doc.table(a.session.sel.focus.story, &tp).unwrap();
+    assert_eq!(t.props.width_pct, Some(60.0), "a percentage, not points");
+    assert_eq!(t.props.width, Some(300.0), "the old point width stays; the percentage overrides it");
+    // Reopened, the field shows the percentage and the select `%`.
+    h.state_mut().run("table.properties", json!({})).unwrap();
+    h.run_steps(4);
+    let host = h.state().dialog_host.get::<FormHost<dialogs::TableProperties>>().expect("the dialog reopens");
+    let form = &host.form().form;
+    assert!(form.width_on, "the preferred width is on");
+    assert_eq!((form.width_unit.as_str(), form.width), ("percent", 60.0));
+    assert_eq!(h.get_by_label("Width in").value().as_deref(), Some("%"), "the select shows %");
+}
+
 /// Table Layout › Cell Margins opens with the table defaults and does not replace imported
 /// values until the user changes a value and confirms.
 #[test]

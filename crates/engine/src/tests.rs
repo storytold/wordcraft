@@ -3210,6 +3210,28 @@ fn table_properties_apply_in_one_step() {
     assert!(s.run("table.properties", &json!({"valign": "middle"})).is_err());
 }
 
+/// #7885: a table's preferred width is either points or a percentage of the text column.
+#[test]
+fn table_properties_width_percent_round_trips() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    run(&mut s, "table.properties", json!({"widthPct": 50.0}));
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!((t.props.width, t.props.width_pct), (None, Some(50.0)));
+
+    run(&mut s, "table.properties", json!({"width": 300.0}));
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!((t.props.width, t.props.width_pct), (Some(300.0), None));
+
+    run(&mut s, "table.properties", json!({"widthPct": 150.0}));
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!((t.props.width, t.props.width_pct), (Some(300.0), Some(100.0)), "the engine clamps to 100");
+
+    run(&mut s, "table.properties", json!({"width": null}));
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!((t.props.width, t.props.width_pct), (None, None), "null clears both");
+}
+
 /// #4857: Table Properties' row settings apply to every selected row (the whole table, say), the
 /// column width to every selected column and the cell settings to every selected cell, as in
 /// Word, in one undo step; with nothing selected, to the caret's alone.
