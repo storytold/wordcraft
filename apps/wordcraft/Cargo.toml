@@ -57,7 +57,7 @@ winresource = "0.1"
 [target.'cfg(target_os = "macos")'.dependencies]
 # Finder double-click, Open With, Dock drops and `open -a WordCraft letter.docx` arrive as a
 # kAEOpenDocuments Apple event, which winit doesn't handle (#27).
-craft = { workspace = true, features = ["platform-apple-events"] }
+craft = { workspace = true, features = ["platform-apple-events", "menu"] }
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 winit = { version = "0.30", default-features = false, features = ["x11"] }

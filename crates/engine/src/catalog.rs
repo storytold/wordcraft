@@ -532,6 +532,98 @@ Tools|Templates|Templates and Add-ins|tools.templates
 Tools|Views|Full Screen View|view.fullScreenView
 ";
 
+/// RFC-0052 hand marks for catalog features with no engine command: `id|headless|reach|why`.
+///
+/// `headless` is `no` or `partial`, `reach` is `window` (needs a desktop window, dialog or
+/// pointer), `os` (needs an OS or online service the engine doesn't wrap) or `engine-gap` (could
+/// be an engine command, isn't one yet). `yes` is never written here: a feature is `yes` only when
+/// its id is in the engine registry that `wordcraft-cli` and the MCP server load, and a mark on such
+/// an id is stale (`headless_errors`). A missing feature with no mark is `unknown`.
+pub const HEADLESS: &str = "\
+tools.dictate|no|os|speech recognition service
+insert.onlinePicture|no|os|online image search service
+insert.model3d|no|engine-gap|3-D model files could be inserted by a command
+insert.screenshot|no|os|screen capture of other windows
+addins.get|no|os|add-in store service
+insert.video|no|os|online video service
+insert.inkEquation|no|window|drawn with a pen or pointer
+draw.inkToMath|no|os|handwriting recognition service
+review.translate|no|os|online translation service
+review.blockAuthors|no|os|co-authoring service
+view.readLayout|no|window|Read Mode window layout
+";
+
+/// One feature's RFC-0052 `headless:` value and, for `no`/`partial`, its `reach:` and reason.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Headless {
+    pub value: &'static str,
+    pub reach: Option<&'static str>,
+    pub why: &'static str,
+}
+
+const REACHES: [&str; 3] = ["window", "os", "engine-gap"];
+
+/// Parsed `HEADLESS`-format marks: (id, value, reach, why). A malformed line is an error.
+pub fn headless_marks(src: &'static str) -> Result<Vec<(&'static str, Headless)>, String> {
+    let mut out = Vec::new();
+    for line in src.lines().filter(|l| !l.trim().is_empty()) {
+        let f: Vec<&'static str> = line.splitn(4, '|').collect();
+        let [id, value, reach, why] = f[..] else {
+            return Err(format!("headless mark `{line}`: want `id|headless|reach|why`"));
+        };
+        if !matches!(value, "no" | "partial") {
+            return Err(format!("headless mark `{id}`: `{value}` is not `no` or `partial` (`yes` comes from the registry)"));
+        }
+        if !REACHES.contains(&reach) {
+            return Err(format!("headless mark `{id}`: reach `{reach}` is not window, os or engine-gap"));
+        }
+        if out.iter().any(|(m, _)| *m == id) {
+            return Err(format!("headless mark `{id}` is written twice"));
+        }
+        out.push((id, Headless { value, reach: Some(reach), why }));
+    }
+    Ok(out)
+}
+
+/// The `headless:` value of a catalog feature: `yes` when the engine registry has its id, else its
+/// hand mark, else `unknown`.
+pub fn headless_of(id: &str, live: bool, marks: &[(&'static str, Headless)]) -> Headless {
+    if live {
+        return Headless { value: "yes", reach: None, why: "" };
+    }
+    marks.iter().find(|(m, _)| *m == id).map(|(_, h)| *h).unwrap_or(Headless { value: "unknown", reach: None, why: "" })
+}
+
+/// Problems with the marks against the catalog and the registry's ids: unknown ids, and marks on
+/// ids the engine registry has (they would hide a `yes`).
+pub fn headless_errors(src: &'static str, catalog: &[(&str, &str, &str, &str)], live: impl Fn(&str) -> bool) -> Vec<String> {
+    let marks = match headless_marks(src) {
+        Ok(m) => m,
+        Err(e) => return vec![e],
+    };
+    let mut errs = Vec::new();
+    for (id, _) in &marks {
+        if !catalog.iter().any(|e| e.3 == *id) {
+            errs.push(format!("headless mark `{id}` is not a catalog id"));
+        } else if live(id) {
+            errs.push(format!("headless mark `{id}` is stale: the engine registry has it, so it is `yes`"));
+        }
+    }
+    errs
+}
+
+/// Headless counts in the RFC-0052 summary shape.
+fn headless_summary(values: &[Headless]) -> Value {
+    let count = |v: &str| values.iter().filter(|h| h.value == v).count();
+    let no = |r: &str| values.iter().filter(|h| h.value == "no" && h.reach == Some(r)).count();
+    json!({
+        "yes": count("yes"),
+        "no": {"window": no("window"), "os": no("os"), "engine-gap": no("engine-gap")},
+        "partial": count("partial"),
+        "unknown": count("unknown"),
+    })
+}
+
 /// Catalog entries: (tab, group, feature, id).
 pub fn entries() -> Vec<(&'static str, &'static str, &'static str, &'static str)> {
     CATALOG
@@ -546,9 +638,13 @@ pub fn entries() -> Vec<(&'static str, &'static str, &'static str, &'static str)
 /// Parity summary: per tab and overall, with the missing features.
 pub fn parity(reg: &Registry) -> Value {
     let e = entries();
+    let marks = headless_marks(HEADLESS).unwrap_or_default();
+    let mut values = Vec::with_capacity(e.len());
     let mut tabs: Vec<(&str, usize, usize, Vec<String>)> = Vec::new();
     for (tab, group, label, id) in &e {
         let have = reg.get(id).is_some();
+        let h = headless_of(id, have, &marks);
+        values.push(h);
         let t = match tabs.iter_mut().find(|t| t.0 == *tab) {
             Some(t) => t,
             None => {
@@ -564,7 +660,8 @@ pub fn parity(reg: &Registry) -> Value {
         if have {
             t.1 += 1;
         } else {
-            t.3.push(format!("{group} › {label} (`{id}`)"));
+            let reach = h.reach.map(|r| format!(", reach: {r} ({})", h.why)).unwrap_or_default();
+            t.3.push(format!("{group} › {label} (`{id}`): headless: {}{reach}", h.value));
         }
     }
     let live = tabs.iter().map(|t| t.1).sum::<usize>();
@@ -573,6 +670,7 @@ pub fn parity(reg: &Registry) -> Value {
         "live": live,
         "total": total,
         "percent": if total == 0 { 0.0 } else { (live as f64 * 1000.0 / total as f64).round() / 10.0 },
+        "headless": headless_summary(&values),
         "tabs": tabs.iter().map(|t| json!({"tab": t.0, "live": t.1, "total": t.2, "missing": t.3})).collect::<Vec<_>>(),
     })
 }
@@ -595,6 +693,44 @@ mod tests {
         let pct = p["percent"].as_f64().unwrap();
         // The floor only ever rises.
         assert!(pct >= 90.4, "parity {pct}%");
+    }
+
+    #[test]
+    fn headless_marks_are_current() {
+        let reg = crate::cmd::registry();
+        let errs = headless_errors(HEADLESS, &entries(), |id| reg.get(id).is_some());
+        assert!(errs.is_empty(), "{errs:?}");
+    }
+
+    #[test]
+    fn headless_yes_comes_only_from_the_registry() {
+        let marks = headless_marks("a.b|no|window|pointer\n").unwrap();
+        assert_eq!(headless_of("a.b", true, &marks).value, "yes", "a live id is yes whatever the mark says");
+        assert_eq!(headless_of("a.b", false, &marks).reach, Some("window"));
+        assert_eq!(headless_of("c.d", false, &marks).value, "unknown");
+        assert!(headless_marks("a.b|yes|window|x\n").is_err(), "a hand-written yes is refused");
+        assert!(headless_marks("a.b|no|desk|x\n").is_err(), "reach must be window, os or engine-gap");
+        assert!(headless_marks("a.b|no\n").is_err());
+        assert!(headless_marks("a.b|no|os|x\na.b|partial|os|y\n").is_err(), "one mark per id");
+    }
+
+    #[test]
+    fn headless_errors_flag_stale_and_unknown_marks() {
+        let cat = [("T", "G", "F", "a.b"), ("T", "G", "H", "c.d")];
+        let errs = headless_errors("a.b|no|os|x\nz.z|no|os|y\n", &cat, |id| id == "a.b");
+        assert!(errs.iter().any(|e| e.contains("`a.b` is stale")), "{errs:?}");
+        assert!(errs.iter().any(|e| e.contains("`z.z` is not a catalog id")), "{errs:?}");
+        assert!(headless_errors("bad\n", &cat, |_| false).len() == 1);
+    }
+
+    #[test]
+    fn parity_counts_every_feature_once_in_the_headless_summary() {
+        let p = parity(&crate::cmd::registry());
+        let h = &p["headless"];
+        let n = |v: &Value| v.as_u64().unwrap_or(0);
+        let no = n(&h["no"]["window"]) + n(&h["no"]["os"]) + n(&h["no"]["engine-gap"]);
+        assert_eq!(n(&h["yes"]) + no + n(&h["partial"]) + n(&h["unknown"]), n(&p["total"]));
+        assert_eq!(n(&h["yes"]), n(&p["live"]), "every live feature is an engine command here");
     }
 
     #[test]
