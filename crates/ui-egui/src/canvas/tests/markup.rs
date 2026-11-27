@@ -891,3 +891,27 @@ fn hovering_a_tracked_change_shows_its_author_and_time() {
     point_at(&mut h, 2);
     assert_eq!(tips(&h), 0, "with markup hidden the change isn't marked, so it has no tip");
 }
+
+/// #7887: a paragraph whose own formatting changed while tracking (here its alignment) shows a
+/// Formatted tip on its text, while the markup shows formatting.
+#[test]
+fn hovering_a_paragraph_with_tracked_formatting_shows_formatted() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("A centred line")), Default::default());
+    a.session.author = "Ada Reviewer".into();
+    a.run("review.trackChanges", json!({"value": true})).unwrap();
+    a.run("para.alignCenter", json!({})).unwrap();
+    assert!(a.session.doc.body[0].as_para().is_some_and(|p| p.props.fmt_change.is_some()), "the alignment is a tracked change");
+    let mut h = window(a);
+    let point_at = |h: &mut H| {
+        let c = h.state_mut().session.layout().caret(&Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 4 }).unwrap();
+        let at = screen(h, c.x, c.top + c.height / 2.0);
+        h.event(egui::Event::PointerMoved(at));
+        super::rest_for_tip(h);
+    };
+    let tips = |h: &H| h.query_all_by_label_contains("Formatted\nAda Reviewer").count();
+    point_at(&mut h);
+    assert!(tips(&h) > 0, "the paragraph's text shows its formatting change");
+    h.state_mut().session.prefs.markup.formatting = false;
+    point_at(&mut h);
+    assert_eq!(tips(&h), 0, "with formatting markup off the change isn't marked, so it has no tip");
+}

@@ -175,7 +175,9 @@ impl<'a> PageTextTool<'a> {
     fn revision_tip(&self, pos: Pos2) -> Option<String> {
         let (page, x, y) = page_of(self.body.pages, pos)?;
         let layout = &*self.layout;
-        let at = layout.hit(page, x, y, self.app.session.sel.focus.story)?;
+        // The story under the pointer, as a click there takes it: a note or text box over the body.
+        let story = pointer_story(&*self.app, layout, page, x, y, self.app.session.sel.focus.story);
+        let at = layout.hit(page, x, y, story)?;
         revision_under(&*self.app, layout, page, x, y, &at)
     }
 }

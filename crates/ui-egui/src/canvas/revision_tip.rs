@@ -7,19 +7,23 @@ use wordcraft_layout::display::MarkupOptions;
 /// The tip for the tracked change under the pointer at (x, y) on `page`, where `pos` is the caret
 /// position the point hits: its kind, its author and its time, a line each. Only changes the page
 /// marks count: none with markup hidden, insertions, deletions and moves while Show Markup shows
-/// them, formatting changes while it shows formatting. As with a link, the point must be on the
-/// changed character itself, not beside, above or below it.
+/// them, formatting changes while it shows formatting. As with a link, the point must be on a
+/// character, not beside, above or below it: on the changed character itself, or anywhere in the
+/// text of a paragraph whose own formatting changed (its alignment, indents…) when the character
+/// has no change of its own.
 pub(super) fn revision_under(app: &WordApp, layout: &DocLayout, page: usize, x: f32, y: f32, pos: &Pos) -> Option<String> {
     let session = &app.session;
     if !session.view.show_markup {
         return None;
     }
+    let markup = &session.prefs.markup;
     let doc = &session.doc;
     let para = doc.para_at(pos)?;
+    let para_change = para.props.fmt_change.as_ref().filter(|_| markup.formatting).map(|c| (c.rev, tl!("Formatted")));
     let at = wordcraft_geom::Point::new(x, y);
     // The caret falls between characters: the one under the point is on either side of it.
     [(pos.off, para.next_boundary(pos.off)), (para.prev_boundary(pos.off), pos.off)].into_iter().filter(|(a, b)| a < b).find_map(|(a, b)| {
-        let (rev, kind) = change_of(para.props_of_char(a), &session.prefs.markup, |i| doc.move_name(Some(i)).is_some())?;
+        let (rev, kind) = change_of(para.props_of_char(a), markup, |i| doc.move_name(Some(i)).is_some()).or(para_change)?;
         let rev = doc.revisions.get(usize::try_from(rev).ok()?)?;
         let (from, to) = (Pos { off: a, ..pos.clone() }, Pos { off: b, ..pos.clone() });
         let hit = layout.selection_rects(doc, &from, &to, page).into_iter().any(|(pi, r)| pi == page && r.contains(at));
