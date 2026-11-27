@@ -70,14 +70,40 @@ pub(super) fn two_rows(ui: &mut Ui, mut row: impl FnMut(&mut Ui, usize)) {
     });
 }
 
-/// Shows a ribbon gallery with the old ribbon's 20-point small rows for its column of scroll buttons. A gallery is as
-/// high as its tiles or that column of three, whichever is taller, and its tiles take that height: with the ribbon's
-/// 24-point rows the column would outgrow the tiles and stretch them out of shape.
-pub(crate) fn gallery_rows<R>(ui: &mut Ui, show: impl FnOnce(&mut Ui) -> R) -> R {
+/// Shows a ribbon gallery with the old ribbon's 20-point small rows for its column of scroll buttons, in the middle of
+/// the ribbon's body. A gallery is as high as its tiles or that column of three, whichever is taller, and its tiles
+/// take that height: with the ribbon's 24-point rows the column would outgrow the tiles and stretch them out of shape.
+/// The body's height left over is shared above and under the gallery, so it leaves no band of its own over the title.
+/// `None` when the gallery wasn't shown this pass.
+pub(crate) fn gallery_rows<R>(ui: &mut Ui, mut show: impl FnMut(&mut Ui) -> R) -> Option<R> {
+    const ROW: u8 = 20;
+    let body = 3.0 * f32::from(super::RIBBON_LOOK.row) + 2.0 * Gap::Tight.points(ui);
+    let air = ((body - 3.0 * f32::from(ROW)) / 2.0).max(0.0);
+    Stack::new()
+        .gap(Gap::None)
+        .show(ui, |ui, _| {
+            ui.add_space(air);
+            craft::ui::runtime::env::with_env(
+                ui,
+                |overrides| {
+                    overrides.values.set(super::RIBBON_LOOK.row(ROW));
+                },
+                &mut show,
+            )
+        })
+        .inner
+}
+
+/// Shows a ribbon gallery whose tiles take any height (captioned tiles keep their picture at the top and their name
+/// under it) with its column of three scroll buttons as tall as the ribbon's body, so the gallery fills the body as
+/// the three small rows beside it do.
+pub(crate) fn body_gallery<R>(ui: &mut Ui, show: impl FnOnce(&mut Ui) -> R) -> R {
+    let body = 3.0 * f32::from(super::RIBBON_LOOK.row) + 2.0 * Gap::Tight.points(ui);
+    let row = (body / 3.0).floor() as u8;
     craft::ui::runtime::env::with_env(
         ui,
         |overrides| {
-            overrides.values.set(super::RIBBON_LOOK.row(20));
+            overrides.values.set(super::RIBBON_LOOK.row(row));
         },
         show,
     )

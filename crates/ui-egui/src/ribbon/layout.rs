@@ -19,6 +19,18 @@ use crate::undo_marks::apply_edits;
 /// The columns of each half of the Paragraph group: a label and its field.
 const PARAGRAPH_GRID: [ColumnWidth; 2] = [ColumnWidth::Content; 2];
 
+/// Shows `heading` at the top of the first of the ribbon's three small rows and keeps the rest of that row and the gap
+/// under it, so what follows takes the second and third rows and lines up with the small buttons beside it. The room
+/// left is measured by how far the heading moved the cursor, not by its response's rect, which isn't the heading's
+/// height in every layout pass: sized from the rect, the column measured a caption line taller than the three rows
+/// in one pass, and the group, and so the whole ribbon, grew to match.
+fn heading_row(ui: &mut Ui, heading: Text) {
+    let top = ui.cursor().top();
+    heading.show(ui);
+    let used = ui.cursor().top() - top;
+    ui.add_space((f32::from(super::RIBBON_LOOK.row) + Gap::Tight.points(ui) - used).max(0.0));
+}
+
 // Layout › Margins, Orientation, Size and Columns: the caret section's setting is marked, as
 // Text Direction's is (#1206).
 pub(super) fn margins_items(ui: &mut Ui, app: &mut WordApp) {
@@ -160,45 +172,49 @@ pub(super) fn layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             let caption = |label: &'static str| Text::new(tl!(label)).role(TypeRole::Caption);
             // As the old ribbon: two columns of small fields (a header over each label column), labels close to their
             // fields, rows close together, and a wider gap before the Spacing column. Indents show two decimals ("0.00").
+            // Each header takes the first of the ribbon's three small rows and the fields, as tall as the small
+            // buttons, the other two, so they line up with the small buttons beside them (`heading_row`).
             Row::new().gap(Gap::Section).show(ui, |ui, _| {
-                Grid::new(&PARAGRAPH_GRID).gap(Gap::Tight).show(ui, |ui, _| {
-                    caption("Indent").show(ui);
-                    Text::new("").show(ui);
-                    caption("Left:").show(ui);
-                    let field = NumberField::length(tl!("Left"), Bind::bound(&mut left), lengths).range(-792.0..=1584.0).fixed_decimals(2);
-                    let out = field.size(ControlSize::Sm).show(ui);
-                    apply_edits(app, out.edit.events, |app, v: Option<f64>| {
-                        if let Some(pt) = v {
-                            let _ = app.run("para.indents", json!({"left": pt}));
-                        }
-                    });
-                    caption("Right:").show(ui);
-                    let field = NumberField::length(tl!("Right"), Bind::bound(&mut right), lengths).range(-792.0..=1584.0).fixed_decimals(2);
-                    let out = field.size(ControlSize::Sm).show(ui);
-                    apply_edits(app, out.edit.events, |app, v: Option<f64>| {
-                        if let Some(pt) = v {
-                            let _ = app.run("para.indents", json!({"right": pt}));
-                        }
+                Stack::new().gap(Gap::None).show(ui, |ui, _| {
+                    heading_row(ui, caption("Indent"));
+                    Grid::new(&PARAGRAPH_GRID).gap(Gap::Tight).show(ui, |ui, _| {
+                        caption("Left:").show(ui);
+                        let field = NumberField::length(tl!("Left"), Bind::bound(&mut left), lengths).range(-792.0..=1584.0).fixed_decimals(2);
+                        let out = field.size(ControlSize::Md).show(ui);
+                        apply_edits(app, out.edit.events, |app, v: Option<f64>| {
+                            if let Some(pt) = v {
+                                let _ = app.run("para.indents", json!({"left": pt}));
+                            }
+                        });
+                        caption("Right:").show(ui);
+                        let field = NumberField::length(tl!("Right"), Bind::bound(&mut right), lengths).range(-792.0..=1584.0).fixed_decimals(2);
+                        let out = field.size(ControlSize::Md).show(ui);
+                        apply_edits(app, out.edit.events, |app, v: Option<f64>| {
+                            if let Some(pt) = v {
+                                let _ = app.run("para.indents", json!({"right": pt}));
+                            }
+                        });
                     });
                 });
-                Grid::new(&PARAGRAPH_GRID).gap(Gap::Tight).show(ui, |ui, _| {
-                    caption("Spacing").show(ui);
-                    Text::new("").show(ui);
-                    caption("Before:").show(ui);
-                    let field = NumberField::new(tl!("Before"), Bind::bound(&mut before)).unit_kind(UnitKind::Points).range(0.0..=1584.0);
-                    let out = field.size(ControlSize::Sm).show(ui);
-                    apply_edits(app, out.edit.events, |app, v: Option<f64>| {
-                        if let Some(pt) = v {
-                            let _ = app.run("para.spacing", json!({"before": pt}));
-                        }
-                    });
-                    caption("After:").show(ui);
-                    let field = NumberField::new(tl!("After"), Bind::bound(&mut after)).unit_kind(UnitKind::Points).range(0.0..=1584.0);
-                    let out = field.size(ControlSize::Sm).show(ui);
-                    apply_edits(app, out.edit.events, |app, v: Option<f64>| {
-                        if let Some(pt) = v {
-                            let _ = app.run("para.spacing", json!({"after": pt}));
-                        }
+                Stack::new().gap(Gap::None).show(ui, |ui, _| {
+                    heading_row(ui, caption("Spacing"));
+                    Grid::new(&PARAGRAPH_GRID).gap(Gap::Tight).show(ui, |ui, _| {
+                        caption("Before:").show(ui);
+                        let field = NumberField::new(tl!("Before"), Bind::bound(&mut before)).unit_kind(UnitKind::Points).range(0.0..=1584.0);
+                        let out = field.size(ControlSize::Md).show(ui);
+                        apply_edits(app, out.edit.events, |app, v: Option<f64>| {
+                            if let Some(pt) = v {
+                                let _ = app.run("para.spacing", json!({"before": pt}));
+                            }
+                        });
+                        caption("After:").show(ui);
+                        let field = NumberField::new(tl!("After"), Bind::bound(&mut after)).unit_kind(UnitKind::Points).range(0.0..=1584.0);
+                        let out = field.size(ControlSize::Md).show(ui);
+                        apply_edits(app, out.edit.events, |app, v: Option<f64>| {
+                            if let Some(pt) = v {
+                                let _ = app.run("para.spacing", json!({"after": pt}));
+                            }
+                        });
                     });
                 });
             });

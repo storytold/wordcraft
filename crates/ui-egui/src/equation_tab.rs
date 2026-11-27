@@ -257,7 +257,7 @@ fn symbols(ui: &mut Ui, app: &mut WordApp) {
     let out = crate::ribbon::common::gallery_rows(ui, |ui| {
         Gallery::new(tl!("Symbols").to_string(), &items, None).tiles(30, 10).more(GalleryMore::Body(&mut sets)).show(ui)
     });
-    if let Some(c) = out.picked {
+    if let Some(c) = out.and_then(|out| out.picked) {
         let _ = app.run("equation.insertSymbol", json!({"char": c.to_string()}));
         app.canvas.focus_page(ui.ctx());
     }

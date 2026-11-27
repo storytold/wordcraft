@@ -924,6 +924,86 @@ fn home_two_row_groups_spread_their_rows_over_the_three_row_height() {
     }
 }
 
+/// #4017: a large button is as tall as the three small rows beside it, so a one-line label has no more room under it
+/// than the old ribbon gave: Paste reaches the foot of Clipboard's Cut, Copy and Format Painter.
+#[test]
+fn home_large_buttons_reach_the_foot_of_the_three_small_rows() {
+    use egui::accesskit::Role;
+
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    let h = tab_harness(app, "Home");
+    let rect = |name: &str| h.get_by_role_and_label(Role::Button, name).rect();
+    let (paste, cut, format) = (rect("Paste"), rect("Cut"), rect("Format"));
+    assert!(
+        (paste.top() - cut.top()).abs() <= 1.0 && (paste.bottom() - format.bottom()).abs() <= 1.0,
+        "Paste {paste:?} should span the three small rows, Cut {cut:?} to Format Painter {format:?}"
+    );
+}
+
+/// The rectangle of every node named exactly `label`, together: a button and the parts inside it.
+fn named_rect(h: &Harness, label: &str) -> egui::Rect {
+    let rect = h.query_all(By::new().label(label)).map(|node| node.rect()).fold(egui::Rect::NOTHING, |all, rect| all.union(rect));
+    assert!(rect.is_positive(), "a node named {label}");
+    rect
+}
+
+/// #4017: Layout › Paragraph's headings take the first of the ribbon's three small rows and its fields the other two,
+/// so the fields line up with Page Setup's Line Numbers and Hyphenation beside them instead of leaving a band under them.
+#[test]
+fn layout_paragraph_fields_line_up_with_the_small_rows() {
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    let h = tab_harness(app, "Layout");
+    let (second, third) = (named_rect(&h, "Line Numbers"), named_rect(&h, "Hyphenation"));
+    for (upper, lower) in [("Left", "Right"), ("Before", "After")] {
+        let (upper, lower) = (named_rect(&h, upper), named_rect(&h, lower));
+        assert!(
+            (upper.top() - second.top()).abs() < 0.5 && (lower.bottom() - third.bottom()).abs() < 0.5,
+            "fields {upper:?} and {lower:?} should line up with Line Numbers {second:?} and Hyphenation {third:?}"
+        );
+    }
+}
+
+/// #4017: Layout's ribbon is as tall as Home's. Paragraph's headings and fields take the three small rows and nothing
+/// under them, so the group titles sit where every other tab's do.
+#[test]
+fn layout_ribbon_is_as_tall_as_home() {
+    use egui::accesskit::Role;
+    let title = |tab: &str, group: &str| {
+        let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+        let h = tab_harness(app, tab);
+        h.get_by_role_and_label(Role::Label, group).rect()
+    };
+    let (home, layout) = (title("Home", "Clipboard"), title("Layout", "Paragraph"));
+    assert!((layout.top() - home.top()).abs() < 0.5, "Layout's group titles ({layout:?}) should sit where Home's do ({home:?})");
+}
+
+/// #4017: a gallery shorter than the ribbon's body (Table Design › Table Styles, whose tiles would stretch out of shape
+/// if it were taller) sits in the middle of the body, as much room above it as under it, against the Borders button.
+#[test]
+fn short_galleries_sit_in_the_middle_of_the_body() {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    let h = tab_harness(app, "Table Design");
+    let style = h
+        .state()
+        .session
+        .doc
+        .styles
+        .styles
+        .iter()
+        .find(|s| s.kind == wordcraft_doc::StyleKind::Table && !s.hidden)
+        .map(crate::i18n::style_name)
+        .expect("a table style");
+    // The Borders button, not its group of the same name, which also takes the title line.
+    let body = h.get_by_role_and_label(egui::accesskit::Role::Button, "Borders").rect();
+    let tile = named_rect(&h, &style);
+    let (above, under) = (tile.top() - body.top(), body.bottom() - tile.bottom());
+    assert!(
+        above > 1.0 && (above - under).abs() <= 1.0,
+        "the {style} tile {tile:?} should sit in the middle of the body {body:?}: {above} above, {under} under"
+    );
+}
+
 /// #4017: Home's small buttons, icon-only or labelled, are at least 24 points square: the least target size the
 /// accessibility standard asks for (WCAG 2.5.8).
 #[test]

@@ -20,7 +20,7 @@ use serde_json::json;
 use wordcraft_doc::props::CharProps;
 use wordcraft_doc::{Block, Document, Paragraph, Table, para_block};
 
-use super::common::gallery_rows;
+use super::common::{body_gallery, gallery_rows};
 use crate::WordApp;
 use crate::previews::{SnippetOptions, dim, picture_key, preview_revision, snippet_blocks, style_revision, style_snippet};
 
@@ -157,7 +157,7 @@ pub(crate) fn styles(ui: &mut Ui, app: &mut WordApp, current: Option<&str>) {
         let items = image_items("style", &entries, &makers, ppp, revision);
         // Each tile shows the sample's first letters at their size: a large thumbnail as wide as `STYLE_TILE_W` crops
         // them (68 by 48 points), so the sample is not scaled down, with the style's name under it.
-        gallery_rows(ui, |ui| {
+        body_gallery(ui, |ui| {
             Gallery::new(tl!("Styles"), &items, Some(&current))
                 .tiles(6, 3)
                 .thumb(ThumbSize::Large)
@@ -207,7 +207,7 @@ pub(crate) fn style_sets(ui: &mut Ui, app: &mut WordApp) {
     let out = gallery_rows(ui, |ui| {
         Gallery::new(tl!("Style Sets"), &items, None).tiles(7, 4).thumb(ThumbSize::Large).aspect(ThumbAspect::new(12, 11)).spare_buttons().show(ui)
     });
-    if let Some(name) = out.picked {
+    if let Some(name) = out.and_then(|out| out.picked) {
         let _ = app.run("design.styleSet", json!({"name": name}));
     }
 }
@@ -240,7 +240,7 @@ pub(crate) fn table_styles(ui: &mut Ui, app: &mut WordApp) {
             Gallery::new(tl!("Table Styles"), &items, None).tiles(7, 4).thumb(ThumbSize::Large).aspect(ThumbAspect::new(3, 2)).show(ui)
         })
     };
-    if let Some(style) = out.picked {
+    if let Some(style) = out.and_then(|out| out.picked) {
         let _ = app.run("table.style", json!({"style": style}));
     }
 }
