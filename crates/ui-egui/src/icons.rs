@@ -631,9 +631,14 @@ mod tests {
         assert!(!shapes.is_empty(), "{KEY} icon must paint");
     }
 
-    /// #7450: the Dictate microphone icon parses cleanly on a 20x20 viewBox with a rounded capsule (`rx >= width / 2`).
+    /// #7450: the Dictate microphone icon parses cleanly on a `0 0 20 20` viewBox, keeps a
+    /// rounded capsule (`rx >= width / 2`) clear of the U-stand cradle, and renders at 16–22 pt.
     #[test]
     fn dictate_icon_geometry_and_rendering() {
+        use craft::theme::{Contrast, Mode};
+        use craft::ui::primitives::{Draw, DrawEnv, PaintRecord};
+        use craft::ui::testing::{Frames, style};
+
         let (_, bytes) = WORDCRAFT_ICONS.icons.iter().find(|(name, _)| *name == "dictate").expect("dictate is registered");
         let svg = std::str::from_utf8(bytes).expect("an SVG document is text");
 
@@ -642,16 +647,45 @@ mod tests {
         assert_eq!(size.width(), 20.0, "icon viewBox width must be 20");
         assert_eq!(size.height(), 20.0, "icon viewBox height must be 20");
 
-        let attr = |tag: &str, name: &str| -> f32 {
+        fn attr_str<'a>(tag: &'a str, name: &str) -> &'a str {
             let elem = tag.split('>').next().unwrap_or(tag);
             let needle = format!("{name}=\"");
-            let start = elem.find(&needle).unwrap_or_else(|| panic!("missing {name} on {elem}")) + needle.len();
-            let val = &elem[start..elem[start..].find('"').map_or(elem.len(), |i| start + i)];
+            let start = elem
+                .match_indices(&needle)
+                .find(|&(idx, _)| idx == 0 || elem.as_bytes()[idx - 1].is_ascii_whitespace())
+                .map(|(idx, _)| idx + needle.len())
+                .unwrap_or_else(|| panic!("missing {name} on {elem}"));
+            &elem[start..elem[start..].find('"').map_or(elem.len(), |i| start + i)]
+        }
+        let attr = |tag: &str, name: &str| -> f32 {
+            let val = attr_str(tag, name);
             val.parse::<f32>().unwrap_or_else(|_| panic!("non-numeric {name}: {val}"))
         };
+
+        let root = svg.split("<svg").nth(1).expect("dictate.svg must contain a root <svg> element");
+        assert_eq!(attr_str(root, "viewBox"), "0 0 20 20", "root SVG viewBox must be 0 0 20 20");
+
         let rect = svg.split("<rect").nth(1).expect("dictate.svg must contain a <rect> capsule");
+        let cap_x = attr(rect, "x");
+        let cap_y = attr(rect, "y");
         let width = attr(rect, "width");
+        let height = attr(rect, "height");
         let rx = attr(rect, "rx");
         assert!(rx >= width / 2.0, "capsule corner radius ({rx}) must be at least half the width ({width})");
+        assert!(cap_y + height < 15.0, "capsule bottom ({}) must stay clear of the cradle bottom (15.0)", cap_y + height);
+        assert!(cap_x > 5.0 && cap_x + width < 15.0, "capsule x-span ({}..{}) must stay inside the cradle arms (5..15)", cap_x, cap_x + width);
+
+        register();
+        let tokens = style::tokens(Mode::Light, Contrast::Standard);
+        let record = std::cell::RefCell::new(PaintRecord::default());
+        let mut frames = Frames::new();
+        for pt in [16.0_f32, 19.0, 20.0, 22.0] {
+            let shapes = frames.frame_shapes(|ui| {
+                let env = DrawEnv { tokens: &tokens, direction: craft::i18n::Direction::Ltr, ink: craft::ui::style::Ink::OnPanel };
+                let icon = IconSpec::svg(IconId::new("dictate"));
+                Draw::new(ui.painter(), &record, env).icon(Rect::from_min_size(Pos2::ZERO, egui::vec2(pt, pt)), &icon);
+            });
+            assert!(!shapes.is_empty(), "dictate icon must paint at {pt} pt");
+        }
     }
 }
