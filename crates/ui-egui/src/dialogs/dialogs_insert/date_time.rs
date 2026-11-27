@@ -35,6 +35,49 @@ const PT_DATE_FORMATS: &[&str] = &[
     "HH:mm:ss",
 ];
 
+/// Predefined Thai date and time format pictures: Thai month and weekday names and the year in the
+/// Buddhist era (25/11/2569, 25 พฤศจิกายน 2569).
+const TH_DATE_FORMATS: &[&str] = &[
+    "d/M/yyyy",
+    "dd/MM/yyyy",
+    "d MMMM yyyy",
+    "d MMM yyyy",
+    "d MMM yy",
+    "'วัน'dddd'ที่' d MMMM 'พ.ศ.' yyyy",
+    "dddd d MMMM yyyy",
+    "d/M/yy",
+    "yyyy-MM-dd",
+    "d/M/yyyy H:mm",
+    "d/M/yyyy H:mm:ss",
+    "H:mm",
+    "H:mm:ss",
+];
+
+/// The pictures offered for a language tag (`en-US`, `pt-BR` or `th-TH`).
+fn formats_for(language: &str) -> &'static [&'static str] {
+    match language {
+        "pt-BR" => PT_DATE_FORMATS,
+        "th-TH" => TH_DATE_FORMATS,
+        _ => DATE_FORMATS,
+    }
+}
+
+/// The dialog's language for a saved or interface language tag: Portuguese and Thai tags by their
+/// primary subtag, anything else English.
+fn dialog_language(tag: &str) -> &'static str {
+    let tag = tag.to_ascii_lowercase();
+    if tag.starts_with("pt") {
+        "pt-BR"
+    } else if tag == "th" || tag.starts_with("th-") || tag.starts_with("th_") {
+        "th-TH"
+    } else {
+        "en-US"
+    }
+}
+
+/// The dialog's languages, in the order the Language list shows them.
+const LANGUAGES: [&str; 3] = ["pt-BR", "th-TH", "en-US"];
+
 /// What the Date and Time preview list shows at the instant `unix`: document values, not
 /// interface strings. The i18n audit recognizes these instead of treating month names, dates and
 /// times as labels.
@@ -43,8 +86,9 @@ pub(crate) fn date_time_previews_at(unix: u64) -> impl Iterator<Item = String> {
     let offset = wordcraft_engine::cmd::local_offset_secs(unix);
     PT_DATE_FORMATS
         .iter()
+        .chain(TH_DATE_FORMATS.iter())
         .chain(DATE_FORMATS.iter())
-        .flat_map(move |picture| ["pt-BR", "en-US"].map(|lang| wordcraft_engine::cmd::insert::format_date_at_in(picture, Some(lang), unix, offset)))
+        .flat_map(move |picture| LANGUAGES.map(|lang| wordcraft_engine::cmd::insert::format_date_at_in(picture, Some(lang), unix, offset)))
 }
 
 /// State of the Word-like Insert > Date & Time dialog.
@@ -62,19 +106,17 @@ impl DateTimeForm {
     /// Restore a saved format/language or choose a sensible default for the UI language.
     pub fn new(app: &WordApp) -> Self {
         let language = if app.ui.date_time_language.is_empty() {
-            if crate::i18n::current().code().to_ascii_lowercase().starts_with("pt") { "pt-BR" } else { "en-US" }.to_string()
-        } else if app.ui.date_time_language.to_ascii_lowercase().starts_with("pt") {
-            "pt-BR".to_string()
+            dialog_language(crate::i18n::current().code()).to_string()
         } else {
-            "en-US".to_string()
+            dialog_language(&app.ui.date_time_language).to_string()
         };
-        let list = if language == "pt-BR" { PT_DATE_FORMATS } else { DATE_FORMATS };
+        let list = formats_for(&language);
         let format = if list.contains(&app.ui.date_time_format.as_str()) { app.ui.date_time_format.clone() } else { list[0].to_string() };
         Self { format, language, update: app.ui.date_time_update }
     }
     /// Pictures available in the chosen language.
     fn formats(&self) -> &'static [&'static str] {
-        if self.language == "pt-BR" { PT_DATE_FORMATS } else { DATE_FORMATS }
+        formats_for(&self.language)
     }
     /// Engine command parameters corresponding to the current controls.
     pub fn params(&self) -> Value {
@@ -105,23 +147,19 @@ impl WordForm for DateTimeForm {
                 }
             });
             Stack::new().show(ui, |ui, _| {
-                let entries = [Entry::new(0u8, word("Portuguese (Brazil)")), Entry::new(1u8, word("English (United States)"))];
-                let current = Mixed::Same(if self.language == "pt-BR" { 0u8 } else { 1u8 });
+                let entries =
+                    [Entry::new(0u8, word("Portuguese (Brazil)")), Entry::new(1u8, word("Thai")), Entry::new(2u8, word("English (United States)"))];
+                let current = Mixed::Same(LANGUAGES.iter().position(|l| *l == self.language).unwrap_or(2) as u8);
                 let picked = Field::new(word("Language"))
                     .show(ui, |ui, _| Select::new(word("Language"), Bind::given(current), &entries).show(ui).value().copied())
                     .inner
                     .flatten();
                 // A language change starts the format over from that language's first picture.
-                match picked {
-                    Some(0) if self.language != "pt-BR" => {
-                        self.language = "pt-BR".into();
-                        self.format = PT_DATE_FORMATS[0].into();
-                    }
-                    Some(1) if self.language != "en-US" => {
-                        self.language = "en-US".into();
-                        self.format = DATE_FORMATS[0].into();
-                    }
-                    _ => {}
+                if let Some(language) = picked.and_then(|k| LANGUAGES.get(usize::from(k)))
+                    && self.language != *language
+                {
+                    self.language = (*language).into();
+                    self.format = formats_for(language).first().copied().unwrap_or("d/M/yyyy").into();
                 }
                 Checkbox::new(Bind::bound(&mut self.update)).label(word("Update automatically")).show(ui);
             });
