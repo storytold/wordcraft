@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use craft::behavior::{IconId, Selection, SelectionChange, keyed};
 use craft::ui::buttons::{Button, IconButton, ToggleButton};
-use craft::ui::contract::{Bind, CollectionEvent, Entry, Props, SelectMode, Show, ShowCollection, ShowContainer, clicked};
+use craft::ui::contract::{Bind, CollectionEvent, Entry, LeadSource, Props, SelectMode, Show, ShowCollection, ShowContainer, clicked};
 use craft::ui::display::Text;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::list::{List, ListRow};
@@ -122,18 +122,25 @@ pub(super) fn styles(app: &mut WordApp, ui: &mut Ui) {
             // The marker tells a character style from a paragraph style.
             ListRow::new(name.clone()).trailing(if *is_char { "a" } else { "¶" })
         });
+    let secondary_pointer = ui.input(|i| i.pointer.secondary_pressed() || i.pointer.secondary_down() || i.pointer.secondary_released());
     let mut asked = None;
+    let mut picked_style = None;
     for event in &out.events {
         match event {
-            CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
-                if let Some((id, ..)) = keys.first().and_then(|k| list.get(*k)) {
-                    let _ = app.run("para.style", json!({"style": id}));
-                    app.canvas.focus_page(&ctx);
+            CollectionEvent::Selection { change: SelectionChange::Set(keys), by, .. } => {
+                if !(secondary_pointer && matches!(by, LeadSource::Pointer)) {
+                    picked_style = keys.first().copied();
                 }
             }
             CollectionEvent::ContextMenu(request) => asked = Some(request.key),
             _ => {}
         }
+    }
+    if asked.is_none()
+        && let Some((id, ..)) = picked_style.and_then(|k| list.get(k))
+    {
+        let _ = app.run("para.style", json!({"style": id}));
+        app.canvas.focus_page(&ctx);
     }
     let menu_id = app.window_id("styles_row_menu");
     let entries = |row: usize| {
