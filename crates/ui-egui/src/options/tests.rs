@@ -494,6 +494,37 @@ fn language_options_sets_default_proofing_language_including_english_variants_an
     assert_eq!(start.session.prefs.default_language.as_deref(), Some("en-CA"));
 }
 
+/// CodeRabbit on #7944: the Default proofing language picker matches `normal_document` (does not
+/// fall back to the open document's language), and resetting the Language page clears the saved
+/// default proofing language without altering the open document's text or language.
+#[test]
+fn language_options_default_proofing_matches_new_document_and_resets_cleanly() {
+    let mut a = app();
+    a.run("document.setText", json!({"text": "Bonjour"})).unwrap();
+    a.run("select.all", json!({})).unwrap();
+    a.run("review.language", json!({"lang": "fr-FR", "scope": "document"})).unwrap();
+    std::sync::Arc::make_mut(&mut a.session.doc.styles).default_chr.lang = Some("fr-FR".into());
+    let picked = with_model(&mut a, true, |m| {
+        let pages = m.pages();
+        let row = pages
+            .iter()
+            .flat_map(|p| p.groups.iter())
+            .flat_map(|g| g.rows.iter())
+            .find(|r| r.key == "language.defaultProofing")
+            .expect("defaultProofing row");
+        let RowKind::Choice { value, .. } = &row.kind else { panic!("defaultProofing must be a Choice row") };
+        (*value).to_string()
+    });
+    assert_eq!(picked, "en-US", "matches normal_document instead of the open fr-FR document");
+
+    with_model(&mut a, true, |m| m.set("language.defaultProofing", PrefValue::Choice("en-CA".into())));
+    assert_eq!(a.session.prefs.default_language.as_deref(), Some("en-CA"));
+    with_model(&mut a, true, |m| m.reset_page("language"));
+    assert_eq!(a.session.prefs.default_language, None, "resetting Language clears the saved default");
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Bonjour", "document text is untouched");
+    assert_eq!(a.session.doc.styles.default_chr.lang.as_deref(), Some("fr-FR"), "document language is untouched");
+}
+
 /// #7833: Options › Language shows Default proofing language and Set Proofing Language…, opens the
 /// Language dialog from Options, and reflects the document's proofing language in the caption.
 #[test]

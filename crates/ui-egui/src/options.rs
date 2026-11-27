@@ -134,14 +134,7 @@ struct Strings {
 
 /// The default proofing language choice list and active id for File › Options › Language.
 fn default_proofing_choices(app: &WordApp) -> (Vec<(String, String)>, String) {
-    let default_tag = app
-        .session
-        .prefs
-        .default_language
-        .clone()
-        .or_else(|| app.session.editing_lang.clone())
-        .or_else(|| app.session.doc.styles.default_chr.lang.clone())
-        .unwrap_or_else(|| "en-US".to_string());
+    let default_tag = app.session.prefs.default_language.clone().or_else(|| app.session.editing_lang.clone()).unwrap_or_else(|| "en-US".to_string());
     let list = crate::ribbon::language_list(&default_tag);
     let id = list.iter().find(|(tag, _)| crate::ribbon::same_language(&default_tag, tag)).map_or(default_tag, |(tag, _)| tag.clone());
     (list, id)
@@ -291,7 +284,11 @@ impl<'a> OptionsModel<'a> {
                 ("proofing.customDictionaryFile", Text(String::new())),
             ],
             "save" => vec![("save.removePersonalInfo", Bool(false)), ("save.removeDateTime", Bool(false))],
-            "language" => vec![("language.interface", Choice(crate::i18n::AUTO.to_string())), ("language.dictionariesFolder", Text(String::new()))],
+            "language" => vec![
+                ("language.interface", Choice(crate::i18n::AUTO.to_string())),
+                ("language.defaultProofing", Choice(crate::i18n::AUTO.to_string())),
+                ("language.dictionariesFolder", Text(String::new())),
+            ],
             "accessibility" => vec![
                 ("accessibility.animations", Choice(ui.animations.code().to_string())),
                 ("accessibility.readAloudSpeed", Float(f64::from(default_of(&self.app.session.read_aloud).rate()))),
@@ -702,7 +699,13 @@ impl PreferencesModel for OptionsModel<'_> {
             ("save.removePersonalInfo", Bool(v)) => self.run("file.privacyOptions", json!({"removePersonalInfo": v})),
             ("save.removeDateTime", Bool(v)) => self.run("file.privacyOptions", json!({"removeDateTime": v})),
             ("language.interface", Choice(c)) => self.run("ui.language", json!({"value": c})),
-            ("language.defaultProofing", Choice(c)) => self.run("review.language.preferred", json!({"lang": c})),
+            ("language.defaultProofing", Choice(c)) => {
+                let clear = c.eq_ignore_ascii_case(crate::i18n::AUTO);
+                self.run("review.language.preferred", json!({"lang": c}));
+                if clear {
+                    self.app.applied_editing = None;
+                }
+            }
             ("proofing.customDictionaryFile", Text(t)) => {
                 let t = t.trim();
                 self.options(json!({"customDictionary": if t.is_empty() { "auto" } else { t }}));

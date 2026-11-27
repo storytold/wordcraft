@@ -464,7 +464,7 @@ pub struct WordApp {
     legacy_interface_size: Option<f64>,
     /// The interface language and the editing language the session last got for it
     /// ([`i18n::Lang::editing_lang`], or for English the region's English).
-    applied_editing: Option<(i18n::Lang, Option<String>)>,
+    pub(crate) applied_editing: Option<(i18n::Lang, Option<String>)>,
     pub frame_ms: f64,
     /// Nothing else (a dialog, menu, keytips, the File tab) is open to take Escape this frame, so
     /// Escape may leave full screen. Read before anything handles the frame's keys.

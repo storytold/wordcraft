@@ -6,6 +6,14 @@ use wordcraft_doc::CharProps;
 /// document, the selection, the undo history and the modified flag are left alone.
 pub(super) fn preferred_language(s: &mut Session, v: &Value) -> CmdResult {
     let t = p::str(v, "lang").ok_or_else(|| CmdError::Params("`lang` is required".into()))?;
+    if t.trim().eq_ignore_ascii_case("auto") {
+        if let Some(prev) = s.prefs.default_language.take()
+            && s.editing_lang.as_ref() == Some(&prev)
+        {
+            s.editing_lang = None;
+        }
+        return Ok(json!({"preferred": Value::Null}));
+    }
     let l = wordcraft_proof::lang::normalize_tag(t)
         .ok_or_else(|| CmdError::Params(format!("`lang` must be a language tag such as pl-PL or en-US, not {t:?}")))?;
     s.prefs.default_language = Some(l.clone());

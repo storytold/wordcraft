@@ -342,7 +342,7 @@ pub fn specs() -> Vec<CommandSpec> {
             r#"{"lang"?: "en-US|en-GB|pl-PL|fr-FR|…" (BCP 47; default en-US), "noProof"?: bool, "detect"?: bool (detect language automatically, a preference), "default"?: bool (also the document's default and the saved language for future blank documents), "scope"?: "selection" (default) | "document" (every run and paragraph mark of every story: body, headers, footers, notes, comments, text boxes, tables, glossary (skipped while Track Changes and Track Formatting are on); one undo step, selection unchanged; returns the caret, "scope":"document" and "glossarySkipped":true when the glossary was skipped)}"#,
         ),
         CommandSpec::new("review.language.preferred", "Set as Default Language", "File › Options › Language", preferred_language)
-            .params(r#"{"lang": "en-US|en-GB|pl-PL|nl-NL|…" (BCP 47)} — only the saved default proofing language, what future blank documents are written in, as Options › Language › Set as default does; the open document, the selection and the undo history don't change. Returns {"preferred": tag}."#)
+            .params(r#"{"lang": "en-US|en-GB|pl-PL|nl-NL|…|auto" (BCP 47, or "auto" to clear the saved default)} — only the saved default proofing language, what future blank documents are written in, as Options › Language › Set as default does; the open document, the selection and the undo history don't change. Returns {"preferred": tag|null}."#)
             .pure(),
         CommandSpec::new("review.showMarkup", "Show Markup", "Review › Tracking", |s, v| {
             s.view.show_markup = p::bool(v, "value").unwrap_or(!s.view.show_markup);
