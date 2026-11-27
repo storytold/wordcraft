@@ -21,26 +21,32 @@ pub fn use_settings_dir(dir: PathBuf) -> Result<(), String> {
 /// an environment variable a child or a wrapper might have inherited. `WORDCRAFT_PROFILE_DIR`
 /// overrides the entire folder for isolated runs otherwise.
 pub fn settings_dir() -> Option<PathBuf> {
-    if let Some(path) = CHOSEN.get() {
+    settings_dir_with(CHOSEN.get(), |k| std::env::var_os(k))
+}
+
+fn settings_dir_with(chosen: Option<&PathBuf>, mut env: impl FnMut(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {
+    if let Some(path) = chosen {
         return Some(path.clone());
     }
-    if let Some(path) = std::env::var_os("WORDCRAFT_PROFILE_DIR").filter(|p| !p.is_empty()) {
+    if let Some(path) = env("WORDCRAFT_PROFILE_DIR").filter(|p| !p.is_empty()) {
         return Some(PathBuf::from(path));
     }
-    platform_settings_dir()
+    platform_settings_dir_for(env)
 }
 
 /// The platform's own folder, when nothing chose one (see [`settings_dir`]).
+#[cfg(test)]
 fn platform_settings_dir() -> Option<PathBuf> {
+    platform_settings_dir_for(|k| std::env::var_os(k))
+}
+
+fn platform_settings_dir_for(mut env: impl FnMut(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {
     if cfg!(target_os = "macos") {
-        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support/WordCraft"))
+        env("HOME").map(|h| PathBuf::from(h).join("Library/Application Support/WordCraft"))
     } else if cfg!(windows) {
-        std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("WordCraft"))
+        env("APPDATA").map(|a| PathBuf::from(a).join("WordCraft"))
     } else {
-        std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-            .map(|c| c.join("wordcraft"))
+        env("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| env("HOME").map(|h| PathBuf::from(h).join(".config"))).map(|c| c.join("wordcraft"))
     }
 }
 
@@ -108,5 +114,27 @@ mod tests {
         if instance_id().is_none() {
             assert_eq!(key_path(dir, 7981), dir.join("control-key.local-7981"));
         }
+    }
+
+    #[test]
+    fn settings_dir_is_the_apps_folder() {
+        let default_dir = settings_dir_with(None, |key| match key {
+            "HOME" | "APPDATA" | "XDG_CONFIG_HOME" => Some("/tmp/base".into()),
+            _ => None,
+        })
+        .expect("settings_dir should return Some when platform env var is set");
+        let default_name = default_dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        assert!(default_name == "wordcraft" || default_name == "WordCraft", "{}", default_dir.display());
+        assert_eq!(settings_dir_with(None, |_| None), None);
+
+        let override_dir = settings_dir_with(None, |key| (key == "WORDCRAFT_PROFILE_DIR").then(|| "/tmp/profile".into()));
+        assert_eq!(override_dir.as_deref(), Some(Path::new("/tmp/profile")));
+
+        let empty_override = settings_dir_with(None, |key| match key {
+            "WORDCRAFT_PROFILE_DIR" => Some("".into()),
+            "HOME" | "APPDATA" | "XDG_CONFIG_HOME" => Some("/tmp/base".into()),
+            _ => None,
+        });
+        assert_eq!(empty_override, Some(default_dir));
     }
 }
