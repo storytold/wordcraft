@@ -9,7 +9,7 @@ use craft::ui::menu::MenuItem;
 use craft::ui::primitives::FacePaint;
 use craft::ui::tile_grid::{CaptionPlace, Tile};
 
-use super::common::{menu_button, size_field};
+use super::common::{menu_button, size_field, two_rows};
 use super::{WordApp, json};
 use crate::equation_tab::pick_tile;
 
@@ -19,10 +19,10 @@ fn graphic_size(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     row.group(RibbonGroup::new("size", tl!("Size").to_string(), IconId::new("size").into()), |ui| {
         let (w0, h0) =
             wordcraft_engine::cmd::objects::selected(&app.session).and_then(|(_, o)| o.frame().map(|(w, h, _)| (w, h))).unwrap_or((0.0, 0.0));
-        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-            for (label, key, v0) in [("H:", "height", h0), ("W:", "width", w0)] {
-                size_field(ui, app, label, key, v0, false, 36.0..=2000.0);
-            }
+        // Two rows of fields spread over the ribbon's height, as Home's Font and Paragraph (`two_rows`).
+        two_rows(ui, |ui, at| {
+            let (label, key, v0) = if at == 0 { ("H:", "height", h0) } else { ("W:", "width", w0) };
+            size_field(ui, app, label, key, v0, false, 36.0..=2000.0);
         });
     });
 }

@@ -1004,6 +1004,45 @@ fn short_galleries_sit_in_the_middle_of_the_body() {
     );
 }
 
+/// #4017: Shape Format › Size, two rows of fields and nothing else, spreads them over the ribbon's height as Home's Font
+/// and Paragraph do, as much room above the first row as between the rows and under the second (against a Shape
+/// Styles' three rows beside it), instead of leaving the third row empty over the title.
+#[test]
+fn shape_size_rows_spread_over_the_three_row_height() {
+    use egui::accesskit::Role;
+
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("insert.shape", json!({"kind": "rectangle"})).unwrap();
+    let h = tab_harness(app, "Shape Format");
+    let field = |name: &str| h.get_by_role_and_label(Role::SpinButton, name).rect();
+    let (width, rotation) = (field("W:"), field("Rotation"));
+    // Shape Styles' first and last rows: the body's top and foot.
+    let (top, foot) = (named_rect(&h, "Shape Fill").top(), named_rect(&h, "Shape Effects").bottom());
+    let (above, between, under) = (width.top() - top, rotation.top() - width.bottom(), foot - rotation.bottom());
+    assert!(
+        above > 1.0 && (above - under).abs() <= 1.0 && (between - above).abs() <= 1.0,
+        "Size's rows should be spread evenly: {above} pt above, {between} between, {under} under"
+    );
+}
+
+/// #4017: Table Layout › Cell Size's Height and Width fields are as tall as the small buttons beside them, so their rows
+/// line up with Distribute Rows and Distribute Columns.
+#[test]
+fn table_cell_size_fields_line_up_with_the_distribute_buttons() {
+    use egui::accesskit::Role;
+
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    let h = tab_harness(app, "Table Layout");
+    let field = |name: &str| h.get_by_role_and_label(Role::SpinButton, name).rect();
+    let (height, width) = (field("Height:"), field("Width:"));
+    let (rows, columns) = (named_rect(&h, "Distribute Rows"), named_rect(&h, "Distribute Columns"));
+    assert!(
+        (height.center().y - rows.center().y).abs() <= 1.0 && (width.center().y - columns.center().y).abs() <= 1.0,
+        "Height {height:?} and Width {width:?} should line up with Distribute Rows {rows:?} and Columns {columns:?}"
+    );
+}
+
 /// #4017: Home's small buttons, icon-only or labelled, are at least 24 points square: the least target size the
 /// accessibility standard asks for (WCAG 2.5.8).
 #[test]

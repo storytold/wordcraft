@@ -145,12 +145,13 @@ fn cell_size_boxes(ui: &mut Ui, app: &mut WordApp) {
     let w0 = laid.map(|x| x.w).or(stored_w).unwrap_or(0.0);
     let exact = row.height_rule == wordcraft_doc::props::HeightRule::Exact;
     let (height_units, width_units) = (crate::options::lengths(app.session.units()), crate::options::lengths(app.session.units()));
-    // As the old ribbon and Layout › Paragraph: a visible label beside each field, two decimals ("0.20").
+    // As the old ribbon and Layout › Paragraph: a visible label beside each field, two decimals ("0.20"). The fields are
+    // as tall as the small buttons, so their rows line up with Distribute Rows and Distribute Columns beside them.
     let caption = |label: &'static str| Text::new(tl!(label)).role(TypeRole::Caption);
     Grid::new(&[ColumnWidth::Content; 2]).gap(Gap::Tight).show(ui, |ui, _| {
         caption("Height:").show(ui);
         let field = NumberField::length(tl!("Height:").to_string(), Bind::given(Some(f64::from(h0))), height_units).range(CELL_SIZE_RANGE);
-        let out = field.fixed_decimals(2).size(ControlSize::Sm).show(ui);
+        let out = field.fixed_decimals(2).size(ControlSize::Md).show(ui);
         apply_edits(app, out.edit.events, |app, v| {
             if let Some(h) = v {
                 let _ = app.run("table.rowHeight", json!({"height": h, "rule": if exact { "exact" } else { "atLeast" }}));
@@ -158,7 +159,7 @@ fn cell_size_boxes(ui: &mut Ui, app: &mut WordApp) {
         });
         caption("Width:").show(ui);
         let field = NumberField::length(tl!("Width:").to_string(), Bind::given(Some(f64::from(w0))), width_units).range(CELL_SIZE_RANGE);
-        let out = field.fixed_decimals(2).size(ControlSize::Sm).show(ui);
+        let out = field.fixed_decimals(2).size(ControlSize::Md).show(ui);
         apply_edits(app, out.edit.events, |app, v| {
             if let Some(w) = v {
                 let _ = app.run("table.columnWidth", json!({"width": w}));
