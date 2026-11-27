@@ -397,34 +397,23 @@ fn hyperlink_shortcut_focuses_address_and_preserves_document() {
     let mut a = app();
     a.run("text.insert", json!({"text": "Keep this text"})).unwrap();
     a.run("select.text", json!({"text": "Keep this text"})).unwrap();
-    let mut h = crate::test_harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.dialog_host.run(ui);
-        },
-        a,
-    );
+    let mut h = harness(a);
+    h.run_steps(2);
 
     for (event, expected) in [
         (egui::Event::Paste("https://example.com".into()), "https://example.com"),
         (egui::Event::Text("https://example.org".into()), "https://example.org"),
     ] {
-        h.event(egui::Event::Key { key: egui::Key::K, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
-        crate::test_harness::frame(&mut h);
-        crate::test_harness::frame(&mut h);
+        press(&mut h, egui::Key::K, egui::Modifiers::COMMAND);
         assert!(h.state().dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("link")), "Link dialog open");
         h.event(event);
-        crate::test_harness::frame(&mut h);
-        crate::test_harness::frame(&mut h);
+        h.run_steps(2);
         let address = h.get_by_label("Address:").value().unwrap_or_default();
         assert_eq!(address, expected, "input replaces the initial address");
         let display = h.get_by_label("Text to display:").value().unwrap_or_default();
         assert_eq!(display, "Keep this text");
         assert_eq!(body_text(h.state()), "Keep this text");
-        h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
-        crate::test_harness::frame(&mut h);
-        crate::test_harness::frame(&mut h);
+        press(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
         assert!(h.state().dialog_host.open_dialogs().is_empty(), "Cancel closes the dialog");
         assert_eq!(h.state().session.selected_text(), "Keep this text", "Cancel preserves selection");
     }
