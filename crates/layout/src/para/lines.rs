@@ -1104,7 +1104,7 @@ impl Scan {
 
 /// Narrowest span text flows into beside a floating object, points. Word puts an empty
 /// paragraph beside a floating table in a 21.3pt gap but not in an 18.6pt one.
-const MIN_SPAN: f32 = 20.0;
+pub(crate) const MIN_SPAN: f32 = 20.0;
 
 /// Where a row starts under Word 2003's indent rules: right after the floating objects that end
 /// at or before the indent `lo` on this row and let text past their right side (their outline's
