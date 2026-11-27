@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use wordcraft_doc::edit::Fragment;
 use wordcraft_doc::props::CharProps;
 use wordcraft_doc::{Block, Paragraph, Pos};
+use wordcraft_layout::hit::ColumnSelection;
 
 use super::{parse_pos, pos_json};
 use crate::{CmdError, CmdResult, ColumnBlock, CommandSpec, Selection, Session, p};
@@ -96,7 +97,7 @@ fn make(s: &mut Session, a: Pos, b: Pos, xa: f32, xb: f32) {
     let (xa, xb) = (if xa.is_finite() { xa } else { 0.0 }, if xb.is_finite() { xb } else { 0.0 });
     let (left, right) = (xa.min(xb), xa.max(xb));
     let l = s.layout();
-    let segments = l.column_segments(&s.doc, &a, &b, left, right, s.page_hint, MAX_LINES);
+    let segments = l.column_segments(&s.doc, ColumnSelection { start: &a, end: &b, left, right, page_hint: s.page_hint, max_lines: MAX_LINES });
     s.sel = Selection { anchor: a, focus: b };
     s.column = Some(ColumnBlock { sel: s.sel.clone(), anchor_x: xa, focus_x: xb, segments, cells: None });
     s.pending = None;
@@ -166,12 +167,24 @@ pub(crate) fn dispatch(s: &mut Session, id: &str, mutates: bool, run: fn(&mut Se
     {
         return r;
     }
+    // Delete (and Backspace that doesn't delete them) empties whole cells to one paragraph each,
+    // as in Word (#2802).
+    if matches!(id, "text.delete" | "text.backspace" | "text.deleteWordBack" | "text.deleteWordForward")
+        && let Some(r) = super::table::clear_cells(s)
+    {
+        return r;
+    }
     let Some(segs) = s.column_segments().map(<[(Pos, Pos)]>::to_vec) else { return run(s, v) };
     let cells = s.cell_range().is_some();
     match id {
         // Whole cells: table commands take the rectangle between the corners, and Tab moves on
         // from it without clearing it, as in Word.
         _ if cells && (id.starts_with("table.") || matches!(id, "text.tab" | "text.backTab")) => run(s, v),
+        // Copy and Cut of whole cells take a table of them (#1744).
+        "edit.copy" | "edit.cut" if cells => run(s, v),
+        // Paste can lay a copied table over the selected cells. Let it inspect the selection
+        // before the ordinary column replacement deletes it.
+        "edit.paste" if cells => run(s, v),
         "edit.copy" => copy(s, &segs),
         "edit.cut" => {
             let r = copy(s, &segs)?;
@@ -199,6 +212,16 @@ pub(crate) fn dispatch(s: &mut Session, id: &str, mutates: bool, run: fn(&mut Se
     }
 }
 
+/// Delete the pieces of a selected cell rectangle for an ordinary Paste replacement.
+pub(super) fn delete_cell_segments(s: &mut Session) -> Result<(), CmdError> {
+    if s.cell_range().is_some()
+        && let Some(segments) = s.column_segments().map(<[(Pos, Pos)]>::to_vec)
+    {
+        delete(s, &segments)?;
+    }
+    Ok(())
+}
+
 /// Copy: one paragraph per block row (formatting kept); the plain text joins rows with newlines.
 fn copy(s: &mut Session, segs: &[(Pos, Pos)]) -> CmdResult {
     let mut blocks = Vec::new();
@@ -222,7 +245,8 @@ fn copy(s: &mut Session, segs: &[(Pos, Pos)]) -> CmdResult {
         blocks.push(Block::Para(para));
     }
     s.clipboard_text = rows.join("\n");
-    s.clipboard = Some(Fragment { blocks, parts });
+    let media = s.doc.media_of_blocks(&blocks);
+    s.clipboard = Some(Fragment { blocks, parts, media });
     Ok(super::edit::copy_result(s))
 }
 
