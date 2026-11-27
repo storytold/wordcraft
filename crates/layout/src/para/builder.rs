@@ -19,6 +19,7 @@ pub(super) struct Builder<'a> {
     pub(super) levels: Vec<u8>,
     /// Text drawn by clusters that stand for an object, by cluster index (see `ParaLayout::shown`).
     pub(super) shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)>,
+    pub(super) result_breaks: Vec<(usize, bool)>,
     /// Fonts asked for that aren't installed, and the faces drawn instead (see
     /// `ParaLayout::substituted`).
     pub(super) substituted: Vec<(String, FaceRef)>,
@@ -561,6 +562,26 @@ impl<'a> Builder<'a> {
         let g1 = added.last().map(|c| c.g1).unwrap_or(g0);
         self.shown.push((self.clusters.len(), text.to_string(), ranges));
         self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
+    }
+
+    /// A textual field still occupies one document character, but its displayed
+    /// graphemes may wrap. Shape together so kerning and ligatures are retained.
+    pub(super) fn shape_filename(&mut self, text: &str, start: usize, end: usize, rc: &Arc<ResolvedChar>, breaks: &[usize]) {
+        if text.chars().any(|c| strong_rtl(c) == Some(true)) || text.is_empty() {
+            self.shape_atomic(text, start, end, rc);
+            return;
+        }
+        let first = self.clusters.len();
+        self.shape_with(text, start, rc, None, Dir::Guess);
+        for (k, c) in self.clusters.iter_mut().enumerate().skip(first) {
+            let a = c.start.saturating_sub(start);
+            let b = c.end.saturating_sub(start);
+            let shown = text.get(a..b).unwrap_or("").to_string();
+            self.shown.push((k, shown.clone(), (c.g0..c.g1).map(|_| 0..shown.len()).collect()));
+            self.result_breaks.push((k, breaks.binary_search(&b).is_ok()));
+            c.start = start;
+            c.end = end;
+        }
     }
 
     /// Shape `texts` on top of one another as one cluster for `start..end`: each aligned within

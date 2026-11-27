@@ -74,6 +74,10 @@ pub struct ParaLayout {
     pub drop_cap: Option<(usize, u8, f32)>,
     /// Clusters after which the line may break with a hyphen (soft hyphens, auto hyphenation), sorted.
     pub hyph_after: Vec<u32>,
+    /// Cluster ranges of automatically hyphenated words. The first character
+    /// remaining on a line supplies its proofing state, including continuations
+    /// after a forced break inside a long word.
+    pub hyph_words: Vec<std::ops::Range<usize>>,
     /// Bidi embedding level of each byte of the paragraph text (UAX #9, before the per-line
     /// rule L1). Empty when the paragraph is plain left-to-right text.
     pub bidi_levels: Vec<u8>,
@@ -382,7 +386,7 @@ mod label_spacing_tests {
             (st.ascent, st.descent) = if i == label_style as usize { label_metrics } else { text_metrics };
         }
         let mark_style = pl.clusters[0].style;
-        break_lines(&mut pl, &env, mark_style, Some(&level));
+        break_lines(&mut pl, &env, &p.text, mark_style, Some(&level));
         pl.lines
     }
 

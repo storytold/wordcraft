@@ -12,7 +12,9 @@ mod cell_floats;
 mod complex;
 mod float_top;
 mod grid;
+mod header_fields;
 mod header_legacy_float;
+mod hyphenation;
 mod joined;
 mod keep_next_section;
 mod ligature;
@@ -16202,7 +16204,7 @@ fn layout_cache_invalidates_on_changed_filename() {
         l.pages[0]
             .items
             .iter()
-            .find_map(|it| if let Placed::Lines { para, .. } = it { para.shown.first().map(|s| s.1.clone()) } else { None })
+            .find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.shown.iter().map(|s| s.1.as_str()).collect::<String>()) } else { None })
             .unwrap_or_default()
     };
 
@@ -16234,7 +16236,7 @@ fn layout_cache_invalidates_on_changed_filepath() {
         l.pages[0]
             .items
             .iter()
-            .find_map(|it| if let Placed::Lines { para, .. } = it { para.shown.first().map(|s| s.1.clone()) } else { None })
+            .find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.shown.iter().map(|s| s.1.as_str()).collect::<String>()) } else { None })
             .unwrap_or_default()
     };
 
@@ -17239,4 +17241,31 @@ fn header_text_covers_the_whole_band_of_centred_and_right_lines() {
         assert!(!hit(x + left - 30.0), "{align:?}: within 40pt left of the band is text");
         assert!(hit(x + left - 60.0), "{align:?}: beyond 40pt left of the band the picture is hit");
     }
+}
+
+#[test]
+fn print_glyph_ink_uses_device_em_without_snapping_layout_advances() {
+    crate::test_fonts();
+    let mut d = pagination_fixture_document("iiii mmmm aaaa");
+    Arc::make_mut(&mut d.styles).default_chr.size = Some(11.0);
+    let lay = lay(&d);
+    let placed = lay.pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Lines { para, .. } => Some(para),
+            _ => None,
+        })
+        .unwrap();
+    assert!(placed.styles.iter().all(|s| s.size == 11.0), "line layout retains the document's nominal size");
+    let draw = display::page_display(&d, &lay.pages[0], &display::DisplayOptions::default());
+    let sizes: Vec<f32> = draw
+        .iter()
+        .filter_map(|d| match d {
+            display::Draw::Glyphs { size, alpha, .. } if *alpha > 0.0 => Some(*size),
+            _ => None,
+        })
+        .collect();
+    assert!(!sizes.is_empty());
+    assert!(sizes.iter().all(|s| (*s - 11.04).abs() < 0.001), "public print output uses 11.04 pt outlines for nominal 11 pt");
 }
