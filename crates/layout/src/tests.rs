@@ -7009,16 +7009,17 @@ fn body_starts_right_below_a_tall_header() {
 
 fn background_doc() -> Document {
     let mut d = Document::from_text("Body");
-    d.styles = wordcraft_doc::StyleSheet::empty();
-    d.styles.default_chr = CharProps { font: Some("Source Sans 3".into()), size: Some(10.0), ..Default::default() };
-    d.styles.default_para = ParaProps {
+    let mut styles = wordcraft_doc::StyleSheet::empty();
+    styles.default_chr = CharProps { font: Some("Source Sans 3".into()), size: Some(10.0), ..Default::default() };
+    styles.default_para = ParaProps {
         line_spacing: Some(wordcraft_doc::props::LineSpacing::Exactly(14.0)),
         space_before: Some(3.0),
         space_after: Some(3.0),
         ..Default::default()
     };
-    d.styles.styles.push(wordcraft_doc::Style { id: "Normal".into(), ..Default::default() });
-    d.styles.styles.push(wordcraft_doc::Style { id: "Header".into(), based_on: Some("Normal".into()), ..Default::default() });
+    styles.styles.push(wordcraft_doc::Style { id: "Normal".into(), ..Default::default() });
+    styles.styles.push(wordcraft_doc::Style { id: "Header".into(), based_on: Some("Normal".into()), ..Default::default() });
+    d.styles = styles.into();
     d.settings.sum_paragraph_spacing = true;
     d.settings.page_color = Some(Rgb::WHITE);
     d.last_section.margin_top = 10.0;
@@ -7151,7 +7152,7 @@ fn background_header_defaults() {
     let mut d = background_doc();
     // The implicit empty header plus the background paragraph use resolved line metrics.
     assert!((lay(&d).pages[0].body.y - 75.0).abs() < 0.01);
-    d.styles.styles.retain(|s| s.id != "Header");
+    Arc::make_mut(&mut d.styles).styles.retain(|s| s.id != "Header");
     // Native Header-style restoration adds its inherited 3 + 3 pt spacing only once.
     assert!((lay(&d).pages[0].body.y - 69.0).abs() < 0.01);
     let id = exact_header(&mut d, 10.0);
@@ -16461,8 +16462,9 @@ fn background_numbering_isolated() {
     for turn in [TextDirection::Horizontal, TextDirection::Down, TextDirection::Up] {
         for explicit in [false, true] {
             let mut d = background_doc();
-            let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
-            d.styles.styles.iter_mut().find(|s| s.id == "Header").unwrap().para.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+            let num = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+            Arc::make_mut(&mut d.styles).styles.iter_mut().find(|s| s.id == "Header").unwrap().para.numbering =
+                Some(wordcraft_doc::props::NumRef { num, level: 0 });
             d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
             d.last_section.text_direction = turn;
             if explicit {

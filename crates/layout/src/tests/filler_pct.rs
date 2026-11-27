@@ -10,10 +10,11 @@ enum MarginStory {
 
 fn filler_document(kind: MarginStory, start: SectionStart) -> Document {
     let mut doc = Document::new();
-    doc.styles = wordcraft_doc::StyleSheet::empty();
-    doc.styles.default_chr = CharProps { font: Some("Source Sans 3".into()), size: Some(10.0), ..Default::default() };
-    doc.styles.default_para =
+    let mut styles = wordcraft_doc::StyleSheet::empty();
+    styles.default_chr = CharProps { font: Some("Source Sans 3".into()), size: Some(10.0), ..Default::default() };
+    styles.default_para =
         ParaProps { line_spacing: Some(LineSpacing::Exactly(14.0)), space_before: Some(0.0), space_after: Some(0.0), ..Default::default() };
+    doc.styles = styles.into();
     doc.last_section.margin_top = 10.0;
     doc.last_section.margin_bottom = 10.0;
     doc.last_section.header = 35.0;
