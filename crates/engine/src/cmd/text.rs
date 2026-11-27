@@ -17,7 +17,7 @@ use autoformat::insert;
 use delete::{backspace, delete, delete_sentence_back, delete_word_back, delete_word_fwd};
 pub use enter_tab::MAX_TYPED_PARAGRAPHS;
 use enter_tab::{back_tab, new_paragraph, tab};
-use unicode::{ins_char, insert_code, toggle_unicode};
+use unicode::{ins_char, insert_break, insert_code, toggle_unicode};
 pub use unicode::{oem_code_page, system_code_pages, system_oem_code_page};
 
 /// The text-entry commands: typing, Enter, breaks, Tab, deleting and typed symbols.
@@ -25,9 +25,9 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("text.insert", "Type Text", "Editing", insert).params(r#"{"text": string, "raw"?: bool, "paragraphs"?: bool} (paragraphs: each line a paragraph, one undo step, at most 10000 lines)"#),
         CommandSpec::new("text.newParagraph", "New Paragraph", "Editing", new_paragraph).key("Enter"),
-        CommandSpec::new("text.lineBreak", "Line Break", "Editing", |s, _| ins_char(s, '\n')).key("Shift+Enter"),
-        CommandSpec::new("text.pageBreak", "Page Break", "Insert › Pages", |s, _| ins_char(s, PAGE_BREAK)).key("Mod+Enter"),
-        CommandSpec::new("text.columnBreak", "Column Break", "Layout › Breaks", |s, _| ins_char(s, COLUMN_BREAK)).key("Mod+Shift+Enter"),
+        CommandSpec::new("text.lineBreak", "Line Break", "Editing", |s, _| insert_break(s, '\n')).key("Shift+Enter"),
+        CommandSpec::new("text.pageBreak", "Page Break", "Insert › Pages", |s, _| insert_break(s, PAGE_BREAK)).key("Mod+Enter"),
+        CommandSpec::new("text.columnBreak", "Column Break", "Layout › Breaks", |s, _| insert_break(s, COLUMN_BREAK)).key("Mod+Shift+Enter"),
         CommandSpec::new("text.tab", "Tab", "Editing", tab).key("Tab"),
         CommandSpec::new("text.backTab", "Shift+Tab", "Editing", back_tab).key("Shift+Tab"),
         // A tab character even in a table cell, where Tab moves to the next cell (#3137); ⌥Tab on macOS.

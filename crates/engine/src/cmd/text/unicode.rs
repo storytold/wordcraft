@@ -110,3 +110,17 @@ pub(super) fn ins_char(s: &mut Session, c: char) -> CmdResult {
     type_text(s, c.encode_utf8(&mut b))?;
     sel_result(s)
 }
+
+/// A line, page or column break. On a selected picture or shape, Word puts the break in front of
+/// it and keeps it selected, rather than replacing it (#4126).
+pub(super) fn insert_break(s: &mut Session, c: char) -> CmdResult {
+    let Some(at) = crate::cmd::objects::object_selection(s).map(|(p, _)| p) else { return ins_char(s, c) };
+    s.sel = Selection::caret(at.clone());
+    ins_char(s, c)?;
+    // The break goes in front of the object, or of the content control around it.
+    let at = Pos { off: at.off + c.len_utf8(), ..at };
+    if s.doc.para_at(&at).and_then(|p| p.object_at(at.off)).is_some_and(|o| o.is_drawing()) {
+        crate::cmd::objects::select_object(s, &at);
+    }
+    sel_result(s)
+}

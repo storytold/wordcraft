@@ -7111,7 +7111,7 @@ fn scratch_dir(name: &str) -> std::path::PathBuf {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn tiny_png() -> Vec<u8> {
+pub(crate) fn tiny_png() -> Vec<u8> {
     wordcraft_geom::picture::encode_format(
         &image::DynamicImage::from(image::RgbaImage::from_pixel(2, 2, image::Rgba([200, 30, 30, 255])).clone()),
         image::ImageFormat::Png,
