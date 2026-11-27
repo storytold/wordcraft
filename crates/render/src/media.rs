@@ -4,8 +4,8 @@ use super::{Affine, Arc, Document, FontDb, HashMap, Item, Mutex, Page, Picture, 
 use craft_metafile::{ClipPath, Tile};
 use std::collections::HashSet;
 
-/// Upper bound on the bytes the two decoded-media caches keep together (about 256 MB), half each;
-/// past its half a cache starts over.
+/// Upper bound on bytes per decoded-media cache (pictures, vectors and effect
+/// masks); past this budget a cache starts over.
 pub(crate) const CACHE_BYTES: usize = 256 * 1024 * 1024 / 2;
 
 /// Upper bound on cached entries per cache.
@@ -595,6 +595,29 @@ pub(crate) fn pixmap_for(doc: &Document, key: &str, fx: wordcraft_doc::picfx::Pi
     pm
 }
 
+type EffectPixmaps = Vec<(wordcraft_geom::Rect, Arc<Pixmap>)>;
+
+pub(crate) fn effect_pixmaps_for(doc: &Document, media: &str, w: f32, h: f32, crop: [f32; 4], fx: wordcraft_doc::picfx::PicFx) -> EffectPixmaps {
+    let effects = fx.shape_effects();
+    if effects.shadow.is_none() && effects.glow.is_none() {
+        return Vec::new();
+    }
+    let Some(bytes) = doc.media.get(media) else { return Vec::new() };
+    static CACHE: std::sync::OnceLock<Mutex<MediaCache<EffectPixmaps>>> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(MediaCache { map: HashMap::new(), bytes: 0 }));
+    let key = wordcraft_layout::display::picture_effect_key(media, w, h, crop, fx);
+    if let Some(value) = lock(cache).get(&key, bytes) {
+        return value;
+    }
+    let value: EffectPixmaps = wordcraft_layout::display::picture_effects(bytes, w, h, crop, fx)
+        .into_iter()
+        .filter_map(|e| premul_pixmap(e.width, e.height, &e.rgba).map(|pm| (e.rect, Arc::new(pm))))
+        .collect();
+    let size = value.iter().map(|(_, p)| usize::from(p.width()) * usize::from(p.height()) * 4).sum();
+    lock(cache).insert(&key, bytes, value.clone(), size);
+    value
+}
+
 /// A decoded picture at a size the media cache keeps. One too large for the whole cache is
 /// box-averaged down to half of it, so it is decoded once instead of on every render (#3665); pages
 /// draw it scaled to its frame either way.
@@ -641,4 +664,51 @@ pub(crate) fn shrink(pm: &Pixmap, max_pixels: u64) -> Option<Pixmap> {
         }
     }
     Some(Pixmap::from_parts(out, nw as u16, nh as u16))
+}
+
+/// Rasterise the vector alternative at the current display resolution. The source
+/// allocation and target dimensions are both part of the bounded cache identity.
+pub(crate) fn svg_pixmap_for(doc: &Document, media: &str, width: u32, height: u32) -> Option<Arc<Pixmap>> {
+    use craft_svg::tree::{self, usvg};
+    let key = doc.svg_pictures.get(media)?;
+    let bytes = doc.media.get(key)?;
+    let width = width.clamp(1, super::MAX_SIDE);
+    let height = height.clamp(1, super::MAX_SIDE);
+    let cache_key = format!("{key}:{width}:{height}:{}", FontDb::global().generation());
+    static C: std::sync::OnceLock<Mutex<MediaCache<Option<Arc<Pixmap>>>>> = std::sync::OnceLock::new();
+    let cache = C.get_or_init(|| Mutex::new(MediaCache { map: HashMap::new(), bytes: 0 }));
+    if let Some(value) = lock(cache).get(&cache_key, bytes) {
+        return value;
+    }
+    let value = (|| {
+        let limits = tree::Limits { depth: 24, tree_depth: 24, ..Default::default() };
+        let mut options =
+            usvg::Options { font_family: "Source Sans 3".into(), image_href_resolver: tree::image_resolver(limits), ..Default::default() };
+        for face in FontDb::global().loaded_faces() {
+            options.fontdb_mut().load_font_data(face.data().to_vec());
+        }
+        options.fontdb_mut().set_serif_family("Source Serif 4");
+        options.fontdb_mut().set_sans_serif_family("Source Sans 3");
+        options.fontdb_mut().set_monospace_family("JetBrains Mono");
+        let tree = match tree::parse(bytes, &limits, &options) {
+            Ok(tree) => tree,
+            Err(error) => {
+                log::warn!("SVG `{key}` uses its raster fallback: {error}");
+                return None;
+            }
+        };
+        let size = tree.size();
+        let transform = usvg::Transform::from_scale(width as f32 / size.width(), height as f32 / size.height());
+        let pixmap = match tree::draw::render(&tree, transform, width, height, u64::from(width) * u64::from(height) * 4, CACHE_BYTES as u64) {
+            Ok(pixmap) => pixmap,
+            Err(error) => {
+                log::warn!("SVG `{key}` uses its raster fallback: {}", error.message);
+                return None;
+            }
+        };
+        let pixels = pixmap.data().as_chunks::<4>().0.iter().map(|p| vello_cpu::color::PremulRgba8 { r: p[0], g: p[1], b: p[2], a: p[3] }).collect();
+        Some(Arc::new(Pixmap::from_parts(pixels, width as u16, height as u16)))
+    })();
+    lock(cache).insert(&cache_key, bytes, value.clone(), value.as_ref().map_or(0, |_| width as usize * height as usize * 4));
+    value
 }

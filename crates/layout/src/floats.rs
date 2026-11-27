@@ -53,7 +53,7 @@ pub(crate) fn left_out_objects(
 
 /// A floating (not inline) picture, chart or shape: its size and placement.
 pub(crate) fn floating(o: &InlineObject) -> Option<(f32, f32, &Float)> {
-    o.frame().filter(|(_, _, float)| float.wrap != Wrap::Inline)
+    crate::drawing::frame(o).filter(|(_, _, float)| float.wrap != Wrap::Inline)
 }
 
 /// Where a floating object goes, in the coordinates of the box `frame` places on the page.
@@ -738,7 +738,7 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
                 continue;
             }
             let Some(obj) = p.objects.get(oi) else { continue };
-            let Some((w, h, float)) = obj.frame() else { continue };
+            let Some((w, h, float)) = crate::drawing::frame(obj) else { continue };
             let floating = float.wrap != Wrap::Inline;
             let is_late = floating && late.is_some_and(|l| l.placed.contains_key(&oi));
             let late_here = late.and_then(|l| l.here(oi)).filter(|_| floating);
@@ -774,7 +774,12 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
             let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
             // Floating ones are drawn here; inline ones with their line.
             if floating {
-                layer.extend(float_items(obj, rect, (Spin::default(), Point::default()), story, path, c.start));
+                let picture = crate::drawing::picture_rect(obj, rect);
+                // Preserve the outer frame's rotation centre even when its
+                // fitted picture is smaller and aligned at the top left.
+                let centre = Point::new(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+                let picture = carried(picture, float.spin(), centre);
+                layer.extend(float_items(obj, picture, (Spin::default(), Point::default()), story, path, c.start));
             }
             let text_box = match obj {
                 InlineObject::Shape { story: Some(id), .. } if ctx.doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox) => {

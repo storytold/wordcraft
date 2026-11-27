@@ -31,7 +31,10 @@ pub(crate) struct Exporter<'a> {
     /// Embedded pictures by media key and the brightness and contrast baked into them, so one
     /// picture with the same corrections is embedded once however often it's drawn.
     pub(crate) images: HashMap<(String, i32, i32), Option<Image>>,
+    pub(crate) effect_images: HashMap<String, Vec<(Rect, Image)>>,
+    pub(crate) effect_image_bytes: usize,
     /// Parsed metafiles by media key (`None`: not readable).
+    pub(crate) svgs: HashMap<String, Option<Arc<craft_pdf::write::svg::Document>>>,
     pub(crate) vectors: HashMap<String, Option<Arc<Vector>>>,
     pub(crate) tags: Vec<TagEntry>,
     pub(crate) tag_index: HashMap<(StoryRef, DocPath), usize>,

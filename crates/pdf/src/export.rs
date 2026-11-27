@@ -101,6 +101,9 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
         outlined,
         cmaps: HashMap::new(),
         images: HashMap::new(),
+        effect_images: HashMap::new(),
+        effect_image_bytes: 0,
+        svgs: HashMap::new(),
         vectors: HashMap::new(),
         tags: Vec::new(),
         tag_index: HashMap::new(),
@@ -111,7 +114,11 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
         pdf.set_outline(o);
     }
     for sheet in sheets {
-        let size = Size::from_wh(clamp_side(sheet.width), clamp_side(sheet.height)).ok_or(PdfError::NoPages)?;
+        // The physical sheet is expressed on the same 600-dpi device grid as
+        // printed glyph ink. Keep slot geometry at its nominal size: rounding
+        // the media box must not rescale text, links or layout advances.
+        let sheet_side = |side| (clamp_side(side) / 0.12).round() * 0.12;
+        let size = Size::from_wh(sheet_side(sheet.width), sheet_side(sheet.height)).ok_or(PdfError::NoPages)?;
         let mut kp = pdf.start_page_with(PageSettings::new(size));
         let mut annotations = Vec::new();
         let mut surface = kp.surface();

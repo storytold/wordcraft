@@ -373,7 +373,7 @@ impl<'a> Shaped<'a> {
     fn drawing(&mut self, cx: &Cx, (k, o): (usize, &InlineObject), slot: Slot, raise: f32) {
         let env = cx.env;
         // A hidden one takes no room, and with no height its line doesn't draw it.
-        if let Some((w, saved_h, float)) = o.frame()
+        if let Some((w, saved_h, float)) = crate::drawing::frame(o)
             && float.wrap == wordcraft_doc::para::Wrap::Inline
             && !float.hidden
         {
