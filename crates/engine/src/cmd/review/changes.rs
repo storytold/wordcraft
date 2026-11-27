@@ -587,7 +587,12 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
         resolve_compare_hf_part(&mut s.doc, part_id, accept);
     }
     if (s.doc.compare_hf.is_some() || s.doc.has_live_compare_title_page()) && !doc_has_revisions(&s.doc) {
-        s.doc.clear_compare_hf();
+        if accept {
+            s.doc.clear_compare_hf();
+        } else {
+            s.doc.prepare_compare_hf_for_reject();
+            s.doc.restore_compare_hf();
+        }
     }
     s.sel = Selection::caret(a);
     s.clamp_selection();
