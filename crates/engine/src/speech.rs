@@ -10,12 +10,15 @@
 //! letters (Cyrillic, Greek, Arabic, Hebrew, CJK, Thai…), so a Russian sentence gets a Russian voice
 //! where one is installed instead of being spelled out letter by letter. The system's own voice
 //! stays whenever it already speaks the language (English text on an English system keeps the
-//! voice the user chose), and without a voice for the language the default voice speaks.
+//! voice the user chose), and without a voice for the language the default voice speaks. Speech
+//! Dispatcher is the exception: it can't be asked for its default language, so it is told the
+//! language of every sentence.
 //!
-//! The speech itself runs on a worker thread (desktop only): it starts `say` (macOS), `espeak`
-//! / `spd-say` (Linux, BSD) or the Windows speech synthesizer (PowerShell) for the current
-//! sentence, and moves on when it finishes. Commands only change the shared state and wake the
-//! worker, which stops the running sentence when the state changed under it.
+//! The speech itself runs on a worker thread (desktop only): it starts `say` (macOS), `espeak-ng`
+//! / `espeak` (Linux, BSD) or the Windows speech synthesizer (PowerShell) for the current sentence,
+//! or talks to Speech Dispatcher over its socket when neither espeak is installed, and moves on when
+//! the sentence ends. Commands only change the shared state and wake the worker, which stops the
+//! running sentence when the state changed under it.
 
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
@@ -80,12 +83,12 @@ impl Utterance {
 pub fn sentences(doc: &Document, from: &Pos, to: Option<&Pos>, skip_citations: bool) -> Vec<Utterance> {
     let story = from.story;
     // Spans to leave out: whole range fields, both markers included.
-    let skipped: Vec<(Pos, Pos)> = if skip_citations {
+    let skipped = Spans::new(if skip_citations {
         doc.field_ranges(story).into_iter().filter(|r| is_citation_code(&r.instr)).map(|r| (r.start, r.end)).collect()
     } else {
         Vec::new()
-    };
-    let in_skipped = |p: &Pos| skipped.iter().any(|(a, b)| a <= p && p <= b);
+    });
+    let in_skipped = |p: &Pos| skipped.contains(p);
     let mut out = Vec::new();
     for path in doc.para_paths(story) {
         if path < from.path {
@@ -154,6 +157,36 @@ pub fn sentences(doc: &Document, from: &Pos, to: Option<&Pos>, skip_citations: b
         }
     }
     out
+}
+
+/// Spans of the document (both ends included), sorted and merged so a position is looked up by
+/// binary search: checking every character against every citation was quadratic in a document
+/// with many of them.
+struct Spans(Vec<(Pos, Pos)>);
+
+impl Spans {
+    fn new(mut spans: Vec<(Pos, Pos)>) -> Self {
+        spans.retain(|(a, b)| a <= b);
+        spans.sort();
+        let mut merged: Vec<(Pos, Pos)> = Vec::with_capacity(spans.len());
+        for (a, b) in spans {
+            match merged.last_mut() {
+                Some(last) if a <= last.1 => {
+                    if b > last.1 {
+                        last.1 = b;
+                    }
+                }
+                _ => merged.push((a, b)),
+            }
+        }
+        Spans(merged)
+    }
+
+    /// Is `p` inside one of the spans?
+    fn contains(&self, p: &Pos) -> bool {
+        let after = self.0.partition_point(|(a, _)| a <= p);
+        after.checked_sub(1).and_then(|i| self.0.get(i)).is_some_and(|(_, b)| p <= b)
+    }
 }
 
 /// The language of `text` from its script, as a BCP 47 primary tag: Cyrillic is Russian (Ukrainian
@@ -372,6 +405,90 @@ fn mac_default_voice_language() -> &'static str {
     })
 }
 
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+mod ssip;
+
+/// What Read Aloud says when the system has none of the speech programs it knows.
+#[cfg(not(target_arch = "wasm32"))]
+const MISSING_PROGRAM: &str = if cfg!(all(unix, not(target_os = "macos"))) {
+    "Read Aloud needs a speech program: install espeak-ng or Speech Dispatcher from your distribution's packages"
+} else {
+    "Read Aloud couldn't find the system's speech program"
+};
+
+/// Read Aloud's speed (1 = normal) as Speech Dispatcher's rate, -100 to 100 with 0 the voice's
+/// normal speed: the slowest speed is -50 and the fastest 100.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn spd_rate(rate: f32) -> i32 {
+    let rate = if rate.is_finite() { rate.clamp(MIN_RATE, MAX_RATE) } else { 1.0 };
+    let scaled = if rate >= 1.0 { (rate - 1.0) / (MAX_RATE - 1.0) * 100.0 } else { (rate - 1.0) * 100.0 };
+    scaled.round().clamp(-100.0, 100.0) as i32
+}
+
+/// Say one sentence through Speech Dispatcher ([`ssip`]), in the sentence's language whenever it
+/// has one, region included (its voices are per region: `en-GB`, `pt-BR`). Its default language is
+/// its own setting (`en-US` unless configured), which SSIP can't ask for, so English is named too.
+/// `None` when Speech Dispatcher isn't installed.
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+fn speak_dispatcher(text: &str, lang: Option<&str>, rate: f32, changed: &dyn Fn() -> bool) -> Option<Spoken> {
+    let stream = match ssip::connect(changed) {
+        ssip::Connection::Open(s) => s,
+        ssip::Connection::Missing => return None,
+        ssip::Connection::Interrupted => return Some(Spoken::Interrupted),
+        ssip::Connection::Unreachable(why) => return Some(Spoken::Failed(format!("Read Aloud couldn't reach Speech Dispatcher: {why}"))),
+    };
+    let lang = dispatcher_language(lang);
+    let req = ssip::Request { text, rate: spd_rate(rate), lang: lang.as_deref() };
+    Some(dispatcher_spoken(ssip::converse(&stream, &req, changed)))
+}
+
+/// How a sentence Speech Dispatcher handled ended, for the worker.
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+fn dispatcher_spoken(outcome: std::io::Result<ssip::Outcome>) -> Spoken {
+    match outcome {
+        Ok(ssip::Outcome::Done) => Spoken::Done,
+        Ok(ssip::Outcome::Interrupted) => Spoken::Interrupted,
+        Ok(ssip::Outcome::Halted) => Spoken::Halted(HALTED_BY_OTHER.into()),
+        Ok(ssip::Outcome::NotStarted) => Spoken::Halted(NOT_STARTED.into()),
+        Err(e) => Spoken::Failed(format!("Read Aloud couldn't use Speech Dispatcher: {e}")),
+    }
+}
+
+/// Why reading paused when another program cancelled or paused the sentence.
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+const HALTED_BY_OTHER: &str =
+    "Speech Dispatcher kept stopping the sentence for another program (a screen reader, or a stop for every program): press Play to go on";
+
+/// Why reading paused when Speech Dispatcher never began the sentence.
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+const NOT_STARTED: &str =
+    "Speech Dispatcher didn't start the sentence (other speech may be queued before it, or its speech module may be stuck): press Play to try again";
+
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+thread_local! {
+    /// Neither espeak command was found during this reading (the worker thread lives as long as
+    /// one reading): the next sentences go straight to Speech Dispatcher.
+    static NO_ESPEAK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The language tag Speech Dispatcher is given for a sentence in `lang`: its language and region,
+/// as SSIP's `SET LANGUAGE` takes them (`sr-Latn-RS` gives `sr-RS`, `zh-Hant-TW` gives `zh-TW`),
+/// when it names a language (Word's `x-none` doesn't).
+#[cfg(any(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")), test))]
+fn dispatcher_language(lang: Option<&str>) -> Option<String> {
+    let tag = lang.and_then(plain_tag)?;
+    let primary = primary_tag(tag)?;
+    let region = tag
+        .split('-')
+        .skip(1)
+        .take(2)
+        .find(|t| (t.len() == 2 && t.chars().all(|c| c.is_ascii_alphabetic())) || (t.len() == 3 && t.chars().all(|c| c.is_ascii_digit())));
+    Some(match region {
+        Some(r) => format!("{primary}-{}", r.to_ascii_uppercase()),
+        None => primary,
+    })
+}
+
 /// Should `speak` say the sentence again with the default voice? When it gave the program a voice
 /// and the program then exited with a failure: espeak-ng does that, silently, for a voice it
 /// doesn't know, and a missing voice must never mean silence. `exited_ok` is `None` when the
@@ -541,6 +658,10 @@ struct Shared {
     /// A worker thread is running (cleared under the lock as it exits).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     running: bool,
+    /// Bumped when a reading starts: a worker thread can outlive a reading (a pause, then a new
+    /// Read Aloud), and what it learnt about the system's speech programs is per reading.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    readings: u64,
 }
 
 /// The Read Aloud player.
@@ -561,7 +682,16 @@ impl Default for ReadAloud {
         let off = cfg!(test) || std::env::var("WORDCRAFT_SPEECH").is_ok_and(|v| v == "off");
         ReadAloud {
             shared: Arc::new((
-                Mutex::new(Shared { queue: Vec::new(), index: 0, state: State::Stopped, rate: 1.0, generation: 0, error: None, running: false }),
+                Mutex::new(Shared {
+                    queue: Vec::new(),
+                    index: 0,
+                    state: State::Stopped,
+                    rate: 1.0,
+                    generation: 0,
+                    error: None,
+                    running: false,
+                    readings: 0,
+                }),
                 Condvar::new(),
             )),
             backend: if off { Backend::Hold } else { Backend::System },
@@ -597,6 +727,7 @@ impl ReadAloud {
             s.queue = queue;
             s.index = 0;
             s.error = None;
+            s.readings = s.readings.wrapping_add(1);
         });
     }
 
@@ -610,6 +741,7 @@ impl ReadAloud {
                     if s.index >= s.queue.len() {
                         s.index = 0;
                     }
+                    s.error = None;
                     State::Playing
                 }
             };
@@ -723,14 +855,18 @@ impl Drop for ReadAloud {
 enum Spoken {
     Done,
     Interrupted,
+    /// Another program stopped the sentence: reading pauses on it, saying why.
+    #[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
+    Halted(String),
     Failed(String),
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
     let (m, cv) = shared;
+    let mut reading = None;
     loop {
-        let (text, lang, generation, rate) = {
+        let (text, lang, generation, rate, readings) = {
             let mut s = lock(m);
             while s.state == State::Paused {
                 s = cv.wait(s).unwrap_or_else(PoisonError::into_inner);
@@ -740,7 +876,7 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
                 return;
             }
             match s.queue.get(s.index) {
-                Some(u) => (u.text.clone(), u.lang.clone(), s.generation, s.rate),
+                Some(u) => (u.text.clone(), u.lang.clone(), s.generation, s.rate, s.readings),
                 None => {
                     s.state = State::Stopped;
                     s.running = false;
@@ -748,6 +884,12 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
                 }
             }
         };
+        // A new reading asks the system afresh which speech programs it has.
+        if reading != Some(readings) {
+            reading = Some(readings);
+            #[cfg(all(unix, not(target_os = "macos")))]
+            NO_ESPEAK.set(false);
+        }
         let changed = || lock(m).generation != generation;
         let outcome = match backend {
             Backend::System => speak(&text, lang.as_deref(), rate, &changed),
@@ -774,6 +916,10 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
                 }
             }
             Spoken::Interrupted => {}
+            Spoken::Halted(why) => {
+                s.state = State::Paused;
+                s.error = Some(why);
+            }
             Spoken::Failed(e) => {
                 s.state = State::Stopped;
                 s.error = Some(e);
@@ -876,7 +1022,8 @@ fn speak_with(text: &str, lang: Option<&str>, rate: f32, changed: &dyn Fn() -> b
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        for prog in ["espeak-ng", "espeak"] {
+        let programs: &[&str] = if NO_ESPEAK.get() { &[] } else { &["espeak-ng", "espeak"] };
+        for prog in programs {
             let args = espeak_args(&wpm, lang);
             let voiced = args.iter().any(|a| a == "-v");
             let mut c = Command::new(prog);
@@ -886,6 +1033,7 @@ fn speak_with(text: &str, lang: Option<&str>, rate: f32, changed: &dyn Fn() -> b
     }
     let _ = (&wpm, lang);
     let mut child = None;
+    let mut not_found = true;
     let mut last_err = String::from("no speech program on this system");
     for (mut c, voiced) in tries {
         match c.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
@@ -893,11 +1041,23 @@ fn speak_with(text: &str, lang: Option<&str>, rate: f32, changed: &dyn Fn() -> b
                 child = Some((ch, voiced));
                 break;
             }
-            Err(e) => last_err = e.to_string(),
+            Err(e) => {
+                not_found &= e.kind() == std::io::ErrorKind::NotFound;
+                last_err = e.to_string();
+            }
         }
     }
     let Some((mut child, voiced)) = child else {
-        return (Spoken::Failed(format!("Read Aloud couldn't start the speech program: {last_err}")), false, None);
+        // Speech Dispatcher, which many desktops install without the espeak command.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if not_found {
+            NO_ESPEAK.set(true);
+            if let Some(spoken) = speak_dispatcher(text, lang, rate, changed) {
+                return (spoken, false, None);
+            }
+        }
+        let message = if not_found { MISSING_PROGRAM.to_string() } else { format!("Read Aloud couldn't start the speech program: {last_err}") };
+        return (Spoken::Failed(message), false, None);
     };
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(text.as_bytes());
@@ -919,371 +1079,4 @@ fn speak_with(text: &str, lang: Option<&str>, rate: f32, changed: &dyn Fn() -> b
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn texts(v: &[Utterance]) -> Vec<&str> {
-        v.iter().map(|u| u.text.as_str()).collect()
-    }
-
-    #[test]
-    fn powershell_is_launched_from_the_system_folder() {
-        let tail = std::path::Path::new("System32").join("WindowsPowerShell").join("v1.0").join("powershell.exe");
-        let p = windows_powershell(Some("D:\\Win".into()));
-        assert!(p.starts_with("D:\\Win") && p.ends_with(&tail), "{}", p.display());
-        // No SystemRoot, or an empty one: the default Windows folder.
-        for root in [None, Some("".into())] {
-            let p = windows_powershell(root);
-            assert!(p.starts_with("C:\\Windows") && p.ends_with(&tail), "{}", p.display());
-        }
-    }
-
-    #[test]
-    fn powershell_starts_without_a_console_window() {
-        // The flags `speak` passes to `creation_flags` (std can't read them back from the
-        // `Command`): Win32's CREATE_NO_WINDOW (0x0800_0000), or every sentence flashes a
-        // console (#1122).
-        let w = windows_speech(Some("D:\\Win".into()), 1.0, None);
-        assert_eq!(w.creation_flags, 0x0800_0000);
-        assert_eq!(w.program, windows_powershell(Some("D:\\Win".into())));
-        assert_eq!(w.args[..3], ["-NoProfile", "-NonInteractive", "-Command"]);
-        assert!(w.args[3].contains("$s.Rate = 0;"), "{}", w.args[3]);
-        assert!(windows_speech(None, 3.0, None).args[3].contains("$s.Rate = 10;"));
-    }
-
-    #[test]
-    fn splits_sentences_but_not_abbreviations() {
-        let t = "Smith et al. found 3.5 times more (see Fig. 2). J. Smith agreed! Did they? Yes… Pick one, e.g. this one.";
-        let spans = split_sentences(t);
-        let got: Vec<String> = spans.iter().map(|(a, b)| t.chars().skip(*a).take(b - a).collect()).collect();
-        assert_eq!(got, ["Smith et al. found 3.5 times more (see Fig. 2).", "J. Smith agreed!", "Did they?", "Yes…", "Pick one, e.g. this one."]);
-    }
-
-    #[test]
-    fn long_sentences_are_split() {
-        let t = "word ".repeat(400);
-        let spans = split_sentences(&t);
-        assert!(spans.len() >= 3);
-        assert!(spans.iter().all(|(a, b)| b - a <= MAX_SENTENCE + 5));
-    }
-
-    /// A word with no space to split at, or a run of punctuation, is still cut into utterances of
-    /// at most `MAX_UTTERANCE` characters, covering all of it (#3680).
-    #[test]
-    fn sentences_without_spaces_are_split() {
-        for t in ["x".repeat(10_000), "!".repeat(10_000), format!("Go {} now.", "a.".repeat(5_000))] {
-            let spans = split_sentences(&t);
-            assert!(spans.len() >= 8, "{} spans", spans.len());
-            assert!(spans.iter().all(|(a, b)| a < b && b - a <= MAX_UTTERANCE));
-            assert_eq!(spans.first().map(|s| s.0), Some(0));
-            assert_eq!(spans.last().map(|s| s.1), Some(t.chars().count()));
-            assert!(spans.windows(2).all(|w| w[0].1 <= w[1].0));
-        }
-    }
-
-    #[test]
-    fn tidy_removes_citation_leftovers() {
-        assert_eq!(tidy("as shown  ( ) ."), "as shown.");
-        assert_eq!(tidy("as shown [] , and"), "as shown, and");
-        assert_eq!(tidy(" a ( ( [ ] ) ) b ( x ) [ ) ] ; "), "a b ( x ) [ ) ];");
-    }
-
-    /// The tidy that ran replacements until nothing changed, kept to check the one-pass tidy gives
-    /// the same text.
-    fn tidy_by_replacing(s: &str) -> String {
-        let mut t: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
-        loop {
-            let before = t.len();
-            for (from, to) in [("()", ""), ("[]", ""), ("( )", ""), ("[ ]", ""), (" .", "."), (" ,", ","), (" ;", ";"), (" :", ":"), ("  ", " ")] {
-                t = t.replace(from, to);
-            }
-            if t.len() == before {
-                break;
-            }
-        }
-        t.trim().to_string()
-    }
-
-    #[test]
-    fn tidy_matches_replacing_until_nothing_changes() {
-        let alphabet = ['(', ')', '[', ']', ' ', ' ', '\t', '\u{a0}', '.', ',', ';', ':', 'a', 'é'];
-        let mut seed: u64 = 0x3680;
-        for _ in 0..20_000 {
-            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
-            let len = (seed >> 59) as usize + 1;
-            let s: String = (0..len)
-                .map(|i| {
-                    let r = seed.rotate_left(5 * i as u32 + 1) ^ (i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
-                    alphabet[(r % alphabet.len() as u64) as usize]
-                })
-                .collect();
-            assert_eq!(tidy(&s), tidy_by_replacing(&s), "{s:?}");
-        }
-    }
-
-    /// Nested empty brackets are removed in one pass: 40,000 pairs took seconds when each pass
-    /// removed one level (#3680).
-    #[test]
-    fn tidy_is_linear_on_nested_brackets() {
-        let n = 40_000;
-        let started = std::time::Instant::now();
-        assert_eq!(tidy(&format!("a {}{} b", "( [".repeat(n), "] )".repeat(n))), "a b");
-        assert_eq!(tidy(&format!("{}x{}", "(".repeat(n), ")".repeat(n))).len(), 2 * n + 1);
-        // Milliseconds here; `tidy_by_replacing` (the old tidy) takes about 5 minutes on this input.
-        assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
-    }
-
-    #[test]
-    fn citation_codes() {
-        assert!(is_citation_code(" ADDIN ZOTERO_ITEM CSL_CITATION {}"));
-        assert!(is_citation_code("ADDIN ZOTERO_BIBL {\"uncited\":[]} CSL_BIBLIOGRAPHY"));
-        assert!(is_citation_code("ADDIN EN.CITE <EndNote>"));
-        assert!(is_citation_code("ADDIN CSL_CITATION {}"));
-        assert!(is_citation_code("CITATION Smi20 \\l 1033"));
-        assert!(is_citation_code("BIBLIOGRAPHY"));
-        assert!(!is_citation_code("ADDIN ZOTERO_PREF_1"));
-        assert!(!is_citation_code("PAGE"));
-        assert!(!is_citation_code(""));
-        assert!(!is_citation_code("ADD"));
-    }
-
-    #[test]
-    fn plain_document_sentences() {
-        let doc = Document::from_text("First one. Second one.\nThird paragraph");
-        let s = sentences(&doc, &Pos::body(0, 0), None, true);
-        assert_eq!(texts(&s), ["First one.", "Second one.", "Third paragraph"]);
-        assert_eq!(s[1].start, Pos::body(0, 11));
-        assert_eq!(s[1].end, Pos::body(0, 22));
-        // From the caret, and only up to the end of a selection.
-        let s = sentences(&doc, &Pos::body(0, 11), Some(&Pos::body(1, 5)), true);
-        assert_eq!(texts(&s), ["Second one.", "Third"]);
-    }
-
-    #[test]
-    fn player_moves_through_sentences() {
-        let doc = Document::from_text("One. Two. Three.");
-        let mut r = ReadAloud::default();
-        r.backend = Backend::Hold;
-        r.start(sentences(&doc, &Pos::body(0, 0), None, true));
-        assert_eq!(r.state(), State::Playing);
-        assert_eq!(r.current().map(|u| u.text), Some("One.".into()));
-        r.skip(1);
-        r.skip(5);
-        assert_eq!(r.progress(), (2, 3));
-        r.skip(-10);
-        assert_eq!(r.progress(), (0, 3));
-        r.play_pause();
-        assert_eq!(r.state(), State::Paused);
-        r.set_rate(99.0);
-        assert_eq!(r.rate(), MAX_RATE);
-        r.set_rate(f32::NAN);
-        assert_eq!(r.rate(), 1.0);
-        r.play_pause();
-        assert_eq!(r.state(), State::Playing);
-        r.stop();
-        assert_eq!(r.state(), State::Stopped);
-        assert!(!r.open);
-        assert!(r.current().is_none());
-    }
-
-    #[test]
-    fn player_finishes_on_its_own() {
-        let doc = Document::from_text("One. Two. Three.");
-        let mut r = ReadAloud::default();
-        r.backend = Backend::Instant;
-        r.start(sentences(&doc, &Pos::body(0, 0), None, true));
-        for _ in 0..200 {
-            if r.state() == State::Stopped {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert_eq!(r.state(), State::Stopped);
-        assert_eq!(r.progress(), (3, 3));
-        assert!(r.open, "the player stays open after the last sentence");
-        // Play again starts from the top.
-        r.backend = Backend::Hold;
-        r.play_pause();
-        assert_eq!(r.progress().0, 0);
-        assert_eq!(r.state(), State::Playing);
-    }
-
-    #[test]
-    fn empty_queue_does_not_play() {
-        let mut r = ReadAloud::default();
-        r.start(Vec::new());
-        assert_eq!(r.state(), State::Stopped);
-        r.skip(1);
-        r.skip(-1);
-        r.play_pause();
-        assert_eq!(r.state(), State::Stopped);
-    }
-    #[test]
-    fn languages_are_detected_from_the_script() {
-        for (text, tag) in [
-            ("Привет как твои дела?", "ru"),
-            ("Привіт, як справи? Їжак і ґанок", "uk"),
-            ("Γειά σου κόσμε", "el"),
-            ("مرحبا بالعالم", "ar"),
-            ("שלום עולם", "he"),
-            ("こんにちは、世界", "ja"),
-            ("你好，世界", "zh"),
-            ("안녕하세요 세계", "ko"),
-            ("สวัสดีชาวโลก", "th"),
-            ("Hello Привет мир как дела", "ru"),
-            ("Hello world and Привет", "ru"),
-        ] {
-            assert_eq!(detect_language(text), Some(tag), "{text}");
-        }
-        // Latin text, nothing to read, or only punctuation: no guess.
-        for text in ["Hello, world", "", "  ", "?!…", "123"] {
-            assert_eq!(detect_language(text), None, "{text:?}");
-        }
-    }
-
-    #[test]
-    fn an_explicit_language_wins_over_detection() {
-        // The document says so (a Russian run, even of Latin letters).
-        assert_eq!(speech_language("Privet", Some("ru-RU"), None).as_deref(), Some("ru-RU"));
-        assert_eq!(speech_language("Привет", Some("uk-UA"), None).as_deref(), Some("uk-UA"));
-        assert_eq!(speech_language("Hallo Welt", Some("de-DE"), None).as_deref(), Some("de-DE"));
-        // The default English tag on Cyrillic text (Word writes it on every run): the script wins.
-        assert_eq!(speech_language("Привет", Some("en-US"), None).as_deref(), Some("ru"));
-        // Nothing to go on: the default voice.
-        assert_eq!(speech_language("Hello", None, None), None);
-        assert_eq!(speech_language("Привет", None, None).as_deref(), Some("ru"));
-        // A hostile tag is never passed on.
-        assert_eq!(speech_language("Hello", Some("en'; calc; '"), None), None);
-    }
-
-    #[test]
-    fn sentences_carry_the_run_language() {
-        let mut doc = Document::from_text("Привет как твои дела?\nPrivet.");
-        let s = sentences(&doc, &Pos::body(0, 0), None, true);
-        assert_eq!(s.iter().map(|u| u.lang.as_deref()).collect::<Vec<_>>(), [Some("ru"), Some("en-US")]);
-        if let wordcraft_doc::Block::Para(p) = Arc::make_mut(&mut doc.body[1]) {
-            for r in &mut p.runs {
-                r.props.lang = Some("ru-RU".into());
-            }
-        }
-        let s = sentences(&doc, &Pos::body(0, 0), None, true);
-        assert_eq!(s.iter().map(|u| u.lang.as_deref()).collect::<Vec<_>>(), [Some("ru"), Some("ru-RU")]);
-    }
-
-    #[test]
-    fn windows_script_reads_utf8_and_picks_the_voice() {
-        let w = windows_speech(None, 1.0, Some("ru"));
-        let script = &w.args[3];
-        assert!(script.contains("UTF8"), "{script}");
-        assert!(script.contains("GetInstalledVoices") && script.contains("SelectVoice"), "{script}");
-        assert!(script.contains("'ru'"), "{script}");
-        // The default voice when the language is unknown, and no voice code at all.
-        let d = windows_speech(None, 1.0, None);
-        assert!(d.args[3].contains("UTF8") && !d.args[3].contains("SelectVoice"), "{}", d.args[3]);
-        // The sentence is never in the script: it arrives on stdin.
-        assert!(!windows_speech(None, 1.0, Some("ru-RU")).args[3].contains("Привет"));
-        // A tag that isn't a plain language tag is dropped, not put in the script.
-        let h = windows_speech(None, 1.0, Some("ru'; Remove-Item x; '"));
-        assert!(!h.args[3].contains("Remove-Item"), "{}", h.args[3]);
-    }
-
-    #[test]
-    fn espeak_gets_the_language() {
-        assert_eq!(espeak_args("180", Some("ru-RU")), ["-s", "180", "-v", "ru", "--stdin"]);
-        assert_eq!(espeak_args("180", Some("uk")), ["-s", "180", "-v", "uk", "--stdin"]);
-        assert_eq!(espeak_args("180", None), ["-s", "180", "--stdin"]);
-        assert_eq!(espeak_args("180", Some("--evil")), ["-s", "180", "--stdin"]);
-    }
-
-    #[test]
-    fn english_text_keeps_the_default_voice() {
-        // Word writes `en-US` on almost every run: espeak's default voice is English already, so
-        // no `-v` (as before #1843), and Word's language-less `x-none` is no voice either.
-        assert_eq!(espeak_args("180", Some("en-US")), ["-s", "180", "--stdin"]);
-        assert_eq!(espeak_args("180", Some("en-GB")), ["-s", "180", "--stdin"]);
-        assert_eq!(espeak_args("180", Some("x-none")), ["-s", "180", "--stdin"]);
-        // Windows: the user's default voice stays when it already speaks the language, any region.
-        let script = &windows_speech(None, 1.0, Some("en-US")).args[3];
-        let guard = script.find("if ($s.Voice.Culture.TwoLetterISOLanguageName -ne 'en')");
-        let pick = script.find("GetInstalledVoices");
-        assert!(guard.is_some() && pick.is_some() && guard < pick, "{script}");
-    }
-
-    #[test]
-    fn macos_keeps_the_system_voice_for_its_language() {
-        // Current macOS lists its novelty voices first, in alphabetical order.
-        let list = "Albert              en_US    # Hello! My name is Albert.\n\
-                    Bad News            en_US    # The light you see at the end of the tunnel.\n\
-                    Bahh                en_US    # Do not pull the wool over my eyes.\n\
-                    Samantha            en_US    # Hello! My name is Samantha.\n\
-                    Milena              ru_RU    # Здравствуйте!\n";
-        // English text with an English system voice: no `-v`, so `say` keeps the user's voice.
-        assert_eq!(mac_voice("en-US", list, "en"), None);
-        assert_eq!(mac_voice("en", list, "en"), None);
-        // English text on a Russian system: an English voice, never a novelty one.
-        assert_eq!(mac_voice("en-US", list, "ru").as_deref(), Some("Samantha"));
-        assert_eq!(mac_voice("en-US", "Albert en_US # Hi\nBahh en_US # Hi\n", "ru"), None);
-        // The system voice's language: the chosen voice's, else the locale's, else English.
-        assert_eq!(mac_default_language(Some("Milena"), list, Some("en_US")), "ru");
-        assert_eq!(mac_default_language(Some("Gone"), list, Some("de_DE")), "de");
-        assert_eq!(mac_default_language(None, list, Some("ru_RU.UTF-8")), "ru");
-        assert_eq!(mac_default_language(None, list, Some("C")), "en");
-        assert_eq!(mac_default_language(None, "", None), "en");
-    }
-
-    #[test]
-    fn a_voice_the_program_lacks_falls_back_to_the_default() {
-        // espeak-ng exits with a failure, saying nothing, for a `-v` it doesn't know.
-        assert!(retry_without_voice(true, Some(false)));
-        // It spoke, it was given no voice, or it was stopped (or never exited on its own).
-        assert!(!retry_without_voice(true, Some(true)));
-        assert!(!retry_without_voice(false, Some(false)));
-        assert!(!retry_without_voice(true, None));
-    }
-
-    #[test]
-    fn right_to_left_text_uses_the_complex_script_tag() {
-        // Persian tagged `w:bidi="fa-IR"` on a `w:val="en-US"` run: Persian, not Arabic.
-        assert_eq!(speech_language("سلام دنیا", Some("en-US"), Some("fa-IR")).as_deref(), Some("fa-IR"));
-        assert_eq!(speech_language("שלום עולם", Some("en-US"), Some("he-IL")).as_deref(), Some("he-IL"));
-        // The complex-script tag is for complex-script text only.
-        assert_eq!(speech_language("Hello", Some("en-US"), Some("fa-IR")).as_deref(), Some("en-US"));
-        assert_eq!(speech_language("سلام", Some("en-US"), Some("he-IL")).as_deref(), Some("ar"));
-    }
-
-    #[test]
-    fn mixed_sentences_follow_the_other_script() {
-        // More English letters than Cyrillic ones: the English voice would spell the Russian out.
-        assert_eq!(detect_language("Я открыл Microsoft Word and PowerPoint"), Some("ru"));
-        // A single foreign word in an English sentence isn't a real share: the default voice.
-        assert_eq!(detect_language("The word дом means house"), None);
-        // Ties between scripts always go the same way, the first script in the list.
-        assert_eq!(detect_language("αβ дг"), Some("ru"));
-        assert_eq!(detect_language("дг αβ"), Some("ru"));
-    }
-
-    #[test]
-    fn han_letters_keep_a_japanese_or_korean_tag() {
-        assert_eq!(speech_language("東京都。", Some("ja-JP"), None).as_deref(), Some("ja-JP"));
-        assert_eq!(speech_language("東京都。", Some("ko-KR"), None).as_deref(), Some("ko-KR"));
-        assert_eq!(speech_language("東京都。", Some("en-US"), None).as_deref(), Some("zh"));
-    }
-
-    #[test]
-    fn macos_voice_matches_the_language() {
-        let list = "Alex                en_US    # Most people recognize me by my voice.\n\
-                    Eddy (Russian (Russia)) ru_RU    # Привет!\n\
-                    Milena              ru_RU    # Здравствуйте!\n\
-                    Samantha            en_US    # Hello!\n\
-                    Lesya               uk_UA    # Привіт!\n\
-                    Daniel              en_GB    # Hello!\n";
-        assert_eq!(mac_voice("ru", list, "en").as_deref(), Some("Eddy (Russian (Russia))"));
-        assert_eq!(mac_voice("ru-RU", list, "en").as_deref(), Some("Eddy (Russian (Russia))"));
-        assert_eq!(mac_voice("uk", list, "en").as_deref(), Some("Lesya"));
-        assert_eq!(mac_voice("en-GB", list, "ru").as_deref(), Some("Daniel"));
-        // No voice for the language, or nothing listed: the default voice.
-        assert_eq!(mac_voice("el", list, "en"), None);
-        assert_eq!(mac_voice("ru", "", "en"), None);
-        assert_eq!(mac_voice("ru", "garbage line\n\n  \n", "en"), None);
-    }
-}
+mod tests;

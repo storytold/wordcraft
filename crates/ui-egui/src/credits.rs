@@ -1,11 +1,15 @@
 //! The About window's credits: every contributor (GitHub login always; display and real names only
 //! with recorded consent) and the AI models that helped. The tables are baked into the binary by
-//! build.rs from contributors/contributors.json (craftrules standards/contributors.md); nothing is
+//! build.rs from contributors/contributors.json; nothing is
 //! read at run time.
 
-use std::cmp::Ordering;
+use std::borrow::Cow;
 
-use egui::RichText;
+use craft::ui::patterns::form_dialogs::{
+    AboutInfo, AboutLayout, AboutLink, AboutTab, Contributor as ContributorCredit, Credits, HostedAbout, ModelCredit,
+};
+
+use crate::language_packs::language_data_tab;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Contributor {
@@ -35,369 +39,182 @@ pub struct Model {
 
 include!(concat!(env!("OUT_DIR"), "/credits.rs"));
 
-/// Which name to show. Display and real names fall back to the `@username` when not given.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum NameMode {
-    #[default]
-    Username,
-    DisplayName,
-    RealName,
-}
-
-impl NameMode {
-    pub const ALL: [NameMode; 3] = [NameMode::Username, NameMode::DisplayName, NameMode::RealName];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            NameMode::Username => "Username",
-            NameMode::DisplayName => "Display name",
-            NameMode::RealName => "Real name",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SortKey {
-    Name,
-    Prs,
-    Commits,
-    LinesAdded,
-    LinesDeleted,
-    LinesDelta,
-    BinaryAdded,
-    BinaryDeleted,
-    #[default]
-    FirstCommit,
-    LastCommit,
-}
-
-impl SortKey {
-    pub const ALL: [SortKey; 10] = [
-        SortKey::Name,
-        SortKey::Prs,
-        SortKey::Commits,
-        SortKey::LinesAdded,
-        SortKey::LinesDeleted,
-        SortKey::LinesDelta,
-        SortKey::BinaryAdded,
-        SortKey::BinaryDeleted,
-        SortKey::FirstCommit,
-        SortKey::LastCommit,
-    ];
-
-    /// Menu label and table header.
-    pub fn label(self) -> (&'static str, &'static str) {
-        match self {
-            SortKey::Name => ("Name (A–Z)", "Name"),
-            SortKey::Prs => ("Merged PRs", "PRs"),
-            SortKey::Commits => ("Commits", "Commits"),
-            SortKey::LinesAdded => ("Lines added", "+LOC"),
-            SortKey::LinesDeleted => ("Lines deleted", "−LOC"),
-            SortKey::LinesDelta => ("Line delta", "ΔLOC"),
-            SortKey::BinaryAdded => ("Binary assets added", "+Bin"),
-            SortKey::BinaryDeleted => ("Binary assets removed", "−Bin"),
-            SortKey::FirstCommit => ("First commit", "First"),
-            SortKey::LastCommit => ("Last commit", "Last"),
-        }
-    }
-
-    /// Names and dates read naturally oldest/A first; counts read biggest first.
-    pub fn default_ascending(self) -> bool {
-        matches!(self, SortKey::Name | SortKey::FirstCommit | SortKey::LastCommit)
-    }
-}
-
-impl Contributor {
-    pub fn name(&self, mode: NameMode) -> String {
-        let chosen = match mode {
-            NameMode::Username => None,
-            NameMode::DisplayName => self.display_name,
-            NameMode::RealName => self.real_name,
-        };
-        chosen.map_or_else(|| format!("@{}", self.login), str::to_string)
-    }
-
-    pub fn lines_delta(&self) -> i128 {
-        i128::from(self.lines_added) - i128::from(self.lines_deleted)
-    }
-
-    /// One line with everything we know, for tooltips.
-    pub fn summary(&self) -> String {
-        format!(
-            "@{}: {} PRs, {} commits, +{} / −{} lines (Δ {}), +{} / −{} binary assets, {} – {}",
-            self.login,
-            self.prs,
-            self.commits,
-            group(self.lines_added),
-            group(self.lines_deleted),
-            signed(self.lines_delta()),
-            self.binary_added,
-            self.binary_deleted,
-            day(self.first_commit),
-            day(self.last_commit),
-        )
-    }
-}
-
-/// Alphabetical key: case-insensitive, ignoring the `@` of usernames.
-fn name_key(name: &str) -> String {
-    name.trim_start_matches('@').to_lowercase()
-}
-
-fn compare(a: &Contributor, b: &Contributor, mode: NameMode, key: SortKey) -> Ordering {
-    match key {
-        SortKey::Name => name_key(&a.name(mode)).cmp(&name_key(&b.name(mode))),
-        SortKey::Prs => a.prs.cmp(&b.prs),
-        SortKey::Commits => a.commits.cmp(&b.commits),
-        SortKey::LinesAdded => a.lines_added.cmp(&b.lines_added),
-        SortKey::LinesDeleted => a.lines_deleted.cmp(&b.lines_deleted),
-        SortKey::LinesDelta => a.lines_delta().cmp(&b.lines_delta()),
-        SortKey::BinaryAdded => a.binary_added.cmp(&b.binary_added),
-        SortKey::BinaryDeleted => a.binary_deleted.cmp(&b.binary_deleted),
-        // A PR-only contributor (no commit date) sorts after everyone with a date.
-        SortKey::FirstCommit => dated(a.first_commit).cmp(&dated(b.first_commit)),
-        SortKey::LastCommit => dated(a.last_commit).cmp(&dated(b.last_commit)),
-    }
-}
-
-fn dated(d: &str) -> (bool, &str) {
-    (d.is_empty(), d)
-}
-
-/// Contributors in display order. Ties fall back to the name (A–Z) so the order is stable.
-pub fn sorted(list: &[Contributor], mode: NameMode, key: SortKey, ascending: bool) -> Vec<&Contributor> {
-    let mut v: Vec<&Contributor> = list.iter().collect();
-    v.sort_by(|a, b| {
-        let o = compare(a, b, mode, key);
-        let o = if ascending { o } else { o.reverse() };
-        o.then_with(|| compare(a, b, mode, SortKey::Name)).then_with(|| a.login.cmp(b.login))
-    });
-    v
-}
-
-fn group(n: u64) -> String {
-    let s = n.to_string();
-    let mut out = String::with_capacity(s.len() + s.len() / 3);
-    for (i, ch) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-    out
-}
-
-fn signed(n: i128) -> String {
-    let g = group(u64::try_from(n.unsigned_abs()).unwrap_or(u64::MAX));
-    if n < 0 { format!("−{g}") } else { format!("+{g}") }
-}
-
-fn day(iso: &str) -> &str {
-    if iso.is_empty() { "—" } else { iso.get(..10).unwrap_or(iso) }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct View {
-    names: NameMode,
-    key: SortKey,
-    ascending: bool,
-    table: bool,
-}
-
-impl Default for View {
-    fn default() -> Self {
-        View { names: NameMode::Username, key: SortKey::FirstCommit, ascending: true, table: false }
-    }
-}
-
-/// About ▸ Contributors: a name toggle, a sort, and the list as a grab bag or a table.
-pub fn contributors_ui(ui: &mut egui::Ui) {
-    let id = egui::Id::unique("credits_view");
-    let mut v = ui.data_mut(|d| d.get_temp::<View>(id)).unwrap_or_default();
-    ui.horizontal_wrapped(|ui| {
-        ui.label(tl!("Show"));
-        for m in NameMode::ALL {
-            if ui.selectable_label(v.names == m, tl!(m.label())).clicked() {
-                v.names = m;
+/// The baked contributor and model tables as the About dialog's credits. A name is only present where
+/// build.rs recorded consent for it; the profile link is the contributor's GitHub page.
+pub fn credits() -> Credits {
+    let contributors: Vec<ContributorCredit> = CONTRIBUTORS
+        .iter()
+        .map(|c| {
+            let mut credit = ContributorCredit::new(c.login)
+                .profile(Cow::Owned(format!("https://github.com/{}", c.login)))
+                .counts(c.prs, c.commits)
+                .lines(c.lines_added, c.lines_deleted)
+                .binary(c.binary_added, c.binary_deleted)
+                .active(c.first_commit, c.last_commit);
+            if let Some(name) = c.display_name {
+                credit = credit.display_name(name);
             }
-        }
-        ui.separator();
-        ui.label(tl!("Sort"));
-        egui::ComboBox::from_id_salt("credits_sort").selected_text(tl!(v.key.label().0)).show_ui(ui, |ui| {
-            for k in SortKey::ALL {
-                if ui.selectable_label(v.key == k, tl!(k.label().0)).clicked() {
-                    v.key = k;
-                    v.ascending = k.default_ascending();
-                }
+            if let Some(name) = c.real_name {
+                credit = credit.real_name(name);
             }
-        });
-        if ui.button(if v.ascending { "▲" } else { "▼" }).on_hover_text(tl!("Reverse the order")).clicked() {
-            v.ascending = !v.ascending;
-        }
-        ui.separator();
-        if ui.selectable_label(!v.table, tl!("Grab bag")).clicked() {
-            v.table = false;
-        }
-        if ui.selectable_label(v.table, tl!("Table")).clicked() {
-            v.table = true;
-        }
-    });
-    let list = sorted(CONTRIBUTORS, v.names, v.key, v.ascending);
-    let summary = crate::i18n::fmt(
-        tl!("{contributors} contributors · {commits} commits"),
-        &[("contributors", &list.len().to_string()), ("commits", &group(TOTAL_COMMITS))],
-    );
-    ui.label(RichText::new(summary).small().weak());
-    ui.separator();
-    egui::ScrollArea::both().auto_shrink([false, true]).max_height(360.0).show(ui, |ui| {
-        if list.is_empty() {
-            ui.label(tl!("No contributor data was built into this copy."));
-        } else if v.table {
-            table(ui, &list, &mut v);
-        } else {
-            ui.horizontal_wrapped(|ui| {
-                for (i, c) in list.iter().enumerate() {
-                    if i > 0 {
-                        ui.label(RichText::new("·").weak());
-                    }
-                    ui.hyperlink_to(c.name(v.names), format!("https://github.com/{}", c.login)).on_hover_text(c.summary());
-                }
-            });
-        }
-    });
-    ui.data_mut(|d| d.insert_temp(id, v));
+            credit
+        })
+        .collect();
+    let models: Vec<ModelCredit> =
+        MODELS.iter().map(|m| ModelCredit::new(m.company, m.model, m.version).work(m.commits, m.lines_added, m.lines_deleted)).collect();
+    Credits::new(contributors, models, TOTAL_COMMITS)
 }
 
-fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View) {
-    egui::Grid::new("credits_table").striped(true).num_columns(SortKey::ALL.len()).show(ui, |ui| {
-        for k in SortKey::ALL {
-            let arrow = if v.key == k { if v.ascending { " ▲" } else { " ▼" } } else { "" };
-            if ui.button(RichText::new(format!("{}{arrow}", tl!(k.label().1))).strong()).on_hover_text(tl!(k.label().0)).clicked() {
-                if v.key == k {
-                    v.ascending = !v.ascending;
-                } else {
-                    v.key = k;
-                    v.ascending = k.default_ascending();
-                }
-            }
-        }
-        ui.end_row();
-        for c in list {
-            ui.hyperlink_to(c.name(v.names), format!("https://github.com/{}", c.login)).on_hover_text(c.summary());
-            ui.label(group(c.prs));
-            ui.label(group(c.commits));
-            ui.label(group(c.lines_added));
-            ui.label(group(c.lines_deleted));
-            ui.label(signed(c.lines_delta()));
-            ui.label(group(c.binary_added));
-            ui.label(group(c.binary_deleted));
-            ui.label(day(c.first_commit));
-            ui.label(day(c.last_commit));
-            ui.end_row();
-        }
-    });
+/// The About tab's contents: name, blurb, version and build, and the project links in the old About's order (site,
+/// Discord, source), one to a line. A Nightly window names its channel, its exact feed version
+/// and commit, and offers a link to report a problem.
+pub fn about_info() -> AboutInfo {
+    about_info_for(crate::os_window::identity(), option_env!("WORDCRAFT_BUILD_SHA"))
 }
 
-/// About ▸ Models: AI models credited in Co-Authored-By trailers.
-pub fn models_ui(ui: &mut egui::Ui) {
-    if MODELS.is_empty() {
-        ui.label(tl!("No model credits were built into this copy."));
-        return;
+/// The About tab's three lines for `identity`: (name, blurb, version line). A Nightly window's
+/// are English only: they are not one of the stable catalogs' strings.
+fn about_text(identity: crate::os_window::LaunchIdentity, commit: Option<&str>) -> (String, String, String) {
+    match identity {
+        crate::os_window::LaunchIdentity::NightlyV1 => {
+            let version = option_env!("WORDCRAFT_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"));
+            let commit = commit.filter(|value| !value.is_empty()).unwrap_or("unavailable");
+            (
+                crate::os_window::name_for(identity).to_string(),
+                "A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.".to_string(),
+                format!("{version}\nCommit: {commit}"),
+            )
+        }
+        crate::os_window::LaunchIdentity::Stable => {
+            let build = commit.map(|s| s.get(..8).unwrap_or(s)).unwrap_or(tl!("development build"));
+            // The dialog's own "Version {version}" words the line, so this is the number and the build only.
+            let version = crate::i18n::fmt(tl!("{version} ({build})"), &[("version", env!("CARGO_PKG_VERSION")), ("build", build)]);
+            (
+                tl!("WordCraft").to_string(),
+                tl!("A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.")
+                    .to_string(),
+                version.to_string(),
+            )
+        }
     }
-    let assisted: u64 = MODELS.iter().map(|m| m.commits).max().unwrap_or(0).max(1);
-    egui::ScrollArea::both().auto_shrink([false, true]).max_height(360.0).show(ui, |ui| {
-        egui::Grid::new("credits_models").striped(true).num_columns(6).show(ui, |ui| {
-            for h in ["Company", "Model", "Version", "Commits", "% of all commits", "Lines +/−"] {
-                ui.label(RichText::new(tl!(h)).strong());
-            }
-            ui.end_row();
-            for m in MODELS {
-                ui.label(m.company);
-                ui.label(m.model);
-                ui.label(m.version);
-                ui.label(group(m.commits));
-                ui.label(format!("{:.0}%", 100.0 * m.commits as f64 / TOTAL_COMMITS.max(assisted) as f64));
-                ui.label(format!("+{} / −{}", group(m.lines_added), group(m.lines_deleted)));
-                ui.end_row();
-            }
-        });
-    });
+}
+
+fn about_info_for(identity: crate::os_window::LaunchIdentity, commit: Option<&str>) -> AboutInfo {
+    let (name, blurb, version) = about_text(identity, commit);
+    if identity == crate::os_window::LaunchIdentity::NightlyV1 {
+        return AboutInfo::new(name, blurb, version)
+            .links([
+                AboutLink::new("getartcraft.com/apps/wordcraft".to_string(), "https://getartcraft.com/apps/wordcraft"),
+                AboutLink::new("Join us on Discord: discord.gg/artcraft".to_string(), "https://discord.gg/artcraft"),
+                AboutLink::new("Source code: github.com/storytold/wordcraft".to_string(), "https://github.com/storytold/wordcraft"),
+                // Opens only after a click; nothing is collected or sent automatically.
+                AboutLink::new("Report a problem".to_string(), "https://github.com/storytold/wordcraft/issues"),
+            ])
+            .built_with("MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.".to_string());
+    }
+    AboutInfo::new(name, blurb, version)
+        .links([
+            AboutLink::new(tl!("getartcraft.com/apps/wordcraft").to_string(), "https://getartcraft.com/apps/wordcraft"),
+            AboutLink::new(tl!("Join us on Discord: discord.gg/artcraft").to_string(), "https://discord.gg/artcraft"),
+            AboutLink::new(tl!("Source code: github.com/storytold/wordcraft").to_string(), "https://github.com/storytold/wordcraft"),
+        ])
+        .built_with(tl!("MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.").to_string())
+}
+
+/// The About dialog opened on `tab`, with the Language data tab after Models (`AboutTab::App(0)`). The name
+/// table of the dialogs opens it for `about`, `contributors`, `models` and `languageData`.
+pub(crate) fn about(tab: AboutTab) -> HostedAbout {
+    // PLAN: assumed `HostedAbout::layout(self, AboutLayout) -> Self` (look-dialogs-b framework fix)
+    HostedAbout::new(about_info(), credits()).app_tab(language_data_tab()).tab(tab).layout(AboutLayout::Listed)
+}
+
+/// A Nightly window's About names its channel, keeps the full feed version and commit, invents
+/// nothing when the commit is missing, and adds the report link the stable About does not have.
+#[cfg(test)]
+mod nightly_about_tests {
+    use crate::os_window::LaunchIdentity;
+
+    const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    #[test]
+    fn nightly_about_names_the_channel_and_keeps_the_full_version_and_commit() {
+        let (name, blurb, version) = super::about_text(LaunchIdentity::NightlyV1, Some(COMMIT));
+        assert_eq!(name, "WordCraft Nightly");
+        assert!(blurb.contains("word processor"));
+        let package = option_env!("WORDCRAFT_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"));
+        assert_eq!(version, format!("{package}\nCommit: {COMMIT}"));
+    }
+
+    #[test]
+    fn nightly_about_invents_no_provenance_when_the_commit_is_missing() {
+        for commit in [None, Some("")] {
+            let (_, _, version) = super::about_text(LaunchIdentity::NightlyV1, commit);
+            assert!(version.ends_with("\nCommit: unavailable"), "{version}");
+        }
+    }
+
+    #[test]
+    fn only_the_nightly_about_offers_the_report_link_and_the_stable_name_is_unchanged() {
+        let nightly = super::about_info_for(LaunchIdentity::NightlyV1, Some(COMMIT));
+        assert!(nightly.links.iter().any(|link| link.url == "https://github.com/storytold/wordcraft/issues"));
+        let stable = super::about_info_for(LaunchIdentity::Stable, Some(COMMIT));
+        assert!(!stable.links.iter().any(|link| link.url == "https://github.com/storytold/wordcraft/issues"));
+        let (name, _, _) = super::about_text(LaunchIdentity::Stable, Some(COMMIT));
+        assert_eq!(name, "WordCraft");
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use craft::ui::contract::Role;
+    use craft::ui::dialog::DialogHost;
+    use craft::ui::testing::Fixture;
+
     use super::*;
 
-    fn c(
-        login: &'static str,
-        display: Option<&'static str>,
-        real: Option<&'static str>,
-        added: u64,
-        deleted: u64,
-        first: &'static str,
-    ) -> Contributor {
-        Contributor {
-            login,
-            display_name: display,
-            real_name: real,
-            prs: 0,
-            commits: 1,
-            lines_added: added,
-            lines_deleted: deleted,
-            binary_added: 0,
-            binary_deleted: 0,
-            first_commit: first,
-            last_commit: first,
-        }
+    fn column_header(fixture: &Fixture, label: &str) -> egui::Rect {
+        fixture
+            .by_role(Role::COLUMN_HEADER)
+            .into_iter()
+            .find(|cell| fixture.tree().name_of(cell.node) == Some(label))
+            .unwrap_or_else(|| panic!("missing column header {label:?}"))
+            .rect
     }
 
-    fn people() -> [Contributor; 4] {
-        [
-            c("zed", None, None, 5, 50, "2026-01-02T00:00:00Z"),
-            c("Bob", Some("Ann"), None, 10, 0, "2026-01-01T00:00:00Z"),
-            c("alice", None, None, 7, 1, ""),
-            c("carol", None, Some("Dana"), 1, 0, "2026-01-03T00:00:00Z"),
-        ]
+    fn table_rect(fixture: &Fixture) -> egui::Rect {
+        fixture.by_role(Role::TABLE).first().expect("the credits table shows").rect
     }
 
-    fn logins(v: &[&Contributor]) -> Vec<&'static str> {
-        v.iter().map(|c| c.login).collect()
-    }
-
+    /// Verifies that WordCraft's `about(AboutTab::Models)` (`AboutLayout::Listed` with the baked
+    /// `MODELS` table) fits within the dialog and refits its `Company` column when narrowed.
+    /// The original drag-then-content-change refit check (#5588) belongs in `craft-libs` and is
+    /// tracked in `storytold/craft-libs#3372`.
     #[test]
-    fn names_fall_back_to_the_username() {
-        let p = c("bob", Some("Bobby"), None, 0, 0, "");
-        assert_eq!(p.name(NameMode::Username), "@bob");
-        assert_eq!(p.name(NameMode::DisplayName), "Bobby");
-        assert_eq!(p.name(NameMode::RealName), "@bob");
-    }
+    fn models_table_refits_to_narrower_window() {
+        let wide = egui::vec2(1400.0, 800.0);
+        let narrow = egui::vec2(660.0, 800.0);
 
-    #[test]
-    fn alphabetical_ignores_at_and_case() {
-        let all = people();
-        let v = sorted(&all, NameMode::Username, SortKey::Name, true);
-        assert_eq!(logins(&v), ["alice", "Bob", "carol", "zed"]);
-        let v = sorted(&all, NameMode::DisplayName, SortKey::Name, true);
-        assert_eq!(logins(&v), ["alice", "Bob", "carol", "zed"]); // "Ann" sorts with the @usernames
-        let v = sorted(&all, NameMode::RealName, SortKey::Name, false);
-        assert_eq!(logins(&v), ["zed", "carol", "Bob", "alice"]); // "Dana" between bob and zed
-    }
+        let host = Rc::new(RefCell::new(DialogHost::new()));
+        let shown_host = Rc::clone(&host);
+        let mut fixture = Fixture::new(move |ui| shown_host.borrow_mut().run(ui));
+        fixture.room(wide);
+        host.borrow_mut().open(about(AboutTab::Models));
+        fixture.settle();
 
-    #[test]
-    fn delta_and_dates() {
-        let all = people();
-        let v = sorted(&all, NameMode::Username, SortKey::LinesDelta, false);
-        assert_eq!(logins(&v), ["Bob", "alice", "carol", "zed"]);
-        let v = sorted(&all, NameMode::Username, SortKey::FirstCommit, true);
-        assert_eq!(logins(&v), ["Bob", "zed", "carol", "alice"]); // undated last
-    }
+        let wide_table = table_rect(&fixture);
+        let wide_company = column_header(&fixture, "Company");
+        let wide_last = column_header(&fixture, "Lines +/\u{2212}");
+        assert!(wide_last.right() <= wide_table.right() + 1.0, "the table opens fitted to the dialog: {wide_last:?} in {wide_table:?}");
 
-    #[test]
-    fn formatting() {
-        assert_eq!(group(1234567), "1,234,567");
-        assert_eq!(group(12), "12");
-        assert_eq!(signed(-1000), "−1,000");
-        assert_eq!(day("2026-10-07T18:45:23Z"), "2026-10-07");
-        assert_eq!(day(""), "—");
+        fixture.room(narrow).settle();
+        let slim_table = table_rect(&fixture);
+        let slim_company = column_header(&fixture, "Company");
+        let slim_last = column_header(&fixture, "Lines +/\u{2212}");
+        assert!(slim_table.width() < wide_table.width() - 1.0, "hosted About shrinks with window: {slim_table:?} vs {wide_table:?}");
+        assert!(slim_company.width() < wide_company.width() - 1.0, "hosted About refits its Company column: {slim_company:?} vs {wide_company:?}");
+        assert!(slim_last.right() <= slim_table.right() + 1.0, "the narrower table still fits its last column: {slim_last:?} in {slim_table:?}");
     }
 }

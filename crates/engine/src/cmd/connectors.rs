@@ -20,9 +20,12 @@ pub const SNAP: f32 = 12.0;
 /// Largest offset a routed connector gets, points.
 const MAX_OFFSET: f32 = 4000.0;
 
+/// `shape.connect` is offered for what it runs on: a floating connector or line in the body text.
 fn has_connector(s: &Session) -> Option<&'static str> {
     match super::objects::selected(s) {
-        Some((_, InlineObject::Shape { kind, .. })) if kind.is_connector() => None,
+        Some((pos, InlineObject::Shape { kind, float, .. })) if kind.is_open() => {
+            (pos.story != StoryRef::Body || float.wrap == Wrap::Inline).then_some("only floating connectors in the body text can be glued")
+        }
         _ => Some("select a connector first"),
     }
 }
@@ -31,7 +34,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("shape.connect", "Connect Shapes", "Shape Format › Insert Shapes", connect)
             .params(
-                r#"{"start"?: end, "end"?: end}  end: {"path": [..], "off": n, "site"?: n} (glue to that body shape's connection site; nearest one when omitted) | {"x": pt, "y": pt, "page"?: n} (drag the end there: it glues to a shape's site within 12 pt, else stays free there) | null (unglue)"#,
+                r#"{"start"?: end, "end"?: end}  end: {"path": [..], "off": n, "site"?: n} (glue to that body shape's connection site; nearest one when omitted) | {"x": pt, "y": pt, "page"?: n} (drag the end there: it glues to a shape's site within 12 pt, else stays free there) | null (unglue). A plain line's ends only move to points: lines don't glue"#,
             )
             .when(has_connector),
     ]
@@ -48,10 +51,10 @@ fn scan(s: &Session) -> (HashMap<u32, Pos>, Vec<Pos>, Vec<Pos>) {
     let (mut ids, mut conns, mut groups) = (HashMap::new(), Vec::new(), Vec::new());
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(para) = s.doc.para(StoryRef::Body, &path) else { continue };
-        for off in para.object_offsets() {
+        for (off, obj) in para.objects_with_offsets() {
             let pos = Pos { story: StoryRef::Body, path: path.clone(), off };
-            match para.object_at(off) {
-                Some(InlineObject::Shape { kind, extra, float, .. }) => {
+            match obj {
+                InlineObject::Shape { kind, extra, float, .. } => {
                     if extra.id != 0 {
                         ids.entry(extra.id).or_insert(pos.clone());
                     }
@@ -59,7 +62,7 @@ fn scan(s: &Session) -> (HashMap<u32, Pos>, Vec<Pos>, Vec<Pos>) {
                         conns.push(pos);
                     }
                 }
-                Some(InlineObject::Group { children, .. })
+                InlineObject::Group { children, .. }
                     if children.iter().any(|c| matches!(&c.obj, InlineObject::Shape { kind, extra, .. } if kind.is_connector() && (extra.start.is_some() || extra.end.is_some()))) =>
                 {
                     groups.push(pos)
@@ -91,10 +94,11 @@ pub fn reroute(s: &mut Session) -> bool {
         s.touch();
     }
     let layout = s.layout();
+    let objects = layout.object_index();
     let site = |e: Option<ConnEnd>, page: usize| -> Option<(f32, f32)> {
         let e = e?;
         let target = ids.get(&e.id)?;
-        let hit = layout.object(target, page)?;
+        let hit = objects.object(target, page)?;
         let kind = match s.doc.para_at(target)?.object_at(target.off)? {
             InlineObject::Shape { kind, .. } => *kind,
             _ => return None,
@@ -103,7 +107,7 @@ pub fn reroute(s: &mut Session) -> bool {
     };
     let mut plans = Vec::new();
     for pos in conns {
-        let Some(hit) = layout.object(&pos, s.page_hint) else { continue };
+        let Some(hit) = objects.object(&pos, s.page_hint) else { continue };
         let Some(InlineObject::Shape { extra, float, .. }) = s.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)) else { continue };
         let r = hit.rect;
         let (s0, e0) = ends(r.x, r.y, r.w, r.h, float.flip_h, float.flip_v);
@@ -185,13 +189,23 @@ fn ensure_id(s: &mut Session, pos: &Pos) -> Result<u32, CmdError> {
     Ok(id)
 }
 
-/// `shape.connect`: glue, move or unglue the selected connector's ends.
+/// A floating line or connector's start and end on its page: its frame's ends (flips
+/// included), turned with the frame by `deg` about its centre.
+pub fn page_ends(r: wordcraft_geom::Rect, flip_h: bool, flip_v: bool, deg: f32) -> ((f32, f32), (f32, f32)) {
+    let (a, b) = ends(r.x, r.y, r.w, r.h, flip_h, flip_v);
+    let turn = wordcraft_geom::Spin::new(deg, false, false);
+    let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+    (turn.apply(cx, cy, a.0, a.1), turn.apply(cx, cy, b.0, b.1))
+}
+
+/// `shape.connect`: glue, move or unglue the selected connector's ends, or move a line's.
 fn connect(s: &mut Session, v: &Value) -> CmdResult {
     let (pos, obj) = super::objects::selected(s).ok_or_else(|| CmdError::Disabled("select a connector first".into()))?;
     let InlineObject::Shape { kind, float, .. } = &obj else { return Err(CmdError::Disabled("select a connector first".into())) };
-    if !kind.is_connector() {
+    if !kind.is_open() {
         return Err(CmdError::Disabled("select a connector first".into()));
     }
+    let line = !kind.is_connector();
     if pos.story != StoryRef::Body || float.wrap == Wrap::Inline {
         return Err(CmdError::Disabled("only floating connectors in the body text can be glued".into()));
     }
@@ -199,7 +213,7 @@ fn connect(s: &mut Session, v: &Value) -> CmdResult {
     let layout = s.layout();
     let hit = layout.object(&pos, s.page_hint).ok_or_else(|| CmdError::Failed("the connector isn't laid out".into()))?;
     let r = hit.rect;
-    let (mut p0, mut p1) = ends(r.x, r.y, r.w, r.h, fh, fv);
+    let (mut p0, mut p1) = page_ends(r, fh, fv, hit.spin.deg);
     let mut glue: [Option<Option<ConnEnd>>; 2] = [None, None];
     for (i, key) in ["start", "end"].into_iter().enumerate() {
         let Some(e) = v.get(key) else { continue };
@@ -208,6 +222,9 @@ fn connect(s: &mut Session, v: &Value) -> CmdResult {
             continue;
         }
         let here = if i == 0 { p0 } else { p1 };
+        if line && e.get("path").is_some() {
+            return Err(CmdError::Params(format!("`{key}`: a line's ends move to points; lines don't glue to shapes")));
+        }
         let (target, site) = if e.get("path").is_some() {
             let at = body_pos(e).ok_or_else(|| CmdError::Params(format!("`{key}`: no shape there")))?;
             let th = layout
@@ -233,9 +250,9 @@ fn connect(s: &mut Session, v: &Value) -> CmdResult {
             if page != hit.page {
                 return Err(CmdError::Params("a connector's ends stay on its page".into()));
             }
-            // The nearest site of a shape (not a connector) within reach.
+            // The nearest site of a shape (not a connector) within reach; a line's end stays free.
             let mut best: Option<(Pos, u32, f32)> = None;
-            if let Some(pg) = layout.pages.get(page) {
+            if !line && let Some(pg) = layout.pages.get(page) {
                 for it in &pg.items {
                     let wordcraft_layout::Placed::Object { rect, spin, story: StoryRef::Body, path, off, .. } = it else { continue };
                     let at = Pos { story: StoryRef::Body, path: path.clone(), off: *off };
@@ -313,6 +330,66 @@ mod tests {
         }
     }
 
+    /// Drawing commands must not search every page again for each glued connector.
+    #[test]
+    #[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
+    fn rerouting_many_pages_does_not_rescan_all_objects_per_connector() {
+        use wordcraft_doc::{Document, Paragraph, para_block};
+        let mut doc = Document::new();
+        doc.body = (0..8000u32)
+            .map(|i| {
+                let mut p = Paragraph::default();
+                p.props.page_break_before = Some(i > 0);
+                let id = i * 2 + 1;
+                for (kind, x, extra) in [
+                    (ShapeKind::Rectangle, 100.0, ShapeExtra { id, ..Default::default() }),
+                    (ShapeKind::Ellipse, 300.0, ShapeExtra { id: id + 1, ..Default::default() }),
+                    (
+                        ShapeKind::ElbowConnector,
+                        0.0,
+                        ShapeExtra { start: Some(ConnEnd { id, site: 3 }), end: Some(ConnEnd { id: id + 1, site: 2 }), ..Default::default() },
+                    ),
+                ] {
+                    let float = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x, y: 200.0, ..Default::default() };
+                    p.insert_object(p.len(), shape(kind, extra, float), &Default::default()).unwrap();
+                }
+                para_block(p)
+            })
+            .collect();
+        let mut s = Session::new(doc);
+        s.view.proofing = false;
+        s.page_hint = 0;
+        assert_eq!(s.layout().pages.len(), 8000);
+        let started = std::time::Instant::now();
+        assert!(reroute(&mut s));
+        let elapsed = started.elapsed();
+        eprintln!("8000-page reroute: {elapsed:?}");
+        assert!(elapsed < std::time::Duration::from_secs(5), "reroute took {elapsed:?}");
+        for path in s.doc.para_paths(StoryRef::Body) {
+            let para = s.doc.para(StoryRef::Body, &path).unwrap();
+            let InlineObject::Shape { w, h, float, .. } = para.object_at(6).unwrap() else { panic!("connector") };
+            assert_eq!((*w, *h, float.x, float.y), (160.0, 0.0, 140.0, 210.0));
+        }
+        s.touch();
+        assert!(!reroute(&mut s), "rerouting must settle after refreshing the layout");
+    }
+
+    /// The per-case shape/geometry of one scaled-group reroute case.
+    struct ScaledGroupSpec {
+        w: f32,
+        h: f32,
+        kind: ShapeKind,
+        rot: f32,
+        flip_h: bool,
+        flip_v: bool,
+    }
+
+    impl ScaledGroupSpec {
+        fn new(w: f32, h: f32, kind: ShapeKind, rot: f32, flip_h: bool, flip_v: bool) -> Self {
+            Self { w, h, kind, rot, flip_h, flip_v }
+        }
+    }
+
     fn visual_ends(group: &InlineObject) -> ((f32, f32), (f32, f32)) {
         let InlineObject::Group { w, h, float, .. } = group else { panic!("group") };
         let rects = group.group_rects(0.0, 0.0, *w, *h);
@@ -327,6 +404,61 @@ mod tests {
         (turn((x, y)), turn((x + w, y + h)))
     }
 
+    /// One scaled-group case: rerouting keeps the visual free end and the resolved sites.
+    fn assert_scaled_group_reroute(spec: ScaledGroupSpec, free: Option<ConnEnd>, free_start: bool) {
+        let attached = Some(ConnEnd { id: 7, site: 3 });
+        let (start, end) = if free_start { (free, attached) } else { (attached, free) };
+        let group = InlineObject::Group {
+            w: spec.w,
+            h: spec.h,
+            ch_w: 200.0,
+            ch_h: 300.0,
+            float: Float { rot: 25.0, flip_h: true, ..Default::default() },
+            canvas: None,
+            children: vec![
+                GroupChild { x: 100.0, y: 200.0, obj: shape(ShapeKind::Rectangle, ShapeExtra { id: 7, ..Default::default() }, Float::default()) },
+                GroupChild {
+                    x: 10.0,
+                    y: 30.0,
+                    obj: shape(
+                        spec.kind,
+                        ShapeExtra { start, end, ..Default::default() },
+                        Float { rot: spec.rot, flip_h: spec.flip_h, flip_v: spec.flip_v, ..Default::default() },
+                    ),
+                },
+            ],
+        };
+        // Rendering scales each child rectangle before applying its own spin.
+        let before = visual_ends(&group);
+        let expected = if free_start { before.0 } else { before.1 };
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let pos = s.doc.start_of(StoryRef::Body);
+        s.doc.para_mut(pos.story, &pos.path).unwrap().insert_object(pos.off, group, &Default::default()).unwrap();
+        assert!(reroute(&mut s));
+        let group = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+        let after = visual_ends(group);
+        let actual = if free_start { after.0 } else { after.1 };
+        assert!(
+            (actual.0 - expected.0).abs() < 0.001 && (actual.1 - expected.1).abs() < 0.001,
+            "{}x{}, {:?}, {}, {}, {}, {}: {:?} != {:?}",
+            spec.w,
+            spec.h,
+            spec.kind,
+            spec.rot,
+            spec.flip_h,
+            spec.flip_v,
+            free_start,
+            actual,
+            expected
+        );
+        let InlineObject::Group { children, .. } = group else { panic!("group") };
+        let c = &children[1];
+        let InlineObject::Shape { w, h, float, .. } = &c.obj else { panic!("connector") };
+        let routed = ends(c.x, c.y, *w, *h, float.flip_h, float.flip_v);
+        assert_eq!(if free_start { routed.1 } else { routed.0 }, (140.0, 210.0), "resolved sites stay in child coordinates");
+        assert_eq!(float.rot, 0.0);
+        assert!(!reroute(&mut s), "rerouting must settle");
+    }
     #[test]
     fn rerouting_scaled_group_preserves_visual_free_and_unresolved_ends() {
         for (w, h) in [(200.0, 300.0), (400.0, 600.0), (400.0, 150.0)] {
@@ -335,53 +467,7 @@ mod tests {
                     for (flip_h, flip_v) in [(false, false), (true, false), (false, true), (true, true)] {
                         for free in [None, Some(ConnEnd { id: 404, site: 0 }), Some(ConnEnd { id: 7, site: 99 })] {
                             for free_start in [false, true] {
-                                let attached = Some(ConnEnd { id: 7, site: 3 });
-                                let (start, end) = if free_start { (free, attached) } else { (attached, free) };
-                                let group = InlineObject::Group {
-                                    w,
-                                    h,
-                                    ch_w: 200.0,
-                                    ch_h: 300.0,
-                                    float: Float { rot: 25.0, flip_h: true, ..Default::default() },
-                                    canvas: None,
-                                    children: vec![
-                                        GroupChild {
-                                            x: 100.0,
-                                            y: 200.0,
-                                            obj: shape(ShapeKind::Rectangle, ShapeExtra { id: 7, ..Default::default() }, Float::default()),
-                                        },
-                                        GroupChild {
-                                            x: 10.0,
-                                            y: 30.0,
-                                            obj: shape(
-                                                kind,
-                                                ShapeExtra { start, end, ..Default::default() },
-                                                Float { rot, flip_h, flip_v, ..Default::default() },
-                                            ),
-                                        },
-                                    ],
-                                };
-                                // Rendering scales each child rectangle before applying its own spin.
-                                let before = visual_ends(&group);
-                                let expected = if free_start { before.0 } else { before.1 };
-                                let mut s = Session::new(wordcraft_doc::Document::new());
-                                let pos = s.doc.start_of(StoryRef::Body);
-                                s.doc.para_mut(pos.story, &pos.path).unwrap().insert_object(pos.off, group, &Default::default()).unwrap();
-                                assert!(reroute(&mut s));
-                                let group = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
-                                let after = visual_ends(group);
-                                let actual = if free_start { after.0 } else { after.1 };
-                                assert!(
-                                    (actual.0 - expected.0).abs() < 0.001 && (actual.1 - expected.1).abs() < 0.001,
-                                    "{w}x{h}, {kind:?}, {rot}, {flip_h}, {flip_v}, {free_start}: {actual:?} != {expected:?}"
-                                );
-                                let InlineObject::Group { children, .. } = group else { panic!("group") };
-                                let c = &children[1];
-                                let InlineObject::Shape { w, h, float, .. } = &c.obj else { panic!("connector") };
-                                let routed = ends(c.x, c.y, *w, *h, float.flip_h, float.flip_v);
-                                assert_eq!(if free_start { routed.1 } else { routed.0 }, (140.0, 210.0), "resolved sites stay in child coordinates");
-                                assert_eq!(float.rot, 0.0);
-                                assert!(!reroute(&mut s), "rerouting must settle");
+                                assert_scaled_group_reroute(ScaledGroupSpec::new(w, h, kind, rot, flip_h, flip_v), free, free_start);
                             }
                         }
                     }
