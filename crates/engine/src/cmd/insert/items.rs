@@ -206,21 +206,33 @@ pub fn format_date_at_in(fmt: &str, lang: Option<&str>, unix: u64, offset_secs: 
 }
 
 /// Month and weekday names of a language, as Word writes them in date fields: full names, the
-/// three-letter forms (`MMM`, `ddd`) being their first three letters, without a full stop.
-/// Weekdays start on Thursday (1970-01-01).
+/// short forms (`MMM`, `ddd`) being their first three letters, without a full stop, unless the
+/// language lists its own. Weekdays start on Thursday (1970-01-01).
 struct DateNames {
     /// Full month names (January through December).
     months: [&'static str; 12],
     /// Weekday names starting on Thursday (1970-01-01).
     days: [&'static str; 7],
+    /// `MMM` month names (January through December), when they are not the first three letters.
+    months_short: Option<[&'static str; 12]>,
+    /// `ddd` weekday names starting on Thursday, when they are not the first three letters.
+    days_short: Option<[&'static str; 7]>,
     /// The picture of a `DATE` field without `\@`.
     default: &'static str,
+    /// The picture of a `TIME` field without `\@`.
+    time_default: &'static str,
+    /// What `am/pm` writes before and after noon; `AM/PM` writes it in capitals.
+    am_pm: [&'static str; 2],
 }
 
 const ENGLISH: DateNames = DateNames {
     months: ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
     days: ["Thursday", "Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday"],
+    months_short: None,
+    days_short: None,
     default: "M/d/yyyy",
+    time_default: "h:mm am/pm",
+    am_pm: ["AM", "PM"],
 };
 
 /// Portuguese (observed in Word for Mac with a pt-BR document): lower-case names, `MMM` = `out`,
@@ -228,18 +240,47 @@ const ENGLISH: DateNames = DateNames {
 const PORTUGUESE: DateNames = DateNames {
     months: ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"],
     days: ["quinta-feira", "sexta-feira", "sábado", "domingo", "segunda-feira", "terça-feira", "quarta-feira"],
+    months_short: None,
+    days_short: None,
     default: "dd/MM/yyyy",
+    time_default: "h:mm am/pm",
+    am_pm: ["AM", "PM"],
+};
+
+/// Hungarian (observed in Word for Mac with a hu-HU document, #7652): lower-case names, `MMM`
+/// forms of different lengths that carry their own full stop (`febr.`, `szept.`), one- to
+/// three-letter `ddd` forms, `yyyy. MM. dd.` for a `DATE` field and `am/pm h:mm` for a `TIME`
+/// field without a picture, and `de.`/`du.` for `am/pm`.
+const HUNGARIAN: DateNames = DateNames {
+    months: ["január", "február", "március", "április", "május", "június", "július", "augusztus", "szeptember", "október", "november", "december"],
+    days: ["csütörtök", "péntek", "szombat", "vasárnap", "hétfő", "kedd", "szerda"],
+    months_short: Some(["jan.", "febr.", "márc.", "ápr.", "máj.", "jún.", "júl.", "aug.", "szept.", "okt.", "nov.", "dec."]),
+    days_short: Some(["Cs", "P", "Szo", "V", "H", "K", "Sze"]),
+    default: "yyyy. MM. dd.",
+    time_default: "am/pm h:mm",
+    am_pm: ["de.", "du."],
 };
 
 /// Choose month and weekday names according to the primary language subtag.
 fn date_names(lang: Option<&str>) -> &'static DateNames {
     let primary = lang.and_then(|l| l.trim().split(['-', '_']).next()).unwrap_or("");
-    if primary.eq_ignore_ascii_case("pt") { &PORTUGUESE } else { &ENGLISH }
+    if primary.eq_ignore_ascii_case("pt") {
+        &PORTUGUESE
+    } else if primary.eq_ignore_ascii_case("hu") {
+        &HUNGARIAN
+    } else {
+        &ENGLISH
+    }
 }
 
 /// The picture Word gives a `DATE` field that has no `\@` switch, in the field's language.
 pub fn default_date_picture(lang: Option<&str>) -> &'static str {
     date_names(lang).default
+}
+
+/// The picture Word gives a `TIME` field that has no `\@` switch, in the field's language.
+pub fn default_time_picture(lang: Option<&str>) -> &'static str {
+    date_names(lang).time_default
 }
 
 /// Format a date and time with a Word picture; `days_since` (days since 1970-01-01) gives the weekday.
@@ -252,9 +293,14 @@ pub fn format_date_parts(fmt: &str, y: i64, m: usize, d: u32, hms: (u32, u32, u3
 #[allow(clippy::too_many_arguments)]
 pub fn format_date_parts_in(fmt: &str, lang: Option<&str>, y: i64, m: usize, d: u32, (hh, mm, ss): (u32, u32, u32), days_since: i64) -> String {
     let names = date_names(lang);
-    let month = names.months.get(m.saturating_sub(1)).copied().unwrap_or(names.months[0]);
-    let day = names.days.get(days_since.rem_euclid(7) as usize).copied().unwrap_or(names.days[0]);
+    let mi = m.saturating_sub(1);
+    let di = days_since.rem_euclid(7) as usize;
+    let month = names.months.get(mi).copied().unwrap_or(names.months[0]);
+    let day = names.days.get(di).copied().unwrap_or(names.days[0]);
     let three = |s: &str| -> String { s.chars().take(3).collect() };
+    let month_short = names.months_short.map_or_else(|| three(month), |n| n.get(mi).copied().unwrap_or(n[0]).to_string());
+    let day_short = names.days_short.map_or_else(|| three(day), |n| n.get(di).copied().unwrap_or(n[0]).to_string());
+    let am_pm = names.am_pm[usize::from(hh >= 12)];
     let mut out = String::new();
     let chars: Vec<char> = fmt.chars().collect();
     let mut i = 0;
@@ -282,10 +328,22 @@ pub fn format_date_parts_in(fmt: &str, lang: Option<&str>, y: i64, m: usize, d: 
             }
             continue;
         }
-        // `am/pm` (any case) is one token: AM or PM.
-        if chars.get(i..i + 5).is_some_and(|w| w.iter().collect::<String>().eq_ignore_ascii_case("am/pm")) {
-            out.push_str(if hh < 12 { "AM" } else { "PM" });
-            i += 5;
+        // `am/pm` and `a/p` (any case) are one token: the language's before/after-noon text, in
+        // capitals when the token is (`AM/PM`), as written otherwise. `a/p` writes the same text
+        // as `am/pm`, as in Word.
+        let token = [5, 3].into_iter().find(|&len| {
+            chars.get(i..i + len).is_some_and(|w| {
+                let w: String = w.iter().collect();
+                w.eq_ignore_ascii_case("am/pm") || w.eq_ignore_ascii_case("a/p")
+            })
+        });
+        if let Some(len) = token {
+            if c.is_ascii_uppercase() {
+                out.push_str(&am_pm.to_uppercase());
+            } else {
+                out.push_str(am_pm);
+            }
+            i += len;
             continue;
         }
         let mut n = 1;
@@ -296,11 +354,11 @@ pub fn format_date_parts_in(fmt: &str, lang: Option<&str>, y: i64, m: usize, d: 
             ('y' | 'Y', 4..) => out.push_str(&format!("{y:04}")),
             ('y' | 'Y', _) => out.push_str(&format!("{:02}", y % 100)),
             ('M', 4..) => out.push_str(month),
-            ('M', 3) => out.push_str(&three(month)),
+            ('M', 3) => out.push_str(&month_short),
             ('M', 2) => out.push_str(&format!("{m:02}")),
             ('M', 1) => out.push_str(&m.to_string()),
             ('d' | 'D', 4..) => out.push_str(day),
-            ('d' | 'D', 3) => out.push_str(&three(day)),
+            ('d' | 'D', 3) => out.push_str(&day_short),
             ('d' | 'D', 2) => out.push_str(&format!("{d:02}")),
             ('d' | 'D', 1) => out.push_str(&d.to_string()),
             ('H', 2..) => out.push_str(&format!("{hh:02}")),
@@ -572,6 +630,37 @@ mod date_time_locale_tests {
         assert_eq!(format("ddd", 20), "sáb");
         assert_eq!(format("MMM", 20), "out");
         assert_eq!(format("MMMM", 20), "outubro");
+    }
+
+    /// Hungarian names, abbreviations, `am/pm` text and the default pictures, as Word for Mac
+    /// writes them in a hu-HU document (#7652). Monday 23 November 2026 is day 20780.
+    #[test]
+    fn hungarian_date_names_render_for_hu() {
+        let at = |pic: &str, m, d, hh, days| format_date_parts_in(pic, Some("hu-HU"), 2026, m, d, (hh, 5, 0), days);
+        assert_eq!(at("yyyy. MMMM d., dddd", 11, 23, 9, 20780), "2026. november 23., hétfő");
+        assert_eq!(at("dddd, yyyy. MMMM d.", 11, 23, 9, 20780), "hétfő, 2026. november 23.");
+        assert_eq!(at("yyyy. MMM d.", 11, 23, 9, 20780), "2026. nov. 23.");
+        assert_eq!(at("ddd, MMM d.", 11, 23, 9, 20780), "H, nov. 23.");
+        assert_eq!(at("MMM", 2, 15, 9, 20499), "febr.");
+        assert_eq!(at("MMM", 9, 15, 9, 20711), "szept.");
+        assert_eq!(at("ddd dddd", 11, 28, 9, 20785), "Szo szombat");
+        assert_eq!(at("yyyy'. év' MMMM d'-án'", 11, 23, 9, 20780), "2026. év november 23-án");
+        assert_eq!(at("h:mm am/pm", 11, 23, 9, 20780), "9:05 de.");
+        assert_eq!(at("h:mm am/pm", 11, 23, 15, 20780), "3:05 du.");
+        assert_eq!(at("h:mm AM/PM", 11, 23, 9, 20780), "9:05 DE.");
+        assert_eq!(at("h:mm a/p", 11, 23, 15, 20780), "3:05 du.");
+        assert_eq!(at("H:mm", 11, 23, 15, 20780), "15:05");
+        assert_eq!(default_date_picture(Some("hu-HU")), "yyyy. MM. dd.");
+        assert_eq!(at(default_date_picture(Some("hu-HU")), 11, 23, 9, 20780), "2026. 11. 23.");
+        assert_eq!(at(default_time_picture(Some("hu-HU")), 11, 23, 15, 20780), "du. 3:05");
+        assert_eq!(default_time_picture(Some("en-US")), "h:mm am/pm");
+    }
+
+    /// `a/p` is one token, as in Word: it writes `AM`/`PM`, not `PM/p` (#7652).
+    #[test]
+    fn a_slash_p_is_one_token() {
+        assert_eq!(format_date_parts_in("h:mm a/p", Some("en-US"), 2026, 11, 23, (15, 5, 0), 20780), "3:05 PM");
+        assert_eq!(format_date_parts_in("h:mm am/pm", None, 2026, 11, 23, (9, 5, 0), 20780), "9:05 AM");
     }
 
     /// A pt-BR dynamic field keeps its result after DOCX round-trip and refresh.
