@@ -354,6 +354,7 @@ impl WordApp {
         // draws, for itself.
         self.window_work(ctx);
         self.drain_inbox();
+        crate::keys::tick_paste_wait(self, ctx);
         self.paste_arrived(ctx);
         // Focus hides the title bar's search box: a search left open there has no box to show it, and would keep
         // Escape from leaving Focus (#5398).

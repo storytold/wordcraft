@@ -32,7 +32,10 @@ struct ElsewhereContext {
 impl Session {
     fn leave_math_for_command(&mut self, id: &str) {
         if self.math.is_some()
-            && (id.starts_with("text.") || id.starts_with("caret.") || id.starts_with("select.") || id.starts_with("edit.paste"))
+            && (id.starts_with("text.")
+                || id.starts_with("caret.")
+                || id.starts_with("select.")
+                || (id.starts_with("edit.paste") && id != "edit.pasteFormat"))
             && let Some(m) = self.math.take()
         {
             let off = m.at.off + wordcraft_doc::para::OBJ.len_utf8();

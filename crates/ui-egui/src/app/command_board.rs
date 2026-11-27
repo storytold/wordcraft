@@ -357,13 +357,15 @@ impl WordApp {
                 self.canvas.focus_page(ctx);
             }
         }
+        self.canvas.paste_event_consumed_same_frame = false;
     }
 
     /// Paste Formatting from its key. Mod+Shift+V pastes the formatting Mod+Shift+C (or the Format
     /// Painter) picked up; with none picked up it pastes the clipboard as text only, as Word for
     /// Windows does (#1537, #4943). Another key bound to Paste Formatting only pastes formatting.
-    /// The framework fires one command per chord, so nothing waits for a browser paste event.
-    fn paste_format_command(&self, ctx: &egui::Context, params: Value) -> (&'static str, Value) {
+    /// On platforms where a browser paste event follows Mod+Shift+V, pasting formatting arms
+    /// `ignore_next_paste` so that paired paste event is dropped.
+    fn paste_format_command(&mut self, ctx: &egui::Context, params: Value) -> (&'static str, Value) {
         let formatting = self.session.painter.is_some() || self.session.copied_format.is_some();
         // The command runs a pass after its press, when a quick tap's modifiers are already up: with none held the fire
         // is Mod+Shift+V's while that chord is still the command's.
@@ -376,6 +378,10 @@ impl WordApp {
                 .iter()
                 .any(|binding| Some(binding.trigger.chord) == default)
         };
+        if formatting && chord && self.canvas.paste_event_follows_chord && !std::mem::take(&mut self.canvas.paste_event_consumed_same_frame) {
+            self.canvas.ignore_next_paste = true;
+            self.canvas.paste_wait_since = Some(ctx.input(|i| i.time));
+        }
         if !formatting && chord { ("edit.pasteText", json!({})) } else { ("edit.pasteFormat", params) }
     }
 }
