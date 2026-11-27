@@ -342,7 +342,8 @@ pub(crate) fn snippet_blocks(base: &Document, blocks: Vec<Block>, options: Snipp
     d.last_section.margin_bottom = 0.0;
     let l = wordcraft_layout::layout(&d, &mut wordcraft_layout::LayoutCache::new(), &Default::default());
     let page = l.pages.first()?;
-    let mut opts = crate::canvas::screen_render_options();
+    // A preview's pixels per point: the screen's in dialogs, less in the small gallery tiles.
+    let mut opts = crate::canvas::screen_render_options(ppp);
     if let Some(p) = paper {
         opts.paper = p;
     }

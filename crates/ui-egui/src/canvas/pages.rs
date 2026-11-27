@@ -16,6 +16,8 @@ pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>) -> u
     format!("{:?}{:?}{:?}", app.session.doc.settings.page_color, app.session.doc.settings.page_picture, app.session.doc.settings.watermark)
         .hash(&mut h);
     app.session.doc.media.len().hash(&mut h);
+    // Moving to a screen of another density can change how borders are drawn.
+    screen_render_options(app.native_scale).light_rules.hash(&mut h);
     // A page drawn without a dragged object must not pass for the page with it: the drag starts
     // and ends change the key once each, so the page is rendered again then and only then.
     hidden.hash(&mut h);
@@ -150,7 +152,7 @@ pub(crate) fn dark_page(app: &WordApp) -> bool {
 
 /// Render options for this view's page rasters: marks, markup, dark page, header/body dimming.
 pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_render::RenderOptions {
-    let mut opts = screen_render_options();
+    let mut opts = screen_render_options(app.native_scale);
     opts.display.marks = app.session.view.marks;
     opts.display.always = app.session.prefs.marks;
     opts.display.placeholders = true;
@@ -179,15 +181,17 @@ pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_re
     opts
 }
 
-/// Render options for page rasters shown on screen, so a page looks as text does in the
-/// platform's other apps (exports never change): on macOS, text is darkened the way the system
-/// draws it; on Linux and the BSDs it is hinted lightly, as FreeType's `hintslight` draws it
-/// there (not darkened: hinted text already has FreeType's weight, and darkening made it
-/// look semi-bold).
-pub(crate) fn screen_render_options() -> wordcraft_render::RenderOptions {
+/// Render options for page rasters shown on a screen of `screen_ppp` device pixels per point, so a
+/// page looks as text does in the platform's other apps (exports never change): on macOS, text is
+/// darkened the way the system draws it; on Linux and the BSDs it is hinted lightly, as FreeType's
+/// `hintslight` draws it there (not darkened: hinted text already has FreeType's weight, and
+/// darkening made it look semi-bold). On screens of 2 or more pixels per point, borders and rules
+/// are drawn a pixel lighter ([`wordcraft_render::RenderOptions::light_rules`]).
+pub(crate) fn screen_render_options(screen_ppp: f32) -> wordcraft_render::RenderOptions {
     wordcraft_render::RenderOptions {
         text_darkening: cfg!(target_os = "macos"),
         hinting: cfg!(all(unix, not(target_os = "macos"))),
+        light_rules: screen_ppp >= 2.0,
         ..Default::default()
     }
 }

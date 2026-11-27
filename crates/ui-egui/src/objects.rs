@@ -1028,7 +1028,7 @@ fn preview_bounds(o: &ObjectHit) -> wordcraft_geom::Rect {
 fn preview(app: &WordApp, layout: &DocLayout, o: &ObjectHit, scale: f32, body: &PageBody) -> Option<Preview> {
     let obj = hit_object(app, o)?;
     let page = layout.pages.get(o.page)?;
-    let mut opts = crate::canvas::screen_render_options();
+    let mut opts = crate::canvas::screen_render_options(app.native_scale);
     opts.dark = crate::canvas::dark_page(app);
     let items = wordcraft_layout::display::object_display(&app.session.doc, page, obj, o.rect, o.text_box, &opts.display);
     let b = preview_bounds(o);

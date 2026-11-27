@@ -2045,14 +2045,68 @@ fn ink_run(img: &Rendered, down: bool, at: u32, mid: u32) -> Option<(u32, u32)> 
     runs.into_iter().min_by_key(|r| gap(*r))
 }
 
+/// Device pixels across a level or upright line `weight` points wide, drawn alone at `k` pixels
+/// per point, 10.3 pt from the raster's edge (off the pixel grid at every scale used here).
+fn line_pixels(d: &Document, weight: f32, level: bool, rule: bool, k: f32, opts: &RenderOptions) -> usize {
+    let (x0, y0, x1, y1) = if level { (2.0, 10.3, 18.0, 10.3) } else { (10.3, 2.0, 10.3, 18.0) };
+    let line = Draw::Line { x0, y0, x1, y1, width: weight, color: Rgb::BLACK, stroke: Stroke::Solid, alpha: 1.0, text_bg: None, rule };
+    let img = render_items(d, &[line], wordcraft_geom::Rect::new(0.0, 0.0, 20.0, 20.0), k, opts);
+    let (at, mid) = if level { (img.width / 2, img.height / 2) } else { (img.height / 2, img.width / 2) };
+    ink_run(&img, level, at, mid).map_or(0, |(a, b)| (b - a + 1) as usize)
+}
+
 /// Device pixels per point at 100, 125 and 150 % zoom on 1x and 2x screens, with the zoom and
 /// the screen's pixels per point.
 fn screen_scales() -> impl Iterator<Item = (f32, f32, f32)> {
     [1.0f32, 1.25, 1.5].into_iter().flat_map(|zoom| [1.0f32, 2.0].into_iter().map(move |ppp| (zoom, ppp, zoom * ppp * 96.0 / 72.0)))
 }
 
+/// With `light_rules` (screens of 2 or more pixels per point), a border or rule is drawn one
+/// device pixel lighter than the nearest whole number of pixels to its weight, and never under
+/// one pixel.
+#[test]
+fn screen_rules_are_drawn_a_pixel_lighter_than_their_weight_but_never_under_one_pixel() {
+    let d = Document::new();
+    let light = RenderOptions { light_rules: true, ..Default::default() };
+    for (zoom, ppp, k) in screen_scales() {
+        for weight in [0.25f32, 0.5, 0.75, 1.0, 1.5, 3.0] {
+            let px = f64::from(weight) * f64::from(k);
+            for level in [true, false] {
+                let w = line_pixels(&d, weight, level, true, k, &light) as f64;
+                assert!(
+                    w >= 1.0 && w >= px - 1.5 - 1e-6 && w <= (px - 0.5).max(1.0) + 1e-6,
+                    "zoom {zoom}, {ppp} px/pt: a {weight} pt rule ({px:.3} px) is {w} px"
+                );
+            }
+        }
+    }
+}
+
+/// Exports (no `light_rules`) draw borders at the nearest whole number of pixels to their weight,
+/// never under one, and so does a screen for every line that isn't a border or rule, such as an
+/// underline: only borders on light rasters are drawn lighter.
+#[test]
+fn exports_and_lines_other_than_rules_keep_the_nearest_whole_pixel() {
+    let d = Document::new();
+    let (export, light) = (RenderOptions::default(), RenderOptions { light_rules: true, ..Default::default() });
+    for (zoom, ppp, k) in screen_scales() {
+        for weight in [0.25f32, 0.5, 0.75, 1.0, 1.5, 3.0] {
+            let px = f64::from(weight) * f64::from(k);
+            for level in [true, false] {
+                for (rule, opts, what) in [(true, &export, "a border in an export"), (false, &light, "an underline on screen")] {
+                    let w = line_pixels(&d, weight, level, rule, k, opts) as f64;
+                    assert!(
+                        w >= 1.0 && ((w - px).abs() <= 0.5 + 1e-6 || (px < 0.5 && w == 1.0)),
+                        "zoom {zoom}, {ppp} px/pt: {what} of {weight} pt ({px:.3} px) is {w} px"
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// #5967: borders of one weight cover the same device pixels whatever they border: a paragraph,
-/// a table's cell, a run of text or the page.
+/// a table's cell, a run of text or the page, in exports and on screen.
 #[test]
 fn borders_of_one_weight_cover_the_same_pixels_on_paragraphs_tables_text_and_pages() {
     use wordcraft_doc::props::{Border, Borders};
@@ -2081,17 +2135,20 @@ fn borders_of_one_weight_cover_the_same_pixels_on_paragraphs_tables_text_and_pag
         items.iter().filter_map(|it| if let Draw::Line { x0, y0, x1, y1, .. } = it { Some((*x0, *y0, *x1, *y1)) } else { None }).collect();
     // The page's four sides, the cell's four, the heading's rule and the run's four sides.
     assert_eq!(rules.len(), 13, "{rules:?}");
-    for (zoom, ppp, k) in screen_scales() {
-        let widths: Vec<usize> = rules
-            .iter()
-            .map(|&(x0, y0, x1, y1)| {
-                let (mx, my, level) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, y0 == y1);
-                let img = render_items(&d, &items, wordcraft_geom::Rect::new(mx - 4.0, my - 4.0, 8.0, 8.0), k, &RenderOptions::default());
-                let (at, mid) = if level { (img.width / 2, img.height / 2) } else { (img.height / 2, img.width / 2) };
-                ink_run(&img, level, at, mid).map_or(0, |(a, b)| (b - a + 1) as usize)
-            })
-            .collect();
-        assert!(widths.iter().all(|w| *w >= 1 && *w == widths[0]), "zoom {zoom}, {ppp} px/pt: {widths:?} pixels for {rules:?}");
+    for opts in [RenderOptions::default(), RenderOptions { light_rules: true, ..Default::default() }] {
+        for (zoom, ppp, k) in screen_scales() {
+            let widths: Vec<usize> = rules
+                .iter()
+                .map(|&(x0, y0, x1, y1)| {
+                    let (mx, my, level) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, y0 == y1);
+                    let img = render_items(&d, &items, wordcraft_geom::Rect::new(mx - 4.0, my - 4.0, 8.0, 8.0), k, &opts);
+                    let (at, mid) = if level { (img.width / 2, img.height / 2) } else { (img.height / 2, img.width / 2) };
+                    ink_run(&img, level, at, mid).map_or(0, |(a, b)| (b - a + 1) as usize)
+                })
+                .collect();
+            let light = opts.light_rules;
+            assert!(widths.iter().all(|w| *w >= 1 && *w == widths[0]), "zoom {zoom}, {ppp} px/pt, light {light}: {widths:?} pixels for {rules:?}");
+        }
     }
 }
 
@@ -2140,8 +2197,8 @@ fn meeting_ink(d: &Document, items: &[Draw], (x, y): (f32, f32), (sx, sy): (i64,
     (past_level, past_upright, alpha(if sx > 0 { c0 } else { c1 }, if sy > 0 { r0 } else { r1 }))
 }
 
-/// #1757: where borders meet they close cleanly, at every zoom and screen density: at a box's
-/// corners (page borders, which run each side past the others, and a table
+/// #1757: where borders meet they close cleanly, at every zoom and screen density, in exports and
+/// on screen: at a box's corners (page borders, which run each side past the others, and a table
 /// cell, which runs its level edges past the upright ones) the corner pixel is inked and nothing
 /// is inked just past either border; where a table's inner level edges meet its outer upright
 /// ones nothing shows past the outer edge; and a cell's upright edge runs on into the next row
@@ -2167,59 +2224,63 @@ fn borders_meet_in_clean_corners_at_every_zoom() {
         .into_iter()
         .map(|(name, d)| (name, d, page_rules(d)))
         .collect();
-    let opts = RenderOptions::default();
-    for (zoom, ppp, k) in screen_scales() {
-        for (name, d, (items, level, upright)) in &laid {
-            let top = level.iter().map(|l| l.0).fold(f32::INFINITY, f32::min);
-            let bottom = level.iter().map(|l| l.0).fold(f32::NEG_INFINITY, f32::max);
-            let left = upright.iter().map(|u| u.0).fold(f32::INFINITY, f32::min);
-            let right = upright.iter().map(|u| u.0).fold(f32::NEG_INFINITY, f32::max);
-            let at = format!("{name}, zoom {zoom}, {ppp} px/pt");
-            for (x, y, sx, sy) in [(left, top, 1, 1), (right, top, -1, 1), (left, bottom, 1, -1), (right, bottom, -1, -1)] {
-                let (past_level, past_upright, corner) = meeting_ink(d, items, (x, y), (sx, sy), k, &opts);
-                assert!(
-                    past_level == 0 && past_upright == 0 && corner == 255,
-                    "{at}: corner ({x}, {y}): ink past {past_level} and {past_upright}, corner {corner}"
-                );
-            }
-            // The grid's inner level edges, where they meet the outer upright ones.
-            for &(y, ..) in level.iter().filter(|l| l.0 > top + 1.0 && l.0 < bottom - 1.0) {
-                for (x, sx) in [(left, 1), (right, -1)] {
-                    let (past_level, ..) = meeting_ink(d, items, (x, y), (sx, 1), k, &opts);
-                    assert_eq!(past_level, 0, "{at}: inner edge at y {y} shows past the edge at x {x}");
+    for opts in [RenderOptions::default(), RenderOptions { light_rules: true, ..Default::default() }] {
+        let light = opts.light_rules;
+        for (zoom, ppp, k) in screen_scales() {
+            for (name, d, (items, level, upright)) in &laid {
+                let top = level.iter().map(|l| l.0).fold(f32::INFINITY, f32::min);
+                let bottom = level.iter().map(|l| l.0).fold(f32::NEG_INFINITY, f32::max);
+                let left = upright.iter().map(|u| u.0).fold(f32::INFINITY, f32::min);
+                let right = upright.iter().map(|u| u.0).fold(f32::NEG_INFINITY, f32::max);
+                let at = format!("{name}, zoom {zoom}, {ppp} px/pt, light {light}");
+                for (x, y, sx, sy) in [(left, top, 1, 1), (right, top, -1, 1), (left, bottom, 1, -1), (right, bottom, -1, -1)] {
+                    let (past_level, past_upright, corner) = meeting_ink(d, items, (x, y), (sx, sy), k, &opts);
+                    assert!(
+                        past_level == 0 && past_upright == 0 && corner == 255,
+                        "{at}: corner ({x}, {y}): ink past {past_level} and {past_upright}, corner {corner}"
+                    );
                 }
-            }
-            // Each row's own piece of the outer upright edges meets the next row's end to end.
-            for &(x, _, y) in upright.iter().filter(|u| u.2 < bottom - 1.0 && (u.0 == left || u.0 == right)) {
-                let (img, cx, cy) = page_window(d, items, (x, y), k, &opts);
-                let (c0, c1) = ink_run(&img, false, cy - (3.0 * k).round() as u32, cx).expect("the upright edge");
-                let seam = (0..img.height).map(|py| img.pixel((c0 + c1) / 2, py)[3]).min().unwrap_or(0);
-                assert_eq!(seam, 255, "{at}: the upright edge at x {x} is broken where the row ends at y {y}");
+                // The grid's inner level edges, where they meet the outer upright ones.
+                for &(y, ..) in level.iter().filter(|l| l.0 > top + 1.0 && l.0 < bottom - 1.0) {
+                    for (x, sx) in [(left, 1), (right, -1)] {
+                        let (past_level, ..) = meeting_ink(d, items, (x, y), (sx, 1), k, &opts);
+                        assert_eq!(past_level, 0, "{at}: inner edge at y {y} shows past the edge at x {x}");
+                    }
+                }
+                // Each row's own piece of the outer upright edges meets the next row's end to end.
+                for &(x, _, y) in upright.iter().filter(|u| u.2 < bottom - 1.0 && (u.0 == left || u.0 == right)) {
+                    let (img, cx, cy) = page_window(d, items, (x, y), k, &opts);
+                    let (c0, c1) = ink_run(&img, false, cy - (3.0 * k).round() as u32, cx).expect("the upright edge");
+                    let seam = (0..img.height).map(|py| img.pixel((c0 + c1) / 2, py)[3]).min().unwrap_or(0);
+                    assert_eq!(seam, 255, "{at}: the upright edge at x {x} is broken where the row ends at y {y}");
+                }
             }
         }
     }
 }
 
 /// A comment card's outline as Print Markup draws it (`balloons.rs`): four rules, each stopping
-/// on the next one's centre line, close square at every zoom and screen density, wherever the
-/// card lies on the pixel grid. Ending each on the nearest whole pixel left
+/// on the next one's centre line, close square at every zoom and screen density, in exports and on
+/// screen, wherever the card lies on the pixel grid. Ending each on the nearest whole pixel left
 /// some corners without their outer pixel.
 #[test]
 fn rules_that_stop_on_each_others_centre_lines_close_square() {
     let d = Document::new();
     let side =
         |x0, y0, x1, y1| Draw::Line { x0, y0, x1, y1, width: 0.5, color: Rgb::BLACK, stroke: Stroke::Solid, alpha: 1.0, text_bg: None, rule: true };
-    let opts = RenderOptions::default();
-    for (zoom, ppp, k) in screen_scales() {
-        for off in [0.0f32, 0.13, 0.29, 0.37, 0.61] {
-            let (l, t, r, b) = (40.0 + off, 50.0 + 0.7 * off, 160.0 + off, 90.0 + 0.7 * off);
-            let card = [side(l, t, r, t), side(r, t, r, b), side(l, b, r, b), side(l, t, l, b)];
-            for (x, y, sx, sy) in [(l, t, 1, 1), (r, t, -1, 1), (l, b, 1, -1), (r, b, -1, -1)] {
-                let (past_level, past_upright, corner) = meeting_ink(&d, &card, (x, y), (sx, sy), k, &opts);
-                assert!(
-                    past_level == 0 && past_upright == 0 && corner == 255,
-                    "zoom {zoom}, {ppp} px/pt: corner ({x}, {y}): ink past {past_level} and {past_upright}, corner {corner}"
-                );
+    for opts in [RenderOptions::default(), RenderOptions { light_rules: true, ..Default::default() }] {
+        let light = opts.light_rules;
+        for (zoom, ppp, k) in screen_scales() {
+            for off in [0.0f32, 0.13, 0.29, 0.37, 0.61] {
+                let (l, t, r, b) = (40.0 + off, 50.0 + 0.7 * off, 160.0 + off, 90.0 + 0.7 * off);
+                let card = [side(l, t, r, t), side(r, t, r, b), side(l, b, r, b), side(l, t, l, b)];
+                for (x, y, sx, sy) in [(l, t, 1, 1), (r, t, -1, 1), (l, b, 1, -1), (r, b, -1, -1)] {
+                    let (past_level, past_upright, corner) = meeting_ink(&d, &card, (x, y), (sx, sy), k, &opts);
+                    assert!(
+                        past_level == 0 && past_upright == 0 && corner == 255,
+                        "zoom {zoom}, {ppp} px/pt, light {light}: corner ({x}, {y}): ink past {past_level} and {past_upright}, corner {corner}"
+                    );
+                }
             }
         }
     }
@@ -2234,8 +2295,8 @@ fn rules_of_one_width_cover_the_same_whole_pixels_at_every_zoom() {
             let mut widths = Vec::new();
             for i in 0..20 {
                 let pos = 10.0 + f64::from(i) * 17.37;
-                let (w_h, (_, oy)) = snap_rule(view, (5.0, pos, 400.0, pos), 0.5).unwrap();
-                let (w_v, (ox, _)) = snap_rule(view, (pos, 5.0, pos, 400.0), 0.5).unwrap();
+                let (w_h, (_, oy)) = snap_rule(view, (5.0, pos, 400.0, pos), 0.5, false).unwrap();
+                let (w_v, (ox, _)) = snap_rule(view, (pos, 5.0, pos, 400.0), 0.5, false).unwrap();
                 widths.push(w_h);
                 widths.push(w_v);
                 for (w, centre) in [(w_h, (pos + oy) * k + 12.9), (w_v, (pos + ox) * k + 37.3)] {
@@ -2246,8 +2307,8 @@ fn rules_of_one_width_cover_the_same_whole_pixels_at_every_zoom() {
             assert!(widths.iter().all(|w| *w == widths[0] && *w >= 1.0 && w.fract() == 0.0), "zoom {zoom} ppp {ppp}: {widths:?}");
         }
     }
-    assert!(snap_rule(Affine::rotate(0.3), (0.0, 0.0, 9.0, 0.0), 0.5).is_none());
-    assert!(snap_rule(Affine::scale(2.0), (0.0, 0.0, 9.0, 4.0), 0.5).is_none());
+    assert!(snap_rule(Affine::rotate(0.3), (0.0, 0.0, 9.0, 0.0), 0.5, false).is_none());
+    assert!(snap_rule(Affine::scale(2.0), (0.0, 0.0, 9.0, 4.0), 0.5, false).is_none());
 }
 
 /// The same three pictures that don't draw as in the PDF test: each stays a grey box, and the page's
