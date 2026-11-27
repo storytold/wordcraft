@@ -107,7 +107,7 @@ pub(super) fn list_index(ui: &mut Ui, label: &Label, rows: &[String], current: O
     let mut picked = Picked { selected: None, activated: None };
     for event in events {
         match event {
-            CollectionEvent::Selection(SelectionChange::Set(set)) => picked.selected = set.last().copied(),
+            CollectionEvent::Selection { change: SelectionChange::Set(set), .. } => picked.selected = set.last().copied(),
             CollectionEvent::Activate(row) => {
                 picked.selected = Some(row);
                 picked.activated = Some(row);

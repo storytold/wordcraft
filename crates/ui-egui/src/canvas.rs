@@ -9,6 +9,7 @@ use std::cell::Cell;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use craft::behavior::intent::EditCommand;
 use craft::behavior::kurbo::{Point, Size};
 use craft::pages::layout::{Fit, LayoutOptions, PageDisplay, SCREEN_POINTS_PER_POINT};
 use craft::pages::ui::reading::{ReadingMetrics, reading_size};
@@ -17,7 +18,7 @@ use craft::ui::canvas::{Autoscroll, ContextSource, MiddleButton, NavigationOptio
 use craft::ui::contract::Show as _;
 
 use craft::ui::runtime::env::Env;
-use craft::ui::runtime::focus::{self, FocusTarget};
+use craft::ui::runtime::focus::{self, EditSet, FocusTarget};
 use craft::ui::style::DataColor;
 use egui::{Color32, Pos2, Rect, Ui, pos2, vec2};
 use serde_json::json;
@@ -156,6 +157,10 @@ pub struct CanvasState {
     pub(crate) read_force_reflow: bool,
     /// Web Layout's width follows the window once a drag has settled, not on every frame of it.
     web_viewport: reading::Settle,
+    /// Side gutter the last `PageView` pass laid pages out with (`PageSpacing::side`), in screen points.
+    pub(crate) page_side: Option<f32>,
+    /// `PageView`'s side gutter changed since the last Web Layout pass, so Web Layout must reflow at once.
+    web_force_reflow: bool,
     /// First text position on the column currently leading the reading view, captured from the last
     /// pass's layout. Survives changing page sizes, even when the caret stays elsewhere.
     pub(crate) read_first_visible: Option<Pos>,
@@ -405,6 +410,8 @@ impl Default for CanvasState {
             nav_to_caret: false,
             read_force_reflow: false,
             web_viewport: Default::default(),
+            page_side: None,
+            web_force_reflow: false,
             read_first_visible: None,
             dragging: false,
             column_drag: None,
@@ -465,16 +472,19 @@ fn update_viewport(app: &mut WordApp, full: Rect, metrics: &ReadingMetrics, side
             // Without an anchor (Read Mode was just entered) the view starts at the caret.
             app.canvas.scroll_to_caret |= reflow_anchor.is_none();
         }
+        app.canvas.web_force_reflow = false;
     } else {
         if app.session.view.mode == wordcraft_layout::ViewMode::Web {
             // Web Layout wraps to the work area (#1876).
             let scale = app.session.view.zoom.clamp(0.1, 5.0) * PX_PER_PT;
-            // The page view keeps its side gutter (the rail width) clear on both sides of a page, so the page
+            // The page view keeps its side gutter (`PageSpacing::side`) clear on both sides of a page, so the page
             // fits the window only when its width leaves that room.
             let w = web_layout_width((full.width() - 2.0 * side).max(0.0), scale);
             let changed = (app.session.view.web_width - w).abs() > 0.5;
-            // At once on entry or a zoom (the viewport holds still), after a window drag has settled.
-            if app.canvas.web_viewport.apply(full.size(), ctx.input(|i| i.time), changed, false) {
+            let forced = std::mem::take(&mut app.canvas.web_force_reflow);
+            // At once on entry, a zoom, or a page-spacing change (the viewport holds still), after a window drag
+            // has settled.
+            if app.canvas.web_viewport.apply(full.size(), ctx.input(|i| i.time), changed, forced) {
                 app.session.view.web_width = w;
                 // The pixel offset no longer points at the same text: keep the caret's line in view.
                 app.canvas.scroll_to_caret = true;
@@ -483,6 +493,7 @@ fn update_viewport(app: &mut WordApp, full: Rect, metrics: &ReadingMetrics, side
             }
         } else {
             app.canvas.web_viewport.leave();
+            app.canvas.web_force_reflow = false;
         }
         app.canvas.read_force_reflow = false;
         app.canvas.read_first_visible = None;
@@ -634,7 +645,7 @@ fn sync_view_state(app: &WordApp, state: &mut PageViewState) {
     // A wheel or pinch zoom is the view's own, anchored at the pointer, and reaches the session rounded to a whole
     // percent (`show_pages`): the view keeps its exact zoom while it rounds to the session's, or the rounding would
     // move the place under the pointer on the next pass.
-    let session_zoom = f64::from(v.zoom.clamp(0.1, 5.0));
+    let session_zoom = f64::from(if v.zoom.is_finite() { v.zoom.clamp(0.1, 5.0) } else { 1.0 });
     if (state.zoom * 100.0).round() != (session_zoom * 100.0).round() {
         state.zoom = session_zoom;
     }
@@ -732,7 +743,8 @@ fn show_reading(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: R
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let full = ui.available_rect_before_wrap();
     let Some(metrics) = reading_metrics::read(ui) else { return };
-    let layout = prepare_layout(app, full, &metrics, Env::of(ui).tokens.size.rail.width, ui.ctx());
+    let side = app.canvas.page_side.unwrap_or(0.0);
+    let layout = prepare_layout(app, full, &metrics, side, ui.ctx());
     if app.session.view.read_mode {
         show_reading(app, ui, &layout, full, &metrics);
     } else {
@@ -797,12 +809,19 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     let mut fix = ScrollFix::default();
     // The caret the follow wants whose page the pass did not place: its page, the page's height and the caret.
     let mut unplaced = None;
+    // The page answers for the linked Cut and Copy while it has focus: with nothing selected they are inactive, so the
+    // ribbon, the context menu and the command search grey them as production did.
+    let inactive_edits = [(EditCommand::Cut, "edit.cut"), (EditCommand::Copy, "edit.copy")]
+        .into_iter()
+        .filter(|(_, id)| !crate::app::command_board::command_enabled(app, id))
+        .fold(EditSet::NONE, |set, (command, _)| set.with(command));
     let out = PageView::new(tl!("Document"), &source, &mut state, paper)
         .options(options)
         // Hide White Space cuts each page to its text area: without the bodies the pages show whole.
         .bodies(&bodies)
         .navigation(navigation_options())
         .editor(craft::ui::primitives::EditorPurpose::Text)
+        .inactive_edits(inactive_edits)
         .rulers(show_rulers)
         .snap(crate::objects::snap(app, layout))
         .tool_regions(regions)
@@ -871,6 +890,20 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
         });
     let caret = caret_after.or(caret);
     app.canvas.page_keys = source.into_keys();
+    let side = out.spacing.side as f32;
+    if side.is_finite() {
+        let side = side.max(0.0);
+        if app.canvas.page_side.is_none_or(|prev| (prev - side).abs() > 0.01) {
+            app.canvas.page_side = Some(side);
+            if app.session.view.mode == wordcraft_layout::ViewMode::Web {
+                app.canvas.web_force_reflow = true;
+                ui.ctx().request_discard("page view side gutter changed");
+                if !ui.ctx().will_discard() {
+                    ui.ctx().request_repaint();
+                }
+            }
+        }
+    }
     // This pass's own input changed the document under the pages it drew: run the pass again, so the frame that
     // delivers a key paints its text (production laid out and painted in the one pass) rather than the next frame.
     if ran && !Arc::ptr_eq(&laid_before, &app.session.layout()) {
