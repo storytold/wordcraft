@@ -100,10 +100,10 @@ pub fn field_name(instr: &str) -> String {
     instr.split_whitespace().next().unwrap_or("").trim_start_matches('=').to_ascii_uppercase()
 }
 
-/// REF's hyperlink switch links its cached result without updating that result.
+/// REF and PAGEREF use the hyperlink switch to link their displayed text to the bookmark.
 pub(crate) fn reference_link(instr: &str) -> Option<String> {
     let (name, args) = instr.trim_start().split_once(char::is_whitespace)?;
-    if !name.eq_ignore_ascii_case("REF") {
+    if !name.eq_ignore_ascii_case("REF") && !name.eq_ignore_ascii_case("PAGEREF") {
         return None;
     }
     let args = args.trim_start();
