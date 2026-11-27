@@ -597,3 +597,38 @@ fn descriptor_size_sweep_never_panics_or_passes() {
         }
     }
 }
+
+/// A footer lookalike in entry data that only a shortened view's wider scan window reaches. The whole slice
+/// leaves it outside the window, so the whole-slice load must still be tried when the bounded view does not
+/// certify.
+/// An EOCD-like record claiming no entries: the finder keeps it as a competing candidate wherever it sits.
+fn empty_footer() -> Vec<u8> {
+    let mut record = b"PK\x05\x06".to_vec();
+    record.extend([0u8; 18]);
+    record
+}
+
+#[test]
+fn a_lookalike_only_the_shortened_view_can_see_does_not_hide_a_real_concatenation() {
+    let ordinary = raw_zip::build(&records(Doc::minimal()));
+    let comment = vec![b'c'; 4000];
+    // Offsets inside the second archive: the lookalike sits in the band the view scans and the whole slice does not.
+    let build = |filler: usize, at: usize| {
+        let mut body = vec![b'x'; filler];
+        body[at..at + 22].copy_from_slice(&empty_footer());
+        let mut recs = records(Doc::minimal());
+        recs.push(Record::new("word/media/pad.bin", 0, body));
+        with_comment(raw_zip::build(&recs), &comment)
+    };
+    let probe = build(70_000, 0);
+    let base = probe.windows(22).position(|w| w == empty_footer().as_slice()).expect("lookalike present");
+    // Want: whole_start = len - 22 - 65535 > base >= whole_start - comment.len().
+    let whole_start = probe.len() - 22 - 0xFFFF;
+    let at = (whole_start - 2000).checked_sub(base).expect("room before the band");
+    let second = build(70_000, at);
+    let position = second.windows(22).position(|w| w == empty_footer().as_slice()).unwrap();
+    assert!(position < second.len() - 22 - 0xFFFF && position + comment.len() >= second.len() - 22 - 0xFFFF, "band {position}");
+    let report = validate_bytes(&[ordinary.as_slice(), second.as_slice()].concat());
+    assert!(concatenated(&report), "{report:?}");
+    assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
+}
