@@ -2,7 +2,7 @@ use craft::behavior::{EditEvent, IconId, Selection};
 use craft::review::ThreadId;
 use craft::review::ui::CommentsPanelState;
 use craft::ui::buttons::Button;
-use craft::ui::contract::{Bind, Props, Show, ShowContainer};
+use craft::ui::contract::{Bind, Props, Show, ShowContainer, Sizing};
 use craft::ui::display::Text;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::primitives::IconSpec;
@@ -128,6 +128,12 @@ pub(crate) fn state_has_drafts(state: &CommentsPanelState) -> bool {
 /// is cut off in a balloon that isn't selected (#3382).
 pub(crate) const COMMENT_ROWS: usize = 10;
 
+/// The lines a comment or reply field in the pane shows at least. A field of one line is a single-line field, which
+/// doesn't wrap (#7906); from two lines it wraps its text and grows with it up to [`COMMENT_ROWS`]. The fields take
+/// the card's width, as they did before the port: a field measures its lines at the width it is offered, so one drawn
+/// at its own, narrower length would come out lines short of its text.
+const FIELD_LINES: usize = 2;
+
 /// A comment's text, editable in place. Typing stays in a draft until the field's value lands (focus leaves it);
 /// then [`commit_comment`] writes it back with one `review.editComment`, so each editing session is one undo step.
 /// Escape gives back the text from before, so the draft goes.
@@ -140,8 +146,9 @@ fn comment_field(app: &mut WordApp, ui: &mut Ui, document: u64, id: u32) {
     let field = ui.make_persistent_id(("comment_edit", document, id));
     let out = TextField::new(tl!("Comment").to_owned(), Bind::given(shown))
         .id(field)
-        .lines(1)
+        .lines(FIELD_LINES)
         .max_lines(COMMENT_ROWS)
+        .sizing(Sizing::FillWidth)
         .placeholder(tl!("Add a comment").to_owned())
         .enabled(editable)
         .show(ui);
@@ -198,8 +205,9 @@ fn reply_field(app: &mut WordApp, ui: &mut Ui, document: u64, id: u32) -> bool {
     let field = reply_id(document, id);
     let out = TextField::new(tl!("Reply").to_owned(), Bind::given(shown))
         .id(field)
-        .lines(1)
+        .lines(FIELD_LINES)
         .max_lines(COMMENT_ROWS)
+        .sizing(Sizing::FillWidth)
         .placeholder(tl!("Write a reply").to_owned())
         .enabled(editable)
         .show(ui);
