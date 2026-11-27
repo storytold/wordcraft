@@ -999,7 +999,7 @@ struct CentralDirectory<'a> {
 fn check_concatenated_archives(bytes: &[u8], readable: bool, acc: &mut Acc) {
     observation_contract! {
         rules: "PKG-CONCATENATED";
-        collections: "field.entries*3";
+        collections: "field.entries*4";
         scope: "input-budgeted EOCD scan respecting declared comments and at most two candidate archive splits";
         loss: "split budget, an unsupported boundary layout, or incomplete isolated package loading";
         fallback: "report incomplete coverage for unresolved candidate boundaries";
@@ -1052,9 +1052,10 @@ fn check_concatenated_archives(bytes: &[u8], readable: bool, acc: &mut Acc) {
         let (first, second) = bytes.split_at(boundary);
         // The second archive's own footer is the last exact-end record whose directory is plausible in the
         // second slice; a lookalike with no plausible directory (inside the comment) must not shadow it.
+        // The candidates are in decreasing offset order, so the first one before the boundary ends the scan.
         let second_directory = exact_ends
             .iter()
-            .filter_map(|&last| last.checked_sub(boundary))
+            .map_while(|&last| last.checked_sub(boundary))
             .take_while(|_| walks.charge(1))
             .find_map(|last| archive_count_at(second, last).map(|count| (last, count)));
         if first_count.is_none() && second_directory.is_none() {
@@ -1068,16 +1069,22 @@ fn check_concatenated_archives(bytes: &[u8], readable: bool, acc: &mut Acc) {
             acc.ran("PKG-CONCATENATED");
         }
         remaining -= 1;
-        if first_count.is_none_or(|count| count > acc.limits.entries as u64) || !standalone_opc(first, footer, acc.limits, false) {
+        let first_rels =
+            if first_count.is_some_and(|count| count <= acc.limits.entries as u64) { standalone_opc(first, footer, acc.limits) } else { None };
+        if first_rels.is_none() {
             unresolved = true;
             continue;
         }
         if let Some((last, count)) = second_directory
             && count <= acc.limits.entries as u64
-            && (first == second || standalone_opc(second, last, acc.limits, true))
         {
-            acc.add("PKG-CONCATENATED", None, format!("a second complete OPC archive starts at byte {boundary}"));
-            return;
+            // The claim is that the second archive is complete, so its package relationships must have been read
+            // cleanly whichever way it was loaded. Identical slices share one load.
+            let second_rels = if first == second { first_rels } else { standalone_trailing(second, last, acc.limits, &mut walks) };
+            if second_rels == Some(true) {
+                acc.add("PKG-CONCATENATED", None, format!("a second complete OPC archive starts at byte {boundary}"));
+                return;
+            }
         }
         unresolved = true;
     }
@@ -1103,6 +1110,15 @@ struct FooterWalks {
 
 impl FooterWalks {
     fn new(entries: usize) -> Self {
+        observation_contract! {
+            rules: "-";
+            collections: "type.HashMap*1";
+            scope: "empty per-scan memo of walked directories, filled at most once per charged walk";
+            loss: "none; an empty memo only forgoes reuse";
+            fallback: "walk the directory again, charged against the scan-wide budget";
+            package_loss: "independent";
+        }
+
         Self { budget: entries.saturating_mul(4), spent: false, done: HashMap::new() }
     }
 
@@ -1121,6 +1137,15 @@ impl FooterWalks {
     }
 
     fn footer(&mut self, bytes: &[u8], footer: usize, limit: usize) -> Footer {
+        observation_contract! {
+            rules: "-";
+            collections: "field.done*2";
+            scope: "memo lookup and insert keyed by directory start and count, one insert per budget-charged walk";
+            loss: "a refused walk (budget spent) or a previously rejected walk, which is never reused";
+            fallback: "report the footer as unanchored so the scan records incomplete coverage";
+            package_loss: "independent";
+        }
+
         let Some((start, count)) = directory_at(bytes, footer) else {
             return Footer::Rejected;
         };
@@ -1144,6 +1169,15 @@ impl FooterWalks {
 
 /// Every EOCD-like record with a comment ending exactly at EOF, within its 16-bit comment window, last first.
 fn exact_end_footers(bytes: &[u8]) -> Vec<usize> {
+    observation_contract! {
+        rules: "-";
+        collections: "type.Vec*2";
+        scope: "footer-like records inside the last 16-bit comment window of the input, at most one per byte offset";
+        loss: "input shorter than a footer, or no record whose comment ends at the end of the input";
+        fallback: "an empty list: no exact-end candidate, so the scan reports nothing for an unreadable input";
+        package_loss: "independent";
+    }
+
     let Some(last) = bytes.len().checked_sub(22) else {
         return Vec::new();
     };
@@ -1405,11 +1439,37 @@ fn directory_at(bytes: &[u8], footer: usize) -> Option<(usize, u64)> {
     Some((start, count))
 }
 
-/// Isolated loading reuses the normal entry, decompression and XML budgets.
-fn standalone_opc(bytes: &[u8], footer: usize, limits: crate::Limits, require_clean_rels: bool) -> bool {
+/// Load the trailing slice of a split. A footer proven to be the archive's own (its directory, every local
+/// extent and its comment are verified) is read through a view that ends at that footer with an empty comment,
+/// so a record copied into the comment cannot compete with it. Without that proof the slice is read whole.
+fn standalone_trailing(bytes: &[u8], footer: usize, limits: crate::Limits, walks: &mut FooterWalks) -> Option<bool> {
     observation_contract! {
         rules: "-";
-        collections: "field.content_types*2,field.incomplete*1";
+        collections: "-";
+        scope: "one copy of the proven trailing archive, bounded by the input, with a zeroed comment length";
+        loss: "an unverified footer, a directory larger than the entry budget, or an exhausted walk budget";
+        fallback: "read the whole slice as given, which can only withhold certification";
+        package_loss: "independent";
+    }
+
+    let comment = u16_at(bytes, footer + 20).unwrap_or(0);
+    let proven = comment != 0
+        && directory_at(bytes, footer).is_some_and(|(_, count)| usize::try_from(count).is_ok_and(|count| walks.charge(count)))
+        && matches!(verify_footer(bytes, footer, limits.entries), Footer::Verified(_));
+    if !proven {
+        return standalone_opc(bytes, footer, limits);
+    }
+    let mut view = bytes.get(..footer + 22)?.to_vec();
+    view.get_mut(footer + 20..footer + 22)?.fill(0);
+    standalone_opc(&view, footer, limits)
+}
+
+/// Isolated loading reuses the normal entry, decompression and XML budgets. `None` when the slice is not a
+/// complete OPC archive; otherwise whether its package-level relationships part was read cleanly.
+fn standalone_opc(bytes: &[u8], footer: usize, limits: crate::Limits) -> Option<bool> {
+    observation_contract! {
+        rules: "-";
+        collections: "field.content_types*2,field.incomplete*2,field.rels*1";
         scope: "isolated ZIP slice with its own directory and loadable Word main";
         loss: "unreadable package or incomplete package loading";
         fallback: "do not infer a complete OPC archive";
@@ -1417,21 +1477,18 @@ fn standalone_opc(bytes: &[u8], footer: usize, limits: crate::Limits, require_cl
     }
 
     let mut probe = Acc::with_limits(limits);
-    let Some(pkg) = load_archive(bytes, &mut probe, Some(footer)) else {
-        return false;
-    };
+    let pkg = load_archive(bytes, &mut probe, Some(footer))?;
     if probe.incomplete || !pkg.content_types_present || pkg.content_types.inventory_invalid {
-        return false;
+        return None;
     }
-    // A malformed or partly read package-level relationships part cannot certify the trailing archive as complete.
-    if require_clean_rels
-        && pkg.rels.iter().any(|part| part.name.eq_ignore_ascii_case("_rels/.rels") && (part.incomplete || !part.inventory_complete))
-    {
-        return false;
-    }
+    // A malformed or partly read package-level relationships part does not make the slice incomplete, but it
+    // cannot certify an archive as the complete one.
+    let rels_clean = !pkg.rels.iter().any(|part| part.name.eq_ignore_ascii_case("_rels/.rels") && (part.incomplete || !part.inventory_complete));
     match &pkg.main {
-        Resolution::One(main) => pkg.content_types.of(main).is_some_and(is_main_content_type) && main_xml_loadable(&pkg, main, &mut probe),
-        Resolution::Absent | Resolution::Unknown(_) | Resolution::Ambiguous(_) => false,
+        Resolution::One(main) => {
+            (pkg.content_types.of(main).is_some_and(is_main_content_type) && main_xml_loadable(&pkg, main, &mut probe)).then_some(rels_clean)
+        }
+        Resolution::Absent | Resolution::Unknown(_) | Resolution::Ambiguous(_) => None,
     }
 }
 
