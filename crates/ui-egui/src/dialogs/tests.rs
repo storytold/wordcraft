@@ -1892,6 +1892,45 @@ fn word_count_shows_label_and_count_on_a_line_over_close_and_cancel() {
     assert!(!is_open(h.state(), "wordCount"), "Cancel closes Word Count");
 }
 
+/// Reopening Word Count preserves the "Count words in text boxes and notes" setting.
+#[test]
+fn word_count_keeps_include_text_boxes_setting_across_reopens() {
+    use egui::accesskit::{Role, Toggled};
+    let mut app = app_with("one two three ");
+    let _ = app.run("insert.textBox", json!({"text": "four five six seven"}));
+    let mut h = app_harness(app);
+    h.run_steps(2);
+
+    let box_label = "Count words in text boxes and notes";
+    let box_toggled = |h: &egui_kittest::Harness<'_, WordApp>| h.get_by_role_and_label(Role::CheckBox, box_label).accesskit_node().toggled();
+    let word_count_is = |h: &egui_kittest::Harness<'_, WordApp>, expected: &str| {
+        let words_rect = h.get_by_label("Words").rect();
+        h.query_all_by_label(expected).any(|n| (n.rect().center().y - words_rect.center().y).abs() < 1.0)
+    };
+
+    super::open(h.state_mut(), "wordCount", &json!({})).expect("word count opens");
+    h.run_steps(3);
+    assert_eq!(box_toggled(&h), Some(Toggled::True));
+    assert!(word_count_is(&h, "7"), "counts text boxes on first open");
+
+    h.get_by_role_and_label(Role::CheckBox, box_label).click();
+    h.run_steps(3);
+    assert_eq!(box_toggled(&h), Some(Toggled::False));
+    assert!(!h.state().session.prefs.count_notes);
+    assert!(word_count_is(&h, "3"), "excludes text boxes after unticking");
+
+    h.get_by_role_and_label(Role::Button, "Cancel").click();
+    h.run_steps(3);
+    assert!(!is_open(h.state(), "wordCount"));
+    assert!(!h.state().session.prefs.count_notes);
+
+    super::open(h.state_mut(), "wordCount", &json!({})).expect("word count reopens");
+    h.run_steps(3);
+    assert!(!h.state().session.prefs.count_notes, "reopening must not turn count_notes back on");
+    assert_eq!(box_toggled(&h), Some(Toggled::False), "checkbox stays unticked across reopens");
+    assert!(word_count_is(&h, "3"), "reopened count still excludes text boxes");
+}
+
 /// #1885: the close control is at the title bar's right end; a click in the close box
 /// closes the dialog; one just under the title bar leaves it open; a drag that starts on the box
 /// doesn't move the dialog.

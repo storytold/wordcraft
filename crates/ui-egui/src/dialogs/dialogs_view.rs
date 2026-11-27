@@ -22,7 +22,9 @@ use crate::WordApp;
 /// Opens `wordCount` or `zoom`; any other name opens nothing.
 pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
     match name {
-        "wordCount" => Some(open_with(app, parent, WordCountDialog::new(), DialogHooks::prepare_only(prepare_word_count))),
+        "wordCount" => {
+            Some(open_with(app, parent, WordCountDialog::new(app.session.prefs.count_notes), DialogHooks::prepare_only(prepare_word_count)))
+        }
         "zoom" => {
             // The view keeps the zoom as a fraction (1.0 = 100%); the dialog shows and answers percent, as `view.zoom` takes it.
             let percent = (f64::from(app.session.view.zoom) * 100.0).round();
@@ -75,8 +77,8 @@ pub(crate) struct WordCountDialog {
 }
 
 impl WordCountDialog {
-    fn new() -> Self {
-        Self { stats: None, include_text_boxes: true }
+    fn new(include_text_boxes: bool) -> Self {
+        Self { stats: None, include_text_boxes }
     }
 }
 
