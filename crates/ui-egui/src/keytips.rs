@@ -1,71 +1,92 @@
 //! Word-style keytips: Alt (or F10) shows letter badges over ribbon tabs, then over a tab's
-//! controls; numbered badges also reach the customized Quick Access Toolbar. Typing never
-//! reaches the document while active.
+//! controls; numbered badges also reach the customized Quick Access Toolbar. The mechanism (phase
+//! machine, badges, claimed keys) is the framework's `Keytips`; this module gives it WordCraft's
+//! tabs, controls, legacy sequences and regions.
 
-use egui::{Align2, CornerRadius, Rect, Stroke, Ui, Vec2};
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
+
+use craft::behavior::overlay::MinWidth;
+use craft::keymap::CommandRef;
+use craft::menu::{KeytipControl, Keytips, RibbonOutput};
+use craft::ui::contract::Bind;
+use craft::ui::contract::overlay::Anchor;
+use craft::ui::contract::{Show as _, ShowContainer as _};
+use craft::ui::display::Text;
+use craft::ui::popover::Popover;
+use craft::ui::runtime::env::Label;
+use craft::ui::runtime::inspect::{self, Recorded};
+use egui::{Rect, Ui};
 
 use crate::WordApp;
-use crate::theme::{Tokens, semibold};
 
-/// egui ids the ribbon publishes its keytip state under (accessors, since `Id::new` isn't const).
-pub fn phase_id() -> egui::Id {
-    egui::Id::new("wc_keytips_phase")
-}
-pub fn tab_id() -> egui::Id {
-    egui::Id::new("wc_keytips_tab")
-}
-pub fn letters_id() -> egui::Id {
-    egui::Id::new("wc_keytips_letters")
-}
-pub fn rects_id() -> egui::Id {
-    egui::Id::new("wc_keytips_rects")
+/// The key of the inspected region the title bar records over its quick access toolbar buttons.
+pub(crate) fn qat_region() -> egui::Id {
+    egui::Id::unique("wc_keytips_qat_region")
 }
 
-/// A bare Alt press (either Alt key) arms or cancels keytips.
-fn is_alt(key: egui::Key) -> bool {
-    matches!(key, egui::Key::AltLeft | egui::Key::AltRight)
+/// The key of the inspected region the title bar records over its Search box.
+pub(crate) fn search_region() -> egui::Id {
+    egui::Id::unique("wc_keytips_search_region")
 }
 
-/// What the keytip state machine is showing.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Phase {
-    /// Keytips off; the ribbon behaves normally.
-    #[default]
-    Off,
-    /// Badges over the tabs.
-    Tabs,
-    /// Badges over one tab's groups and buttons.
-    Commands,
-    /// Partway through a legacy menu key sequence (#1697); the letters so far are in
-    /// `keytip_prefix`, and a hint stands in for the badges.
-    Legacy,
+/// The key of the inspected region the Backstage records over its page buttons.
+pub(crate) fn backstage_region() -> egui::Id {
+    egui::Id::unique("wc_keytips_backstage_region")
 }
 
-/// Which ribbon item a letter is bound to, and what pressing it does.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Target {
-    /// Switch to a tab (and show its command badges).
-    Tab(&'static str),
-    /// Run a command, optionally with parameters.
-    Cmd { id: &'static str, params: serde_json::Value },
-    /// Open a dialog by name.
-    Dialog { name: &'static str },
+/// Per-context map of ribbon `menu_button` widget ids to the command id each opens a menu for,
+/// so [`Keytips`] places badges on menu buttons without binding them to fire on pointer click.
+fn menu_buttons_id() -> egui::Id {
+    egui::Id::unique("wc_keytips_menu_buttons")
 }
 
-impl Target {
-    fn run(self, app: &mut WordApp) {
-        match self {
-            Target::Tab(tab) => {
-                let _ = app.run("ui.tab", serde_json::json!({ "tab": tab }));
+/// Records (or clears) the command id associated with a ribbon `menu_button` widget id so
+/// [`show`] can attach `CommandRef` to its inspected element for language-independent badge placement.
+pub(crate) fn note_menu_button(ctx: &egui::Context, widget_id: egui::Id, command_id: Option<&str>) {
+    let existing = ctx.data(|d| d.get_temp::<Arc<HashMap<egui::Id, CommandRef>>>(menu_buttons_id()));
+    let unchanged = match (&existing, command_id) {
+        (Some(map), Some(id)) => map.get(&widget_id).is_some_and(|cmd| cmd.id == id && cmd.params.is_null()),
+        (Some(map), None) => !map.contains_key(&widget_id),
+        (None, None) => true,
+        (None, Some(_)) => false,
+    };
+    if unchanged {
+        return;
+    }
+    ctx.data_mut(|d| {
+        let mut map = d.get_temp::<Arc<HashMap<egui::Id, CommandRef>>>(menu_buttons_id()).map(|a| (*a).clone()).unwrap_or_default();
+        match command_id {
+            Some(id) => {
+                map.insert(widget_id, CommandRef::new(id));
             }
-            Target::Cmd { id, params } => {
-                let _ = app.run(id, params);
-            }
-            Target::Dialog { name } => {
-                let _ = app.run("ui.dialog", serde_json::json!({ "name": name }));
+            None => {
+                map.remove(&widget_id);
             }
         }
+        d.insert_temp(menu_buttons_id(), Arc::new(map));
+    });
+}
+
+/// Attaches noted `menu_button` commands to uncommanded root elements of a ribbon `Recorded`
+/// snapshot so `craft::menu::Keytips` places badges on menu buttons regardless of translation.
+fn with_menu_commands(ctx: &egui::Context, recorded: Arc<Recorded>) -> Arc<Recorded> {
+    let Some(commands) = ctx.data(|d| d.get_temp::<Arc<HashMap<egui::Id, CommandRef>>>(menu_buttons_id())) else {
+        return recorded;
+    };
+    if commands.is_empty() || !recorded.elements.iter().any(|e| e.part.is_none() && e.command.is_none() && commands.contains_key(&e.id)) {
+        return recorded;
     }
+    let mut patched = (*recorded).clone();
+    for element in &mut patched.elements {
+        if element.part.is_none()
+            && element.command.is_none()
+            && let Some(cmd) = commands.get(&element.id)
+        {
+            element.command = Some(cmd.clone());
+        }
+    }
+    Arc::new(patched)
 }
 
 /// Word's tab letters, as Word for Windows shows them after Alt (File F, Design G, References S,
@@ -93,49 +114,60 @@ pub const SEARCH_LETTER: &str = "Q";
 /// Legacy menu keys (#1697): Word 2003 menu sequences Word for Windows still takes after Alt,
 /// observed there. Hidden, as in Word: no badges, not in Customize Keyboard. They start only on
 /// letters no tab keytip or Search uses (see the test).
-fn legacy() -> Vec<(&'static str, Target)> {
-    let cmd = |id| Target::Cmd { id, params: serde_json::json!({}) };
-    let dialog = |name| Target::Dialog { name };
-    vec![
-        ("VU", cmd("view.fullScreenView")),
-        ("VP", cmd("view.printLayout")),
-        ("VW", cmd("view.webLayout")),
-        ("VO", cmd("view.outline")),
-        ("VN", cmd("view.draft")),
-        ("VD", cmd("view.navigationPane")),
-        ("VL", cmd("view.ruler")),
-        ("VZ", dialog("zoom")),
-        ("EL", cmd("select.all")),
-        ("EF", dialog("find")),
-        ("EE", dialog("replace")),
-        ("EG", dialog("goto")),
-        ("IS", dialog("symbol")),
-        ("IPF", cmd("insert.picture")),
-        ("OF", dialog("font")),
-        ("OP", dialog("paragraph")),
-        ("TW", cmd("review.wordCount")),
-        ("AIT", dialog("insertTable")),
-    ]
+fn legacy() -> &'static [(&'static str, CommandRef)] {
+    static LEGACY: OnceLock<Vec<(&'static str, CommandRef)>> = OnceLock::new();
+    LEGACY.get_or_init(|| {
+        let cmd = CommandRef::new;
+        let dialog = |name: &str| CommandRef::with_params("ui.dialog", serde_json::json!({ "name": name }));
+        vec![
+            ("VU", cmd("view.fullScreenView")),
+            ("VP", cmd("view.printLayout")),
+            ("VW", cmd("view.webLayout")),
+            ("VO", cmd("view.outline")),
+            ("VN", cmd("view.draft")),
+            ("VD", cmd("view.navigationPane")),
+            ("VL", cmd("view.ruler")),
+            ("VZ", dialog("zoom")),
+            ("EL", cmd("select.all")),
+            ("EF", dialog("find")),
+            ("EE", dialog("replace")),
+            ("EG", dialog("goto")),
+            ("IS", dialog("symbol")),
+            ("IPF", cmd("insert.picture")),
+            ("OF", dialog("font")),
+            ("OP", dialog("paragraph")),
+            ("TW", cmd("review.wordCount")),
+            ("AIT", dialog("insertTable")),
+        ]
+    })
 }
 
-/// A letter in a legacy menu key sequence: run it once complete, wait while it can still grow,
-/// and ignore a letter that leads nowhere, as Word does.
-fn legacy_key(app: &mut WordApp, name: &str) {
-    let keys = format!("{}{name}", app.ui.keytip_prefix);
-    let rows = legacy();
-    if let Some((_, target)) = rows.iter().find(|(k, _)| *k == keys) {
-        app.ui.keytips = Phase::Off;
-        app.ui.keytip_prefix.clear();
-        target.clone().run(app);
-    } else if rows.iter().any(|(k, _)| k.starts_with(&keys)) {
-        app.ui.keytips = Phase::Legacy;
-        app.ui.keytip_prefix = keys;
+/// Cached `Phase::Tabs` keytip sequences (`SEARCH_LETTER` when Backstage is closed, plus Word
+/// 2003 legacy menu keys on non-macOS).
+fn sequences(backstage: bool) -> &'static [(&'static str, CommandRef)] {
+    static WITH_SEARCH: OnceLock<Vec<(&'static str, CommandRef)>> = OnceLock::new();
+    static SEARCH_ONLY: OnceLock<[(&'static str, CommandRef); 1]> = OnceLock::new();
+
+    match (cfg!(target_os = "macos"), backstage) {
+        (true, true) => &[],
+        (true, false) => SEARCH_ONLY.get_or_init(|| [(SEARCH_LETTER, CommandRef::new("tools.search"))]),
+        (false, true) => legacy(),
+        (false, false) => WITH_SEARCH.get_or_init(|| {
+            let mut v = legacy().to_vec();
+            v.push((SEARCH_LETTER, CommandRef::new("tools.search")));
+            v
+        }),
     }
 }
 
 /// The letter badge for a tab (empty when it has none).
 pub fn tab_letter(tab: &str) -> &'static str {
     TAB_LETTERS.iter().chain(&TABLE_TAB_LETTERS).find(|(t, _)| *t == tab).map(|(_, l)| *l).unwrap_or("")
+}
+
+/// The tab a badge the keytips reported belongs to.
+fn tab_of_badge(badge: &str) -> Option<&'static str> {
+    TAB_LETTERS.iter().chain(&TABLE_TAB_LETTERS).find(|(_, l)| *l == badge).map(|(t, _)| *t)
 }
 
 /// The tabs that carry a badge, in display order.
@@ -180,18 +212,19 @@ fn shortcut_letter(app: &WordApp, id: &str) -> Option<char> {
     (cs.next().is_none() && c.is_ascii_alphanumeric()).then(|| c.to_ascii_uppercase())
 }
 
-/// One ribbon control: what it is called and what it does.
+/// One ribbon control: what it is called and the command its button is bound to.
 struct Control {
     tip: &'static str,
-    target: Target,
+    command: CommandRef,
 }
 
 /// A tab's controls in the order they are drawn; mirrors `ribbon.rs`, so badges land in order.
 fn controls(tab: &str) -> Vec<Control> {
-    let c = |tip: &'static str, id: &'static str| Control { tip, target: Target::Cmd { id, params: serde_json::json!({}) } };
+    let c = |tip: &'static str, id: &'static str| Control { tip, command: CommandRef::new(id) };
     let m = c;
-    let d = |tip: &'static str, name: &'static str| Control { tip, target: Target::Dialog { name } };
-    let p = |tip: &'static str, id: &'static str, params: serde_json::Value| Control { tip, target: Target::Cmd { id, params } };
+    let d =
+        |tip: &'static str, name: &'static str| Control { tip, command: CommandRef::with_params("ui.dialog", serde_json::json!({ "name": name })) };
+    let p = |tip: &'static str, id: &'static str, params: serde_json::Value| Control { tip, command: CommandRef::with_params(id, params) };
     match tab {
         "Home" => vec![
             m("Paste", "edit.paste"),
@@ -235,7 +268,7 @@ fn controls(tab: &str) -> Vec<Control> {
             c("Pictures", "insert.picture"),
             m("Shapes", "insert.shape"),
             c("Icons", "insert.icon"),
-            c("SmartArt", "insert.smartArt"),
+            c("Diagram", "insert.smartArt"),
             c("Chart", "insert.chart"),
             d("Link", "link"),
             d("Bookmark", "bookmark"),
@@ -246,10 +279,10 @@ fn controls(tab: &str) -> Vec<Control> {
             m("Page Number", "insert.pageNumber"),
             c("Text Box", "insert.textBox"),
             c("Quick Parts", "insert.quickParts"),
-            m("WordArt", "insert.wordArt"),
+            m("Decorative Text", "insert.wordArt"),
             m("Drop Cap", "insert.dropCap"),
             c("Signature Line", "insert.signatureLine"),
-            c("Date & Time", "insert.dateTime"),
+            d("Date & Time", "dateTime"),
             c("Object", "insert.object"),
             c("Equation", "insert.equation"),
             m("Symbol", "insert.symbol"),
@@ -287,6 +320,7 @@ fn controls(tab: &str) -> Vec<Control> {
             m("Breaks", "layout.break"),
             m("Line Numbers", "layout.lineNumbers"),
             m("Hyphenation", "layout.hyphenation"),
+            c("Fit One Page", "layout.fitOnePage"),
             c("Position", "arrange.position"),
             c("Wrap Text", "arrange.wrap"),
             c("Bring Forward", "arrange.bringForward"),
@@ -332,8 +366,10 @@ fn controls(tab: &str) -> Vec<Control> {
             c("Rules", "mailings.rules"),
             c("Match Fields", "mailings.matchFields"),
             c("Preview Results", "mailings.preview"),
+            p("First Record", "mailings.first", serde_json::json!({})),
             p("Previous Record", "mailings.previous", serde_json::json!({})),
             p("Next Record", "mailings.next", serde_json::json!({})),
+            p("Last Record", "mailings.last", serde_json::json!({})),
             c("Find Recipient", "mailings.findRecipient"),
             c("Check for Errors", "mailings.checkErrors"),
             c("Finish & Merge", "mailings.finish"),
@@ -367,6 +403,7 @@ fn controls(tab: &str) -> Vec<Control> {
             c("Read Mode", "view.readMode"),
             c("Print Layout", "view.printLayout"),
             c("Web Layout", "view.webLayout"),
+            c("Markdown Source", "view.markdownSource"),
             c("Outline", "view.outline"),
             c("Draft", "view.draft"),
             c("Focus", "view.focus"),
@@ -382,6 +419,9 @@ fn controls(tab: &str) -> Vec<Control> {
             c("New Window", "view.newWindow"),
             c("Arrange All", "view.arrangeAll"),
             c("Split", "view.split"),
+            c("View Side by Side", "view.sideBySide"),
+            c("Synchronous Scrolling", "view.syncScroll"),
+            m("Switch Windows", "view.switchWindows"),
             c("Full Screen", "view.fullScreen"),
             c("Macros", "tools.macros"),
         ],
@@ -415,1005 +455,152 @@ fn controls(tab: &str) -> Vec<Control> {
     }
 }
 
-/// The badge letter for every control of a tab, in drawing order.
-/// A command keeps its own `Alt+letter` shortcut letter; the rest take a free name/word
-/// initial, then any free letter — never a reserved or already-assigned one.
-fn letters_for(app: &WordApp, tab: &str) -> Vec<String> {
-    let reserved = reserved_letters(app);
-    let ctrls = controls(tab);
-    let n = ctrls.len();
-    let mut out: Vec<Option<String>> = vec![None; n];
-    let mut used: Vec<char> = Vec::new();
+/// Maps an ASCII alphanumeric keytip letter to a static single-character `&'static str`, avoiding
+/// per-control `String` allocations when caching [`KeytipControl`].
+fn ascii_upper_str(c: char) -> Option<&'static str> {
+    const CHARS: &str = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let idx = CHARS.find(c.to_ascii_uppercase())?;
+    CHARS.get(idx..idx + 1)
+}
 
-    // Candidate letters for a control: its own shortcut letter, then its name's letters, then
-    // the initials of its words — all uppercase, alphanumeric only.
-    let candidates = |ctl: &Control, own: Option<char>| -> Vec<char> {
-        let mut v = Vec::new();
-        v.extend(own);
-        let words: Vec<&str> = ctl.tip.split_whitespace().filter(|w| w.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())).collect();
-        if let Some(w) = words.first() {
-            v.extend(w.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_uppercase()));
-        }
-        if words.len() > 1 {
-            v.extend(words.iter().map(|w| w.chars().next().unwrap_or(' ')).filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_uppercase()));
-        }
-        v
-    };
+/// Cached keytip controls and reserved shortcut letters per engine registry and active ribbon tab,
+/// avoiding per-frame `registry.all()` scans and `KeytipControl` / `CommandRef` allocations while
+/// idle.
+pub(crate) struct KeytipCache {
+    registry: Arc<wordcraft_engine::Registry>,
+    reserved: Vec<char>,
+    tab: String,
+    tab_controls: Vec<KeytipControl<'static>>,
+}
 
-    let id_of = |ctl: &Control| match &ctl.target {
-        Target::Cmd { id, .. } => *id,
-        Target::Dialog { .. } => "ui.dialog",
-        Target::Tab(_) => "ui.tab",
-    };
-
-    // Pass 1: own shortcut letters. First-come keeps it if two commands somehow share a letter.
-    for (i, ctl) in ctrls.iter().enumerate() {
-        if let Some(c) = shortcut_letter(app, id_of(ctl))
-            && !used.contains(&c)
-        {
-            used.push(c);
-            out[i] = Some(c.to_string());
-        }
-    }
-    // Pass 2: name-derived letters for everything still unassigned.
-    for (i, ctl) in ctrls.iter().enumerate() {
-        if out[i].is_some() {
-            continue;
-        }
-        let own = shortcut_letter(app, id_of(ctl));
-        let chosen = candidates(ctl, own)
+impl KeytipCache {
+    fn build_tab_controls(app: &WordApp, tab: &str) -> Vec<KeytipControl<'static>> {
+        let mut out: Vec<KeytipControl<'static>> = controls(tab)
             .into_iter()
-            .find(|c| !used.contains(c) && !reserved.contains(c))
-            .or_else(|| ('A'..='Z').find(|c| !used.contains(c) && !reserved.contains(c)));
-        match chosen {
-            Some(c) => {
-                used.push(c);
-                out[i] = Some(c.to_string());
-            }
-            None => {
-                // Two-letter badge fallback: a tab has at most ~20 controls, so this succeeds;
-                // the "?n" form keeps assignment total rather than panicking.
-                let two = ('A'..='Z').flat_map(|a| ('A'..='Z').map(move |b| format!("{a}{b}"))).find(|s| {
-                    let mut ch = s.chars();
-                    let (a, b) = (ch.next().unwrap_or('?'), ch.next().unwrap_or('?'));
-                    !out.iter().flatten().any(|o| o == s) && !reserved.contains(&a) && !reserved.contains(&b)
-                });
-                let two = two.unwrap_or_else(|| format!("?{}", out.iter().flatten().count()));
-                used.extend(two.chars());
-                out[i] = Some(two);
-            }
+            .map(|control| {
+                let letters = shortcut_letter(app, &control.command.id).and_then(ascii_upper_str);
+                KeytipControl::new(control.command, control.tip, letters)
+            })
+            .collect();
+        out.push(KeytipControl::new(CommandRef::new("tools.search"), "Search", Some(SEARCH_LETTER)));
+        out
+    }
+
+    fn new(app: &WordApp, tab: &str) -> Self {
+        KeytipCache {
+            registry: app.session.registry.clone(),
+            reserved: reserved_letters(app),
+            tab: tab.to_owned(),
+            tab_controls: Self::build_tab_controls(app, tab),
         }
     }
-    out.into_iter().map(|o| o.unwrap_or_default()).collect()
+
+    fn sync(&mut self, app: &WordApp, tab: &str) {
+        let reg_changed = !Arc::ptr_eq(&self.registry, &app.session.registry);
+        if reg_changed {
+            self.registry = app.session.registry.clone();
+            self.reserved = reserved_letters(app);
+        }
+        if reg_changed || self.tab != tab {
+            self.tab.clear();
+            self.tab.push_str(tab);
+            self.tab_controls = Self::build_tab_controls(app, tab);
+        }
+    }
 }
 
-/// Pure letter assignment `(tab letters, per-tab control letters)`, for tests without a window.
-#[cfg(test)]
-fn letters(app: &WordApp) -> (Vec<(&'static str, String)>, Vec<(String, Vec<String>)>) {
-    let tabs = badge_tabs(app).into_iter().map(|t| (t, tab_letter(t).to_string())).collect();
-    let cmds = crate::ribbon::TABS
-        .iter()
-        .filter(|t| !tab_letter(t).is_empty() || crate::ribbon::in_table_public(app))
-        .map(|t| ((*t).to_string(), letters_for(app, t)))
-        .collect();
-    (tabs, cmds)
+/// The Backstage's pages as cached static keytip controls.
+fn backstage_controls() -> &'static [KeytipControl<'static>] {
+    static CONTROLS: OnceLock<Vec<KeytipControl<'static>>> = OnceLock::new();
+    CONTROLS.get_or_init(|| {
+        crate::backstage::KEYTIPS
+            .iter()
+            .map(|(page, letter)| {
+                KeytipControl::new(CommandRef::with_params("ui.backstage", serde_json::json!({ "page": page })), page, Some(letter))
+            })
+            .collect()
+    })
 }
 
-/// A keytip control as the ribbon needs to see it: its tooltip and its command id.
-pub struct ControlInfo {
-    pub tip: &'static str,
-    pub id: &'static str,
-}
+/// Shows the keytips after the shell and the regions they place badges on, and acts on what the keys chose.
+pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>, screen_bar: Option<Rect>) {
+    let ctx = ui.ctx().clone();
+    // Alt during an object drag is part of the drag (Alt moves an object freely), not a keytip tap.
+    // PLAN: `CanvasState::object_gesture` is canvas-w9's (cv.A10).
+    let enabled = app.ui.keytips_enabled && app.canvas.object_gesture().is_none();
 
-/// A tab's badgeable controls in drawing order, for the widgets to find their own badges.
-pub fn controls_public(tab: &str) -> Vec<ControlInfo> {
-    controls(tab)
+    // A tab the ribbon shows has an element id this pass; one in the overflow menu has none and gets no badge.
+    // PLAN: assumed `RibbonOutput::tab_ids: Vec<(T, egui::Id)>` (ribbon-w3, S-L361).
+    let tabs: Vec<(Label, &str, egui::Id)> = badge_tabs(app)
         .into_iter()
-        .map(|c| ControlInfo {
-            tip: c.tip,
-            id: match &c.target {
-                Target::Cmd { id, .. } => id,
-                Target::Dialog { .. } => "ui.dialog",
-                Target::Tab(_) => "ui.tab",
-            },
-        })
-        .collect()
-}
+        .filter_map(|t| ribbon.tab_ids.iter().find(|(name, _)| name == t).map(|(_, id)| (Label::from(t), tab_letter(t), *id)))
+        .collect();
 
-/// A keytip badge: letters or toolbar numbers, high contrast in both themes.
-pub fn badge(ui: &Ui, rect: Rect, letter: &str) {
-    let count = letter.chars().count();
-    if count == 0 || count > 4 {
-        return;
-    }
-    let t = Tokens::get(ui.ctx());
-    let font = semibold(if count > 3 { 8.5 } else { 10.0 });
-    let width = ui.ctx().fonts_mut(|f| f.layout_no_wrap(letter.to_string(), font.clone(), t.on_accent).size().x);
-    let r = Rect::from_min_size(rect.min + Vec2::new(2.0, 1.0), Vec2::new((width + 4.0).max(15.0), 15.0));
-    let p = ui.painter();
-    p.rect_filled(r, CornerRadius::same(3), t.accent);
-    p.rect_stroke(r, CornerRadius::same(3), Stroke::new(1.0, t.menu), egui::StrokeKind::Inside);
-    p.text(r.center(), Align2::CENTER_CENTER, letter, font, t.on_accent);
-}
-
-/// Record a tab badge over a tab's real rect, called as each tab is laid out. After a typed
-/// prefix (J, or Quick Access Toolbar digits) only the badges it can still complete show.
-pub fn record_tab(rect: Rect, tab: &str, prefix: &str, out: &mut Vec<(Rect, String)>) {
-    let l = tab_letter(tab);
-    if !l.is_empty() && l.starts_with(prefix) {
-        out.push((rect, l.to_string()));
-    }
-}
-
-/// Record a control badge over the control's real rect. `index` is the control's position in
-/// the tab's drawing order, which is exactly the order `letters_for` assigns letters in.
-pub fn record_control(rect: Rect, letter: String, out: &mut Vec<(Rect, String)>) {
-    out.push((rect, letter));
-}
-
-/// The badge letter for the `index`th control of a tab.
-pub fn letter_for(app: &WordApp, index: usize) -> String {
-    letters_for(app, &app.ui.tab).get(index).cloned().unwrap_or_default()
-}
-
-/// The number of badgeable controls on a tab (so callers can index them in drawing order).
-pub fn control_count(tab: &str) -> usize {
-    controls(tab).len()
-}
-
-/// Handle a key while keytips are showing. Returns true when the key was consumed.
-pub fn handle_key(app: &mut WordApp, key: egui::Key) -> bool {
-    if app.ui.keytips != Phase::Off {
-        match key {
-            egui::Key::Escape => {
-                app.ui.keytips = Phase::Off;
-            }
-            k if is_alt(k) => {
-                app.ui.keytips = if app.ui.keytips == Phase::Tabs { Phase::Off } else { Phase::Tabs };
-            }
-            k => {
-                let Some(name) = keys::key_name(k).map(|n| n.to_ascii_uppercase()) else {
-                    // A key with no keytip cancels the mode.
-                    app.ui.keytips = Phase::Off;
-                    app.ui.keytip_prefix.clear();
-                    return true;
-                };
-                // Quick Access Toolbar badges are all digits; a pending prefix keeps its kind.
-                let typed = if app.ui.keytip_prefix.is_empty() { name.as_str() } else { app.ui.keytip_prefix.as_str() };
-                if app.ui.keytips == Phase::Tabs && typed.chars().all(|c| c.is_ascii_digit()) {
-                    qat_key(app, &name);
-                    return true;
-                }
-                match app.ui.keytips {
-                    Phase::Tabs => {
-                        let name = format!("{}{name}", app.ui.keytip_prefix);
-                        let tabs = badge_tabs(app);
-                        let hit = tabs.iter().copied().find(|t| tab_letter(t) == name);
-                        // J waits for the table tab's second letter.
-                        if hit.is_none() && tabs.iter().any(|t| tab_letter(t).starts_with(&name)) {
-                            app.ui.keytip_prefix = name;
-                            return true;
-                        }
-                        match hit {
-                            Some(tab) => {
-                                let _ = app.run("ui.tab", serde_json::json!({ "tab": tab }));
-                                // File opens the Backstage: no ribbon commands to badge.
-                                app.ui.keytips = if tab == "File" { Phase::Off } else { Phase::Commands };
-                            }
-                            // Q is the title bar's Search box, as in Word (#819).
-                            None if name == SEARCH_LETTER => {
-                                app.ui.keytips = Phase::Off;
-                                let _ = app.run("tools.search", serde_json::json!({}));
-                            }
-                            // Word 2003's menu keys: off on macOS, where F10 still shows badges.
-                            None if !cfg!(target_os = "macos") && legacy().iter().any(|(k, _)| k.starts_with(name.as_str())) => {
-                                legacy_key(app, &name);
-                                return true;
-                            }
-                            None => app.ui.keytips = Phase::Off,
-                        }
-                    }
-                    Phase::Legacy => {
-                        legacy_key(app, &name);
-                        return true;
-                    }
-                    Phase::Commands => {
-                        let tab = app.ui.tab.clone();
-                        let ls = letters_for(app, &tab);
-                        let ctrls = controls(&tab);
-                        let mut hit: Option<Target> = None;
-                        for (ctl, l) in ctrls.into_iter().zip(ls) {
-                            if l == name {
-                                hit = Some(ctl.target);
-                                break;
-                            }
-                        }
-                        app.ui.keytips = Phase::Off;
-                        if let Some(t) = hit {
-                            t.run(app);
-                        }
-                    }
-                    Phase::Off => {}
-                }
-            }
+    let cache = match app.keytip_cache.take() {
+        Some(mut cache) => {
+            cache.sync(app, &app.ui.tab);
+            cache
         }
-        app.ui.keytip_prefix.clear();
-        return true;
-    }
-    false
-}
-
-/// The first nine buttons use one digit. Further buttons use a leading zero and equally wide
-/// numbers, so no complete badge is the prefix of another, even for the maximum-size toolbar.
-pub(crate) fn qat_label(index: usize, count: usize) -> String {
-    if index < 9 {
-        (index + 1).to_string()
+        None => KeytipCache::new(app, &app.ui.tab),
+    };
+    let controls: &[KeytipControl<'_>] = if app.ui.backstage { backstage_controls() } else { &cache.tab_controls };
+    let sequences = sequences(app.ui.backstage);
+    // A hidden toolbar has no badges, and a disabled command's button has none to press.
+    let digits: Vec<CommandRef> = if app.ui.quick_access_toolbar {
+        app.session
+            .ribbon
+            .qat()
+            .iter()
+            // PLAN: chrome-w8 gives `qat_enabled` a leading `ctx`.
+            .filter(|id| crate::chrome::qat_enabled(&ctx, app, id))
+            .map(|id| CommandRef::new(id.to_string()))
+            .collect()
     } else {
-        let width = count.saturating_sub(9).to_string().len();
-        format!("0{:0width$}", index.saturating_sub(8))
-    }
-}
+        Vec::new()
+    };
 
-fn qat_key(app: &mut WordApp, name: &str) {
-    app.ui.keytip_prefix.push_str(name);
-    // A hidden toolbar has no badges, so a digit cancels the mode and runs nothing (#1945).
-    let ids = if app.ui.quick_access_toolbar { app.session.ribbon.qat() } else { Vec::new() };
-    let mut hit = None;
-    let mut pending = false;
-    for (index, id) in ids.iter().enumerate() {
-        let label = qat_label(index, ids.len());
-        if label == app.ui.keytip_prefix {
-            hit = Some((*id).to_string());
-            break;
-        }
-        pending |= label.starts_with(&app.ui.keytip_prefix);
+    let mut places: Vec<Arc<Recorded>> = Vec::new();
+    let patch_menu_places = enabled && (app.keytips_active || !ctx.input(|i| i.events.is_empty()));
+    places.extend(ribbon.controls.clone().map(|recorded| if patch_menu_places { with_menu_commands(&ctx, recorded) } else { recorded }));
+    places.extend(inspect::recorded(&ctx, qat_region()));
+    places.extend(inspect::recorded(&ctx, search_region()));
+    if app.ui.backstage {
+        places.extend(inspect::recorded(&ctx, backstage_region()));
     }
-    if hit.is_some() || !pending {
-        app.ui.keytips = Phase::Off;
-        app.ui.keytip_prefix.clear();
-        if let Some(id) = hit
-            && crate::chrome::qat_enabled(app, &id)
-        {
-            let _ = app.run(&id, serde_json::json!({}));
-        }
+
+    let out = Keytips::new(enabled)
+        .tabs(&tabs)
+        .controls(controls)
+        .sequences(sequences)
+        .digits(&digits)
+        .reserved(&cache.reserved)
+        .places(&places)
+        .show_over(ui);
+    app.keytip_cache = Some(cache);
+    // PLAN: `WordApp::keytips_active` is app-hub's (rb.A11).
+    app.keytips_active = out.active;
+    if let Some(tab) = out.tab.as_deref().and_then(tab_of_badge) {
+        let _ = app.run("ui.tab", serde_json::json!({ "tab": tab }));
     }
-}
-
-/// Alt (or F10) turns keytips on: the first press shows the tab badges.
-pub fn activate(app: &mut WordApp) {
-    if app.ui.keytips_enabled && app.ui.keytips == Phase::Off {
-        app.ui.keytip_prefix.clear();
-        app.ui.keytips = Phase::Tabs;
-    }
-}
-
-use crate::keys;
-
-/// Keytips are suppressed while the Backstage or a modal dialog is open, or while a text field
-/// (not the canvas) has focus; the canvas lets Alt open keytips and `canvas_events` swallows
-/// typing while they show.
-pub fn suppressed(app: &WordApp, ctx: &egui::Context) -> bool {
-    !app.ui.keytips_enabled || app.ui.backstage || app.dialog.is_some() || (ctx.egui_wants_keyboard_input() && !app.canvas.focused)
-}
-
-/// Native backends report Alt through both key and modifier events, in either order. Track
-/// the transition once; the key-up event can still carry the old `alt: true` modifier state.
-/// A release is a keytip tap only if the Alt modifier was on during the press: AltGr (Right Alt
-/// on Polish, German, Czech… layouts) is a Right Alt key without it on Linux and Ctrl+Alt on
-/// Windows, and types characters instead (#2388).
-fn alt_transition(app: &mut WordApp, pressed: bool, modifiers: egui::Modifiers) -> bool {
-    let other_modifier = modifiers.ctrl || modifiers.shift || modifiers.command || modifiers.mac_cmd;
-    if pressed {
-        if !app.ui.alt_pressed {
-            app.ui.alt_chord_used = false;
-            app.ui.alt_modifier_seen = false;
-        }
-        app.ui.alt_pressed = true;
-        app.ui.alt_chord_used |= other_modifier;
-        app.ui.alt_modifier_seen |= modifiers.alt;
-        false
-    } else {
-        let released = std::mem::take(&mut app.ui.alt_pressed);
-        let seen = std::mem::take(&mut app.ui.alt_modifier_seen) || modifiers.alt;
-        released && !std::mem::take(&mut app.ui.alt_chord_used) && !other_modifier && seen
-    }
-}
-
-/// Read keytip input every frame, before layout, so the frame paints the new state. Suppression
-/// cancels keytips so letters reach the text; Alt still reaches the rest of the UI (the
-/// registry's Alt+letter shortcuts are untouched).
-///
-/// Keytips arm on a bare Alt *release* with no key pressed in between — the same chord Word
-/// uses. On macOS they never arm from Alt at all, because Option is how you type accented
-/// characters there and hijacking it would swallow the next letter.
-pub fn logic(app: &mut WordApp, ctx: &egui::Context) {
-    if suppressed(app, ctx) || !ctx.input(|i| i.focused) {
-        app.ui.keytips = Phase::Off;
-        app.ui.keytip_prefix.clear();
-        app.ui.alt_pressed = false;
-        app.ui.alt_chord_used = false;
-        app.ui.alt_key_down = false;
-        app.ui.alt_modifier_seen = false;
-        app.keytip_rects.clear();
-        ctx.data_mut(|d| {
-            d.insert_temp(phase_id(), Phase::Off);
-            d.remove::<Vec<(Rect, String)>>(rects_id());
-        });
-        return;
-    }
-    // On macOS Option+key types accents, so Alt must never arm keytips there.
-    const ALT_ARMS: bool = !cfg!(target_os = "macos");
-    let events: Vec<egui::Event> = ctx.input(|i| i.events.clone());
-    // Alt pressed or let go while dragging (an object, a selection) is part of the drag (Alt
-    // moves an object freely), not a keytip tap.
-    let dragging = app.canvas.obj_drag.is_some() || ctx.input(|i| i.pointer.any_down());
-    let mut other_key = false;
-    let mut alt_released = false;
-    let mut f10 = false;
-    for e in &events {
-        match e {
-            egui::Event::Key { key, pressed, modifiers, .. } => {
-                if is_alt(*key) {
-                    app.ui.alt_key_down = *pressed;
-                    // Left Alt is never AltGr, whatever modifiers the event carries.
-                    let modifiers = egui::Modifiers { alt: modifiers.alt || *key == egui::Key::AltLeft, ..*modifiers };
-                    alt_released |= alt_transition(app, *pressed, modifiers);
-                } else if *pressed {
-                    other_key = true;
-                    app.ui.alt_chord_used = true;
-                    if *key == egui::Key::F10 && !modifiers.any() {
-                        f10 = true;
-                    }
-                }
-            }
-            // Alt off while an Alt key is still down (AltGr on Linux turns Level 3 Shift on, not
-            // Alt): the key's release ends the press, not this.
-            egui::Event::ModifiersChanged(modifiers) if !(app.ui.alt_key_down && !modifiers.alt) => {
-                alt_released |= alt_transition(app, modifiers.alt, *modifiers);
-            }
-            egui::Event::PointerButton { pressed: true, .. } => {
-                other_key = true;
-                app.ui.alt_chord_used = true;
-            }
-            _ => {}
-        }
-        if dragging && app.ui.alt_pressed {
-            app.ui.alt_chord_used = true;
+    if let Some(pending) = &out.pending {
+        // With no ribbon showing (Focus, Full Screen View) the hint hangs under the screen bar.
+        if let Some(anchor) = ribbon.tabs.or(screen_bar) {
+            legacy_hint(ui, pending, anchor);
         }
     }
-    // Route letter/navigation keys to the keytips while they are showing.
-    let mut consumed = Vec::new();
-    for e in &events {
-        if let egui::Event::Key { key, pressed: true, modifiers, .. } = e
-            && app.ui.keytips != Phase::Off
-            && !is_alt(*key)
-            && (*key != egui::Key::F10 || modifiers.any())
-            && handle_key(app, *key)
-        {
-            consumed.push(*key);
-        }
-    }
-    // A badge can turn the mode off before canvas_events runs. Consume both the key and its
-    // text event now, or the digit/letter would also be typed into the document (#620).
-    if !consumed.is_empty() {
-        ctx.input_mut(|i| {
-            i.events.retain(|e| match e {
-                egui::Event::Key { key, pressed: true, .. } => !consumed.contains(key),
-                egui::Event::Text(_) => false,
-                _ => true,
-            });
-        });
-    }
-    if ALT_ARMS && alt_released && !other_key {
-        app.ui.keytips = if app.ui.keytips == Phase::Tabs { Phase::Off } else { Phase::Tabs };
-        app.ui.keytip_prefix.clear();
-    } else if f10 {
-        activate(app);
-    }
-    if app.ui.keytips == Phase::Off {
-        app.ui.keytip_prefix.clear();
-    }
-    // Publish the state the ribbon widgets read to place their badges, and clear last frame's.
-    ctx.data_mut(|d| {
-        d.insert_temp(phase_id(), app.ui.keytips);
-        d.insert_temp(tab_id(), app.ui.tab.clone());
-        if matches!(app.ui.keytips, Phase::Commands) {
-            d.insert_temp(letters_id().with(&app.ui.tab), letters_for(app, &app.ui.tab));
-            d.insert_temp(rects_id(), Vec::<(egui::Rect, String)>::new());
-        } else {
-            d.remove::<Vec<(egui::Rect, String)>>(rects_id());
-        }
-    });
-    app.keytip_rects.clear();
 }
 
-/// Paint the badges for the current phase over the ribbon. Called after the ribbon is laid out,
-/// so every badge sits exactly on its own control and can never overlap another one.
-pub fn show(app: &mut WordApp, ctx: &egui::Context, ui: &mut Ui) {
-    if app.ui.keytips == Phase::Off || suppressed(app, ctx) {
-        return;
-    }
-    // Tab badges were recorded during layout; command badges were published to egui memory by
-    // the widgets themselves (they own their rects).
-    let tabs = std::mem::take(&mut app.keytip_rects);
-    if app.ui.keytips == Phase::Legacy {
-        legacy_hint(app, ui, tabs.iter().map(|(r, _)| *r).reduce(|a, b| a.union(b)));
-        return;
-    }
-    let cmds: Vec<(Rect, String)> = ui.data(|d| d.get_temp::<Vec<(Rect, String)>>(rects_id())).unwrap_or_default();
-    for (r, l) in tabs.into_iter().chain(cmds) {
-        badge(ui, r, &l);
-    }
-}
-
-/// Where the legacy hint hangs from: the tab row, or, with no ribbon showing (Focus, Full Screen
-/// View), the top of the window under the slim bar, so Alt, V still says it's waiting.
-fn legacy_hint_anchor(tabs: Option<Rect>, window: Rect) -> Rect {
-    tabs.unwrap_or_else(|| Rect::from_min_size(window.left_top(), Vec2::new(0.0, crate::chrome::SCREEN_BAR_HEIGHT)))
-}
-
-/// The hint under the tab row while a legacy menu key sequence waits for its next letter.
-fn legacy_hint(app: &WordApp, ui: &Ui, tabs: Option<Rect>) {
-    let tabs = legacy_hint_anchor(tabs, ui.ctx().content_rect());
-    let t = Tokens::get(ui.ctx());
-    let keys: Vec<String> = app.ui.keytip_prefix.chars().map(String::from).collect();
+/// The hint under `anchor` while a legacy menu key sequence waits for its next letter.
+fn legacy_hint(ui: &mut Ui, pending: &str, anchor: Rect) {
+    let keys: Vec<String> = pending.chars().map(String::from).collect();
     let text = crate::i18n::fmt(tl!("Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel."), &[("keys", &keys.join(", "))]);
-    let font = egui::FontId::proportional(12.0);
-    let galley = ui.ctx().fonts_mut(|f| f.layout_no_wrap(text, font, t.text));
-    let r = Rect::from_min_size(tabs.left_bottom() + Vec2::new(4.0, 2.0), galley.size() + Vec2::new(16.0, 10.0));
-    let p = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("wc_legacy_keys")));
-    p.rect_filled(r, CornerRadius::same(4), t.menu);
-    p.rect_stroke(r, CornerRadius::same(4), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-    p.galley(r.min + Vec2::new(8.0, 5.0), galley, t.text);
+    let mut open = true;
+    Popover::new(tl!("Old menu keys"), Bind::bound(&mut open))
+        .overlay(|overlay| overlay.anchor(Anchor::Rect(anchor)).min_width(MinWidth::None))
+        .show(ui, |ui, _| {
+            Text::new(text.clone()).show(ui);
+        });
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn app() -> WordApp {
-        WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default())
-    }
-
-    fn key_event(key: egui::Key, pressed: bool, modifiers: egui::Modifiers) -> egui::Event {
-        egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers }
-    }
-
-    fn input_frame(ctx: &egui::Context, app: &mut WordApp, events: Vec<egui::Event>) {
-        ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| logic(app, ui.ctx())).drop_without_applying_deltas();
-    }
-
-    #[test]
-    fn native_alt_taps_toggle_once_in_either_event_order() {
-        let alt = egui::Modifiers { alt: true, ..Default::default() };
-        // Key-up can precede ModifiersChanged and still carry alt=true. Some backends send
-        // only modifier events; a fast tap can also fit entirely in a single frame.
-        for key in [None, Some(egui::Key::AltLeft), Some(egui::Key::AltRight)] {
-            for modifiers_first in [false, true] {
-                for same_frame in [false, true] {
-                    let ctx = egui::Context::default();
-                    let mut a = app();
-                    let mut press = vec![egui::Event::ModifiersChanged(alt)];
-                    let mut release = vec![egui::Event::ModifiersChanged(egui::Modifiers::NONE)];
-                    if let Some(key) = key {
-                        if modifiers_first {
-                            press.push(key_event(key, true, alt));
-                            release.push(key_event(key, false, egui::Modifiers::NONE));
-                        } else {
-                            press.insert(0, key_event(key, true, egui::Modifiers::NONE));
-                            release.insert(0, key_event(key, false, alt));
-                        }
-                    }
-                    for expected in [if cfg!(target_os = "macos") { Phase::Off } else { Phase::Tabs }, Phase::Off] {
-                        if same_frame {
-                            input_frame(&ctx, &mut a, press.iter().chain(&release).cloned().collect());
-                        } else {
-                            input_frame(&ctx, &mut a, press.clone());
-                            input_frame(&ctx, &mut a, release.clone());
-                        }
-                        assert_eq!(a.ui.keytips, expected, "key={key:?}, modifiers_first={modifiers_first}, same_frame={same_frame}");
-                        assert!(!a.ui.alt_pressed);
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn native_alt_chords_and_interrupted_taps_do_not_activate() {
-        let ctx = egui::Context::default();
-        let mut a = app();
-        let alt = egui::Modifiers { alt: true, ..Default::default() };
-        for modifier in [egui::Modifiers::CTRL, egui::Modifiers::SHIFT, egui::Modifiers::MAC_CMD] {
-            input_frame(&ctx, &mut a, vec![egui::Event::ModifiersChanged(modifier | alt)]);
-            // Releasing the other modifier first must not turn this into a bare Alt tap.
-            input_frame(&ctx, &mut a, vec![egui::Event::ModifiersChanged(alt)]);
-            input_frame(&ctx, &mut a, vec![egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
-            assert_eq!(a.ui.keytips, Phase::Off);
-        }
-        for event in [
-            key_event(egui::Key::ArrowDown, true, alt),
-            egui::Event::PointerButton { pos: egui::pos2(400.0, 300.0), button: egui::PointerButton::Primary, pressed: true, modifiers: alt },
-        ] {
-            input_frame(&ctx, &mut a, vec![egui::Event::ModifiersChanged(alt)]);
-            input_frame(&ctx, &mut a, vec![event]);
-            // A repeated key-down must not forget the key/mouse chord.
-            input_frame(&ctx, &mut a, vec![key_event(egui::Key::AltLeft, true, alt)]);
-            input_frame(&ctx, &mut a, vec![key_event(egui::Key::AltLeft, false, alt), egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
-            assert_eq!(a.ui.keytips, Phase::Off);
-        }
-        input_frame(&ctx, &mut a, vec![egui::Event::ModifiersChanged(alt)]);
-        ctx.run_ui(egui::RawInput { focused: false, events: vec![egui::Event::WindowFocused(false)], ..Default::default() }, |ui| {
-            logic(&mut a, ui.ctx())
-        })
-        .drop_without_applying_deltas();
-        input_frame(&ctx, &mut a, vec![key_event(egui::Key::AltLeft, false, alt), egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
-        assert_eq!(a.ui.keytips, Phase::Off, "returning after Alt+Tab must not arm keytips");
-        input_frame(&ctx, &mut a, vec![egui::Event::ModifiersChanged(alt)]);
-        a.ui.backstage = true;
-        input_frame(&ctx, &mut a, vec![]);
-        a.ui.backstage = false;
-        input_frame(&ctx, &mut a, vec![egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
-        assert_eq!(a.ui.keytips, Phase::Off, "suppression cancels the pending Alt tap");
-    }
-
-    #[test]
-    fn tab_letters_match_word() {
-        // Observed in Word for Windows (Microsoft 365): Alt shows these over the tabs.
-        assert_eq!(tab_letter("File"), "F");
-        assert_eq!(tab_letter("Home"), "H");
-        assert_eq!(tab_letter("Insert"), "N");
-        assert_eq!(tab_letter("Design"), "G");
-        assert_eq!(tab_letter("Layout"), "P");
-        assert_eq!(tab_letter("References"), "S");
-        assert_eq!(tab_letter("Mailings"), "M");
-        assert_eq!(tab_letter("Review"), "R");
-        assert_eq!(tab_letter("View"), "W");
-        assert_eq!(tab_letter("Help"), "Y");
-        assert_eq!(tab_letter("Table Design"), "JT");
-        assert_eq!(tab_letter("Table Layout"), "JL");
-    }
-
-    #[test]
-    fn every_keytip_command_is_registered() {
-        // The keytip tables name commands by id; a renamed or removed command must fail here,
-        // not silently do nothing when its badge is pressed. Features not built yet are fine
-        // when the Word feature catalog lists them (the ribbon shows them too); `ui.*` commands are
-        // the app's own (`WordApp::run`).
-        let a = app();
-        let catalog: Vec<&str> = wordcraft_engine::catalog::entries().into_iter().map(|e| e.3).collect();
-        let mut missing = Vec::new();
-        for (tab, _) in TAB_LETTERS.iter().chain(&TABLE_TAB_LETTERS) {
-            for ctrl in controls(tab) {
-                if let Target::Cmd { id, .. } = ctrl.target
-                    && a.session.registry.get(id).is_none()
-                    && !catalog.contains(&id)
-                    && !id.starts_with("ui.")
-                {
-                    missing.push(format!("{tab}: {id}"));
-                }
-            }
-        }
-        assert!(missing.is_empty(), "unregistered: {missing:#?}");
-    }
-
-    #[test]
-    fn letters_are_unique_inside_every_tab() {
-        let a = app();
-        let (tabs, cmds) = letters(&a);
-        for (_, ls) in &cmds {
-            let mut seen = Vec::new();
-            for l in ls {
-                assert!(!seen.contains(l), "duplicate badge letter {l}");
-                seen.push(l.clone());
-            }
-        }
-        let mut tl = Vec::new();
-        for (tab, l) in &tabs {
-            assert!(!l.is_empty(), "tab {tab} has no badge");
-            assert!(!tl.contains(l), "duplicate tab letter {l}");
-            tl.push(l.clone());
-        }
-    }
-
-    #[test]
-    fn keytips_never_reuse_another_commands_shortcut_letter() {
-        let a = app();
-        let reserved = reserved_letters(&a);
-        let (_, cmds) = letters(&a);
-        for (tab, ls) in &cmds {
-            let ctrls = controls(tab);
-            let ids: Vec<String> = ctrls
-                .iter()
-                .map(|c| match &c.target {
-                    Target::Cmd { id, .. } => (*id).to_string(),
-                    _ => "ui.dialog".to_string(),
-                })
-                .collect();
-            for (i, l) in ls.iter().enumerate() {
-                let id = ids.get(i).map(|s| s.as_str()).unwrap_or("");
-                if let Some(sc) = shortcut_letter(&a, id) {
-                    assert_eq!(l, &sc.to_string(), "{tab}: {id} should keep its shortcut letter {sc}");
-                } else if reserved.contains(&l.chars().next().unwrap_or('?')) {
-                    panic!("{tab}: badge {l} collides with another command's shortcut");
-                }
-            }
-        }
-    }
-
-    /// Alt+drag selects a column (#237); releasing Alt afterwards must not open keytips. A bare
-    /// Alt tap still does (off macOS, where Option types accents).
-    #[test]
-    fn alt_click_or_drag_does_not_arm_keytips_on_release() {
-        let ctx = egui::Context::default();
-        let mut a = app();
-        a.ui.backstage = false;
-        a.dialog = None;
-        let alt = egui::Modifiers { alt: true, ..Default::default() };
-        let key = |pressed, modifiers| egui::Event::Key { key: egui::Key::AltLeft, physical_key: None, pressed, repeat: false, modifiers };
-        let pos = egui::pos2(400.0, 300.0);
-        let frame = |a: &mut WordApp, events: Vec<egui::Event>| {
-            let input = egui::RawInput { events, ..Default::default() };
-            ctx.run_ui(input, |ui| logic(a, ui.ctx())).drop_without_applying_deltas();
-        };
-        // Alt down, drag with the mouse over several frames, Alt up.
-        frame(&mut a, vec![key(true, alt)]);
-        frame(&mut a, vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: alt }]);
-        frame(&mut a, vec![egui::Event::PointerMoved(pos + egui::vec2(60.0, 40.0))]);
-        frame(&mut a, vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: alt }]);
-        frame(&mut a, vec![key(false, egui::Modifiers::NONE)]);
-        assert_eq!(a.ui.keytips, Phase::Off, "Alt+drag then Alt up leaves keytips off");
-        // Alt held while a key is pressed in a later frame: also a chord.
-        frame(&mut a, vec![key(true, alt)]);
-        frame(&mut a, vec![egui::Event::Key { key: egui::Key::ArrowDown, physical_key: None, pressed: true, repeat: false, modifiers: alt }]);
-        frame(&mut a, vec![key(false, egui::Modifiers::NONE)]);
-        assert_eq!(a.ui.keytips, Phase::Off, "Alt+key then Alt up leaves keytips off");
-        // A bare tap (press and release in separate frames) arms them.
-        frame(&mut a, vec![key(true, alt)]);
-        frame(&mut a, vec![key(false, egui::Modifiers::NONE)]);
-        let tap = if cfg!(target_os = "macos") { Phase::Off } else { Phase::Tabs };
-        assert_eq!(a.ui.keytips, tap);
-    }
-
-    /// #1697: Alt, V, U turns on Full Screen View, as in Word for Windows; Alt, V waits with a hint
-    /// instead of tab badges; a letter that leads nowhere is ignored; Esc ends the sequence and
-    /// Alt goes back to the tab badges.
-    #[test]
-    fn legacy_menu_keys() {
-        let mut a = app();
-        let keys = |a: &mut WordApp, ks: &[egui::Key]| {
-            activate(a);
-            for k in ks {
-                assert!(handle_key(a, *k));
-            }
-        };
-        if cfg!(target_os = "macos") {
-            // Off on macOS: F10's badges take only the ribbon's letters.
-            keys(&mut a, &[egui::Key::V]);
-            assert_eq!(a.ui.keytips, Phase::Off);
-            return;
-        }
-        keys(&mut a, &[egui::Key::V]);
-        assert_eq!((a.ui.keytips, a.ui.keytip_prefix.as_str()), (Phase::Legacy, "V"));
-        assert!(handle_key(&mut a, egui::Key::S), "S leads nowhere after V");
-        assert_eq!((a.ui.keytips, a.ui.keytip_prefix.as_str()), (Phase::Legacy, "V"), "and is ignored");
-        assert!(handle_key(&mut a, egui::Key::U));
-        assert_eq!(a.ui.keytips, Phase::Off);
-        assert!(a.ui.keytip_prefix.is_empty());
-        assert!(a.session.view.full_screen_view, "Alt, V, U: Full Screen View");
-        // Three letters: Alt, A, I, T opens Insert Table.
-        keys(&mut a, &[egui::Key::A, egui::Key::I]);
-        assert_eq!((a.ui.keytips, a.ui.keytip_prefix.as_str()), (Phase::Legacy, "AI"));
-        assert!(handle_key(&mut a, egui::Key::T));
-        assert!(matches!(a.dialog, Some(crate::dialogs::Dialog::InsertTable { .. })));
-        a.dialog = None;
-        // Esc ends the whole sequence; Alt goes back to the tab badges.
-        keys(&mut a, &[egui::Key::A, egui::Key::I, egui::Key::Escape]);
-        assert_eq!(a.ui.keytips, Phase::Off);
-        assert!(a.ui.keytip_prefix.is_empty());
-        keys(&mut a, &[egui::Key::E, egui::Key::AltLeft]);
-        assert_eq!(a.ui.keytips, Phase::Tabs);
-        assert!(a.ui.keytip_prefix.is_empty());
-        // The ribbon comes first: W is still the View tab.
-        a.ui.keytips = Phase::Off;
-        keys(&mut a, &[egui::Key::W]);
-        assert_eq!((a.ui.tab.as_str(), a.ui.keytips), ("View", Phase::Commands));
-    }
-
-    /// #1697 review: with no ribbon showing (Focus, Full Screen View) no tab rects are recorded,
-    /// so the hint hangs under the slim bar at the top of the window instead of not showing.
-    #[test]
-    fn the_legacy_hint_hangs_under_the_slim_bar_without_a_ribbon() {
-        let window = Rect::from_min_size(egui::pos2(0.0, 0.0), Vec2::new(1440.0, 900.0));
-        let anchor = legacy_hint_anchor(None, window);
-        assert_eq!(anchor.left_bottom(), egui::pos2(0.0, crate::chrome::SCREEN_BAR_HEIGHT));
-        let tabs = Rect::from_min_max(egui::pos2(10.0, 40.0), egui::pos2(600.0, 64.0));
-        assert_eq!(legacy_hint_anchor(Some(tabs), window), tabs, "under the tab row when the ribbon shows");
-    }
-
-    /// #1697: legacy sequences never start on a tab keytip (table tabs included) or Search, and
-    /// every one reaches a command or dialog that exists.
-    #[test]
-    fn legacy_menu_keys_stay_off_the_ribbon_letters_and_all_resolve() {
-        let mut a = app();
-        a.run("insert.table", serde_json::json!({"rows": 2, "cols": 2})).unwrap();
-        let mut taken: Vec<&str> = badge_tabs(&a).into_iter().map(tab_letter).collect();
-        taken.push(SEARCH_LETTER);
-        for (keys, target) in legacy() {
-            let first = &keys[..1];
-            assert!(!taken.contains(&first), "{keys} starts on a ribbon letter");
-            assert!(!legacy().iter().any(|(k, _)| *k != keys && k.starts_with(keys)), "{keys} hides a longer sequence");
-            let mut b = app();
-            match target {
-                Target::Cmd { id, .. } => assert!(b.session.registry.get(id).is_some(), "{keys}: {id}"),
-                Target::Dialog { name } => {
-                    Target::Dialog { name }.run(&mut b);
-                    assert!(b.dialog.is_some(), "{keys}: dialog {name}");
-                }
-                Target::Tab(_) => panic!("{keys}: a tab"),
-            }
-        }
-    }
-
-    #[test]
-    fn keytip_state_machine() {
-        let mut a = app();
-        a.ui.backstage = false;
-        a.dialog = None;
-        a.canvas.focused = false;
-        activate(&mut a);
-        assert_eq!(a.ui.keytips, Phase::Tabs);
-        assert!(handle_key(&mut a, egui::Key::Escape));
-        assert_eq!(a.ui.keytips, Phase::Off);
-        activate(&mut a);
-        assert!(handle_key(&mut a, egui::Key::H));
-        assert_eq!(a.ui.tab, "Home");
-        assert_eq!(a.ui.keytips, Phase::Commands);
-        assert!(handle_key(&mut a, egui::Key::F));
-        assert_eq!(a.ui.keytips, Phase::Off);
-        // Alt, F: the Backstage, and keytips end.
-        a.ui.backstage = false;
-        activate(&mut a);
-        assert!(handle_key(&mut a, egui::Key::F));
-        assert!(a.ui.backstage, "Alt, F opens File");
-        assert_eq!(a.ui.keytips, Phase::Off);
-        // Alt, W: View; Alt, R: Review (Word's letters, not V and S).
-        a.ui.backstage = false;
-        activate(&mut a);
-        assert!(handle_key(&mut a, egui::Key::W));
-        assert_eq!((a.ui.tab.as_str(), a.ui.keytips), ("View", Phase::Commands));
-        a.ui.keytips = Phase::Off;
-        activate(&mut a);
-        assert!(handle_key(&mut a, egui::Key::R));
-        assert_eq!(a.ui.tab, "Review");
-    }
-
-    /// Word's contextual table tabs take two letters (#1183): Alt, J, T is Table Design and
-    /// Alt, J, L is Table Layout. J alone waits for the second letter.
-    #[test]
-    fn alt_j_t_and_alt_j_l_open_the_table_tabs() {
-        let mut a = app();
-        a.run("insert.table", serde_json::json!({"rows": 2, "cols": 2})).unwrap();
-        assert!(crate::ribbon::in_table_public(&a));
-        for (second, tab) in [(egui::Key::T, "Table Design"), (egui::Key::L, "Table Layout")] {
-            a.run("ui.tab", serde_json::json!({"tab": "Home"})).unwrap();
-            activate(&mut a);
-            assert!(handle_key(&mut a, egui::Key::J));
-            assert_eq!((a.ui.tab.as_str(), a.ui.keytips), ("Home", Phase::Tabs), "J waits for the second letter");
-            assert!(handle_key(&mut a, second));
-            assert_eq!((a.ui.tab.as_str(), a.ui.keytips), (tab, Phase::Commands));
-            assert!(a.ui.keytip_prefix.is_empty());
-            assert!(!letters_for(&a, tab).is_empty(), "{tab} badges its controls");
-            a.ui.keytips = Phase::Off;
-        }
-        // J then a letter no table tab uses ends keytips without switching tabs.
-        a.run("ui.tab", serde_json::json!({"tab": "Home"})).unwrap();
-        activate(&mut a);
-        handle_key(&mut a, egui::Key::J);
-        handle_key(&mut a, egui::Key::X);
-        assert_eq!((a.ui.tab.as_str(), a.ui.keytips), ("Home", Phase::Off));
-        assert!(a.ui.keytip_prefix.is_empty());
-        // Outside a table there is no J tab.
-        let mut b = app();
-        activate(&mut b);
-        handle_key(&mut b, egui::Key::J);
-        assert_eq!(b.ui.keytips, Phase::Off);
-    }
-
-    #[test]
-    fn qat_keytips_follow_custom_order_and_skip_disabled_commands() {
-        let mut a = app();
-        a.run("tools.customizeRibbon", serde_json::json!({"qatAdd": "format.bold"})).unwrap();
-        a.run("tools.customizeRibbon", serde_json::json!({"qatAdd": "format.italic"})).unwrap();
-        a.run("tools.customizeRibbon", serde_json::json!({"qatMove": {"command": "format.bold", "by": -4}})).unwrap();
-        let bold_index = a.session.ribbon.qat().iter().position(|id| *id == "format.bold").unwrap();
-        assert_eq!(bold_index, 0);
-        activate(&mut a);
-        handle_key(&mut a, egui::Key::Num1);
-        assert_eq!(a.session.run("format.state", &serde_json::json!({})).unwrap()["bold"], true);
-        assert_eq!(a.ui.keytips, Phase::Off);
-
-        let mut b = app();
-        let before = b.session.doc.clone();
-        activate(&mut b);
-        handle_key(&mut b, egui::Key::Num2); // Undo is disabled in an untouched document.
-        assert_eq!(b.session.doc, before);
-        assert!(!b.session.can_redo());
-        assert_eq!(b.ui.keytips, Phase::Off);
-    }
-
-    #[test]
-    fn long_qat_badges_wait_for_the_complete_number_and_escape_cancels() {
-        let mut a = app();
-        let mut commands: Vec<String> =
-            a.session.registry.all().iter().filter(|s| s.id != "format.bold").take(19).map(|s| s.id.to_string()).collect();
-        commands.insert(9, "format.bold".into());
-        a.session.ribbon.qat = Some(commands);
-        activate(&mut a);
-        handle_key(&mut a, egui::Key::Num0);
-        handle_key(&mut a, egui::Key::Num0);
-        assert_eq!(a.ui.keytips, Phase::Tabs);
-        assert_eq!(a.session.run("format.state", &serde_json::json!({})).unwrap()["bold"], false);
-        handle_key(&mut a, egui::Key::Num1); // 001: first button after the first nine.
-        assert_eq!(a.session.run("format.state", &serde_json::json!({})).unwrap()["bold"], true);
-        assert_eq!(a.ui.keytips, Phase::Off);
-        activate(&mut a);
-        handle_key(&mut a, egui::Key::Num0);
-        handle_key(&mut a, egui::Key::Escape);
-        assert!(a.ui.keytip_prefix.is_empty());
-        assert_eq!(a.ui.keytips, Phase::Off);
-
-        for count in [9, 10, 18, 19, 100, 200] {
-            let labels: Vec<_> = (0..count).map(|i| qat_label(i, count)).collect();
-            for (i, label) in labels.iter().enumerate() {
-                assert!(
-                    !labels.iter().enumerate().any(|(j, other)| i != j && other.starts_with(label)),
-                    "ambiguous label {label} in {count} buttons"
-                );
-            }
-        }
-    }
-
-    /// #1945: a hidden Quick Access Toolbar has no number badges: a digit after Alt ends the mode
-    /// and runs none of the toolbar's commands; shown again, the same digit runs the first one.
-    #[test]
-    fn hidden_toolbar_has_no_digit_keytips() {
-        let mut a = app();
-        a.session.ribbon.qat = Some(vec!["format.bold".into()]);
-        a.run("ui.quickAccessToolbar", serde_json::json!({"value": false})).unwrap();
-        activate(&mut a);
-        assert_eq!(a.ui.keytips, Phase::Tabs);
-        assert!(handle_key(&mut a, egui::Key::Num1), "the digit is consumed");
-        assert_eq!(a.ui.keytips, Phase::Off);
-        assert!(a.ui.keytip_prefix.is_empty());
-        assert_eq!(a.session.run("format.state", &serde_json::json!({})).unwrap()["bold"], false, "Bold didn't run");
-        a.run("ui.quickAccessToolbar", serde_json::json!({"value": true})).unwrap();
-        activate(&mut a);
-        assert!(handle_key(&mut a, egui::Key::Num1));
-        assert_eq!(a.session.run("format.state", &serde_json::json!({})).unwrap()["bold"], true, "shown, 1 runs Bold");
-    }
-
-    #[test]
-    fn qat_digit_runs_once_and_never_types_into_the_document() {
-        let mut a = app();
-        a.session.ribbon.qat = Some(vec!["text.insert".into(), "format.bold".into()]);
-        a.canvas.focused = true;
-        a.canvas.want_focus = true;
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            a,
-        );
-        h.run_steps(4);
-        let key = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
-        h.input_mut().events.push(key(egui::Key::F10));
-        h.step();
-        assert_eq!(h.state().ui.keytips, Phase::Tabs);
-        h.input_mut().events.extend([key(egui::Key::Num2), egui::Event::Text("2".into())]);
-        h.step();
-        assert_eq!(h.state().ui.keytips, Phase::Off);
-        assert_eq!(h.state_mut().session.run("format.state", &serde_json::json!({})).unwrap()["bold"], true);
-        assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty());
-        // Normal typing resumes immediately after the command.
-        h.input_mut().events.push(egui::Event::Text("hello".into()));
-        h.step();
-        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "hello");
-        if !cfg!(target_os = "macos") {
-            let alt = egui::Modifiers { alt: true, ..Default::default() };
-            h.input_mut().events.extend([key_event(egui::Key::AltLeft, true, egui::Modifiers::NONE), egui::Event::ModifiersChanged(alt)]);
-            h.step();
-            h.input_mut().events.extend([key_event(egui::Key::AltLeft, false, alt), egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
-            h.step();
-            assert_eq!(h.state().ui.keytips, Phase::Tabs);
-            h.input_mut().events.extend([key(egui::Key::Num2), egui::Event::Text("2".into())]);
-            h.step();
-            assert_eq!(h.state_mut().session.run("format.state", &serde_json::json!({})).unwrap()["bold"], false);
-            assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "hello");
-        }
-    }
-
-    /// #1697 review: Alt, V, U through the whole app (the canvas has the keyboard), not only
-    /// `handle_key`: Full Screen View turns on and neither letter types into the document.
-    #[test]
-    fn legacy_menu_keys_through_the_app_never_type() {
-        if cfg!(target_os = "macos") {
-            return;
-        }
-        let mut a = app();
-        a.canvas.focused = true;
-        a.canvas.want_focus = true;
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            a,
-        );
-        h.run_steps(4);
-        let alt = egui::Modifiers { alt: true, ..Default::default() };
-        h.input_mut().events.extend([key_event(egui::Key::AltLeft, true, egui::Modifiers::NONE), egui::Event::ModifiersChanged(alt)]);
-        h.step();
-        h.input_mut().events.extend([key_event(egui::Key::AltLeft, false, alt), egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
-        h.step();
-        assert_eq!(h.state().ui.keytips, Phase::Tabs);
-        let key = |key| key_event(key, true, egui::Modifiers::NONE);
-        h.input_mut().events.extend([key(egui::Key::V), egui::Event::Text("v".into())]);
-        h.step();
-        assert_eq!((h.state().ui.keytips, h.state().ui.keytip_prefix.as_str()), (Phase::Legacy, "V"));
-        h.input_mut().events.extend([key(egui::Key::U), egui::Event::Text("u".into())]);
-        h.run_steps(3);
-        assert_eq!(h.state().ui.keytips, Phase::Off);
-        assert!(h.state().session.view.full_screen_view, "Alt, V, U: Full Screen View");
-        assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "no letter typed");
-    }
-
-    #[test]
-    fn keytips_option_persists_and_disabled_keytips_leave_f10_alone() {
-        let mut a = app();
-        activate(&mut a);
-        a.run("ui.keytips", serde_json::json!({"value": false})).unwrap();
-        assert_eq!(a.ui.keytips, Phase::Off);
-        assert!(a.run("ui.keytips", serde_json::json!({"value": "false"})).is_err());
-        let saved = serde_json::to_vec(&a.prefs()).unwrap();
-        let mut b = app();
-        b.apply_prefs(serde_json::from_slice(&saved).unwrap());
-        activate(&mut b);
-        assert_eq!(b.ui.keytips, Phase::Off);
-        assert_eq!(b.run("ui.keytips", serde_json::json!({})).unwrap()["enabled"], false);
-        let ctx = egui::Context::default();
-        let mut output = ctx.run_ui(
-            egui::RawInput {
-                events: vec![egui::Event::Key {
-                    key: egui::Key::F10,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: egui::Modifiers::NONE,
-                }],
-                ..Default::default()
-            },
-            |ui| logic(&mut b, ui.ctx()),
-        );
-        output.textures_delta.clear();
-        assert_eq!(b.ui.keytips, Phase::Off);
-        b.apply_prefs(serde_json::from_str("{}").unwrap());
-        assert!(b.ui.keytips_enabled, "older preferences retain enabled KeyTips");
-    }
-
-    /// Alt, then Q opens Search like Alt+Q (#819); no tab owns Q.
-    #[test]
-    fn alt_then_q_opens_search() {
-        let mut a = app();
-        a.ui.backstage = false;
-        a.dialog = None;
-        assert!(TAB_LETTERS.iter().all(|(_, l)| *l != SEARCH_LETTER));
-        activate(&mut a);
-        assert!(handle_key(&mut a, egui::Key::Q));
-        assert_eq!(a.ui.keytips, Phase::Off);
-        assert!(matches!(a.dialog, Some(crate::dialogs::Dialog::Commands { .. })), "{:?}", a.dialog.as_ref().map(|d| d.name()));
-    }
-}
+mod tests;

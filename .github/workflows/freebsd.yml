@@ -2,19 +2,18 @@
 # (GitHub has no FreeBSD runners). GPU tests skip themselves when the VM has no adapter.
 name: FreeBSD
 
-# The VM build is slow, so it runs nightly on main and on pushes to `release`, not on every push
-# or dependency change: a drifted dependency still shows up within a day, and always before a
-# release ships. PRs that change the FreeBSD packaging itself still run it.
+# The VM build is slow, so it runs nightly on main and on pushes to `release`, not on every pull
+# request: a drifted dependency still shows up within a day, and always before a release ships.
+# PRs that change the FreeBSD workflow or packaging itself still run it.
 on:
-  schedule:
-    - cron: "27 4 * * *"
   push:
     branches: [release]
   pull_request:
     paths:
-      - "crates/fonts/**"
       - .github/workflows/freebsd.yml
       - packaging/env.sh
+  schedule:
+    - cron: "27 4 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -29,4 +28,4 @@ jobs:
     # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
     uses: storytold/craft-common-actions/.github/workflows/freebsd.yml@main
     with:
-      craft-fonts-ref: 8dcdacd5153e64560d109541a47d806f26f048c0
+      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
