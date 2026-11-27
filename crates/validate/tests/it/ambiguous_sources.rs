@@ -464,3 +464,94 @@ fn ambiguous_identity_stays_undecided_in_a_package_with_many_relationships_parts
     assert!(report.coverage_notes.iter().any(|n| n.contains("rIdMissing") && n.contains("was not decided")), "{report:?}");
     assert!(!report.findings.iter().any(|f| f.rule == "REL-DANGLING"), "{report:?}");
 }
+
+/// Each source of `AmbiguousIdentities::new` pinned on its own. The type is private to the crate, so each case is a
+/// header owner whose relationship points at a missing target, with exactly one extra record added to the package:
+/// when the owner's identity is ambiguous the missing target is undecided, otherwise it is a dangling Error.
+mod identity_sources {
+    use crate::common::*;
+    use crate::round20::raw_zip::{self, Record};
+    use wordcraft_validate::{Report, validate_bytes};
+
+    const HEADER: &str = "word/header.xml";
+    const HEADER_RELS: &str = "word/_rels/header.xml.rels";
+
+    fn header_rels() -> Vec<u8> {
+        rels_xml(r#"<Relationship Id="x" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/gone.png"/>"#)
+    }
+
+    /// The minimal package plus a header with a dangling relationship, plus `extra` records.
+    fn package_with(extra: &[(&str, &[u8])]) -> Report {
+        let mut doc = Doc::minimal();
+        doc.add_with_override(
+            HEADER,
+            CT_HEADER,
+            format!(
+                r#"<w:hdr {NS}><w:p><w:r><w:drawing><a:blip xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" r:embed="x"/></w:drawing></w:r></w:p></w:hdr>"#
+            ),
+        );
+        doc.set(HEADER_RELS, header_rels());
+        let mut records: Vec<Record> = doc.entries.drain(..).map(|(n, b)| Record::new(n, 0, b)).collect();
+        records.extend(extra.iter().map(|(n, b)| Record::new(n, 0, *b)));
+        validate_bytes(&raw_zip::build(&records))
+    }
+
+    /// A well-formed header body for the extra record, so no scan incompleteness can stand in for the ambiguity.
+    fn clean_header() -> Vec<u8> {
+        format!(r#"<w:hdr {NS}><w:p/></w:hdr>"#).into_bytes()
+    }
+
+    fn undecided(report: &Report) -> bool {
+        report.coverage_notes.iter().any(|n| n.contains("relationship x") && n.contains("not decided"))
+    }
+
+    fn dangling(report: &Report) -> bool {
+        report.findings.iter().any(|f| f.rule == "REL-DANGLING" && f.message.contains("relationship x"))
+    }
+
+    fn assert_ambiguous(report: &Report) {
+        assert!(undecided(report), "{report:?}");
+        assert!(!dangling(report), "{report:?}");
+    }
+
+    #[test]
+    fn unambiguous_identity_is_decided() {
+        let report = package_with(&[]);
+        assert!(dangling(&report), "{report:?}");
+        assert!(!undecided(&report), "{report:?}");
+    }
+
+    #[test]
+    fn identity_ambiguous_only_through_collapsed_names_is_ambiguous() {
+        // An exact duplicate record: the reader keeps one entry, so only the collapsed name carries the ambiguity.
+        let report = package_with(&[(HEADER, &clean_header())]);
+        assert!(report.findings.iter().any(|f| f.rule == "PKG-DUP-ENTRY"), "{report:?}");
+        assert!(!report.findings.iter().any(|f| f.rule == "PKG-CASE-COLLISION"), "{report:?}");
+        assert_ambiguous(&report);
+    }
+
+    #[test]
+    fn identity_ambiguous_only_through_duplicate_entries_is_ambiguous() {
+        // A case variant of the owner: two distinct entries share one identity, nothing is collapsed.
+        let report = package_with(&[("word/Header.xml", b"\xff")]);
+        assert!(report.findings.iter().any(|f| f.rule == "PKG-CASE-COLLISION"), "{report:?}");
+        assert!(!report.findings.iter().any(|f| f.rule == "PKG-DUP-ENTRY"), "{report:?}");
+        assert_ambiguous(&report);
+    }
+
+    #[test]
+    fn identity_ambiguous_only_through_duplicate_relationships_parts_is_ambiguous() {
+        // A case variant of the relationships part itself; the owner's identity is unique.
+        let rels = header_rels();
+        let report = package_with(&[("word/_rels/Header.xml.rels", &rels)]);
+        assert!(report.findings.iter().any(|f| f.rule == "PKG-CASE-COLLISION"), "{report:?}");
+        assert_ambiguous(&report);
+    }
+
+    #[test]
+    fn directory_entry_sharing_the_name_does_not_make_the_identity_ambiguous() {
+        let report = package_with(&[("word/header.xml/", b"")]);
+        assert!(dangling(&report), "{report:?}");
+        assert!(!undecided(&report), "{report:?}");
+    }
+}
