@@ -3,7 +3,8 @@ use std::sync::Arc;
 use craft::behavior::{ColumnWidth, Selection, SelectionChange, keyed};
 use craft::font_manager::Catalog;
 use craft::font_manager::picker::FontPickerSettings;
-use craft::ui::contract::{Bind, CollectionEvent, ColumnKey, ColumnSpec, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::buttons::Button;
+use craft::ui::contract::{Bind, CollectionEvent, ColumnKey, ColumnSpec, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk, StackDialog, dialog_id};
 use craft::ui::display::{Kbd, Text};
 use craft::ui::form::Field;
@@ -21,7 +22,7 @@ use serde_json::{Value, json};
 
 use super::{select_index, settled, text_field, word};
 use crate::WordApp;
-use crate::dialogs::host::{DialogHooks, Settle, open_with};
+use crate::dialogs::host::{DialogHooks, FormHost, Settle, open_with};
 use crate::widgets::font_box::font_picker;
 
 // ---------------------------------------------------------------------------------------------
@@ -158,6 +159,159 @@ struct Insertion {
     font: String,
 }
 
+/// The Symbol dialog's "from:" list: how the Character code box reads and which characters the
+/// grid shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SymbolFrom {
+    /// Every character of the font; codes are Unicode code points in hex.
+    #[default]
+    UnicodeHex,
+    /// The Windows-1252 code page in byte order; codes are decimal bytes.
+    AsciiDecimal,
+    /// The Windows-1252 code page in byte order; codes are hex bytes.
+    AsciiHex,
+}
+
+impl SymbolFrom {
+    pub const ALL: [SymbolFrom; 3] = [SymbolFrom::UnicodeHex, SymbolFrom::AsciiDecimal, SymbolFrom::AsciiHex];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SymbolFrom::UnicodeHex => "Unicode (hex)",
+            SymbolFrom::AsciiDecimal => "ASCII (decimal)",
+            SymbolFrom::AsciiHex => "ASCII (hex)",
+        }
+    }
+}
+
+/// Windows-1252 bytes 0x80-0x9F (`None` = undefined in the code page).
+const CP1252_HIGH: [Option<char>; 32] = [
+    Some('\u{20AC}'),
+    None,
+    Some('\u{201A}'),
+    Some('\u{0192}'),
+    Some('\u{201E}'),
+    Some('\u{2026}'),
+    Some('\u{2020}'),
+    Some('\u{2021}'),
+    Some('\u{02C6}'),
+    Some('\u{2030}'),
+    Some('\u{0160}'),
+    Some('\u{2039}'),
+    Some('\u{0152}'),
+    None,
+    Some('\u{017D}'),
+    None,
+    None,
+    Some('\u{2018}'),
+    Some('\u{2019}'),
+    Some('\u{201C}'),
+    Some('\u{201D}'),
+    Some('\u{2022}'),
+    Some('\u{2013}'),
+    Some('\u{2014}'),
+    Some('\u{02DC}'),
+    Some('\u{2122}'),
+    Some('\u{0161}'),
+    Some('\u{203A}'),
+    Some('\u{0153}'),
+    None,
+    Some('\u{017E}'),
+    Some('\u{0178}'),
+];
+
+/// The character a Windows-1252 byte (0x20..=0xFF) stands for.
+fn cp1252_char(b: u8) -> Option<char> {
+    match b {
+        0x20..=0x7F | 0xA0..=0xFF => Some(char::from(b)),
+        0x80..=0x9F => CP1252_HIGH.get(usize::from(b - 0x80)).copied().flatten(),
+        _ => None,
+    }
+}
+
+/// The Windows-1252 byte of `c`, if it has one (0x20..=0xFF).
+pub fn cp1252_byte(c: char) -> Option<u8> {
+    let cp = c as u32;
+    if (0x20..=0x7F).contains(&cp) || (0xA0..=0xFF).contains(&cp) {
+        return u8::try_from(cp).ok();
+    }
+    CP1252_HIGH.iter().position(|x| *x == Some(c)).and_then(|i| u8::try_from(i).ok()).map(|i| 0x80 + i)
+}
+
+/// The Character code box text for `c` in mode `from`; None when `c` has no code there.
+pub fn code_text(c: char, from: SymbolFrom) -> Option<String> {
+    match from {
+        SymbolFrom::UnicodeHex => Some(format!("{:04X}", c as u32)),
+        SymbolFrom::AsciiDecimal => cp1252_byte(c).map(|b| b.to_string()),
+        SymbolFrom::AsciiHex => cp1252_byte(c).map(|b| format!("{b:02X}")),
+    }
+}
+
+/// The character a typed code names in mode `from` (inverse of [`code_text`]; trims spaces).
+pub fn char_from_code(code: &str, from: SymbolFrom) -> Option<char> {
+    let code = code.trim();
+    match from {
+        SymbolFrom::UnicodeHex => {
+            let hex = code.strip_prefix("U+").or_else(|| code.strip_prefix("u+")).unwrap_or(code);
+            u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
+        }
+        SymbolFrom::AsciiDecimal => code.parse::<u8>().ok().and_then(cp1252_char),
+        SymbolFrom::AsciiHex => u8::from_str_radix(code, 16).ok().and_then(cp1252_char),
+    }
+}
+
+/// The Shortcut key line: `bound` (a command's shortcut) wins; else the mode's typing method
+/// (`2665, ` and `toggle_key`, the Toggle Unicode key, or `Alt+0189`); "" if none.
+pub fn symbol_shortcut(c: char, from: SymbolFrom, bound: Option<&str>, toggle_key: Option<&str>) -> String {
+    if let Some(k) = bound.filter(|k| !k.is_empty()) {
+        return k.to_string();
+    }
+    match from {
+        SymbolFrom::UnicodeHex => match (code_text(c, from), toggle_key.filter(|k| !k.is_empty())) {
+            (Some(code), Some(key)) => format!("{code}, {key}"),
+            _ => String::new(),
+        },
+        SymbolFrom::AsciiDecimal | SymbolFrom::AsciiHex => cp1252_byte(c).map(|b| format!("Alt+0{b:03}")).unwrap_or_default(),
+    }
+}
+
+/// The from: mode that shows `c`: `from` when `c` has a code there, else Unicode (hex).
+pub fn from_showing(c: char, from: SymbolFrom) -> SymbolFrom {
+    if code_text(c, from).is_some() { from } else { SymbolFrom::UnicodeHex }
+}
+
+/// The characters the grid shows in mode `from`, from the font's sorted `chars`: all of them in
+/// Unicode (hex); the code page's, in byte order, in the ASCII modes.
+pub fn grid_chars(chars: &[char], from: SymbolFrom) -> Vec<char> {
+    match from {
+        SymbolFrom::UnicodeHex => chars.to_vec(),
+        SymbolFrom::AsciiDecimal | SymbolFrom::AsciiHex => {
+            let mut v: Vec<(u8, char)> = chars.iter().filter_map(|c| cp1252_byte(*c).map(|b| (b, *c))).collect();
+            v.sort_unstable();
+            v.dedup();
+            v.into_iter().map(|(_, c)| c).collect()
+        }
+    }
+}
+
+/// AutoCorrect…: open the AutoCorrect dialog (AutoCorrect tab) with With = `c` and Replace
+/// empty, as a dialog of its own (it replaces the Symbol dialog).
+pub(crate) fn symbol_autocorrect(app: &mut WordApp, c: char) -> Option<DialogId> {
+    let id = crate::dialogs_review::open(app, "autoCorrect", &json!({"tab": 0}), None)?;
+    if let Some(host) = app.dialog_host.get_mut_by_id::<FormHost<crate::dialogs_review::AutoCorrectForm>>(id) {
+        let form = host.form_mut();
+        form.from = String::new();
+        form.to = c.to_string();
+    }
+    Some(id)
+}
+
+/// The command (from the Special Characters table) that inserts `c`, when there is one.
+fn special_command(c: char) -> Option<&'static str> {
+    SPECIAL.iter().find(|(_, ch, _)| *ch == c).and_then(|(_, _, cmd)| *cmd)
+}
+
 /// The Symbol dialog: the Symbols tab (a font's characters by Unicode subset) and the Special
 /// Characters tab.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
@@ -168,8 +322,10 @@ pub struct SymbolForm {
     /// The chosen font; empty = (normal text), the text's own font.
     pub font: String,
     pub selected: Option<char>,
-    /// Character code, hexadecimal Unicode.
+    /// Character code, as the from: list reads it.
     pub code: String,
+    /// The from: list: Unicode (hex), ASCII (decimal) or ASCII (hex).
+    pub from: SymbolFrom,
     /// Selected row on the Special Characters tab.
     pub special: usize,
     /// The caret's font: what (normal text) shows.
@@ -177,6 +333,9 @@ pub struct SymbolForm {
     /// The characters the shown font has, sorted.
     #[serde(skip)]
     chars: Vec<char>,
+    /// The characters the grid shows for `from` (byte order in the ASCII modes).
+    #[serde(skip)]
+    grid: Vec<char>,
     /// The font `chars` was read from.
     #[serde(skip)]
     chars_of: Option<String>,
@@ -223,27 +382,59 @@ impl SymbolForm {
         let face = wordcraft_fonts::word::resolve(&family, false, false).face.get();
         self.chars = face.chars().into_iter().map(|(c, _)| c).filter(|c| !c.is_control() && !(0xD800..=0xDFFF).contains(&(*c as u32))).collect();
         self.chars_of = Some(family);
-        // Keep the selection when the new font has it; otherwise its first character.
-        if self.selected.is_none_or(|c| self.chars.binary_search(&c).is_err()) {
-            self.selected = self.chars.iter().copied().find(|c| *c > ' ').or(self.chars.first().copied());
+        self.regrid();
+    }
+
+    /// Rebuild the shown grid for the font and the from: mode; keep the selection when the grid
+    /// has it, otherwise select its first character.
+    fn regrid(&mut self) {
+        self.grid = grid_chars(&self.chars, self.from);
+        if self.selected.is_none_or(|c| !self.grid.contains(&c)) {
+            self.selected = self.grid.iter().copied().find(|c| *c > ' ').or(self.grid.first().copied());
         }
         self.sync_code();
         self.reveal = self.selected.and_then(|c| self.index_of(c));
     }
 
+    /// Pick a recently used symbol `c`, inserted in `font` ("" = the text's): show its font, and
+    /// switch to Unicode (hex) first when the from: mode has no code for it, so it stays selected.
+    pub fn pick_recent(&mut self, font: &str, c: char) {
+        let from = from_showing(c, self.from);
+        let regrid = from != self.from;
+        self.from = from;
+        self.font = font.to_string();
+        self.selected = Some(c);
+        let before = self.chars_of.clone();
+        self.load();
+        if regrid && before == self.chars_of {
+            self.regrid();
+        }
+        self.sync_code();
+        self.reveal = self.index_of(c);
+    }
+
+    /// Change the from: mode.
+    pub fn set_from(&mut self, from: SymbolFrom) {
+        if self.from != from {
+            self.from = from;
+            self.regrid();
+        }
+    }
+
+    /// Where `c` is in the shown grid.
     fn index_of(&self, c: char) -> Option<usize> {
-        self.chars.binary_search(&c).ok()
+        self.grid.iter().position(|x| *x == c)
     }
 
     fn sync_code(&mut self) {
-        self.code = self.selected.map(|c| format!("{:04X}", c as u32)).unwrap_or_default();
+        self.code = self.selected.and_then(|c| code_text(c, self.from)).unwrap_or_default();
     }
 
-    /// Select by typed character code (hex): the character, when the font has it.
+    /// Select by typed character code (read by the from: mode): the character, when the grid
+    /// shows it.
     pub fn select_code(&mut self, code: &str) -> bool {
-        let cp = u32::from_str_radix(code.trim().trim_start_matches("U+").trim_start_matches("u+"), 16).ok();
-        let Some(c) = cp.and_then(char::from_u32) else { return false };
-        if self.chars.binary_search(&c).is_err() {
+        let Some(c) = char_from_code(code, self.from) else { return false };
+        if !self.grid.contains(&c) {
             return false;
         }
         self.selected = Some(c);
@@ -254,9 +445,8 @@ impl SymbolForm {
     /// Jump to a Unicode subset: its first character in this font.
     pub fn jump_to(&mut self, subset: &str) {
         let Some((_, a, b)) = SUBSETS.iter().find(|(n, _, _)| *n == subset) else { return };
-        let i = self.chars.partition_point(|c| (*c as u32) < *a);
-        if let Some(c) = self.chars.get(i).filter(|c| (**c as u32) <= *b) {
-            self.selected = Some(*c);
+        if let Some(i) = self.grid.iter().position(|c| (*a..=*b).contains(&(*c as u32))) {
+            self.selected = self.grid.get(i).copied();
             self.sync_code();
             self.reveal = Some(i);
         }
@@ -295,6 +485,8 @@ pub(crate) struct SymbolDialog {
     settings_changed: bool,
     /// Insert mode: OK files the form here for the settle hook to insert.
     held: HeldAnswer<SymbolForm>,
+    /// AutoCorrect… was pressed on this character: the settle hook opens AutoCorrect for it.
+    autocorrect: Option<char>,
 }
 
 impl SymbolDialog {
@@ -313,6 +505,7 @@ impl SymbolDialog {
             settings: FontPickerSettings::default(),
             settings_changed: false,
             held: HeldAnswer::new(),
+            autocorrect: None,
         };
         open_with(app, parent, dialog, Self::hooks())
     }
@@ -329,6 +522,7 @@ impl SymbolDialog {
             settings: FontPickerSettings::default(),
             settings_changed: false,
             held: HeldAnswer::new(),
+            autocorrect: None,
         }
     }
 
@@ -372,6 +566,12 @@ fn settle(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
         Some(d) => {
             let changed = d.settings_changed.then(|| d.settings.clone());
             d.settings_changed = false;
+            if let Some(c) = d.autocorrect.take() {
+                // AutoCorrect… replaces the Symbol dialog.
+                app.dialog_host.close_by_id(id);
+                symbol_autocorrect(app, c);
+                return Settle::Done;
+            }
             (d.take_ok(), changed)
         }
         None => return Settle::Done,
@@ -439,11 +639,14 @@ impl StackDialog for SymbolDialog {
         let mut form: SymbolForm = serde_json::from_value(fields).map_err(|e| e.to_string())?;
         // The skipped (derived) state is the dialog's own: keep it across the round trip.
         form.chars = std::mem::take(&mut self.form.chars);
+        form.grid = std::mem::take(&mut self.form.grid);
         form.chars_of = self.form.chars_of.take();
         form.reveal = self.form.reveal.take();
         form.recent = std::mem::take(&mut self.form.recent);
         self.form = form;
-        if field == "selected" {
+        if field == "from" {
+            self.form.regrid();
+        } else if field == "selected" {
             self.form.sync_code();
         }
         Ok(())
@@ -451,7 +654,7 @@ impl StackDialog for SymbolDialog {
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<Option<SymbolPick>>> {
         let picking = self.request.is_some();
-        let SymbolDialog { form, catalog, settings, settings_changed, held, .. } = self;
+        let SymbolDialog { form, catalog, settings, settings_changed, held, autocorrect, .. } = self;
         if !picking {
             // An accepted insert leaves the dialog open: drop the accepted answer.
             let _ = held.finish();
@@ -463,7 +666,7 @@ impl StackDialog for SymbolDialog {
         } else {
             dialog.ok_label(word("Insert")).cancel_label(word("Close")).accept_stays_open(true).held(&mut *held)
         };
-        let out = dialog.show(ui, |ui, cx, form| symbol_body(ui, cx, form, catalog.as_ref(), settings, picking));
+        let out = dialog.show(ui, |ui, cx, form| symbol_body(ui, cx, form, catalog.as_ref(), settings, picking, autocorrect));
         *settings_changed |= *settings != before;
         if picking {
             let pick = |form: &SymbolForm| form.selected.map(|ch| SymbolPick { ch, font: form.font.clone() });
@@ -488,6 +691,7 @@ fn symbol_body(
     catalog: Option<&Arc<Catalog>>,
     settings: &mut FontPickerSettings,
     picking: bool,
+    autocorrect: &mut Option<char>,
 ) -> bool {
     Stack::new().show(ui, |ui, _| {
         if picking {
@@ -508,7 +712,7 @@ fn symbol_body(
                 }
             }
         }
-        let activated = if form.tab == 1 { special_table(ui, form) } else { symbol_page(ui, form, catalog, settings) };
+        let activated = if form.tab == 1 { special_table(ui, form) } else { symbol_page(ui, form, catalog, settings, picking, autocorrect) };
         if activated {
             // PLAN: assumed `FormCx::accept` (dialogs-w5, S-L285).
             cx.accept();
@@ -587,7 +791,14 @@ fn special_table(ui: &mut Ui, form: &mut SymbolForm) -> bool {
 
 /// The Symbols tab: font, subset, the characters, recent symbols and the code. Whether a character
 /// was activated.
-fn symbol_page(ui: &mut Ui, form: &mut SymbolForm, catalog: Option<&Arc<Catalog>>, settings: &mut FontPickerSettings) -> bool {
+fn symbol_page(
+    ui: &mut Ui,
+    form: &mut SymbolForm,
+    catalog: Option<&Arc<Catalog>>,
+    settings: &mut FontPickerSettings,
+    picking: bool,
+    autocorrect: &mut Option<char>,
+) -> bool {
     form.load();
     if let Some(catalog) = catalog {
         let mut family = form.shown_font().to_string();
@@ -600,16 +811,18 @@ fn symbol_page(ui: &mut Ui, form: &mut SymbolForm, catalog: Option<&Arc<Catalog>
             form.load();
         }
     }
-    let available: Vec<usize> = (0..SUBSETS.len())
+    // The ASCII modes show the code page in byte order: the subsets have no place there.
+    let available: Vec<usize> = (0..if form.from == SymbolFrom::UnicodeHex { SUBSETS.len() } else { 0 })
         .filter(|i| {
             SUBSETS
                 .get(*i)
                 .is_some_and(|(_, a, b)| form.chars.get(form.chars.partition_point(|c| (*c as u32) < *a)).is_some_and(|c| (*c as u32) <= *b))
         })
         .collect();
-    let rows: Vec<Label> = available.iter().filter_map(|i| SUBSETS.get(*i)).map(|(name, _, _)| Label::from(*name)).collect();
+    let subset_rows: Vec<Label> = available.iter().filter_map(|i| SUBSETS.get(*i)).map(|(name, _, _)| Label::from(*name)).collect();
     let current = form.selected.and_then(subset_of).and_then(|s| available.iter().position(|i| SUBSETS.get(*i).is_some_and(|(n, _, _)| *n == s)));
-    if let Some(at) = select_index(ui, &word("Subset:"), &rows, current)
+    if !available.is_empty()
+        && let Some(at) = select_index(ui, &word("Subset:"), &subset_rows, current)
         && let Some((name, _, _)) = available.get(at).and_then(|i| SUBSETS.get(*i))
     {
         form.jump_to(name);
@@ -625,6 +838,29 @@ fn symbol_page(ui: &mut Ui, form: &mut SymbolForm, catalog: Option<&Arc<Catalog>
     if form.code != before {
         let code = form.code.clone();
         form.select_code(&code);
+    }
+    let modes: Vec<Label> = SymbolFrom::ALL.iter().map(|m| word(m.label())).collect();
+    let shown = SymbolFrom::ALL.iter().position(|m| *m == form.from);
+    if let Some(m) = select_index(ui, &word("from:"), &modes, shown).and_then(|at| SymbolFrom::ALL.get(at)) {
+        form.set_from(*m);
+    }
+    // The Shortcut key line: a special character's command chord, else the mode's typing method.
+    let ctx = ui.ctx().clone();
+    let chord =
+        |id: &'static str| craft::ui::runtime::commands::chord(&ctx, &craft::ui::runtime::commands::CommandRef::from(id)).map(|c| c.to_string());
+    let shortcut = form
+        .selected
+        .map(|c| {
+            let bound = special_command(c).and_then(chord);
+            let toggle = chord("text.toggleUnicode");
+            symbol_shortcut(c, form.from, bound.as_deref(), toggle.as_deref())
+        })
+        .unwrap_or_default();
+    Field::new(word("Shortcut key:")).show(ui, |ui, _| {
+        Text::new(Label::from(shortcut.clone())).show(ui);
+    });
+    if !picking && Button::new(word("AutoCorrect…")).id_salt("symbol_autocorrect").enabled(form.selected.is_some()).show(ui).clicked() {
+        *autocorrect = form.selected;
     }
     activated
 }
@@ -659,11 +895,7 @@ fn recent_row(ui: &mut Ui, form: &mut SymbolForm, dark: bool) {
             && let Some(r) = rows.last().and_then(|i| form.recent.get(*i)).cloned()
             && let Some(c) = r.ch.chars().next()
         {
-            form.font = r.font;
-            form.selected = Some(c);
-            form.load();
-            form.sync_code();
-            form.reveal = form.index_of(c);
+            form.pick_recent(&r.font, c);
         }
     }
 }
@@ -671,17 +903,17 @@ fn recent_row(ui: &mut Ui, form: &mut SymbolForm, dark: bool) {
 /// The characters of the shown font as a single-selection grid, each painted in the font; whether
 /// one was activated.
 fn glyph_grid(ui: &mut Ui, form: &mut SymbolForm, dark: bool) -> bool {
-    if form.chars.is_empty() {
+    if form.grid.is_empty() {
         Text::new(word("This font has no characters to show.")).show(ui);
         return false;
     }
-    let positions: Vec<usize> = (0..form.chars.len()).collect();
+    let positions: Vec<usize> = (0..form.grid.len()).collect();
     let source = keyed(&positions, |at: &usize| *at);
     let mut selection = form.selected.and_then(|c| form.index_of(c)).map_or_else(Selection::default, Selection::single);
     let reveal = form.reveal.take();
     let font = form.shown_font().to_string();
     let events = {
-        let chars = &form.chars;
+        let chars = &form.grid;
         let mut grid = TileGrid::new(word("Symbols"))
             .thumb_size(ThumbSize::Medium)
             .select(SelectMode::Single)
@@ -710,7 +942,7 @@ fn glyph_grid(ui: &mut Ui, form: &mut SymbolForm, dark: bool) -> bool {
             _ => {}
         }
     }
-    if let Some(c) = picked.and_then(|i| form.chars.get(i).copied()) {
+    if let Some(c) = picked.and_then(|i| form.grid.get(i).copied()) {
         form.selected = Some(c);
         form.sync_code();
     }
