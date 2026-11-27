@@ -1043,6 +1043,33 @@ fn table_cell_size_fields_line_up_with_the_distribute_buttons() {
     );
 }
 
+/// #4017: Diagram Design › Layouts is an in-ribbon gallery, one row of previews as Design › Style Sets is, so the tab's
+/// ribbon stays as tall as the others instead of holding every layout in two rows of large cards.
+#[test]
+fn diagram_layouts_show_one_row_in_the_ribbon() {
+    use egui::accesskit::Role;
+
+    let home = {
+        let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+        tab_harness(app, "Home").get_by_role_and_label(Role::Label, "Clipboard").rect()
+    };
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    app.run("insert.smartArt", json!({"layout": "process", "items": ["One", "Two", "Three"]})).unwrap();
+    let h = tab_harness(app, "SmartArt Design");
+    // The tab's ribbon is as tall as the others: its group titles sit where Home's do.
+    let title = h.get_by_role_and_label(Role::Label, "Create Graphic").rect();
+    assert!((title.top() - home.top()).abs() < 0.5, "Diagram Design's group titles ({title:?}) should sit where Home's do ({home:?})");
+    let layouts = wordcraft_doc::smart_art::SmartArtLayout::ALL;
+    let tile = |at: usize| h.get_by_role_and_label(Role::RadioButton, layouts[at].label()).rect();
+    let (first, second) = (tile(0), tile(1));
+    // Create Graphic's first and third rows: the body's top and foot.
+    let (top, foot) = (named_rect(&h, "Promote").top(), named_rect(&h, "Text Pane").bottom());
+    assert!(
+        (first.top() - second.top()).abs() <= 1.0 && first.top() >= top - 1.0 && first.bottom() <= foot + 1.0,
+        "the layouts {first:?} and {second:?} should share one row within the body ({top} to {foot})"
+    );
+}
+
 /// #4017: Home's small buttons, icon-only or labelled, are at least 24 points square: the least target size the
 /// accessibility standard asks for (WCAG 2.5.8).
 #[test]
