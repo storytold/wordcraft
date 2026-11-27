@@ -76,6 +76,10 @@ fn every_char_prop_round_trips() {
     let all = CharProps {
         style: Some("Strong".into()),
         font: Some("Georgia".into()),
+        font_ascii_theme: None,
+        font_hansi_theme: None,
+        font_ea_theme: None,
+        font_cs_theme: None,
         // The symbol's own font: the run is written as `w:sym` characters (#2036).
         sym_font: Some("Wingdings".into()),
         size: Some(10.5),

@@ -246,7 +246,7 @@ fn copy(s: &mut Session, segs: &[(Pos, Pos)]) -> CmdResult {
     }
     s.clipboard_text = rows.join("\n");
     let media = s.doc.media_of_blocks(&blocks);
-    s.clipboard = Some(Fragment { blocks, parts, media });
+    s.clipboard = Some(Fragment { svg_pictures: s.doc.svg_pictures_of_media(&media), blocks, parts, media });
     Ok(super::edit::copy_result(s))
 }
 

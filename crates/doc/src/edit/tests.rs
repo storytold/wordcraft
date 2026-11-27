@@ -1176,7 +1176,7 @@ fn insert_fragment_remaps_conflicting_media_keys() {
         fx: Default::default(),
         ole: None,
     });
-    let frag = Fragment { blocks: vec![Block::Para(p)], parts: Default::default(), media: frag_media };
+    let frag = Fragment { blocks: vec![Block::Para(p)], parts: Default::default(), media: frag_media, ..Default::default() };
 
     let pos = Pos::body(0, 0);
     d.insert_fragment(&pos, &frag).unwrap();
@@ -1352,4 +1352,51 @@ fn copy_range_from_cell_into_para_after_table() {
         })
         .collect();
     assert_eq!(texts, vec!["orld", "Foo", "Bar", "Trail"]);
+}
+
+#[test]
+fn svg_alternatives_survive_copy_and_adoption_with_colliding_media() {
+    let mut source = Document::new();
+    let raster = source.add_media(vec![1, 2, 3], "png");
+    let svg = source.add_media(b"<svg>source</svg>".to_vec(), "svg");
+    let alias = source.add_svg_picture(&raster, &svg).unwrap();
+    assert_eq!(source.add_media(vec![1, 2, 3], "png"), raster, "ordinary rasters do not acquire a vector alternative");
+    let mut p = Paragraph::new();
+    p.insert_object(
+        0,
+        InlineObject::Image {
+            media: alias,
+            w: 10.0,
+            h: 10.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        },
+        &CharProps::default(),
+    )
+    .unwrap();
+    source.body = vec![crate::para_block(p)];
+    let copied = source.copy_range(&Pos::body(0, 0), &Pos::body(0, crate::para::OBJ.len_utf8()));
+    assert_eq!(copied.svg_pictures.len(), 1);
+    for adopt in [false, true] {
+        let mut dest = Document::new();
+        dest.add_media(vec![9, 9, 9], "png");
+        dest.add_media(b"<svg>destination</svg>".to_vec(), "svg");
+        let fragment = if adopt { dest.adopt(source.clone()) } else { copied.clone() };
+        dest.insert_fragment(&Pos::body(0, 0), &fragment).unwrap();
+        let p = dest.para(StoryRef::Body, &Path::top(0)).unwrap();
+        let media = p
+            .objects
+            .iter()
+            .find_map(|o| match o {
+                InlineObject::Image { media, .. } => Some(media),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(dest.media[media].as_slice(), &[1, 2, 3]);
+        assert_eq!(dest.media[&dest.svg_pictures[media]].as_slice(), b"<svg>source</svg>");
+        assert_eq!(dest.media["image1.png"].as_slice(), &[9, 9, 9]);
+    }
 }

@@ -23,6 +23,8 @@ pub struct Fragment {
     /// Media items referenced by objects in this fragment.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty", with = "crate::byte_store")]
     pub media: BTreeMap<String, Arc<Vec<u8>>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub svg_pictures: BTreeMap<String, String>,
 }
 
 impl Fragment {
@@ -68,6 +70,7 @@ impl Fragment {
         d.body = self.blocks.iter().cloned().map(Arc::new).collect();
         d.parts = self.parts.clone();
         d.media = self.media.clone();
+        d.svg_pictures = self.svg_pictures.clone();
         d
     }
     /// Whether the fragment holds an equation (in tables too), which a copy also puts on the
@@ -159,6 +162,8 @@ impl Fragment {
             self.blocks.pop();
         }
         self.blocks.append(&mut piece.blocks);
+        self.media.append(&mut piece.media);
+        self.svg_pictures.append(&mut piece.svg_pictures);
     }
     pub fn from_text(s: &str) -> Fragment {
         let lines: Vec<&str> = s.split('\n').collect();
@@ -1111,7 +1116,7 @@ impl Document {
         crate::control::balance_blocks(&mut blocks);
         let parts = self.text_box_parts(&blocks);
         let media = self.media_of_blocks(&blocks);
-        Fragment { blocks, parts, media }
+        Fragment { svg_pictures: self.svg_pictures_of_media(&media), blocks, parts, media }
     }
 
     /// A copy of the block at `path` (a whole table, say) as a fragment, with its text boxes.
@@ -1134,7 +1139,7 @@ impl Document {
         crate::control::balance_blocks(&mut blocks);
         let parts = self.text_box_parts(&blocks);
         let media = self.media_of_blocks(&blocks);
-        Fragment { blocks, parts, media }
+        Fragment { svg_pictures: self.svg_pictures_of_media(&media), blocks, parts, media }
     }
 
     /// The table whose whole text `a..b` covers when the range runs across its cells: from the
@@ -1177,7 +1182,7 @@ impl Document {
         let blocks: Vec<Block> = self.body.iter().map(|b| (**b).clone()).collect();
         let parts = self.text_box_parts(&blocks);
         let media = self.media_of_blocks(&blocks);
-        Fragment { blocks, parts, media }
+        Fragment { svg_pictures: self.svg_pictures_of_media(&media), blocks, parts, media }
     }
 
     /// Another document's body as a fragment of this one, to insert: the media, lists, styles,
@@ -1229,6 +1234,13 @@ impl Document {
         for (key, data) in &src.media {
             let ext = key.rsplit_once('.').map(|(_, e)| e).unwrap_or("png");
             media.insert(key.clone(), self.add_media(data.to_vec(), ext));
+        }
+        for (raster, svg) in &src.svg_pictures {
+            if let (Some(raster_key), Some(svg_key)) = (media.get(raster), media.get(svg))
+                && let Some(key) = self.add_svg_picture(raster_key, svg_key)
+            {
+                media.insert(raster.clone(), key);
+            }
         }
         let next_abs = self.numbering.abstracts.iter().map(|a| a.id.saturating_add(1)).max().unwrap_or(0);
         let mut abs_map = BTreeMap::new();
@@ -1346,7 +1358,7 @@ impl Document {
         }
         let mut blocks: Vec<Block> = src.body.iter().map(|b| (**b).clone()).collect();
         blocks.iter_mut().for_each(|b| link.block(b));
-        Fragment { blocks, parts, media: self.media.clone() }
+        Fragment { blocks, parts, media: self.media.clone(), svg_pictures: self.svg_pictures.clone() }
     }
 
     /// [`Self::adopt_with`] as blocks to place in a story directly (a reader building one): its
@@ -1378,6 +1390,11 @@ impl Document {
             out.insert(id, part.clone());
         }
         out
+    }
+
+    /// Alternative representations carried by this selection's media.
+    pub fn svg_pictures_of_media(&self, media: &BTreeMap<String, Arc<Vec<u8>>>) -> BTreeMap<String, String> {
+        self.svg_pictures.iter().filter(|(a, b)| media.contains_key(*a) && media.contains_key(*b)).map(|(a, b)| (a.clone(), b.clone())).collect()
     }
 
     /// Media items referenced by objects in `blocks`, nested text box stories included.
@@ -1417,6 +1434,8 @@ impl Document {
                 each_para(b, 0, &mut collect_para);
             }
         }
+        let vectors: Vec<String> = keys.iter().filter_map(|k| self.svg_pictures.get(k).cloned()).collect();
+        keys.extend(vectors);
         let mut out = BTreeMap::new();
         for k in keys {
             if let Some(data) = self.media.get(&k) {
@@ -1674,6 +1693,13 @@ impl Document {
             }
         }
         // Tables that would nest deeper than the limit here become their paragraphs (#1596).
+        for (raster, svg) in &frag.svg_pictures {
+            let raster_key = media_remap.get(raster).unwrap_or(raster).clone();
+            let svg_key = media_remap.get(svg).unwrap_or(svg).clone();
+            if let Some(key) = self.add_svg_picture(&raster_key, &svg_key) {
+                media_remap.insert(raster.clone(), key);
+            }
+        }
         let room = MAX_TABLE_DEPTH.saturating_sub(pos.path.depth());
         let mut blocks = Vec::with_capacity(frag.blocks.len());
         for b in frag.blocks.iter().cloned() {
