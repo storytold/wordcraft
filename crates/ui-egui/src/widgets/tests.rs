@@ -1,10 +1,14 @@
+use std::path::Path;
+use std::sync::Arc;
+
 use craft::font_manager::Catalog;
 use craft::font_manager::craft_font_catalog::{Limits, Source};
+use craft::font_manager::picker::FontPickerSettings;
 use craft::ui::buttons::IconButton;
-use craft::ui::contract::{Props as _, Show as _};
-use egui::Key;
+use craft::ui::contract::{Bind, Props as _, Show as _};
 use egui::accesskit::Role;
-use egui_kittest::kittest::{NodeT, Queryable};
+use egui::{Key, vec2};
+use egui_kittest::kittest::{By, NodeT, Queryable};
 use serde_json::{Value, json};
 use wordcraft_engine::Session;
 
@@ -221,4 +225,78 @@ fn drawn_buttons_fade_in_on_hover_and_darken_while_pressed() {
     h.run_steps(4);
     let fill_after = find_button_fill(&h.output().shapes, rect);
     assert_eq!(fill_after, None, "Save button must clear hover fill after unhovering");
+}
+
+/// #7317: typing in WordCraft's `font_picker` updates the popup list on the same frame as the
+/// keystroke, shows the Recently Used Fonts section again when cleared, and narrows immediately
+/// on subsequent typing.
+#[test]
+fn the_typed_list_shows_on_the_frame_of_the_keystroke() {
+    let catalog = Arc::new(Catalog::new(Default::default()).with_font_service(false));
+    catalog.set_app_dirs(vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts")]);
+    catalog.rescan();
+    assert!(catalog.families().iter().any(|f| f == "Inter"), "fixed catalog loaded assets/fonts");
+
+    let mut settings = FontPickerSettings::default();
+    settings.recent = vec!["Source Serif 4".to_string()];
+    let mut family = String::new();
+
+    let mut h = crate::test_harness::builder().with_size(vec2(400.0, 900.0)).build_ui(move |ui| {
+        let _ = super::font_picker("Font", Bind::bound(&mut family), &catalog, Bind::bound(&mut settings), &[], None).show(ui);
+    });
+    h.run_steps(2);
+
+    h.get(By::new().role(Role::TextInput)).click();
+    h.run_steps(2);
+
+    let erase = || {
+        vec![
+            egui::Event::Key { key: Key::Backspace, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE },
+            egui::Event::Key { key: Key::Backspace, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE },
+        ]
+    };
+    let send = |h: &mut egui_kittest::Harness<'static, ()>, events: Vec<egui::Event>| {
+        for ev in events {
+            h.event(ev);
+        }
+        h.step();
+    };
+
+    let frames: [(Vec<egui::Event>, &[&str], &[&str]); 7] = [
+        // Typing an unmatched query clears the list; one Backspace restores recents + all fonts on that frame.
+        (vec![egui::Event::Text("x".into())], &[], &["Source Serif 4", "Inter", "JetBrains Mono"]),
+        (erase(), &["Source Serif 4"], &[]),
+        // Typing narrows immediately on the keystroke frame and excludes non-matching families.
+        (vec![egui::Event::Text("jet".into())], &["JetBrains Mono"], &["Inter", "Source Serif 4"]),
+        (erase(), &["JetBrains Mono"], &["Inter"]),
+        (erase(), &["JetBrains Mono"], &["Inter"]),
+        (erase(), &["Source Serif 4"], &[]),
+        (vec![egui::Event::Text("int".into())], &["Inter"], &["JetBrains Mono"]),
+    ];
+
+    fn collect_texts(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Vec(children) => {
+                for child in children {
+                    collect_texts(child, out);
+                }
+            }
+            egui::Shape::Text(text) => out.push(text.galley.text().to_owned()),
+            _ => {}
+        }
+    }
+
+    for (n, (events, expected, excluded)) in frames.into_iter().enumerate() {
+        send(&mut h, events);
+        let mut texts = Vec::new();
+        for clipped in &h.output().shapes {
+            collect_texts(&clipped.shape, &mut texts);
+        }
+        for label in expected {
+            assert!(texts.iter().any(|t| t == label), "keystroke {n}: expected {label:?} to be drawn on the frame, got texts: {texts:?}");
+        }
+        for label in excluded {
+            assert!(texts.iter().all(|t| t != label), "keystroke {n}: expected {label:?} to be filtered out on the frame, got texts: {texts:?}");
+        }
+    }
 }
