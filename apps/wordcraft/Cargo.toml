@@ -58,6 +58,13 @@ winresource = "0.1"
 # Finder double-click, Open With, Dock drops and `open -a WordCraft letter.docx` arrive as a
 # kAEOpenDocuments Apple event, which winit doesn't handle (#27).
 craft = { workspace = true, features = ["platform-apple-events"] }
+# The Edit menu a system file panel needs for ⌘V and the like (panel_menu.rs), behind a safe API,
+# and the AppKit calls that tell when a panel is the key window. muda is the one craft's native
+# menu bar uses (craft-window's `appkit`); the AppKit bindings are already in the build through
+# eframe and craft's dialogs, at these versions.
+muda = { version = "0.21", default-features = false }
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSMenu", "NSWindow", "NSPanel", "NSSavePanel"] }
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 winit = { version = "0.30", default-features = false, features = ["x11"] }
@@ -74,3 +81,11 @@ craft = { workspace = true, features = ["update"] }
 # The nightly Windows identity: an explicit AppUserModelID, so Nightly gets its own taskbar
 # button instead of sharing the stable app's (#16335's rule for the suite).
 winsafe = { version = "=0.0.29", default-features = false, features = ["user", "shell"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+# tests/mac_panel_menu_appkit.rs reads AppKit's menu bar back.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSMenu", "NSMenuItem", "NSWindow", "NSPanel", "NSSavePanel", "NSColorPanel"] }
+
+[[test]]
+name = "mac_panel_menu_appkit"
+harness = false

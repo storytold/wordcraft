@@ -21,6 +21,8 @@ mod control_server;
 mod default_apps;
 mod launch_profile;
 mod nightly_session;
+#[cfg(target_os = "macos")]
+mod panel_menu;
 mod prefs;
 mod process_identity;
 mod profile_root;
@@ -65,6 +67,13 @@ struct App {
     spool: Spool,
     /// The control server, when `--control` started one; it removes the token file it made.
     control: Option<control_server::Control>,
+    /// The Edit menu a system file panel gets while it is the key window (macOS).
+    #[cfg(target_os = "macos")]
+    panel_menu: panel_menu::PanelMenu,
+    /// The file service behind `Host::files`, which knows whether a panel is open, whichever
+    /// feature asked for it (macOS: `panel_menu`).
+    #[cfg(target_os = "macos")]
+    files: Arc<dyn craft::host::Files>,
     /// The app binary's last step as the app leaves, run once at the end of `finish` (a Nightly
     /// quit ends the process inside AppKit's terminate, after eframe's `on_exit`).
     exit: Option<Box<dyn FnOnce()>>,
@@ -76,6 +85,16 @@ impl App {
     fn logic_pass(&mut self, ctx: &egui::Context, frame: Option<&eframe::Frame>) {
         self.app.logic(ctx);
         self.panels.pump_with(self.app.dialog_host_mut(), frame);
+        #[cfg(target_os = "macos")]
+        {
+            let open = self.files.pending_pick().is_some();
+            self.panel_menu.sync(open);
+            if open {
+                // The panel's menu bar follows the key window (the panel or another document's
+                // window), so look again while a panel is open.
+                ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            }
+        }
         // A quit that waits for nothing (the documents are answered for) closes the root window.
         if self.app.quit_requested && !self.app.printing.busy() {
             WindowHost::of(ctx).act(egui::ViewportId::ROOT, WindowAction::Close);
@@ -693,10 +712,11 @@ fn main() -> eframe::Result {
             // The interface language: the saved choice, else the system's.
             let lang = wordcraft_ui_egui::i18n::Lang::from_pref(&settings.lock().get().language);
             let (file_service, panels) = FileService::new(Wake::new(wake.clone()));
+            let file_service: Arc<dyn craft::host::Files> = Arc::new(file_service);
             let host = Arc::new(
                 Host::builder(wordcraft_ui_egui::APP)
                     .i18n(wordcraft_ui_egui::i18n::catalogs())
-                    .files(Arc::new(file_service))
+                    .files(Arc::clone(&file_service))
                     .settings(Arc::new(settings.clone()))
                     .lang(lang.craft_lang())
                     .build(),
@@ -804,6 +824,10 @@ fn main() -> eframe::Result {
                 settings,
                 spool,
                 control: control_server,
+                #[cfg(target_os = "macos")]
+                panel_menu: Default::default(),
+                #[cfg(target_os = "macos")]
+                files: file_service,
                 exit: Some(Box::new(move || {
                     nightly_session::finish_once(&session_for_exit, noticed_for_exit.load(std::sync::atomic::Ordering::Relaxed));
                 })),
@@ -993,12 +1017,13 @@ mod smoke {
             // (a screen reader turns it on in the app; `Frames::over` keeps the context's own options).
             ctx.enable_accesskit();
             let (files, panels) = FileService::new(Wake::new(|| {}));
+            let files: Arc<dyn craft::host::Files> = Arc::new(files);
             let (settings, _) = prefs::open(false, &mut Store::in_memory());
             let lang = wordcraft_ui_egui::i18n::Lang::from_pref(&settings.lock().get().language);
             let host = Arc::new(
                 Host::builder(wordcraft_ui_egui::APP)
                     .i18n(wordcraft_ui_egui::i18n::catalogs())
-                    .files(Arc::new(files))
+                    .files(Arc::clone(&files))
                     .settings(Arc::new(settings.clone()))
                     .lang(lang.craft_lang())
                     .build(),
@@ -1014,7 +1039,24 @@ mod smoke {
             let drops = intake.sender();
             let session = Session::new(wordcraft_doc::Document::new());
             let app = WordApp::new(session, services(spool.clone(), intake, false)).with_host(host).with_settings(settings.clone());
-            Run { app: App { app, panels, drops, settings, spool, control: None, exit: None }, frames, ctx, sender }
+            Run {
+                app: App {
+                    app,
+                    panels,
+                    drops,
+                    settings,
+                    spool,
+                    control: None,
+                    exit: None,
+                    #[cfg(target_os = "macos")]
+                    panel_menu: Default::default(),
+                    #[cfg(target_os = "macos")]
+                    files,
+                },
+                frames,
+                ctx,
+                sender,
+            }
         }
 
         /// One frame as eframe runs it: the input hook once, the logic once, the UI per pass.
