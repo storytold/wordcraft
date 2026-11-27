@@ -72,6 +72,10 @@ pub struct FontDb {
     /// The folders the system font scan reads (the platform's font folders for [`FontDb::global`]).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     font_dirs: Vec<std::path::PathBuf>,
+    /// The folders are the platform's: each scan lists them again, since some (Office's
+    /// numbered cloud font caches) appear while the app runs.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    system_dirs: bool,
     /// Set once the font folders have been scanned. Lookups by family name wait for the first
     /// scan, so what they find doesn't depend on what ran before them.
     #[cfg(not(target_arch = "wasm32"))]
@@ -138,6 +142,7 @@ impl FontDb {
             user: RwLock::new(user::UserFonts::default()),
             generation: AtomicU64::new(0),
             font_dirs,
+            system_dirs: false,
             #[cfg(not(target_arch = "wasm32"))]
             cataloged: std::sync::OnceLock::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -173,7 +178,7 @@ impl FontDb {
     /// first time a lookup by family name needs them (or ahead of time by
     /// [`FontDb::scan_in_background`]).
     pub fn global() -> &'static FontDb {
-        GLOBAL.get_or_init(|| FontDb::with_font_dirs(system_font_dirs()))
+        GLOBAL.get_or_init(|| FontDb { system_dirs: true, ..FontDb::with_font_dirs(system_font_dirs()) })
     }
 
     /// Initialize a test process with only the repository's pinned bundled fonts: no optional

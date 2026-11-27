@@ -291,7 +291,17 @@ pub fn system_font_dirs() -> Vec<std::path::PathBuf> {
         let root = std::env::var_os("WINDIR").map(std::path::PathBuf::from).unwrap_or_else(|| "C:\\Windows".into());
         dirs.push(root.join("Fonts"));
         if let Some(l) = std::env::var_os("LOCALAPPDATA") {
-            dirs.push(std::path::PathBuf::from(l).join("Microsoft\\Windows\\Fonts"));
+            let local = std::path::PathBuf::from(l);
+            dirs.push(local.join("Microsoft\\Windows\\Fonts"));
+            // Office cloud fonts are installed per user outside the Windows font
+            // folder. Scan only the downloaded font families, not preview fonts.
+            if let Ok(versions) = std::fs::read_dir(local.join("Microsoft\\FontCache")) {
+                for version in versions.flatten() {
+                    if version.file_name().to_string_lossy().chars().all(|c| c.is_ascii_digit()) {
+                        dirs.push(version.path().join("CloudFonts"));
+                    }
+                }
+            }
         }
     } else {
         dirs.extend(["/usr/share/fonts", "/usr/local/share/fonts"].map(Into::into));

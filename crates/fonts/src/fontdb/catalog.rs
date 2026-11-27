@@ -188,7 +188,7 @@ impl FontDb {
     #[cfg(not(target_arch = "wasm32"))]
     fn scan_font_dirs(&self) -> usize {
         let mut found = Vec::new();
-        let mut stack = self.font_dirs.clone();
+        let mut stack = if self.system_dirs { super::system_font_dirs() } else { self.font_dirs.clone() };
         // Each folder once, however links lead back to it.
         let mut visited = std::collections::HashSet::new();
         while let Some(d) = stack.pop() {
