@@ -2,15 +2,17 @@
 //! New Bullet's bullet. The form is a [`WordForm`]; OK runs one `format.set` with only what the user
 //! changed, or hands the form back to Define New Bullet when it was opened from there.
 
-use craft::behavior::ColumnWidth;
+use craft::behavior::{ColumnWidth, Mixed};
 use craft::font_manager::picker::FontPickerSettings;
 use craft::ui::choice::Checkbox;
+use craft::ui::contract::Entry;
 use craft::ui::contract::{Bind, Pad, Props as _, Show as _, ShowContainer as _};
 use craft::ui::dialog::DialogId;
 use craft::ui::display::{Picture, PictureSize, Text};
 use craft::ui::layout_components::{Grid, Row, Stack};
 use craft::ui::list::ThumbAspect;
 use craft::ui::patterns::form_dialogs::FormCx;
+use craft::ui::pickers::Select;
 use craft::ui::runtime::env::{Label, UnitKind};
 use craft::ui::sections::GroupBox;
 use craft::ui::style::SurfaceKind;
@@ -24,7 +26,7 @@ use wordcraft_doc::props::{CharProps, TextColor, Underline, VertAlign};
 use super::dialogs_bullet::DefineBulletForm;
 use super::host::{Asks, ChildAnswer, WordForm, open_form};
 use crate::WordApp;
-use crate::colors::{AutoFace, ColorFieldEmpty, Palette, color_field};
+use crate::colors::{AutoFace, ColorFieldEmpty, ColorFieldResponse, Palette, color_field};
 use crate::widgets::font_box::{CatalogRef, font_picker};
 
 /// The width of the sample; fixed, because sizing it from the dialog would grow the dialog frame by frame.
@@ -45,8 +47,12 @@ pub(crate) struct FontForm {
     pub size: Option<f64>,
     pub bold: bool,
     pub italic: bool,
-    pub underline: bool,
+    /// Underline style: its `w:u` name ("none", "words", "double"…), or "" while the selected text mixes styles.
+    pub underline: String,
+    /// Underline color: "auto" or RRGGBB, or "" while the selected text differs.
+    pub underline_color: String,
     pub strike: bool,
+    pub double_strike: bool,
     pub sup: bool,
     pub sub: bool,
     pub small_caps: bool,
@@ -125,6 +131,26 @@ fn preview_size(size: Option<f64>) -> f32 {
     size.map(|pt| pt as f32).filter(|pt| pt.is_finite()).unwrap_or(12.0).clamp(6.0, 72.0)
 }
 
+/// The underline style named `name` (its `w:u` name), if any.
+pub(super) fn underline_style(name: &str) -> Option<Underline> {
+    Underline::ALL.into_iter().find(|u| u.ooxml() == name)
+}
+
+/// The Underline style box's entries, in Word's order: (none), Words only, then the lines.
+pub(super) const UNDERLINE_STYLES: [(&str, &str); 11] = [
+    ("none", "(none)"),
+    ("words", "Words only"),
+    ("single", "Single"),
+    ("double", "Double"),
+    ("thick", "Thick"),
+    ("dotted", "Dotted"),
+    ("dash", "Dashed"),
+    ("dotDash", "Dot dash"),
+    ("dotDotDash", "Dot dot dash"),
+    ("wave", "Wave"),
+    ("wavyDouble", "Double wave"),
+];
+
 /// Whether automatic text on `paper` is white.
 fn dark_paper(paper: Rgb) -> bool {
     u32::from(paper.0) * 299 + u32::from(paper.1) * 587 + u32::from(paper.2) * 114 < 128_000
@@ -134,18 +160,17 @@ fn dark_paper(paper: Rgb) -> bool {
 fn font_sample_props(form: &FontForm, paper: Rgb) -> CharProps {
     let font = form.stored(form.font.trim());
     let (size, color, spacing) = (form.size, form.color.as_str(), form.spacing.unwrap_or(0.0) as f32);
-    let (bold, italic, underline, strike) = (form.bold, form.italic, form.underline, form.strike);
+    let (bold, italic, strike) = (form.bold, form.italic, form.strike);
     let (small_caps, caps, hidden) = (form.small_caps, form.caps, form.hidden);
     // Automatic text is black, or white on a dark page.
     let auto = if dark_paper(paper) { 255 } else { 0 };
     let ink = Rgb::parse(color).unwrap_or(Rgb(auto, auto, auto));
     // A hidden run is dotted, as Word draws hidden text when it is shown.
-    let line = if underline {
-        Underline::Single
-    } else if hidden {
-        Underline::Dotted
-    } else {
-        Underline::None
+    // A blank style box (mixed styles) draws no line; (none) on hidden text keeps the dots.
+    let line = match underline_style(&form.underline) {
+        Some(u) if u != Underline::None => u,
+        _ if hidden => Underline::Dotted,
+        _ => Underline::None,
     };
     CharProps {
         font: Some(font.to_string()),
@@ -153,7 +178,9 @@ fn font_sample_props(form: &FontForm, paper: Rgb) -> CharProps {
         bold: Some(bold),
         italic: Some(italic),
         underline: Some(line),
+        underline_color: Rgb::parse(&form.underline_color),
         strike: Some(strike),
+        double_strike: Some(form.double_strike),
         color: Some(TextColor::Rgb(ink)),
         caps: Some(caps),
         small_caps: Some(small_caps),
@@ -206,8 +233,10 @@ impl FontForm {
             size: st.get("size").and_then(Value::as_f64),
             bold: b("bold"),
             italic: b("italic"),
-            underline: b("underline"),
+            underline: s("underlineStyle"),
+            underline_color: s("underlineColor"),
             strike: b("strike"),
+            double_strike: b("doubleStrike"),
             sup: b("superscript"),
             sub: b("subscript"),
             small_caps: b("smallCaps"),
@@ -247,7 +276,21 @@ impl FontForm {
         props.insert("bold".into(), json!(self.bold));
         props.insert("italic".into(), json!(self.italic));
         props.insert("strike".into(), json!(self.strike));
-        props.insert("underline".into(), json!(if self.underline { "single" } else { "none" }));
+        props.insert("doubleStrike".into(), json!(self.double_strike));
+        // A blank style box (the selection mixes styles) sends no style, so each run keeps its own;
+        // the colour goes with a style that draws a line, or with the blank box (the field is
+        // enabled then, as in Word).
+        let style = underline_style(&self.underline);
+        if let Some(u) = style {
+            props.insert("underline".into(), json!(u.ooxml()));
+        }
+        if style != Some(Underline::None) {
+            if let Some(c) = Rgb::parse(&self.underline_color) {
+                props.insert("underlineColor".into(), json!(c.hex()));
+            } else if self.underline_color.eq_ignore_ascii_case("auto") {
+                props.insert("underlineColor".into(), json!("auto"));
+            }
+        }
         let vert = if self.sup {
             "superscript"
         } else if self.sub {
@@ -381,6 +424,36 @@ impl WordForm for FontForm {
                 if out.more_colors {
                     asks.push(Asks::Color { field: "color", current: Rgb::parse(&self.color), tab: craft::color_ui::ui::ColorPickerTab::Standard });
                 }
+                Text::new(Label::from(tl!("Underline style:"))).show(ui);
+                let entries: Vec<Entry<usize>> =
+                    UNDERLINE_STYLES.iter().enumerate().map(|(at, (_, l))| Entry::new(at, Label::from(tl!(l)))).collect();
+                let current = UNDERLINE_STYLES.iter().position(|(v, _)| *v == self.underline);
+                let shown = current.map_or(Mixed::Mixed, Mixed::Same);
+                if let Some(at) = Select::new(Label::from(tl!("Underline style:")), Bind::given(shown), &entries).show(ui).value().copied() {
+                    self.underline = UNDERLINE_STYLES[at].0.to_string();
+                }
+                Text::new(Label::from(tl!("Underline color:"))).show(ui);
+                // Nothing to colour while there is no underline.
+                let line_face = craft::theme::Srgba::rgb(0.0, 0.0, 0.0);
+                let line_empty = ColorFieldEmpty::Automatic { label: Label::from(tl!("Automatic")), value: "auto", face: AutoFace::One(line_face) };
+                let lined = self.underline != "none";
+                // One grid cell (a Row, like the kerning size's), greyed inside it: a bare enabled scope would
+                // take a cell of its own and push the rows after it out of step.
+                let mut out = ColorFieldResponse::default();
+                Row::new().show(ui, |ui, _| {
+                    out = ui
+                        .add_enabled_ui(lined, |ui| {
+                            color_field(ui, &Label::from(tl!("Underline color:")), &mut self.underline_color, &line_empty, &self.palette)
+                        })
+                        .inner;
+                });
+                if out.more_colors {
+                    asks.push(Asks::Color {
+                        field: "underlineColor",
+                        current: Rgb::parse(&self.underline_color),
+                        tab: craft::color_ui::ui::ColorPickerTab::Standard,
+                    });
+                }
                 Text::new(Label::from(tl!("Spacing (pt):"))).show(ui);
                 NumberField::new(Label::from(tl!("Spacing (pt):")), Bind::bound(&mut self.spacing))
                     .unit_kind(UnitKind::Points)
@@ -406,8 +479,14 @@ impl WordForm for FontForm {
             Grid::new(&EFFECT_COLUMNS).fill_width().show(ui, |ui, _| {
                 tick(ui, &mut self.bold, tl!("Bold"));
                 tick(ui, &mut self.italic, tl!("Italic"));
-                tick(ui, &mut self.underline, tl!("Underline"));
-                tick(ui, &mut self.strike, tl!("Strikethrough"));
+                // Strikethrough and Double strikethrough exclude each other: the one just ticked wins, so text that
+                // already has both (from a file) keeps both until one is ticked.
+                if tick(ui, &mut self.strike, tl!("Strikethrough")) && self.strike {
+                    self.double_strike = false;
+                }
+                if tick(ui, &mut self.double_strike, tl!("Double strikethrough")) && self.double_strike {
+                    self.strike = false;
+                }
                 // Superscript and Subscript exclude each other: the one just ticked wins.
                 if tick(ui, &mut self.sup, tl!("Superscript")) && self.sup {
                     self.sub = false;
@@ -461,12 +540,27 @@ impl WordForm for FontForm {
         if let Some(f) = changed.get("font").cloned() {
             changed.insert("fontCs".into(), f);
         }
-        if changed.is_empty() { Vec::new() } else { vec![("format.set".into(), json!({"props": changed}))] }
+        // Automatic underline colour drops the run's own colour, which `format.set` can't do: its own command,
+        // in the same undo step (the host joins a dialog's commands).
+        let auto_line = changed.get("underlineColor").and_then(Value::as_str) == Some("auto");
+        if auto_line {
+            changed.remove("underlineColor");
+        }
+        let mut commands = Vec::new();
+        if !changed.is_empty() {
+            commands.push(("format.set".into(), json!({"props": changed})));
+        }
+        if auto_line {
+            commands.push(("format.underlineColor".into(), json!({"color": "auto"})));
+        }
+        commands
     }
 
     fn answer(&mut self, answer: ChildAnswer) {
-        if let ChildAnswer::Color { field: "color", hex } = answer {
-            self.color = hex;
+        match answer {
+            ChildAnswer::Color { field: "color", hex } => self.color = hex,
+            ChildAnswer::Color { field: "underlineColor", hex } => self.underline_color = hex,
+            _ => {}
         }
     }
 
