@@ -43,6 +43,14 @@ pub(crate) fn builder_with<S>(spec: impl FnOnce() -> InstallSpec + 'static) -> H
     })
 }
 
+/// Like [`builder`], with custom interface fonts (e.g. a recording `FontCandidates` spy).
+pub(crate) fn builder_with_fonts<S>(fonts: impl FnOnce() -> craft::ui::fonts::UiFonts<'static> + 'static) -> HarnessBuilder<S> {
+    egui_kittest::Harness::builder().with_context_setup(move |ctx| {
+        cjk_stand_in(ctx);
+        craft::ui::shell::embed::install(ctx, install_spec(), &fonts()).expect("the craft runtime installs on a fresh test context");
+    })
+}
+
 /// A bare egui context with the craft runtime installed (the framework's test spec), for a test that
 /// runs frames by hand (`ctx.run_ui`) instead of through a kittest harness. A frame on a context
 /// without the runtime has no command registry, so the canvas's publish of its view commands
