@@ -56,6 +56,12 @@ fn apply_format_painter(app: &mut WordApp) {
     }
 }
 
+/// The text cursor a `ShellInfo` uses over page text: native Windows paints its own I-beam so it
+/// contrasts with dark pages, while other native shells and Web shells use the system text cursor.
+pub(crate) fn text_cursor(shell: &ShellInfo) -> Cursor {
+    if shell.os == Os::Windows && shell.runtime == Runtime::Native { Cursor::Painted(PaintedCursor::IBeam) } else { Cursor::System(CursorIcon::Text) }
+}
+
 /// The page's text tool: selection, caret placement and the page's editor input of one pass. Built
 /// inside the page-view body and dropped there, so nothing outlives the pass; `body` is this
 /// pass's placement, never the last pass's record.
@@ -63,8 +69,8 @@ pub(crate) struct PageTextTool<'a> {
     app: &'a mut WordApp,
     layout: Arc<DocLayout>,
     body: &'a PageBody<'a>,
-    /// The Windows shell draws its own I-beam.
-    draws_ibeam: bool,
+    /// The cursor over page text for the active shell.
+    text_cursor: Cursor,
     /// The modifier a link tip names for following the link.
     link_key: &'static str,
 }
@@ -97,9 +103,9 @@ impl<'a> PageTextTool<'a> {
     /// drawn (Windows, native: on the web the host OS is the browser's) and which key follows a link.
     // PLAN: the sheet's `pass` and `ctx` parameters are not taken: the page's keys run from `run_page_tool` (S-L240) and the tip goes through `ToolContext::tip`; canvas-w9 drops both from its call.
     pub(crate) fn new(app: &'a mut WordApp, layout: Arc<DocLayout>, body: &'a PageBody<'a>, shell: &ShellInfo) -> Self {
-        let draws_ibeam = shell.os == Os::Windows && shell.runtime == Runtime::Native;
+        let text_cursor = text_cursor(shell);
         let link_key = if shell.os == Os::Mac { "⌘" } else { "Ctrl" };
-        PageTextTool { app, layout, body, draws_ibeam, link_key }
+        PageTextTool { app, layout, body, text_cursor, link_key }
     }
 
     fn pointer_at(&self, pos: Pos2, clicks: u32) -> Option<(usize, f32, f32, u8)> {
@@ -266,7 +272,7 @@ impl CanvasTool for PageTextTool<'_> {
     }
 
     fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
-        let text = || if self.draws_ibeam { Cursor::Painted(PaintedCursor::IBeam) } else { Cursor::System(CursorIcon::Text) };
+        let text = || self.text_cursor.clone();
         let Some(pointer) = cx.pointer else { return text() };
         if let Some(c) = ObjectGesture::cursor(&*self.app, &self.layout, self.body, pointer.pos, pointer.mods) {
             return c;

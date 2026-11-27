@@ -2442,3 +2442,94 @@ fn hostile_numbers_are_ignored() {
     assert!(h.state().canvas.view.zoom.is_finite() && h.state().canvas.view.zoom > 0.0);
     assert!(h.state().canvas.view.offset.0.is_finite() && h.state().canvas.view.offset.1.is_finite());
 }
+
+/// Deliberately renamed and updated from pre-#7101
+/// `ibeam::tests::the_drawn_i_beam_takes_the_canvas_colour_off_the_page` (#7317, #7751): post-#7101,
+/// `PageTextTool::cursor` delegates painted I-beam colour and rasterisation to `craft`, and
+/// `craft::ui::runtime::cursor::current` exposes only `Option<Cursor>` (not the drawn colour).
+/// Deliberately expects `Cursor::System(CursorIcon::Default)` (arrow) off the page: on native
+/// Windows, hovering text on a dark page selects `PaintedCursor::IBeam`, while hovering off the
+/// page (in the gap between pages or outside the page edge, with Hide White Space off or on)
+/// falls back to the default arrow.
+#[test]
+fn i_beam_over_page_and_arrow_off_page() {
+    use craft::behavior::cursor::{Cursor, CursorIcon as BehaviorCursorIcon, PaintedCursor};
+    use craft::host::target::{Os, Runtime, ShellInfo};
+    use craft::ui::InstallSpec;
+    use std::sync::Arc;
+
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("text.insert", json!({"text": "Page one"})).unwrap();
+    app.run("layout.break", json!({"kind": "page"})).unwrap();
+    app.run("text.insert", json!({"text": "Page two"})).unwrap();
+    app.session.view.zoom = 0.4;
+    app.run("view.commentsPane", json!({"value": false})).unwrap();
+
+    let mut h = crate::test_harness::builder_with(move || {
+        InstallSpec::new(ShellInfo::default().os(Os::Windows).runtime(Runtime::Native), Arc::new(craft::ui::testing::windows::NoWindows))
+    })
+    .with_size(egui::vec2(500.0, 1000.0))
+    .with_step_dt(1.0 / 60.0)
+    .build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.app_frame();
+
+    let cursor_at = |h: &mut H, at: Pos2| -> Option<Cursor> {
+        h.event(egui::Event::PointerMoved(at));
+        h.app_frame();
+        craft::ui::runtime::cursor::current(&h.ctx)
+    };
+
+    // Native Windows selects the painted I-beam over the page and the default arrow off the page.
+    let shown = h.state().canvas.shown.pages.clone();
+    assert!(shown.len() > 1, "two pages shown");
+    let (p0, p1) = (&shown[0], &shown[1]);
+    assert!(p1.rect.min.y > p0.rect.max.y, "pages are stacked vertically with a gap between them");
+    assert_eq!(cursor_at(&mut h, p0.rect.center()), Some(Cursor::Painted(PaintedCursor::IBeam)), "on the dark page");
+
+    let gap = egui::pos2(p0.rect.center().x, (p0.rect.max.y + p1.rect.min.y) / 2.0);
+    assert!(!shown.iter().any(|p| p.rect.contains(gap)), "gap point lies outside every page rect");
+    assert_eq!(cursor_at(&mut h, gap), Some(Cursor::System(BehaviorCursorIcon::Default)), "between the pages");
+
+    let off_left = egui::pos2(p0.rect.min.x - 20.0, p0.rect.center().y);
+    assert_eq!(cursor_at(&mut h, off_left), Some(Cursor::System(BehaviorCursorIcon::Default)), "off the page edge");
+
+    // With Hide White Space on, page rects overlap across the cut margins (eliminating the
+    // inter-page rect gap, leaving only a thin seam between visible bands). Hovering page 1's
+    // text band or the hairline seam keeps the painted I-beam, while hovering off the page edge
+    // falls back to the default arrow.
+    assert!(h.state_mut().run("view.hideWhiteSpace", json!({"value": true})).is_ok());
+    h.app_frame();
+    let layout = h.state_mut().session.layout();
+    let shown = h.state().canvas.shown.pages.clone();
+    assert!(shown.len() > 1, "two pages shown with Hide White Space");
+    let (p0, p1) = (&shown[0], &shown[1]);
+    assert!(p1.rect.min.y < p0.rect.max.y, "Hide White Space collapses the inter-page rect gap");
+    let band0_bottom = p0.rect.min.y + p0.band.1;
+    let band1_top = p1.rect.min.y + p1.band.0;
+    assert!(band1_top > band0_bottom, "visible page bands meet across a hairline seam");
+    let seam = egui::pos2(p0.rect.center().x, (band0_bottom + band1_top) / 2.0);
+    assert!(p0.rect.contains(seam) && p1.rect.contains(seam), "seam lies inside overlapping page rects");
+    let body0 = layout.pages[0].body;
+    let on_body = p0.to_screen(craft::behavior::kurbo::Point::new(f64::from(body0.x + body0.w / 2.0), f64::from(body0.bottom() - 20.0)));
+    assert_eq!(cursor_at(&mut h, on_body), Some(Cursor::Painted(PaintedCursor::IBeam)), "on page 1's text area");
+    assert_eq!(cursor_at(&mut h, seam), Some(Cursor::Painted(PaintedCursor::IBeam)), "on the hairline seam between cut margins");
+    let off_page = egui::pos2(p0.rect.min.x - 20.0, p0.rect.center().y);
+    assert_eq!(cursor_at(&mut h, off_page), Some(Cursor::System(BehaviorCursorIcon::Default)), "off the page edge with Hide White Space");
+}
+
+#[test]
+fn text_cursor_by_shell_uses_painted_ibeam_only_on_native_windows() {
+    use craft::behavior::cursor::{Cursor, CursorIcon as BehaviorCursorIcon, PaintedCursor};
+    use craft::host::target::{Os, Runtime, ShellInfo};
+
+    assert_eq!(super::input::text_cursor(&ShellInfo::default().os(Os::Windows).runtime(Runtime::Native)), Cursor::Painted(PaintedCursor::IBeam));
+    assert_eq!(super::input::text_cursor(&ShellInfo::default().os(Os::Linux).runtime(Runtime::Native)), Cursor::System(BehaviorCursorIcon::Text));
+    assert_eq!(super::input::text_cursor(&ShellInfo::default().os(Os::Windows).runtime(Runtime::Web)), Cursor::System(BehaviorCursorIcon::Text));
+}
