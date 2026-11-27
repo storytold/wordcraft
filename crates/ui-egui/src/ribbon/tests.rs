@@ -1373,3 +1373,44 @@ fn symbol_tip_names_known_characters_and_falls_back_to_the_code_point() {
     assert!(unnamed.contains("2602") && unnamed.contains("Miscellaneous Symbols"), "unnamed character: {unnamed}");
     assert_eq!(symbol_tip("", ""), "");
 }
+
+/// #4349: Insert › Shapes offers its basic shapes as a grid of tiles (5 columns, wrapping into rows),
+/// not a vertical list. Each tile has an accessible name, a readable bounding box, and clicking it
+/// inserts that shape into the document.
+#[test]
+fn the_shapes_menu_offers_its_basic_shapes_as_a_grid_of_tiles() {
+    use egui::accesskit::Role;
+
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Lanterns")), crate::Services::default());
+    let mut h = tab_harness(app, "Insert");
+    click_button(&mut h, "Shapes");
+
+    let tiles = super::galleries::SHAPE_TILES;
+    let rects: Vec<egui::Rect> = tiles
+        .iter()
+        .map(|&(label, _, _)| h.query_all(By::new().role(Role::ListItem).label(label)).next().unwrap_or_else(|| panic!("shape tile {label}")).rect())
+        .collect();
+
+    // A grid, not a list: tiles sit side by side, wrapping into rows.
+    assert_eq!(rects[0].top(), rects[1].top(), "the first two shapes share a row");
+    assert!(rects[0].right() <= rects[1].left(), "side by side");
+    let rows = rects.iter().map(|r| r.top().round() as i32).collect::<std::collections::BTreeSet<_>>().len();
+    assert!(rows >= 2 && rows < tiles.len(), "{rows} rows for {} shapes", tiles.len());
+    assert!(rects.iter().all(|r| r.width() >= 24.0 && r.height() >= 24.0), "tiles are big enough to read and hit");
+
+    // Clicking each tile inserts its own shape kind into the document.
+    for (i, &(label, kind, _)) in tiles.iter().enumerate() {
+        if i > 0 {
+            h.query_all(By::new().role(Role::Button).label("Shapes")).next().expect("Shapes button").click();
+            crate::test_harness::frames(&mut h, 1);
+        }
+        let before = h.state().session.undo_depth();
+        h.query_all(By::new().role(Role::ListItem).label(label)).next().unwrap_or_else(|| panic!("shape tile {label}")).click();
+        crate::test_harness::frames(&mut h, 1);
+        assert_eq!(h.state().session.undo_depth(), before + 1, "clicking {label} inserts a shape");
+        let doc = serde_json::to_string(&h.state().session.doc).unwrap();
+        assert!(doc.contains(&format!(r#""{kind}""#)), "{label} tile inserts a {kind} shape");
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_eq!(h.state().session.undo_depth(), before, "undo removes {label} shape");
+    }
+}

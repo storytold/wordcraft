@@ -24,7 +24,7 @@ use crate::WordApp;
 use crate::previews::{SnippetOptions, dim, picture_key, preview_revision, snippet_blocks, style_revision, style_snippet};
 
 /// The basic shapes of Insert › Shapes: tooltip, `insert.shape` kind and the registered icon.
-const SHAPE_TILES: [(&str, &str, &str); 9] = [
+pub(super) const SHAPE_TILES: [(&str, &str, &str); 9] = [
     ("Rectangle", "rectangle", "shape.rectangle"),
     ("Rounded Rectangle", "roundedRectangle", "shape.roundedRectangle"),
     ("Oval", "ellipse", "shape.ellipse"),
