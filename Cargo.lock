@@ -1317,7 +1317,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=0b8bbaf4c842da2d47de7b
 [[package]]
 name = "craft-cfb"
 version = "0.1.0"
-source = "git+https://github.com/voidm4p/craft-libs?rev=193db451e493c5b9ff5e4e63976462b2d06d3e33#193db451e493c5b9ff5e4e63976462b2d06d3e33"
+source = "git+https://github.com/voidm4p/craft-libs?rev=4033e212e867d242ff8a0fc8f1c6dd52fbce204d#4033e212e867d242ff8a0fc8f1c6dd52fbce204d"
 
 [[package]]
 name = "craft-cloud-ui"
@@ -1440,16 +1440,16 @@ dependencies = [
 [[package]]
 name = "craft-docx"
 version = "0.1.0"
-source = "git+https://github.com/voidm4p/craft-libs?rev=193db451e493c5b9ff5e4e63976462b2d06d3e33#193db451e493c5b9ff5e4e63976462b2d06d3e33"
+source = "git+https://github.com/voidm4p/craft-libs?rev=4033e212e867d242ff8a0fc8f1c6dd52fbce204d#4033e212e867d242ff8a0fc8f1c6dd52fbce204d"
 dependencies = [
  "base64 0.23.1",
  "chrono",
- "craft-drawingml 0.1.0 (git+https://github.com/voidm4p/craft-libs?rev=193db451e493c5b9ff5e4e63976462b2d06d3e33)",
- "craft-math 0.1.0 (git+https://github.com/voidm4p/craft-libs?rev=193db451e493c5b9ff5e4e63976462b2d06d3e33)",
+ "craft-drawingml 0.1.0 (git+https://github.com/voidm4p/craft-libs?rev=4033e212e867d242ff8a0fc8f1c6dd52fbce204d)",
+ "craft-math 0.1.0 (git+https://github.com/voidm4p/craft-libs?rev=4033e212e867d242ff8a0fc8f1c6dd52fbce204d)",
  "craft-offcrypto",
- "craft-opc 0.1.0 (git+https://github.com/voidm4p/craft-libs?rev=193db451e493c5b9ff5e4e63976462b2d06d3e33)",
+ "craft-opc 0.1.0 (git+https://github.com/voidm4p/craft-libs?rev=4033e212e867d242ff8a0fc8f1c6dd52fbce204d)",
  "craft-wordmodel",
- "craft-xml 0.1.0 (git+https://github.com/voidm4p/craft-libs?rev=193db451e493c5b9ff5e4e63976462b2d06d3e33)",
+ "craft-xml 0.1.0 (git+https://github.com/voidm4p/craft-libs?rev=4033e212e867d242ff8a0fc8f1c6dd52fbce204d)",
  "log",
  "quick-xml 0.41.0",
  "thiserror 2.0.21",
@@ -1491,10 +1491,10 @@ dependencies = [
 [[package]]
 name = "craft-drawingml"
 version = "0.1.0"
-source = "git+https://github.com/voidm4p/craft-libs?rev=193db451e493c5b9ff5e4e63976462b2d06d3e33#193db451e493c5b9ff5e4e63976462b2d06d3e33"
+source = "git+https://github.com/voidm4p/craft-libs?rev=4033e212e867d242ff8a0fc8f1c6dd52fbce204d#4033e212e867d242ff8a0fc8f1c6dd52fbce204d"
 dependencies = [
  "chrono",
- "craft-xml 0.1.0 (git+https://github.com/voidm4p/craft-libs?rev=193db451e493c5b9ff5e4e63976462b2d06d3e33)",
+ "craft-xml 0.1.0 (git+https://github.com/voidm4p/craft-libs?rev=4033e212e867d242ff8a0fc8f1c6dd52fbce204d)",
  "kurbo",
  "log",
  "serde",
@@ -1765,9 +1765,9 @@ dependencies = [
 [[package]]
 name = "craft-math"
 version = "0.1.0"
-source = "git+https://github.com/voidm4p/craft-libs?rev=193db451e493c5b9ff5e4e63976462b2d06d3e33#193db451e493c5b9ff5e4e63976462b2d06d3e33"
+source = "git+https://github.com/voidm4p/craft-libs?rev=4033e212e867d242ff8a0fc8f1c6dd52fbce204d#4033e212e867d242ff8a0fc8f1c6dd52fbce204d"
 dependencies = [
- "craft-xml 0.1.0 (git+https://github.com/voidm4p/craft-libs?rev=193db451e493c5b9ff5e4e63976462b2d06d3e33)",
+ "craft-xml 0.1.0 (git+https://github.com/voidm4p/craft-libs?rev=4033e212e867d242ff8a0fc8f1c6dd52fbce204d)",
  "roxmltree",
  "serde",
 ]
@@ -1872,12 +1872,12 @@ dependencies = [
 [[package]]
 name = "craft-offcrypto"
 version = "0.1.0"
-source = "git+https://github.com/voidm4p/craft-libs?rev=193db451e493c5b9ff5e4e63976462b2d06d3e33#193db451e493c5b9ff5e4e63976462b2d06d3e33"
+source = "git+https://github.com/voidm4p/craft-libs?rev=4033e212e867d242ff8a0fc8f1c6dd52fbce204d#4033e212e867d242ff8a0fc8f1c6dd52fbce204d"
 dependencies = [
  "aes",
  "base64 0.23.1",
- "craft-cfb 0.1.0 (git+https://github.com/voidm4p/craft-libs?rev=193db451e493c5b9ff5e4e63976462b2d06d3e33)",
- "craft-xml 0.1.0 (git+https://github.com/voidm4p/craft-libs?rev=193db451e493c5b9ff5e4e63976462b2d06d3e33)",
+ "craft-cfb 0.1.0 (git+https://github.com/voidm4p/craft-libs?rev=4033e212e867d242ff8a0fc8f1c6dd52fbce204d)",
+ "craft-xml 0.1.0 (git+https://github.com/voidm4p/craft-libs?rev=4033e212e867d242ff8a0fc8f1c6dd52fbce204d)",
  "getrandom 0.3.4",
  "hmac 0.13.0",
  "sha1 0.11.0",
@@ -1900,10 +1900,10 @@ dependencies = [
 [[package]]
 name = "craft-opc"
 version = "0.1.0"
-source = "git+https://github.com/voidm4p/craft-libs?rev=193db451e493c5b9ff5e4e63976462b2d06d3e33#193db451e493c5b9ff5e4e63976462b2d06d3e33"
+source = "git+https://github.com/voidm4p/craft-libs?rev=4033e212e867d242ff8a0fc8f1c6dd52fbce204d#4033e212e867d242ff8a0fc8f1c6dd52fbce204d"
 dependencies = [
- "craft-xml 0.1.0 (git+https://github.com/voidm4p/craft-libs?rev=193db451e493c5b9ff5e4e63976462b2d06d3e33)",
- "craft-zip 0.1.0 (git+https://github.com/voidm4p/craft-libs?rev=193db451e493c5b9ff5e4e63976462b2d06d3e33)",
+ "craft-xml 0.1.0 (git+https://github.com/voidm4p/craft-libs?rev=4033e212e867d242ff8a0fc8f1c6dd52fbce204d)",
+ "craft-zip 0.1.0 (git+https://github.com/voidm4p/craft-libs?rev=4033e212e867d242ff8a0fc8f1c6dd52fbce204d)",
  "log",
  "thiserror 2.0.21",
 ]
@@ -2463,10 +2463,10 @@ dependencies = [
 [[package]]
 name = "craft-wordmodel"
 version = "0.1.0"
-source = "git+https://github.com/voidm4p/craft-libs?rev=193db451e493c5b9ff5e4e63976462b2d06d3e33#193db451e493c5b9ff5e4e63976462b2d06d3e33"
+source = "git+https://github.com/voidm4p/craft-libs?rev=4033e212e867d242ff8a0fc8f1c6dd52fbce204d#4033e212e867d242ff8a0fc8f1c6dd52fbce204d"
 dependencies = [
  "base64 0.23.1",
- "craft-math 0.1.0 (git+https://github.com/voidm4p/craft-libs?rev=193db451e493c5b9ff5e4e63976462b2d06d3e33)",
+ "craft-math 0.1.0 (git+https://github.com/voidm4p/craft-libs?rev=4033e212e867d242ff8a0fc8f1c6dd52fbce204d)",
  "log",
  "serde",
  "serde_json",
@@ -2512,7 +2512,7 @@ dependencies = [
 [[package]]
 name = "craft-xml"
 version = "0.1.0"
-source = "git+https://github.com/voidm4p/craft-libs?rev=193db451e493c5b9ff5e4e63976462b2d06d3e33#193db451e493c5b9ff5e4e63976462b2d06d3e33"
+source = "git+https://github.com/voidm4p/craft-libs?rev=4033e212e867d242ff8a0fc8f1c6dd52fbce204d#4033e212e867d242ff8a0fc8f1c6dd52fbce204d"
 dependencies = [
  "quick-xml 0.41.0",
  "serde",
@@ -2532,7 +2532,7 @@ dependencies = [
 [[package]]
 name = "craft-zip"
 version = "0.1.0"
-source = "git+https://github.com/voidm4p/craft-libs?rev=193db451e493c5b9ff5e4e63976462b2d06d3e33#193db451e493c5b9ff5e4e63976462b2d06d3e33"
+source = "git+https://github.com/voidm4p/craft-libs?rev=4033e212e867d242ff8a0fc8f1c6dd52fbce204d#4033e212e867d242ff8a0fc8f1c6dd52fbce204d"
 dependencies = [
  "flate2",
  "thiserror 2.0.21",

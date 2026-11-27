@@ -172,8 +172,8 @@ debug = 0
 # Temporary, until storytold/craft-libs takes the matching craft-docx/craft-wordmodel change
 # and the craft-libs rev moves past it.
 [patch."https://github.com/storytold/craft-libs"]
-craft-docx = { git = "https://github.com/voidm4p/craft-libs", rev = "193db451e493c5b9ff5e4e63976462b2d06d3e33" }
-craft-wordmodel = { git = "https://github.com/voidm4p/craft-libs", rev = "193db451e493c5b9ff5e4e63976462b2d06d3e33" }
+craft-docx = { git = "https://github.com/voidm4p/craft-libs", rev = "4033e212e867d242ff8a0fc8f1c6dd52fbce204d" }
+craft-wordmodel = { git = "https://github.com/voidm4p/craft-libs", rev = "4033e212e867d242ff8a0fc8f1c6dd52fbce204d" }
 
 # Required by craft-pdf: the backend rejects writers that failed during unwinding.
 # The framework's patches, which Cargo does not carry over to dependents: its vendored crates from craft-libs,
