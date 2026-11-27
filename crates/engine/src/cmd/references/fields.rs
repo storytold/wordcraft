@@ -27,12 +27,29 @@ pub const CHAPTER_SEPARATORS: [&str; 5] = ["-", ".", ":", "\u{2014}", "\u{2013}"
 /// a chapter number (`STYLEREF n \s` and a separator) and a `SEQ label \* format \s n` number
 /// (ECMA-376 §17.16.5.56, §17.16.5.59).
 pub(super) fn caption(s: &mut Session, v: &Value) -> CmdResult {
+    let (story, at) = caption_site(s, v);
+    let text = p::str(v, "text").unwrap_or("");
+    s.doc.insert_block(story, &at, Block::Para(caption_paragraph(v, text)?))?;
+    update_seq(s)?;
+    let off = s.doc.para(story, &at).map_or(0, |p| p.len());
+    s.sel = Selection::caret(Pos { story, path: at, off });
+    sel_result(s)
+}
+
+/// Number a prospective caption at its insertion site without changing the document or selection.
+pub fn caption_preview(s: &Session, v: &Value) -> Result<String, CmdError> {
+    let (story, at) = caption_site(s, v);
+    let mut doc = s.doc.clone();
+    doc.insert_block(story, &at, Block::Para(caption_paragraph(v, "")?))?;
+    update_seq_in(&mut doc)?;
+    Ok(doc.para(story, &at).map_or_else(String::new, Paragraph::plain_text))
+}
+
+fn caption_paragraph(v: &Value, text: &str) -> Result<Paragraph, CmdError> {
     let label: String = p::str(v, "label").unwrap_or("Figure").chars().filter(|c| !matches!(c, '"' | '\\') && !c.is_control()).take(40).collect();
     let label = if label.trim().is_empty() { "Figure".to_string() } else { label.trim().to_string() };
     // SEQ identifiers are one word: Word joins a multi-word label with underscores.
     let ident = label.split_whitespace().collect::<Vec<_>>().join("_");
-    let text = p::str(v, "text").unwrap_or("").to_string();
-    let above = p::str(v, "position") == Some("above");
     let format = seq_format(p::str(v, "format").unwrap_or("ARABIC"));
     let chapter = p::u64(v, "chapter").filter(|l| (1..=9).contains(l));
     let sep = p::str(v, "separator").and_then(|x| CHAPTER_SEPARATORS.iter().find(|s| **s == x)).copied().unwrap_or("-");
@@ -51,10 +68,15 @@ pub(super) fn caption(s: &mut Session, v: &Value) -> CmdResult {
     if !text.is_empty() {
         para.insert_text(para.len(), &format!(": {text}"), &CharProps::default())?;
     }
+    Ok(para)
+}
+
+fn caption_site(s: &Session, v: &Value) -> (StoryRef, Path) {
     // A selected picture, shape or chart: next to the paragraph holding it, in the same cell or
     // text box (#1230). Otherwise next to the caret's top-level block: a paragraph, or the whole
     // table it is in.
-    let f = s.sel.focus.clone();
+    let f = &s.sel.focus;
+    let above = p::str(v, "position") == Some("above");
     let at = match crate::cmd::objects::object_selection(s) {
         Some((pos, _)) => {
             let k = pos.path.last();
@@ -65,11 +87,7 @@ pub(super) fn caption(s: &mut Session, v: &Value) -> CmdResult {
             Path::top(if above { top } else { top.saturating_add(1) })
         }
     };
-    s.doc.insert_block(f.story, &at, Block::Para(para))?;
-    update_seq(s)?;
-    let off = s.doc.para(f.story, &at).map_or(0, |p| p.len());
-    s.sel = Selection::caret(Pos { story: f.story, path: at, off });
-    sel_result(s)
+    (f.story, at)
 }
 
 /// Renumber the body's SEQ fields in document order, honouring `\* format`, `\s level` (restart
@@ -78,11 +96,15 @@ pub(super) fn caption(s: &mut Session, v: &Value) -> CmdResult {
 /// the last level-n heading's number, or its count when the heading isn't numbered) and the
 /// text or number of the nearest paragraph of a style.
 pub fn update_seq(s: &mut Session) -> Result<(), CmdError> {
+    update_seq_in(&mut s.doc)
+}
+
+fn update_seq_in(doc: &mut wordcraft_doc::Document) -> Result<(), CmdError> {
     // Numbers first: a STYLEREF to a heading that holds a SEQ field shows its new number.
-    let numbers = seq_results(&s.doc);
-    apply_results(&mut s.doc, numbers)?;
-    let refs = styleref_results(&s.doc);
-    apply_results(&mut s.doc, refs)
+    let numbers = seq_results(doc);
+    apply_results(doc, numbers)?;
+    let refs = styleref_results(doc);
+    apply_results(doc, refs)
 }
 
 /// A field's fresh result: its story and paragraph, its object index there and the text.
