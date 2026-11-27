@@ -9,7 +9,7 @@ use super::headers::{
     HfLinks, bookmark_names, bookmark_pages, headers_footers, headers_footers_refer_to_pages, marks_key, mirror_even_pages, section_side,
 };
 use super::notes::{MAX_NOTE_PAGES, NoteSeps, note_info, place_endnotes};
-use super::page::{PageBuilder, body_top_for, foot_top_for, item_bottom};
+use super::page::{PageBuilder, foot_top_for, header_bottom_for, item_bottom, resolve_body_bounds};
 use super::placed::Placed;
 use super::table_flow::place_table;
 use super::{
@@ -33,13 +33,13 @@ impl Mode {
     }
 }
 
-/// Where a section's pages start and end: the body below the headers (on the first page, and on
-/// the others) and the foot above the footers.
+/// Where a section's pages start and end: the body top and bottom resolved against headers and
+/// footers (on the first page, and on the others).
 struct Tops {
     body: f32,
+    body_bottom: f32,
     first: f32,
-    foot: f32,
-    first_foot: f32,
+    first_bottom: f32,
 }
 
 /// A section being laid out: its index, its properties as laid out (turned for vertical text),
@@ -231,7 +231,7 @@ fn new_page_builder<'p>(
         col_break_page: None,
         sect_beneath: false,
         beneath: false,
-        foot_top: f32::MAX,
+        body_bottom: sect.page_h - sect.margin_bottom,
         early,
         seeded: 0,
         settle,
@@ -272,7 +272,8 @@ fn turned_sections(ctx: &mut Ctx, sections: &[(usize, &SectionProps)], web: bool
         .map(|(_, s)| {
             (!web && s.text_direction.is_turned()).then(|| {
                 ctx.fields.page_format = s.page_num_format;
-                let top = body_top_for(ctx, s, s.headers.default);
+                let hb = header_bottom_for(ctx, s, s.headers.default);
+                let (top, _) = resolve_body_bounds(s, hb, None);
                 vertical::unturned_sect(s, top)
             })
         })
@@ -287,11 +288,21 @@ fn section_tops(ctx: &mut Ctx, hf: &HfLinks, (si, sect): (usize, &SectionProps),
     let (heads, feet) = (hf.heads.set(si), hf.feet.set(si));
     let hb = |i: Option<u32>| hf.defining_width(false, si, i);
     let fb = |i: Option<u32>| hf.defining_width(true, si, i);
-    let body = if fixed { sect.margin_top } else { with_pct_base(ctx, hb(heads.default), |c| body_top_for(c, sect, heads.default)) };
-    let first = if fixed || !sect.title_page { body } else { with_pct_base(ctx, hb(heads.first), |c| body_top_for(c, sect, heads.first)) };
-    let foot = if fixed { f32::MAX } else { with_pct_base(ctx, fb(feet.default), |c| foot_top_for(c, sect, feet.default)) };
-    let first_foot = if fixed || !sect.title_page { foot } else { with_pct_base(ctx, fb(feet.first), |c| foot_top_for(c, sect, feet.first)) };
-    Tops { body, first, foot, first_foot }
+    if fixed {
+        let bottom = sect.page_h - sect.margin_bottom;
+        return Tops { body: sect.margin_top, body_bottom: bottom, first: sect.margin_top, first_bottom: bottom };
+    }
+    let def_hb = with_pct_base(ctx, hb(heads.default), |c| header_bottom_for(c, sect, heads.default));
+    let def_ft = with_pct_base(ctx, fb(feet.default), |c| foot_top_for(c, sect, feet.default));
+    let (body, body_bottom) = resolve_body_bounds(sect, def_hb, def_ft);
+    let (first, first_bottom) = if !sect.title_page {
+        (body, body_bottom)
+    } else {
+        let first_hb = with_pct_base(ctx, hb(heads.first), |c| header_bottom_for(c, sect, heads.first));
+        let first_ft = with_pct_base(ctx, fb(feet.first), |c| foot_top_for(c, sect, feet.first));
+        resolve_body_bounds(sect, first_hb, first_ft)
+    };
+    Tops { body, body_bottom, first, first_bottom }
 }
 
 /// Set up the walk state for a section before its header and footer room is measured: no grid yet
@@ -334,8 +345,10 @@ fn end_previous_section<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLink
     ctx.fields.page_format = prev.page_num_format;
     pb.sect_idx = si - 1;
     let (ph, pf) = (hf.heads.set(si - 1), hf.feet.set(si - 1));
-    let top = body_top_for(ctx, prev, ph.default);
-    pb.foot_top = foot_top_for(ctx, prev, pf.default);
+    let hb = header_bottom_for(ctx, prev, ph.default);
+    let ft = foot_top_for(ctx, prev, pf.default);
+    let (top, bottom) = resolve_body_bounds(prev, hb, ft);
+    pb.body_bottom = bottom;
     pb.new_page(block, top);
 }
 
@@ -357,7 +370,7 @@ fn start_section_page<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<
     if restart.is_some() {
         pb.restart_at = restart;
     }
-    pb.foot_top = sec.tops.first_foot;
+    pb.body_bottom = sec.tops.first_bottom;
     pb.new_page(block, sec.tops.first);
 }
 
@@ -605,7 +618,7 @@ pub(crate) fn layout_pass(
             continue_page(&mut pb, sect, block);
         }
         prev_turn = turn;
-        pb.foot_top = sec.tops.foot;
+        pb.body_bottom = sec.tops.body_bottom;
         let last = (*end).min(doc.body.len().saturating_sub(1));
         let balance = prepare_section_end(&mut pb, sections, (si, mode.web));
         let (next, discarded) = place_section_blocks(&mut ctx, &mut pb, &outline, (block, last), (balance, sec.tops.body));

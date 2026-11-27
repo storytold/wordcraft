@@ -82,9 +82,9 @@ pub(crate) struct PageBuilder<'a> {
     pub(crate) sect_beneath: bool,
     /// ... and so do the current page's (set as the page starts).
     pub(crate) beneath: bool,
-    /// Top of the footer of the pages being started: a footer reaching above the bottom margin
-    /// pushes the body up (`f32::MAX`: no footer).
-    pub(crate) foot_top: f32,
+    /// Resolved bottom of the body on pages being started (above the footer, or the bottom
+    /// margin when no footer pushes it up or an oversized footer falls back to the margin).
+    pub(crate) body_bottom: f32,
     /// The wrap areas pages start with ([`EarlyFloats`]) ...
     pub(crate) early: &'a EarlyFloats,
     /// ... and how many of the current page's `excl` they are (its first ones).
@@ -334,7 +334,7 @@ impl PageBuilder<'_> {
         let s = self.sect;
         self.number = self.restart_at.take().unwrap_or_else(|| self.number.saturating_add(1));
         let (w, h) = if self.web { (s.page_w, f32::MAX / 4.0) } else { (s.page_w, s.page_h) };
-        let bottom = self.body_bottom(body_top);
+        let bottom = self.body_bottom;
         let body = Rect::new(s.margin_left + s.gutter, body_top, s.text_width(), (bottom - body_top).max(36.0));
         let mut decor = Vec::new();
         if !self.web {
@@ -412,13 +412,6 @@ impl PageBuilder<'_> {
             self.bottom = self.bottom.min(self.top + h);
         }
     }
-    /// The bottom of the body on a page started with its body at `body_top`: a footer taller than
-    /// the bottom margin pushes it up (Word: no gap), leaving it at least a little room.
-    fn body_bottom(&self, body_top: f32) -> f32 {
-        // ODF keeps the footer's spacing above a footer too tall for the bottom margin.
-        let gap = if self.sect.footer_gap.is_finite() { self.sect.footer_gap.clamp(0.0, 1584.0) } else { 0.0 };
-        (self.sect.page_h - self.sect.margin_bottom).min((self.foot_top - gap).max(body_top + 36.0))
-    }
     /// The room for text in the next column, or on the page [`Self::advance`] starts after the
     /// last: there, below its body top (`body_top`) and above its footer and the notes carried
     /// onto it (#3907 CodeRabbit: a different first page's header or footer doesn't shrink it).
@@ -428,7 +421,7 @@ impl PageBuilder<'_> {
         } else if self.web {
             f32::MAX / 8.0 - body_top
         } else {
-            self.body_bottom(body_top) - self.stack_h(&self.carry) - body_top
+            self.body_bottom - self.stack_h(&self.carry) - body_top
         }
     }
     /// The bottom of the columns without balancing: above the footnotes.
@@ -496,10 +489,73 @@ pub(crate) fn item_bottom(y: f32, para: &ParaLayout, l0: usize, l1: usize) -> Op
     Some(y + l.top + l.height - f.top)
 }
 
-/// Where body text starts: the top margin, or below the header if it's taller.
-pub(crate) fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u32>) -> f32 {
-    let Some(id) = header else { return sect.margin_top };
-    let Some(part) = ctx.doc.parts.get(&id) else { return sect.margin_top };
+/// Minimum vertical room kept for body text when a header and footer together would otherwise
+/// squeeze the body into an unusable sliver (1 inch, capped to the section's margin-to-margin
+/// body height on tiny pages).
+const MIN_BODY_HEIGHT: f32 = 72.0;
+
+/// Resolve `(body_top, body_bottom)` jointly from a section's margins, raw header bottom
+/// (`sect.header + h`), and raw footer top (`foot_top`).
+///
+/// Word grows the header downward and footer upward past the margins, but full-page background
+/// graphics or embedded objects in headers/footers must not collapse the body into a sliver or
+/// push it off the page, and a combined tall header + tall footer is resolved symmetrically so
+/// neither band arbitrarily wins and body text does not draw over a non-oversized footer.
+pub(crate) fn resolve_body_bounds(sect: &SectionProps, header_bottom: Option<f32>, foot_top: Option<f32>) -> (f32, f32) {
+    let margin_top = sect.margin_top;
+    let margin_bottom = sect.page_h - sect.margin_bottom;
+    let margin_body = (margin_bottom - margin_top).max(0.0);
+    if margin_body <= 0.0 {
+        return (margin_top, margin_bottom);
+    }
+    // Word starts the body right below a header / above a footer that reaches past the margin,
+    // no gap; ODF keeps the header/footer spacing.
+    let header_gap = if sect.header_gap.is_finite() { sect.header_gap.clamp(0.0, 1584.0) } else { 0.0 };
+    let footer_gap = if sect.footer_gap.is_finite() { sect.footer_gap.clamp(0.0, 1584.0) } else { 0.0 };
+
+    let min_body = MIN_BODY_HEIGHT.min(margin_body);
+
+    // 1. Individual oversized-band guard: a single header or footer leaving less than `min_body`
+    // (e.g. a full-page or near-full-page background/OLE graphic) falls back to its margin rather
+    // than collapsing the body to a narrow sliver or pushing it off the page.
+    let mut top = header_bottom.filter(|v| v.is_finite()).map_or(margin_top, |hb| {
+        let edge = margin_top.max(hb + header_gap);
+        if margin_bottom - edge < min_body { margin_top } else { edge }
+    });
+    let mut bottom = foot_top.filter(|v| v.is_finite()).map_or(margin_bottom, |ft| {
+        let edge = margin_bottom.min(ft - footer_gap);
+        if edge - margin_top < min_body { margin_bottom } else { edge }
+    });
+
+    // 2. Combined squeeze guard: if both header and footer individually leave `>= min_body` yet
+    // together leave less than `min_body`, release the larger intrusion first (or both on an exact
+    // tie or tiny page) so body text gets usable height without asymmetrically dropping only the
+    // footer while honoring a larger header.
+    if bottom - top < min_body {
+        let h_push = top - margin_top;
+        let f_push = margin_bottom - bottom;
+        if (h_push - f_push).abs() < 0.01 {
+            top = margin_top;
+            bottom = margin_bottom;
+        } else if h_push > f_push {
+            top = margin_top;
+            if bottom - top < min_body {
+                bottom = margin_bottom;
+            }
+        } else {
+            bottom = margin_bottom;
+            if bottom - top < min_body {
+                top = margin_top;
+            }
+        }
+    }
+    (top, bottom)
+}
+
+/// Where the header ends on the page (`sect.header + h`), or `None` when the section has no header.
+pub(crate) fn header_bottom_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u32>) -> Option<f32> {
+    let id = header?;
+    let part = ctx.doc.parts.get(&id)?;
     let blocks = part.blocks.clone();
     // Placed as `headers_footers` draws it, so page-relative floats wrap the same way.
     let frame = PageFrame { sect, margin_top: None, origin: (sect.margin_left + sect.gutter, sect.header), number: 1, mirror: ctx.mirror };
@@ -508,15 +564,12 @@ pub(crate) fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u3
         layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, Some(frame))).height
     });
     ctx.track_totals = track;
-    // Word starts the body right below a header that reaches past the top margin, no gap;
-    // ODF keeps the header's spacing.
-    let gap = if sect.header_gap.is_finite() { sect.header_gap.clamp(0.0, 1584.0) } else { 0.0 };
-    sect.margin_top.max(sect.header + h + gap)
+    Some(sect.header + h)
 }
 
-/// Where the footer starts (as `headers_footers` places it), `f32::MAX` without one.
-pub(crate) fn foot_top_for(ctx: &mut Ctx, sect: &SectionProps, footer: Option<u32>) -> f32 {
-    let Some(part) = footer.and_then(|id| ctx.doc.parts.get(&id).map(|p| (id, p))) else { return f32::MAX };
+/// Where the footer starts (as `headers_footers` places it), or `None` without one.
+pub(crate) fn foot_top_for(ctx: &mut Ctx, sect: &SectionProps, footer: Option<u32>) -> Option<f32> {
+    let part = footer.and_then(|id| ctx.doc.parts.get(&id).map(|p| (id, p)))?;
     let (id, blocks) = (part.0, part.1.blocks.clone());
     // A page total in the footer is filled in after pagination, like the header's: it doesn't
     // make the body lay out again.
@@ -544,7 +597,8 @@ pub(crate) fn foot_top_for(ctx: &mut Ctx, sect: &SectionProps, footer: Option<u3
             _ => None,
         })
         .collect();
-    laid.items
+    let top = laid
+        .items
         .iter()
         .filter_map(|item| match item {
             Placed::Rule { x0, x1, y0, y1, border }
@@ -556,7 +610,8 @@ pub(crate) fn foot_top_for(ctx: &mut Ctx, sect: &SectionProps, footer: Option<u3
             }
             _ => None,
         })
-        .fold(top, f32::min)
+        .fold(top, f32::min);
+    Some(top)
 }
 
 /// Where a box of laid-out items sits on its page, for floating objects positioned relative to

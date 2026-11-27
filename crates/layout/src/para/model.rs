@@ -31,20 +31,43 @@ impl<'a> SymbolRun<'a> {
                 return p;
             }
         }
-        let Some(u) = wordcraft_doc::symbol_fonts::symbol_char(self.family, c) else { return c };
-        // A few list bullets have common look-alikes in far more fonts: use one when no face
-        // has the exact character.
-        let alt = match u {
-            '\u{26AB}' => Some('\u{25CF}'),
-            '\u{25FC}' => Some('\u{25A0}'),
-            '\u{2B9A}' => Some('\u{27A2}'),
-            _ => None,
+        let u = wordcraft_doc::symbol_fonts::symbol_char(self.family, c).unwrap_or(c);
+        // Common symbol-font bullets, arrows, boxes and check marks have widely covered
+        // look-alikes: use the first covered one when no loaded or system face has `u`.
+        // Also applies when an exporter writes the mapped Unicode code point directly inside a
+        // Wingdings/Symbol run.
+        let alts: &[char] = match u {
+            '\u{26AB}' | '\u{2B24}' => &['\u{25CF}'],
+            '\u{25FC}' | '\u{25FE}' | '\u{2B1B}' => &['\u{25A0}'],
+            '\u{2B9A}' => &['\u{27A2}', '\u{25BA}', '\u{25B8}'],
+            '\u{27A2}' => &['\u{25BA}', '\u{25B8}'],
+            '\u{2B98}' => &['\u{25C4}', '\u{25C2}'],
+            '\u{2B99}' => &['\u{25B2}'],
+            '\u{2B9B}' => &['\u{25BC}'],
+            '\u{274F}' | '\u{2751}' | '\u{2752}' | '\u{2B1C}' => &['\u{25A1}'],
+            '\u{1F78E}' | '\u{1F78F}' => &['\u{25A1}', '\u{25FB}'],
+            '\u{2756}' => &['\u{25C6}'],
+            '\u{1F868}' | '\u{1F878}' | '\u{21E6}' | '\u{2B88}' => &['\u{2190}'],
+            '\u{1F869}' | '\u{1F879}' | '\u{21E7}' | '\u{2B89}' => &['\u{2191}'],
+            '\u{1F86A}' | '\u{1F87A}' | '\u{21E8}' | '\u{2B8A}' => &['\u{2192}'],
+            '\u{1F86B}' | '\u{1F87B}' | '\u{21E9}' | '\u{2B8B}' => &['\u{2193}'],
+            '\u{1F5F8}' => &['\u{2713}', '\u{2714}', '\u{221A}'],
+            '\u{1F5F9}' => &['\u{2611}', '\u{2713}', '\u{2714}'],
+            '\u{2611}' => &['\u{2713}', '\u{2714}'],
+            '\u{1F5F5}' | '\u{1F5F7}' => &['\u{2612}', '\u{2717}', '\u{00D7}'],
+            '\u{2612}' => &['\u{2717}', '\u{00D7}'],
+            '\u{1F5F6}' => &['\u{2717}', '\u{00D7}'],
+            '\u{2217}' => &['*'],
+            _ => &[],
         };
-        let has = |ch: char| self.face.covers(ch) || wordcraft_fonts::FontDb::global().fallback_for(ch, self.face.id()).is_some();
-        match alt {
-            Some(a) if !has(u) && has(a) => a,
-            _ => u,
+        if alts.is_empty() {
+            return u;
         }
+        let has = |ch: char| self.face.covers(ch) || wordcraft_fonts::FontDb::global().fallback_for(ch, self.face.id()).is_some();
+        if has(u) {
+            return u;
+        }
+        alts.iter().copied().find(|&a| has(a)).unwrap_or(u)
     }
 }
 
@@ -404,4 +427,47 @@ pub struct ParaEnv<'a> {
     /// The paragraph goes on from the line of the one before, whose mark is hidden (#3986): its
     /// list number is counted and sets its indents, but isn't drawn.
     pub joined: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn symbol_run_lookalikes_preserve_shape_and_checkbox_semantics() {
+        crate::test_fonts();
+        let resolved = wordcraft_fonts::word::resolve("Wingdings", false, false);
+        let run = SymbolRun::of("Wingdings", &resolved).expect("Wingdings is a symbol font");
+        let run2 = SymbolRun::of("Wingdings 2", &resolved).expect("Wingdings 2 is a symbol font");
+
+        // U+1F78F (MEDIUM WHITE SQUARE, Wingdings 0x6F) and U+1F78E (LIGHT WHITE SQUARE, 0xA8)
+        // must stay squares, never map to diamonds.
+        let squares = ['\u{1F78E}', '\u{1F78F}', '\u{25A1}', '\u{25FB}'];
+        for c in ['\u{F06F}', '\u{F0A8}', '\u{1F78F}', '\u{1F78E}'] {
+            let shown = run.show(c);
+            assert!(squares.contains(&shown), "square {c:?} mapped to non-square {shown:?}");
+            assert_ne!(shown, '\u{25C6}');
+            assert_ne!(shown, '\u{25C7}');
+        }
+
+        // U+2756 (Wingdings 0x76) is a diamond and stays a diamond.
+        let shown_diamond = run.show('\u{F076}');
+        assert!(matches!(shown_diamond, '\u{2756}' | '\u{25C6}'), "diamond mapped to {shown_diamond:?}");
+
+        // Checked ballot boxes must stay checked/checkmark, never degrade to an unchecked box (□).
+        let checked = ['\u{1F5F9}', '\u{2611}', '\u{2713}', '\u{2714}'];
+        for c in ['\u{F0FE}', '\u{1F5F9}', '\u{2611}'] {
+            let shown = run.show(c);
+            assert!(checked.contains(&shown), "checked box {c:?} mapped to {shown:?}");
+            assert_ne!(shown, '\u{25A1}', "checked box {c:?} must never degrade to unchecked □");
+        }
+
+        // Crossed ballot boxes must stay crossed/X, never degrade to an unchecked box (□).
+        let crossed = ['\u{1F5F7}', '\u{1F5F5}', '\u{2612}', '\u{2717}', '\u{00D7}'];
+        for (r, c) in [(run, '\u{F0FD}'), (run2, '\u{F051}'), (run, '\u{1F5F7}'), (run, '\u{1F5F5}'), (run, '\u{2612}')] {
+            let shown = r.show(c);
+            assert!(crossed.contains(&shown), "crossed box {c:?} mapped to {shown:?}");
+            assert_ne!(shown, '\u{25A1}', "crossed box {c:?} must never degrade to unchecked □");
+        }
+    }
 }

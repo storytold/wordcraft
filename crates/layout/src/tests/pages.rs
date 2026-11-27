@@ -1103,3 +1103,181 @@ fn a_page_reference_into_nested_text_boxes_stops_where_layout_does() {
     let output = layout(&d, &mut LayoutCache::new(), &LayoutOptions { output_page_refs: true, ..Default::default() });
     assert_eq!(shown_in(&output, 0, StoryRef::Body), ["2", "2", "9"]);
 }
+
+#[test]
+fn oversized_header_falls_back_to_top_margin_instead_of_collapsing_body() {
+    crate::test_fonts();
+    let pic = |h: f32| InlineObject::Image {
+        media: "img".into(),
+        w: 468.0,
+        h,
+        alt: String::new(),
+        crop: Default::default(),
+        float: Default::default(),
+        fx: Default::default(),
+        ole: None,
+    };
+    let layout_with_header = |h: f32| {
+        let mut d = Document::from_text(&"Body line\n".repeat(60));
+        let mut hp = Paragraph::with_text("", Default::default());
+        hp.props.space_after = Some(0.0);
+        hp.insert_object(0, pic(h), &Default::default()).unwrap();
+        let id = d.add_part(PartKind::Header, vec![para_block(hp)]);
+        d.last_section.headers.default = Some(id);
+        (d.clone(), lay(&d))
+    };
+
+    // Full-page (792pt) and near-full-page (660pt, 640pt) inline header graphics would otherwise
+    // push body_top below the bottom margin or collapse the body to a ~40pt sliver (61-page cliff).
+    // All fall back cleanly to margin_top.
+    for oversized_h in [792.0, 660.0, 640.0] {
+        let (d, l) = layout_with_header(oversized_h);
+        assert!(l.pages.len() <= 3, "h={oversized_h}: expected <= 3 pages, got {}", l.pages.len());
+        let p0 = &l.pages[0];
+        assert!((p0.body.y - d.last_section.margin_top).abs() < 0.01, "h={oversized_h}: body.y={}", p0.body.y);
+        assert!((p0.body.bottom() - (d.last_section.page_h - d.last_section.margin_bottom)).abs() < 0.01, "h={oversized_h}: body={:?}", p0.body);
+        let (top, bottom) = extent(&p0.items, StoryRef::Body).unwrap();
+        assert!(top >= d.last_section.margin_top - 0.01 && bottom <= d.last_section.page_h, "h={oversized_h}: body {top}..{bottom} outside page");
+    }
+
+    // A normal tall letterhead header (120pt) still pushes body_top down below the header.
+    let (d, l) = layout_with_header(120.0);
+    assert!(l.pages[0].body.y >= d.last_section.header + 120.0 - 0.01, "body.y={}", l.pages[0].body.y);
+}
+
+#[test]
+fn oversized_footer_falls_back_to_bottom_margin_instead_of_collapsing_body() {
+    crate::test_fonts();
+    let pic = |h: f32| InlineObject::Image {
+        media: "img".into(),
+        w: 468.0,
+        h,
+        alt: String::new(),
+        crop: Default::default(),
+        float: Default::default(),
+        fx: Default::default(),
+        ole: None,
+    };
+    for oversized_h in [700.0, 640.0] {
+        let mut d = Document::from_text(&"Body line\n".repeat(60));
+        let mut fp = Paragraph::with_text("", Default::default());
+        fp.props.space_after = Some(0.0);
+        fp.insert_object(0, pic(oversized_h), &Default::default()).unwrap();
+        let id = d.add_part(PartKind::Footer, vec![para_block(fp)]);
+        d.last_section.footers.default = Some(id);
+        let l = lay(&d);
+        assert!(l.pages.len() <= 3, "h={oversized_h}: expected <= 3 pages, got {}", l.pages.len());
+        let expected_bottom = d.last_section.page_h - d.last_section.margin_bottom;
+        assert!((l.pages[0].body.bottom() - expected_bottom).abs() < 0.01, "h={oversized_h}: body={:?}", l.pages[0].body);
+    }
+
+    // A normal tall footer (120pt) still pushes body_bottom up above the footer.
+    let mut d = Document::from_text(&"Body line\n".repeat(60));
+    let mut fp = Paragraph::with_text("", Default::default());
+    fp.props.space_after = Some(0.0);
+    fp.insert_object(0, pic(120.0), &Default::default()).unwrap();
+    let id = d.add_part(PartKind::Footer, vec![para_block(fp)]);
+    d.last_section.footers.default = Some(id);
+    let l = lay(&d);
+    let foot_top = extent(&l.pages[0].footer, StoryRef::Part(id)).unwrap().0;
+    assert!(l.pages[0].body.bottom() <= foot_top + 0.01, "body={:?}, foot_top={foot_top}", l.pages[0].body);
+}
+
+#[test]
+fn combined_header_and_footer_bounds_resolve_symmetrically_without_overlap() {
+    crate::test_fonts();
+    let pic = |h: f32| InlineObject::Image {
+        media: "img".into(),
+        w: 468.0,
+        h,
+        alt: String::new(),
+        crop: Default::default(),
+        float: Default::default(),
+        fx: Default::default(),
+        ole: None,
+    };
+    let make_doc = |hh: f32, fh: f32| {
+        let mut d = Document::from_text(&"Body line\n".repeat(60));
+        let mut hp = Paragraph::with_text("", Default::default());
+        hp.props.space_after = Some(0.0);
+        hp.insert_object(0, pic(hh), &Default::default()).unwrap();
+        let hid = d.add_part(PartKind::Header, vec![para_block(hp)]);
+        d.last_section.headers.default = Some(hid);
+        let mut fp = Paragraph::with_text("", Default::default());
+        fp.props.space_after = Some(0.0);
+        fp.insert_object(0, pic(fh), &Default::default()).unwrap();
+        let fid = d.add_part(PartKind::Footer, vec![para_block(fp)]);
+        d.last_section.footers.default = Some(fid);
+        (d, hid, fid)
+    };
+
+    // Combined 360pt header + 330pt footer (and 350pt + 330pt): header is the larger intrusion so
+    // it yields while the footer stays honored — body text must NOT draw over the footer.
+    for (hh, fh) in [(360.0, 330.0), (350.0, 330.0)] {
+        let (d, _hid, fid) = make_doc(hh, fh);
+        let l = lay(&d);
+        assert!(l.pages.len() <= 5, "hh={hh} fh={fh}: expected <= 5 pages, got {}", l.pages.len());
+        for (i, p) in l.pages.iter().enumerate() {
+            let (foot_top, _) = extent(&p.footer, StoryRef::Part(fid)).unwrap();
+            let (_, body_bottom) = extent(&p.items, StoryRef::Body).unwrap();
+            assert!(
+                p.body.bottom() <= foot_top + 0.01 && body_bottom <= foot_top + 0.01,
+                "hh={hh} fh={fh} page {i}: body ends at {body_bottom} (rect {}), footer starts at {foot_top}",
+                p.body.bottom()
+            );
+        }
+    }
+
+    // Symmetric mirror (330pt header + 350pt footer): footer is the larger intrusion so header stays
+    // honored and body text starts below the header.
+    let (d, hid, _fid) = make_doc(330.0, 350.0);
+    let l = lay(&d);
+    assert!(l.pages.len() <= 5, "expected <= 5 pages, got {}", l.pages.len());
+    let (_, head_bottom) = extent(&l.pages[0].header, StoryRef::Part(hid)).unwrap();
+    assert!(l.pages[0].body.y >= head_bottom - 0.01, "body.y={} < head_bottom={head_bottom}", l.pages[0].body.y);
+
+    // Equal squeeze (345pt header + 345pt footer): tie releases both symmetrically to margins.
+    let (d, _, _) = make_doc(345.0, 345.0);
+    let l = lay(&d);
+    assert!((l.pages[0].body.y - d.last_section.margin_top).abs() < 0.01);
+    assert!((l.pages[0].body.bottom() - (d.last_section.page_h - d.last_section.margin_bottom)).abs() < 0.01);
+
+    // Normal 120pt header + 120pt footer together: both push body normally.
+    let (d, hid, fid) = make_doc(120.0, 120.0);
+    let l = lay(&d);
+    let (_, head_bottom) = extent(&l.pages[0].header, StoryRef::Part(hid)).unwrap();
+    let (foot_top, _) = extent(&l.pages[0].footer, StoryRef::Part(fid)).unwrap();
+    assert!(l.pages[0].body.y >= head_bottom - 0.01, "body.y={} < head_bottom={head_bottom}", l.pages[0].body.y);
+    assert!(l.pages[0].body.bottom() <= foot_top + 0.01, "body.bottom={} > foot_top={foot_top}", l.pages[0].body.bottom());
+
+    // Degenerate tiny page (margin-to-margin height < 72pt): finite, non-panicking, keeps margins.
+    let mut tiny = Document::from_text("Tiny page line 1\nTiny page line 2");
+    tiny.last_section.page_h = 100.0;
+    tiny.last_section.margin_top = 40.0;
+    tiny.last_section.margin_bottom = 40.0;
+    tiny.last_section.header = 10.0;
+    tiny.last_section.footer = 10.0;
+    let mut hp = Paragraph::with_text("", Default::default());
+    hp.props.space_after = Some(0.0);
+    hp.insert_object(0, pic(50.0), &Default::default()).unwrap();
+    tiny.last_section.headers.default = Some(tiny.add_part(PartKind::Header, vec![para_block(hp)]));
+    let l = lay(&tiny);
+    assert!(!l.pages.is_empty());
+    assert!((l.pages[0].body.y - 40.0).abs() < 0.01, "tiny body={:?}", l.pages[0].body);
+    assert!(l.pages[0].body.h.is_finite() && l.pages[0].body.h > 0.0);
+}
+
+#[test]
+fn wingdings_symbol_lookalikes_avoid_missing_glyphs() {
+    crate::test_fonts();
+    // Legacy Wingdings PUA codes (arrowhead, arrows, squares, diamond, checked/crossed boxes) +
+    // direct Unicode inside a Wingdings/Symbol run (as some exporters emit).
+    let mut d = Document::from_text("\u{F0D8}\u{F0E8}\u{F071}\u{F06F}\u{F0A8}\u{F076}\u{F0FD}\u{F0FE}\u{2611}\u{2612}\u{1F86A}\u{2217}");
+    let len = d.para(StoryRef::Body, &Path::top(0)).unwrap().len();
+    let sym_start = len - '\u{2217}'.len_utf8();
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, sym_start), &|c| c.font = Some("Wingdings".into())).unwrap();
+    d.format_range(&Pos::body(0, sym_start), &Pos::body(0, len), &|c| c.font = Some("Symbol".into())).unwrap();
+    let l = lay(&d);
+    let missing = l.missing_glyphs(&d, &display::DisplayOptions::default(), None);
+    assert!(missing.is_empty(), "expected no missing glyphs for Wingdings/Symbol lookalikes, got {:?}", missing.chars);
+}
