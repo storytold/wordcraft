@@ -14,6 +14,11 @@ workspace = true
 test-support = ["craft-xls/test-support"]
 
 [dependencies]
+base64 = { workspace = true }
+cfb = { workspace = true }
+flate2 = "1.1"
+quick-xml = { workspace = true }
+wordcraft-calc = { workspace = true }
 wordcraft-doc = { workspace = true }
 wordcraft-docx = { workspace = true }
 craft-wordmodel = { workspace = true }

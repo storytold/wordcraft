@@ -343,7 +343,7 @@ impl<'a> Shaped<'a> {
             _ if o.is_drawing() => self.drawing(cx, (k, o), slot, rc.position),
             InlineObject::Field { .. } => self.field(cx, (k, o), slot, rc),
             InlineObject::NoteRef { kind, id, custom } => self.note_ref(cx, (*kind, *id, custom), slot, rc),
-            InlineObject::Equation { linear, display, math } => self.equation(cx, k, slot, rc, (linear, *display, math)),
+            InlineObject::Equation { linear, display, math, .. } => self.equation(cx, k, slot, rc, (linear, *display, math)),
             // A note separator's line: a short one, or one across the column.
             _ if o.as_note_separator().is_some() => {
                 let cont = o.as_note_separator() == Some(true);
@@ -477,7 +477,10 @@ impl<'a> Shaped<'a> {
 
     fn equation(&mut self, cx: &Cx, k: usize, slot: Slot, rc: &Arc<ResolvedChar>, (linear, display, math): (&str, bool, &wordcraft_doc::math::Math)) {
         let avail = (cx.env.width - cx.rp.indent_left.max(0.0) - cx.rp.indent_right.max(0.0)).max(12.0);
-        let ml = crate::math::layout_equation(math, linear, rc, display, avail, &cx.math_props, &mut self.eq_counter);
+        let mut ml = crate::math::layout_equation(math, linear, rc, display, avail, &cx.math_props, &mut self.eq_counter);
+        if display || cx.env.table.is_some() {
+            ml.fit_width(avail.min(cx.env.width.max(1.0)));
+        }
         // The line is at least as tall as the text around it.
         let (a, d) = self.b.styles.get(slot.style as usize).map(|s| (s.ascent, s.descent)).unwrap_or((0.0, 0.0));
         self.b.clusters.push(slot.cluster(ClKind::Object(k), ml.width, (ml.ascent.max(a).max(0.01), ml.descent.max(d))));

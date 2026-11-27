@@ -192,6 +192,8 @@ Insert|Text|Object|insert.object
 Insert|Text|Text from File|insert.textFromFile
 Insert|Symbols|Equation|insert.equation
 Insert|Symbols|Ink Equation|insert.inkEquation
+Insert|Symbols|Calculation|insert.calculation
+Insert|Symbols|Calculated Value|insert.calcValue
 Insert|Symbols|Symbol|insert.symbol
 Insert|Symbols|Nonbreaking Space|text.nbsp
 Insert|Symbols|Nonbreaking Hyphen|text.nbHyphen
@@ -265,6 +267,8 @@ References|Table of Authorities|Mark Citation|references.markCitation
 References|Table of Authorities|Insert Table of Authorities|references.tableOfAuthorities
 References|Table of Authorities|Update Table|references.updateAuthorities
 References|Fields|Update Fields|references.updateFields
+References|Calculation|Recalculate|calc.recalculate
+References|Calculation|Options|calc.settings
 Mailings|Create|Envelopes|mailings.envelopes
 Mailings|Create|Labels|mailings.labels
 Mailings|Start Mail Merge|Start Mail Merge|mailings.start

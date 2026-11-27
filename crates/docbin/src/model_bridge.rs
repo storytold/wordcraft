@@ -80,6 +80,8 @@ fn table_value(source: craft_wordmodel::table::Table) -> Result<wordcraft_doc::t
         grid: source.grid,
         rows: source.rows.into_iter().map(row_value).collect::<Result<_, _>>()?,
         controls: convert(source.controls)?,
+        // A Word 97 file has no calculation data.
+        calc: None,
     })
 }
 

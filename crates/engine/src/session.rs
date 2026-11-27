@@ -149,6 +149,9 @@ pub struct Session {
     /// ([`Session::why_disabled`]): computed once per document, revision and author instead of
     /// for every button on every frame.
     protect_facts: std::sync::Mutex<Option<((u64, u64, String), crate::cmd::protect::Facts)>>,
+    /// The page of each calculation region, for duplicate-name messages, as last found
+    /// (`crate::cmd::calc`): reused while the document, its revision and its body are the same.
+    pub(crate) calc_pages: Option<crate::cmd::calc::RegionPages>,
     /// How many times the document's body was replaced under the same [`Self::document_id`]
     /// (`document.setText`, version restore, compare, Undo/Redo). It is the body's IME
     /// replacement epoch: a composition must not survive the swap, even when the new body has

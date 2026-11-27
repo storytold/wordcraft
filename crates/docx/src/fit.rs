@@ -15,6 +15,8 @@ pub(crate) const ROOT: &str = "wordcraftFit";
 pub(crate) const NS: &str = "urn:wordcraft:fit";
 /// Marker attribute the parser keeps (namespace declarations are stripped from `El`).
 pub(crate) const KIND: &str = "wordcraft-fit-v1";
+/// The store's data store id (`ds:itemID` of its properties part): the same for every document.
+pub(crate) const ITEM_ID: &str = "{3B8E2C14-7A5D-4F69-9E01-2D6C8B4A7F53}";
 
 /// Serialize `fit` as the custom XML store.
 pub(crate) fn write(fit: &FitState) -> Result<Vec<u8>, DocxError> {

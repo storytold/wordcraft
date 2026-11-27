@@ -664,8 +664,28 @@ fn pasted_box_copies_count_the_objects_they_copy() {
         linear: String::new(),
         display: false,
         math: crate::math::Math { nodes: crate::math::parse_linear(&"z".repeat(5000)), ..Default::default() },
+        calc: None,
     };
     assert!(object_cost(&eq) >= 5000);
+    // A calculation equation's file-sourced strings count: source, unit, error message.
+    let region = |source: usize, unit: usize, error: usize| {
+        let state = if error > 0 { crate::calc::CalcState::Error("e".repeat(error)) } else { Default::default() };
+        let calc = crate::calc::CalcRegion {
+            result_format: None,
+            worksheet_order: None,
+            id: 1,
+            source: "s".repeat(source),
+            unit: (unit > 0).then(|| "u".repeat(unit)),
+            precision: None,
+            numbered: false,
+            state,
+        };
+        InlineObject::Equation { linear: String::new(), display: false, math: Default::default(), calc: Some(Box::new(calc)) }
+    };
+    assert!(object_cost(&region(100_000, 0, 0)) >= 100_000);
+    assert!(object_cost(&region(0, 100_000, 0)) >= 100_000);
+    assert!(object_cost(&region(0, 0, 100_000)) >= 100_000);
+    assert!(object_cost(&region(1, 0, 0)) < 1000, "a small calculation stays cheap");
 }
 
 #[test]

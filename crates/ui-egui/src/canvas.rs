@@ -689,7 +689,9 @@ fn overshoot(target: (f32, f32), view: (f32, f32)) -> f64 {
 fn run_page_tool(app: &mut WordApp, ui: &Ui, layout: &Arc<DocLayout>, body: &PageBody<'_>, pass: &ToolPass) -> ToolHostResponse {
     // Page keys reach the page in every tool mode, once per pass, before the host runs.
     // PLAN: assumed `keys::page_input(app: &mut WordApp, input: &[EditorInput], pass: &ToolPass, ctx: &egui::Context)` (canvas-w10).
-    crate::keys::page_input(app, &pass.editor_input, pass, ui.ctx());
+    if app.calc_dialog.is_none() {
+        crate::keys::page_input(app, &pass.editor_input, pass, ui.ctx());
+    }
     let host = ToolHost::new().enabled(!app.modal_open());
     if let Some(mut tool) = crate::ink::active_tool(app, body) {
         return host.run(ui, pass, &mut tool);

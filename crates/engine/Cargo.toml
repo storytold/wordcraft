@@ -20,6 +20,7 @@ craft-keymap.workspace = true
 craft-codepage.workspace = true
 wordcraft-geom = { workspace = true, features = ["image"] }
 wordcraft-doc = { workspace = true }
+wordcraft-calc = { workspace = true }
 wordcraft-fonts = { workspace = true }
 wordcraft-layout = { workspace = true }
 wordcraft-render = { workspace = true }
@@ -64,6 +65,7 @@ libc = { workspace = true }
 rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
 
 [dev-dependencies]
+zip = { version = "3", default-features = false, features = ["deflate"] }
 wordcraft-doc = { workspace = true, features = ["test-support"] }
 wordcraft-formats = { workspace = true, features = ["test-support"] }
 encoding_rs = { workspace = true }

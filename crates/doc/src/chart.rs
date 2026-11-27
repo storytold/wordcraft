@@ -236,10 +236,26 @@ pub fn clean_fmt(s: &str) -> String {
     s.trim().chars().take(MAX_FMT).collect::<String>().trim_end().to_string()
 }
 
+/// Sources for a calculation-driven XY plot.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlotSpec {
+    pub variable: String,
+    pub expression: String,
+    pub range: String,
+}
+
+impl Default for PlotSpec {
+    fn default() -> Self {
+        Self { variable: "x".into(), expression: "x^2".into(), range: "0, 0.1..10".into() }
+    }
+}
+
 /// A chart WordCraft can edit.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChartSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot: Option<PlotSpec>,
     #[serde(rename = "type")]
     pub kind: ChartType,
     /// Category labels (scatter charts: the x values).
@@ -268,6 +284,8 @@ pub struct ChartSpec {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredSpec {
+    #[serde(default)]
+    plot: Option<PlotSpec>,
     #[serde(rename = "type")]
     kind: ChartType,
     #[serde(default)]
@@ -300,6 +318,7 @@ impl<'de> Deserialize<'de> for ChartSpec {
         let s = StoredSpec::deserialize(deserializer)?;
         let scatter = s.kind == ChartType::Scatter;
         Ok(ChartSpec {
+            plot: s.plot,
             kind: s.kind,
             categories: s.categories,
             series: s.series.into_iter().map(|x| ChartSeries { no_line: x.no_line.unwrap_or(scatter), ..x.series }).collect(),
@@ -317,6 +336,7 @@ impl Default for ChartSpec {
     /// gridlines on, no axis line.
     fn default() -> Self {
         ChartSpec {
+            plot: None,
             kind: ChartType::default(),
             categories: Vec::new(),
             series: Vec::new(),
@@ -342,6 +362,7 @@ impl ChartSpec {
             ),
         };
         ChartSpec {
+            plot: None,
             kind,
             categories: categories.into_iter().map(str::to_string).collect(),
             series: series.into_iter().map(|(n, v)| ChartSeries::new(kind, n.to_string(), v.into_iter().map(Some).collect())).collect(),

@@ -24,6 +24,8 @@ pub const OPEN_EXTS: &[&str] = &[
     "odt",
     "ott",
     "fodt",
+    "xmcd",
+    "mcdx",
     "tex",
     "latex",
     "ltx",
@@ -166,6 +168,8 @@ fn open_encrypted_odt(bytes: &[u8], password: Option<&str>, page: &wordcraft_doc
 fn opened(doc: &mut Document) {
     doc.ensure_nonempty();
     crate::cmd::references::refresh_date_fields(doc);
+    crate::cmd::calc::after_open(doc);
+    crate::cmd::chart::refresh_plots(doc);
 }
 
 /// Parse a document from bytes; `name` gives the format by extension.
@@ -492,6 +496,12 @@ pub fn open_path_with(path: &std::path::Path, password: Option<&str>) -> Result<
 pub fn open_path_in(path: &std::path::Path, password: Option<&str>, region: &wordcraft_geom::Region) -> Result<(Document, bool), String> {
     let bytes = read_document(path)?;
     let name = path.to_string_lossy();
+    if ext_of(&name) == "xmcd" {
+        let files = LocalImages::with_limits(path.parent().unwrap_or(std::path::Path::new("")), 4 << 20, 32 << 20);
+        let mut doc = wordcraft_formats::import_xmcd_with_links(&bytes, &region_page(region), &|relative| files.load(relative))?;
+        opened(&mut doc);
+        return Ok((doc, false));
+    }
     if matches!(ext_of(&name).as_str(), "html" | "htm" | "xhtml") {
         // Pictures referenced by a relative path load from beside the HTML file.
         let images = LocalImages::new(path.parent().unwrap_or(std::path::Path::new("")));

@@ -81,12 +81,14 @@ pub(crate) fn draw_charts(doc: &mut Document, odf: bool) {
 /// Save to a format other than plain text / JSON.
 pub fn save(ext: &str, doc: &Document, opts: &crate::io::ExportOptions) -> Option<Result<Vec<u8>, String>> {
     // .docx/.docm/.dotx/.dotm: the extension picks the package flavour Word expects.
+    // Calculations go as tagged equations plus their hidden sources (see `for_docx`).
     if let Some(flavor) = wordcraft_docx::Flavor::from_ext(ext) {
-        return Some(wordcraft_docx::write_as(doc, flavor).map_err(|e| e.to_string()));
+        return Some(wordcraft_docx::write_as(&for_docx(doc), flavor).map_err(|e| e.to_string()));
     }
     match ext {
+        // Word 2003 XML has no place for the store: calculations go as the equations they show.
         "xml" if opts.word2003 => Some(wordcraft_docx::write_wordml2003(doc).map_err(|e| e.to_string())),
-        "xml" => Some(wordcraft_docx::write_flat(doc).map_err(|e| e.to_string())),
+        "xml" => Some(wordcraft_docx::write_flat(&for_docx(doc)).map_err(|e| e.to_string())),
         "png" => Some(render_png(doc, 0, 2.0, opts)),
         "pdf" => {
             // Output shows the fields Word fills in as it prints (see `output_fields`).
@@ -96,6 +98,18 @@ pub fn save(ext: &str, doc: &Document, opts: &crate::io::ExportOptions) -> Optio
         }
         other => wordcraft_formats::export_with(other, doc, &wordcraft_formats::ExportOptions { comments: opts.markup && opts.comments }),
     }
+}
+
+/// The document a Word package writer gets: with calculations, a copy in which each is a plain
+/// equation in a content control tagged with its id, and the store of their sources to save
+/// beside it (`wordcraft_calc::docx::export`); otherwise `doc` itself. `doc` never changes.
+fn for_docx(doc: &Document) -> std::borrow::Cow<'_, Document> {
+    if !crate::cmd::calc::has_calc(doc) && doc.calc_settings.is_none() && crate::cmd::chart::plot_positions(doc).is_empty() {
+        return std::borrow::Cow::Borrowed(doc);
+    }
+    let (mut copy, store) = wordcraft_calc::docx::export(doc);
+    copy.calc_store = Some(store);
+    std::borrow::Cow::Owned(copy)
 }
 
 /// How a page image is drawn: the printed page, headers and footers at full strength, tracked

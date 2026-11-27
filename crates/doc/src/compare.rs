@@ -25,11 +25,12 @@ fn same_block(a: &Block, b: &Block) -> bool {
 /// The same table. Every field is listed, so a new one does not build until someone decides
 /// whether a change to it counts.
 fn same_table(a: &Table, b: &Table) -> bool {
-    let Table { props, grid, rows, controls } = a;
-    let Table { props: other_props, grid: other_grid, rows: other_rows, controls: other_controls } = b;
+    let Table { props, grid, rows, controls, calc } = a;
+    let Table { props: other_props, grid: other_grid, rows: other_rows, controls: other_controls, calc: other_calc } = b;
     props == other_props
         && grid == other_grid
         && controls == other_controls
+        && calc == other_calc
         && rows.len() == other_rows.len()
         && rows.iter().zip(other_rows).all(|(x, y)| same_row(x, y))
 }

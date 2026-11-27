@@ -52,7 +52,9 @@ impl WordApp {
         if let Some(name) = input_dialog(id, &params)
             && command_enabled(self, id)
         {
-            let _ = dialogs::open(self, name, &params);
+            if !crate::calc_ui::open_dialog(self, name) {
+                let _ = dialogs::open(self, name, &params);
+            }
             return Ok(json!({"pending": name}));
         }
         // The same unsaved work the control channel's refusal covers, so the prompt and the
@@ -272,6 +274,12 @@ impl WordApp {
             // Older copies remain available through File > Recover.
             self.recovery_seen = true;
             self.sync_document();
+        }
+        if matches!(id, "file.open" | "calc.importReview")
+            && let Ok(result) = &r
+            && let Some(review) = result.get("importReview")
+        {
+            dialogs::import_review::open(self, review);
         }
         // An explicit save to the document's own file lets AutoSave keep writing there.
         if let Ok(v) = &r
@@ -587,10 +595,11 @@ impl WordApp {
             }
             "ui.dialog" => {
                 let name = s("name").unwrap_or("");
-                let opened = dialogs::open(self, name, p);
-                json!({"dialog": opened.map(|_| name)})
+                let opened = crate::calc_ui::open_dialog(self, name) || dialogs::open(self, name, p).is_some();
+                json!({"dialog": opened.then_some(name)})
             }
             "ui.closeDialog" => {
+                self.calc_dialog = None;
                 // PLAN: assumed `dialogs::host::close_all(&mut WordApp, &Context)` (dg.A1).
                 if let Some(ctx) = self.ctx.clone() {
                     dialogs::host::close_all(self, &ctx);
@@ -1132,6 +1141,12 @@ fn input_dialog_insert(id: &str, params: &Value) -> Option<&'static str> {
         "insert.bookmark" | "insert.deleteBookmark" if !has_value(params, "name") => Some("bookmark"),
         "format.enclose" if params.get("shape").is_none() => Some("enclose"),
         "insert.crossReference" if !has_value(params, "target") => Some("crossReference"),
+        "insert.calculation" if !has_value(params, "source") => Some("calculation"),
+        "insert.calcValue" if !has_value(params, "name") => Some("calcValue"),
+        "calc.edit" => Some("editCalculation"),
+        "insert.functionPlot" if no_settings(params) => Some("functionPlot"),
+        "chart.editFunctionPlot" if no_settings(params) => Some("editFunctionPlot"),
+        "calc.resultFormat" if no_settings(params) => Some("calcResultFormat"),
         _ => None,
     }
 }
@@ -1161,6 +1176,7 @@ fn input_dialog_references(id: &str, params: &Value) -> Option<&'static str> {
         "references.markEntry" if !has_value(params, "entry") => Some("markEntry"),
         "references.sources" if no_settings(params) => Some("sourceManager"),
         "references.citation" if !has_value(params, "tag") && !has_value(params, "source") => Some("createSource"),
+        "calc.settings" if no_settings(params) => Some("calcOptions"),
         _ => None,
     }
 }

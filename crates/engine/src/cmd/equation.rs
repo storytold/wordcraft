@@ -145,11 +145,17 @@ fn classified_noop(s: &mut Session) {
 ///
 /// The logical before-state is captured *after* lazy `nodes` materialization: an imported
 /// equation that only gets normalized is a state change, never an IME content change.
+///
+/// A calculation region is refused: its `linear` and `math` are its result, drawn from its
+/// source by the recalculation pass.
 fn with_eq<R>(s: &mut Session, at: &Pos, f: impl FnOnce(&mut Math, &mut bool) -> R) -> Result<(R, EquationEffect), CmdError> {
     let para = s.doc.para_mut(at.story, &at.path)?;
-    let Some(InlineObject::Equation { linear, display, math }) = para.object_at_mut(at.off) else {
+    let Some(InlineObject::Equation { linear, display, math, calc }) = para.object_at_mut(at.off) else {
         return Err(CmdError::Failed("no equation there".into()));
     };
+    if calc.is_some() {
+        return Err(not_for_calculations());
+    }
     let normalized = math.nodes.is_empty() && !linear.is_empty() && !math.linear;
     if normalized {
         math.nodes = parse_linear(linear);
@@ -173,6 +179,16 @@ fn with_eq<R>(s: &mut Session, at: &Pos, f: impl FnOnce(&mut Math, &mut bool) ->
     math.omml.clear();
     para.touch();
     Ok((r, EquationEffect { content_changed, state_changed }))
+}
+
+/// The refusal for an equation command on a calculation region.
+fn not_for_calculations() -> CmdError {
+    CmdError::Disabled("this equation is a calculation: edit the calculation source instead".into())
+}
+
+/// Whether the equation at `at` is a calculation region.
+fn is_calculation(s: &Session, at: &Pos) -> bool {
+    matches!(s.doc.para_at(at).and_then(|p| p.object_at(at.off)), Some(InlineObject::Equation { calc: Some(_), .. }))
 }
 
 /// All the text of an equation's runs (its linear form while shown linear).
@@ -236,7 +252,7 @@ fn insert_nodes_as_equation(s: &mut Session, nodes: Arg, v: &Value) -> CmdResult
         Some(p) if !nodes.is_empty() => p,
         _ => MathPos::new(Vec::new(), me::units(&nodes)),
     };
-    let obj = InlineObject::Equation { linear, display, math: Math { nodes, ..Default::default() } };
+    let obj = InlineObject::Equation { linear, display, math: Math { nodes, ..Default::default() }, calc: None };
     let end = s.doc.insert_object(&at, obj, &props)?;
     if p::bool(v, "edit").unwrap_or(true) {
         let Some(session) = crate::next_math_session() else {
@@ -262,6 +278,9 @@ fn insert_nodes_as_equation(s: &mut Session, nodes: Arg, v: &Value) -> CmdResult
 /// position, and returns the equation and caret.
 fn edit(s: &mut Session, v: &Value) -> CmdResult {
     let at = equation_at_caret(s).ok_or_else(|| CmdError::Disabled("no equation at the caret".into()))?;
+    if is_calculation(s, &at) {
+        return Err(not_for_calculations());
+    }
     let nodes = match s.doc.para_at(&at).and_then(|p| p.object_at(at.off)) {
         Some(InlineObject::Equation { math, linear, .. }) => {
             if math.nodes.is_empty() && !math.linear {
@@ -650,7 +669,12 @@ fn convert(s: &mut Session, v: &Value) -> CmdResult {
                 let offs: Vec<usize> = s
                     .doc
                     .para(story, &path)
-                    .map(|p| p.object_offsets().into_iter().filter(|o| matches!(p.object_at(*o), Some(InlineObject::Equation { .. }))).collect())
+                    .map(|p| {
+                        p.object_offsets()
+                            .into_iter()
+                            .filter(|o| matches!(p.object_at(*o), Some(InlineObject::Equation { calc: None, .. })))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 for off in offs {
                     let at = Pos { story, path: path.clone(), off };
@@ -683,6 +707,15 @@ fn convert(s: &mut Session, v: &Value) -> CmdResult {
 /// Toggles or sets the equation's inline or display mode.
 fn set_display(s: &mut Session, v: &Value) -> CmdResult {
     let at = equation_at_caret(s).ok_or_else(|| CmdError::Disabled("no equation at the caret".into()))?;
+    if is_calculation(s, &at) {
+        return lay_out_calculation(s, &at, |display, _, numbered| {
+            *display = p::bool(v, "value").unwrap_or(!*display);
+            // A number needs a line of its own, like a numbered plain equation.
+            if !*display {
+                *numbered = false;
+            }
+        });
+    }
     let (_, effect) = with_eq(s, &at, |_, display| *display = p::bool(v, "value").unwrap_or(!*display))?;
     apply_effect(s, effect, false);
     result(s)
@@ -698,6 +731,12 @@ fn justify(s: &mut Session, v: &Value) -> CmdResult {
         "center" => MathJc::Center,
         _ => MathJc::CenterGroup,
     };
+    if is_calculation(s, &at) {
+        return lay_out_calculation(s, &at, |display, j, _| {
+            *j = jc;
+            *display = true;
+        });
+    }
     let (_, effect) = with_eq(s, &at, |math, display| {
         math.jc = jc;
         *display = true;
@@ -709,6 +748,9 @@ fn justify(s: &mut Session, v: &Value) -> CmdResult {
 /// Add (or remove) an automatic equation number: `#` with nothing after it.
 fn number(s: &mut Session, v: &Value) -> CmdResult {
     let at = equation_at_caret(s).ok_or_else(|| CmdError::Disabled("no equation at the caret".into()))?;
+    if is_calculation(s, &at) {
+        return number_calculation(s, &at, v);
+    }
     let mut pos_reset = false;
     let (_, effect) = with_eq(s, &at, |math, display| {
         let numbered = matches!(math.nodes.as_slice(), [MNode::EqArr { rows }] if rows.iter().any(|r| wordcraft_doc::math::has_number_mark(r)));
@@ -734,6 +776,49 @@ fn number(s: &mut Session, v: &Value) -> CmdResult {
     }
     s.clamp_selection();
     apply_effect(s, effect, false);
+    result(s)
+}
+
+/// Numbers a calculation (or takes its number away): its display is drawn from its source, so
+/// the region keeps the choice and the recalculation pass that follows draws the number, as `#`
+/// draws one on a plain equation. A numbered calculation is a display equation.
+/// Change how a calculation sits on the page (display or inline, justification, numbering)
+/// without touching its source or drawn result: recalculation keeps all three.
+fn lay_out_calculation(s: &mut Session, at: &Pos, change: impl FnOnce(&mut bool, &mut MathJc, &mut bool)) -> CmdResult {
+    let para = s.doc.para_mut(at.story, &at.path)?;
+    let Some(InlineObject::Equation { display, math, calc: Some(c), .. }) = para.object_at_mut(at.off) else {
+        return Err(CmdError::Failed("no calculation there".into()));
+    };
+    let before = (*display, math.jc, c.numbered);
+    change(display, &mut math.jc, &mut c.numbered);
+    if (*display, math.jc, c.numbered) == before {
+        classified_noop(s);
+        return result(s);
+    }
+    para.touch();
+    apply_effect(s, EquationEffect { content_changed: true, state_changed: true }, false);
+    result(s)
+}
+
+fn number_calculation(s: &mut Session, at: &Pos, v: &Value) -> CmdResult {
+    let para = s.doc.para_mut(at.story, &at.path)?;
+    let Some(InlineObject::Equation { display, calc: Some(c), .. }) = para.object_at_mut(at.off) else {
+        return Err(CmdError::Failed("no calculation there".into()));
+    };
+    if c.state == wordcraft_doc::calc::CalcState::EditedOutside {
+        return Err(CmdError::Disabled("this calculation was edited in Word: restore it or keep Word's equation first".into()));
+    }
+    let want = p::bool(v, "value").unwrap_or(!c.numbered);
+    if want == c.numbered {
+        classified_noop(s);
+        return result(s);
+    }
+    c.numbered = want;
+    if want {
+        *display = true;
+    }
+    para.touch();
+    apply_effect(s, EquationEffect { content_changed: true, state_changed: true }, false);
     result(s)
 }
 
@@ -788,7 +873,7 @@ pub fn at_caret(s: &Session) -> Option<(bool, &str)> {
 
 fn get(s: &mut Session, _: &Value) -> CmdResult {
     let at = equation_at_caret(s).ok_or_else(|| CmdError::Disabled("no equation at the caret".into()))?;
-    let Some(InlineObject::Equation { linear, display, math }) = s.doc.para_at(&at).and_then(|p| p.object_at(at.off)) else {
+    let Some(InlineObject::Equation { linear, display, math, .. }) = s.doc.para_at(&at).and_then(|p| p.object_at(at.off)) else {
         return Err(CmdError::Failed("no equation there".into()));
     };
     let nodes = if math.nodes.is_empty() && !math.linear { parse_linear(linear) } else { math.nodes.clone() };

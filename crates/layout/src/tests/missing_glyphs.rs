@@ -63,7 +63,7 @@ fn equation_with(d: &mut Document, linear: &str) {
     let n = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().len();
     d.para_mut(StoryRef::Body, &Path::top(0))
         .unwrap()
-        .insert_object(n, InlineObject::Equation { linear: linear.into(), display: false, math }, &Default::default())
+        .insert_object(n, InlineObject::Equation { linear: linear.into(), display: false, math, calc: None }, &Default::default())
         .unwrap();
 }
 

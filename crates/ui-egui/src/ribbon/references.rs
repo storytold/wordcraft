@@ -177,6 +177,17 @@ pub(super) fn references(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             }
         });
     });
+    row.group(RibbonGroup::new("Calculation", crate::tl!("Calculation"), IconId::new("formula").into()), |ui| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            for (key, label, id) in [
+                ("update", "Recalculate", "calc.recalculate"),
+                ("options", "Options", "calc.settings"),
+                ("formula", "Worksheet Import Review", "calc.importReview"),
+            ] {
+                Button::command(CommandRef::with_params(id, json!({}))).label(crate::tl!(label)).icon(crate::icons::id(key)).show(ui);
+            }
+        });
+    });
 }
 
 /// Zotero (`docs/zotero.md`): the Zotero desktop app does the work in its own window.

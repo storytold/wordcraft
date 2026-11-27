@@ -3394,7 +3394,7 @@ fn chart_and_equation_text_keep_their_pdf_bytes() {
     let n = d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().len();
     d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0))
         .unwrap()
-        .insert_object(n, InlineObject::Equation { linear: linear.into(), display: false, math }, &CharProps::default())
+        .insert_object(n, InlineObject::Equation { linear: linear.into(), display: false, math, calc: None }, &CharProps::default())
         .unwrap();
     let opts = PdfOptions { compress: false, ..Default::default() };
     let a = export(&d, &opts).unwrap();

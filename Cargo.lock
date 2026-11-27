@@ -2331,6 +2331,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-units"
+version = "0.1.0"
+source = "git+https://github.com/alanrathbun/craft-libs?rev=05f58ac578b362499782c9768a295ee1b7ebb739#05f58ac578b362499782c9768a295ee1b7ebb739"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-update"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=0b8bbaf4c842da2d47de7b3fddd7170ba6115541#0b8bbaf4c842da2d47de7b3fddd7170ba6115541"
@@ -7678,9 +7687,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.53.2"
+version = "1.54.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e95f91fcc7a621e8b030f6aa23c71fe9838ae2fb4d8118b75602a328f5144044"
+checksum = "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
 dependencies = [
  "bytes",
  "libc",
@@ -9034,6 +9043,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "wordcraft-calc"
+version = "0.18.1"
+dependencies = [
+ "base64 0.23.1",
+ "craft-units",
+ "flate2",
+ "libm",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "wordcraft-doc",
+]
+
+[[package]]
 name = "wordcraft-cli"
 version = "0.18.1"
 dependencies = [
@@ -9096,8 +9120,10 @@ dependencies = [
  "image",
  "log",
  "proptest",
+ "quick-xml 0.41.0",
  "serde",
  "serde_json",
+ "wordcraft-calc",
  "wordcraft-doc",
  "wordcraft-geom",
 ]
@@ -9128,6 +9154,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "wordcraft-calc",
  "wordcraft-doc",
  "wordcraft-docbin",
  "wordcraft-docx",
@@ -9138,6 +9165,7 @@ dependencies = [
  "wordcraft-pdf",
  "wordcraft-render",
  "zeroize",
+ "zip 3.0.0",
 ]
 
 [[package]]
@@ -9159,6 +9187,8 @@ dependencies = [
 name = "wordcraft-formats"
 version = "0.18.1"
 dependencies = [
+ "base64 0.23.1",
+ "cfb",
  "chardetng",
  "chrono",
  "craft-flow",
@@ -9178,8 +9208,11 @@ dependencies = [
  "craft-xlsx",
  "craft-zip",
  "encoding_rs",
+ "flate2",
  "log",
  "proptest",
+ "quick-xml 0.41.0",
+ "wordcraft-calc",
  "wordcraft-doc",
  "wordcraft-docx",
  "wordcraft-geom",
@@ -9287,6 +9320,7 @@ dependencies = [
  "toml",
  "toml_edit",
  "web-time",
+ "wordcraft-calc",
  "wordcraft-doc",
  "wordcraft-engine",
  "wordcraft-fonts",

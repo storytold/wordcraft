@@ -6,7 +6,7 @@ default-members = ["crates/*", "apps/wordcraft", "apps/wordcraft-cli", "xtask"]
 [workspace.metadata.cl]
 # Port build loop (craft-ui-port-kit): every member but xtask, so the baseline covers the
 # non-UI crates whose framework dependencies the next pin moves too.
-selection = ["wordcraft", "wordcraft-ui-egui", "wordcraft-web", "wordcraft-cli", "wordcraft-control-key", "wordcraft-doc", "wordcraft-docbin", "wordcraft-docx", "wordcraft-engine", "wordcraft-fonts", "wordcraft-formats", "wordcraft-geom", "wordcraft-layout", "wordcraft-mcp", "wordcraft-pdf", "wordcraft-render", "wordcraft-zotero"]
+selection = ["wordcraft", "wordcraft-calc", "wordcraft-ui-egui", "wordcraft-web", "wordcraft-cli", "wordcraft-control-key", "wordcraft-doc", "wordcraft-docbin", "wordcraft-docx", "wordcraft-engine", "wordcraft-fonts", "wordcraft-formats", "wordcraft-geom", "wordcraft-layout", "wordcraft-mcp", "wordcraft-pdf", "wordcraft-render", "wordcraft-zotero"]
 tracked = ["egui", "eframe", "wordcraft-ui-egui"]
 unset_env = ["CARGO_INCREMENTAL", "WORDCRAFT_REQUIRE_WINRES", "CRAFT_FONTS_REQUIRED", "CRAFT_I18N_REQUIRED", "CRAFT_PROOF_EMBED"]
 run_slots = 3
@@ -41,6 +41,7 @@ wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold
 craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "0b8bbaf4c842da2d47de7b3fddd7170ba6115541", version = "=0.1.0" }
 craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "0b8bbaf4c842da2d47de7b3fddd7170ba6115541", version = "=0.1.0" }
 craft-ssip = { git = "https://github.com/storytold/craft-libs", rev = "0b8bbaf4c842da2d47de7b3fddd7170ba6115541", version = "=0.1.0" }
+craft-units = { git = "https://github.com/alanrathbun/craft-libs", rev = "05f58ac578b362499782c9768a295ee1b7ebb739", version = "=0.1.0" }
 wordcraft-engine = { path = "crates/engine" }
 wordcraft-mcp = { path = "crates/mcp" }
 wordcraft-zotero = { path = "crates/zotero" }
@@ -52,13 +53,16 @@ craft = { git = "https://github.com/storytold/craft-libs", rev = "0b8bbaf4c842da
 craft-ui-test-kit = { git = "https://github.com/storytold/craft-libs", rev = "0b8bbaf4c842da2d47de7b3fddd7170ba6115541", version = "=0.1.0" }
 craft-keymap = { git = "https://github.com/storytold/craft-libs", rev = "0b8bbaf4c842da2d47de7b3fddd7170ba6115541", version = "=0.1.0" }
 craft-metafile = { git = "https://github.com/storytold/craft-libs", rev = "0b8bbaf4c842da2d47de7b3fddd7170ba6115541", version = "=0.1.0" }
+wordcraft-calc = { path = "crates/calc" }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
 thiserror = "2"
+# Mathcad's erf and Bessel functions (std has neither).
+libm = "0.2"
+quick-xml = "0.41"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
-quick-xml = "0.41"
 zip = { version = "3", default-features = false, features = ["deflate"] }
 log = "0.4"
 # All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
@@ -196,4 +200,3 @@ eframe = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f3048
 egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
 egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
-

@@ -168,6 +168,10 @@ pub enum InlineObject {
         /// The structure; empty = parse `linear`.
         #[serde(default, skip_serializing_if = "crate::math::Math::is_empty")]
         math: crate::math::Math,
+        /// Set when the equation is a calculation (see [`crate::calc`]): `linear` and `math`
+        /// are then its displayed result, which recalculation rewrites. `None` for plain math.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        calc: Option<Box<crate::calc::CalcRegion>>,
     },
     /// Ruby (Phonetic Guide): small `ruby` text (furigana, pinyin…) set over `base` text. The base
     /// text takes the formatting of the object's run; it reads as the paragraph's text.

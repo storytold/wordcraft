@@ -21,6 +21,7 @@ pub mod odt;
 pub mod rtf;
 pub mod sheet;
 pub mod txt;
+mod xmcd;
 
 use wordcraft_doc::Document;
 
@@ -30,7 +31,7 @@ pub const MAX_ZIP_ENTRIES: u64 = 20_000;
 
 /// Extensions this crate handles.
 pub const EXTENSIONS: &[&str] =
-    &["txt", "text", "md", "markdown", "html", "htm", "xhtml", "mht", "mhtml", "rtf", "odt", "ott", "fodt", "tex", "latex", "ltx"];
+    &["txt", "text", "md", "markdown", "html", "htm", "xhtml", "mht", "mhtml", "rtf", "odt", "ott", "fodt", "tex", "latex", "ltx", "xmcd", "mcdx"];
 
 /// Import `bytes` in the format named by `ext` (no dot, any case). `None` = not our format.
 pub fn import(ext: &str, bytes: &[u8]) -> Option<Result<Document, String>> {
@@ -43,6 +44,8 @@ pub fn import(ext: &str, bytes: &[u8]) -> Option<Result<Document, String>> {
         "rtf" => rtf::import(bytes),
         "odt" | "ott" => odt::import(bytes),
         "fodt" => odt::import_flat(bytes),
+        "xmcd" => xmcd::import(bytes, None),
+        "mcdx" => xmcd::prime::import(bytes, None),
         "tex" | "latex" | "ltx" => Ok(latex::import(bytes)),
         _ => return None,
     };
@@ -60,6 +63,8 @@ pub fn import_on(ext: &str, bytes: &[u8], page: &wordcraft_doc::SectionProps) ->
     let mut doc = match ext.as_str() {
         "odt" | "ott" => return Some(odt::import_on(bytes, page)),
         "fodt" => return Some(odt::import_flat_on(bytes, page)),
+        "xmcd" => return Some(xmcd::import(bytes, Some(page))),
+        "mcdx" => return Some(xmcd::prime::import(bytes, Some(page))),
         "txt" | "text" => txt::import_on(bytes, page),
         "md" | "markdown" => markdown::import_on(&txt::decode(bytes), page),
         "html" | "htm" | "xhtml" => html::import_on(&html::decode(bytes), &|_| None, page),
@@ -68,6 +73,15 @@ pub fn import_on(ext: &str, bytes: &[u8], page: &wordcraft_doc::SectionProps) ->
     };
     doc.ensure_nonempty();
     Some(Ok(doc))
+}
+
+/// Import a legacy worksheet with access to spreadsheet files beside it.
+pub fn import_xmcd_with_links(
+    bytes: &[u8],
+    page: &wordcraft_doc::SectionProps,
+    load: &dyn Fn(&str) -> Option<std::sync::Arc<Vec<u8>>>,
+) -> Result<Document, String> {
+    xmcd::import_with_links(bytes, Some(page), load)
 }
 
 /// Export `doc` in the format named by `ext`. `None` = not our format.

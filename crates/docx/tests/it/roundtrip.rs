@@ -1041,15 +1041,15 @@ fn tracked_equations_round_trip() {
     let plain = CharProps::default();
     let mut p = Paragraph::with_text("Formula: ", CharProps::default());
     let end = p.len();
-    p.insert_object(end, InlineObject::Equation { linear: "x+1".into(), display: false, math: Default::default() }, &ins).unwrap();
+    p.insert_object(end, InlineObject::Equation { linear: "x+1".into(), display: false, math: Default::default(), calc: None }, &ins).unwrap();
     let end = p.len();
-    p.insert_object(end, InlineObject::Equation { linear: "E=mc^2".into(), display: true, math: Default::default() }, &del).unwrap();
+    p.insert_object(end, InlineObject::Equation { linear: "E=mc^2".into(), display: true, math: Default::default(), calc: None }, &del).unwrap();
     let end = p.len();
-    p.insert_object(end, InlineObject::Equation { linear: "a^2+b^2=c^2".into(), display: true, math: Default::default() }, &ins).unwrap();
+    p.insert_object(end, InlineObject::Equation { linear: "a^2+b^2=c^2".into(), display: true, math: Default::default(), calc: None }, &ins).unwrap();
     let end = p.len();
-    p.insert_object(end, InlineObject::Equation { linear: "y=mx+b".into(), display: false, math: Default::default() }, &del).unwrap();
+    p.insert_object(end, InlineObject::Equation { linear: "y=mx+b".into(), display: false, math: Default::default(), calc: None }, &del).unwrap();
     let end = p.len();
-    p.insert_object(end, InlineObject::Equation { linear: "z=1".into(), display: false, math: Default::default() }, &plain).unwrap();
+    p.insert_object(end, InlineObject::Equation { linear: "z=1".into(), display: false, math: Default::default(), calc: None }, &plain).unwrap();
     d.body = vec![para_block(p.clone())];
     let bytes = wordcraft_docx::write(&d).expect("write");
     let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
@@ -1257,7 +1257,7 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
         effects: Default::default(),
         extra: Default::default(),
     };
-    let eq = InlineObject::Equation { linear: "x=(-b±√(b^2-4ac))/2a".into(), display: false, math: Default::default() };
+    let eq = InlineObject::Equation { linear: "x=(-b±√(b^2-4ac))/2a".into(), display: false, math: Default::default(), calc: None };
     let mut p = Paragraph::with_text("shapes ", CharProps::default());
     for o in [tb, star.clone(), eq.clone()] {
         let end = p.len();
@@ -1283,7 +1283,7 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
     }
     assert_eq!(got[0].objects[1], star);
     match &got[0].objects[2] {
-        InlineObject::Equation { linear, display, math } => {
+        InlineObject::Equation { linear, display, math, .. } => {
             assert_eq!(linear, "x=(-b±√(b^2-4ac))/2a");
             assert!(!display);
             assert_eq!(math.nodes, wordcraft_doc::math::parse_linear(linear), "structure is written as OMML and read back");
@@ -2241,7 +2241,7 @@ fn equation_manual_breaks_round_trip() {
     let mut d = Document::new();
     let math = Math { nodes: nodes.clone(), ..Default::default() };
     let mut p = Paragraph::with_text("", CharProps::default());
-    p.insert_object(0, InlineObject::Equation { linear: "a=b+c+d".into(), display: true, math }, &CharProps::default()).unwrap();
+    p.insert_object(0, InlineObject::Equation { linear: "a=b+c+d".into(), display: true, math, calc: None }, &CharProps::default()).unwrap();
     d.body = vec![para_block(p)];
     let r = rt(&d);
     let got = paras(&r).iter().flat_map(|p| p.objects.iter()).find_map(|o| match o {

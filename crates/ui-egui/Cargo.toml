@@ -23,6 +23,8 @@ wordcraft-fonts = { workspace = true }
 wordcraft-layout = { workspace = true }
 wordcraft-render = { workspace = true }
 wordcraft-engine = { workspace = true }
+# Inline calculations: the name a calculation's source defines, for the unique-name prompt.
+wordcraft-calc = { workspace = true }
 wordcraft-zotero = { workspace = true }
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 egui_extras = { workspace = true }
@@ -58,6 +60,7 @@ craft = { workspace = true, features = ["dialogs", "update"] }
 js-sys = "0.3"
 
 [dev-dependencies]
+craft = { workspace = true, features = ["ui-testing"] }
 cfb = { workspace = true }
 # Producer tests simulate a globally exhausted IME revision allocator through the engine's
 # explicit test-support feature; production builds of this crate never enable it.
@@ -73,7 +76,6 @@ craft-zip = { workspace = true }
 # The window tests' frame driver for child viewports; it is not part of the `craft` facade.
 craft-ui-test-kit = { workspace = true }
 # The interface tests' fixture and access tree (`craft::ui::testing`).
-craft = { workspace = true, features = ["ui-testing"] }
 
 [build-dependencies]
 craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "0b8bbaf4c842da2d47de7b3fddd7170ba6115541", features = ["subset"] }

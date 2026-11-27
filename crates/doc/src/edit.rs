@@ -315,7 +315,9 @@ fn object_cost(o: &InlineObject) -> usize {
             InlineObject::NoteRef { custom, .. } => custom.len(),
             InlineObject::BookmarkStart { name } | InlineObject::BookmarkEnd { name } => name.len(),
             InlineObject::PermStart { group, editor, .. } => group.len().saturating_add(editor.len()),
-            InlineObject::Equation { linear, math, .. } => linear.len().saturating_add(math.heap_bytes()),
+            InlineObject::Equation { linear, math, calc, .. } => {
+                linear.len().saturating_add(math.heap_bytes()).saturating_add(calc.as_ref().map_or(0, |c| c.heap_bytes()))
+            }
             InlineObject::Ruby { base, ruby, lang, props, .. } => {
                 [base.len(), ruby.len(), lang.len(), std::mem::size_of::<CharProps>(), serialized_len(props)]
                     .into_iter()

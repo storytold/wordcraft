@@ -354,6 +354,10 @@ impl Session {
             }
             self.doc.ensure_nonempty();
             self.doc.prune_text_boxes();
+            // Calculation results follow their sources in the same undo step.
+            if let Some((before, ..)) = before_doc {
+                crate::cmd::calc::after_command(self, id, before);
+            }
             // Whether the command left the document, the selection and the formatting
             // waiting at the caret as they were. A command that replaces the document —
             // a mail merge, a comparison — is not an edit of this one, whatever the new
