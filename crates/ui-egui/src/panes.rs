@@ -20,7 +20,7 @@ mod side;
 mod state;
 
 use comments::comments;
-pub(crate) use comments::{commit_comment, commit_reply, flush_comment_drafts, has_comment_drafts, state_has_drafts};
+pub(crate) use comments::{commit_comment, commit_reply, flush_comment_drafts, has_comment_drafts, replying_in_pane, state_has_drafts};
 use host::Content;
 #[cfg(test)]
 pub(crate) use host::apply;
