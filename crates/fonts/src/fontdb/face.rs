@@ -33,6 +33,9 @@ pub(super) static BUNDLED: &[&[u8]] = &[
 pub(super) enum FontBytes {
     Static(&'static [u8]),
     Owned(Arc<Vec<u8>>),
+    /// An added font's file, read the first time one of its faces is used.
+    #[cfg(not(target_arch = "wasm32"))]
+    File(Arc<super::user::catalog::FontFile>),
 }
 
 /// One loaded font face.
@@ -72,14 +75,24 @@ pub struct FontFace {
     /// than the full-width figure in the table. Word's automatic spacing between East Asian and
     /// Latin text is half of it (see `wordcraft_layout::para::grid::auto_space`).
     pub avg_char_width: f64,
-    pub shaper: harfrust::ShaperData,
+    /// The shaper's data for the face, made the first time it is shaped.
+    pub(super) shaper: std::sync::OnceLock<harfrust::ShaperData>,
     /// Variable fonts: the named instance's axis settings (user units; empty = default instance),
-    /// the normalised location and the shaper's view of it.
+    /// the normalised location (read from the font when it is first used, for an added font's
+    /// face) and the shaper's view of it (made the first time it is shaped).
     pub coords: Vec<([u8; 4], f32)>,
-    pub(super) location: Location,
-    pub instance: Option<harfrust::ShaperInstance>,
+    pub(super) location: std::sync::OnceLock<Location>,
+    pub(super) instance: std::sync::OnceLock<Option<harfrust::ShaperInstance>>,
+    /// An added font's face whose file is read on first use: what fallback searches and font lists
+    /// ask of it, from the added fonts' catalogue, so asking never reads the file.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) described: Option<super::user::catalog::Described>,
     /// Basic Multilingual Plane coverage bitset, built on first use.
     pub(super) bmp: std::sync::OnceLock<Box<[u64]>>,
+    /// The code points an added font's face maps (sorted, disjoint, inclusive ranges), read from
+    /// its character map alone the first time a fallback search asks.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) ranges: std::sync::OnceLock<Box<[(u32, u32)]>>,
     // Some legacy CJK fonts assemble their contours with TrueType instructions.
     pub(super) outline_hinter: std::sync::OnceLock<Option<HintingInstance>>,
     /// The autohinter's analysis of the font for screen hinting, made once for every size.
@@ -186,10 +199,14 @@ impl std::fmt::Debug for FontFace {
 }
 
 impl FontFace {
+    /// The font file's bytes. An added font's file is read the first time this is asked (empty
+    /// when it can't be read any more, see [`FontFace::usable`]).
     pub fn data(&self) -> &[u8] {
         match &self.bytes {
             FontBytes::Static(b) => b,
             FontBytes::Owned(v) => v.as_slice(),
+            #[cfg(not(target_arch = "wasm32"))]
+            FontBytes::File(f) => f.data(),
         }
     }
     pub fn skrifa(&self) -> Option<skrifa::FontRef<'_>> {
@@ -198,9 +215,41 @@ impl FontFace {
     pub fn hb(&self) -> Option<harfrust::FontRef<'_>> {
         harfrust::FontRef::from_index(self.data(), self.index).ok()
     }
+    /// False for an added font's face whose file couldn't be read when it was first used: lookups
+    /// pass over it, so its text falls back as for a font that isn't installed.
+    pub fn usable(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let FontBytes::File(f) = &self.bytes {
+            return !f.failed();
+        }
+        true
+    }
+    /// The shaper's data for the face, made the first time it is asked.
+    pub(crate) fn shaper_data(&self, hb: &harfrust::FontRef<'_>) -> &harfrust::ShaperData {
+        self.shaper.get_or_init(|| harfrust::ShaperData::new(hb))
+    }
+    /// The shaper's view of a variable font's named instance (`None` for the default instance),
+    /// made the first time it is asked.
+    pub(crate) fn shaper_instance(&self) -> Option<&harfrust::ShaperInstance> {
+        self.instance
+            .get_or_init(|| {
+                if self.coords.is_empty() {
+                    return None;
+                }
+                let hb = self.hb()?;
+                let variations = self.coords.iter().map(|(t, v)| harfrust::Variation { tag: skrifa::Tag::new(t), value: *v });
+                Some(harfrust::ShaperInstance::from_variations(&hb, variations))
+            })
+            .as_ref()
+    }
     /// Where in the design space glyphs, metrics and outlines come from.
     pub fn location(&self) -> LocationRef<'_> {
-        (&self.location).into()
+        self.location
+            .get_or_init(|| match self.skrifa() {
+                Some(f) if !self.coords.is_empty() => f.axes().location(self.coords.iter().map(|(t, v)| (skrifa::Tag::new(t), *v))),
+                _ => Location::default(),
+            })
+            .into()
     }
     /// Is this a named instance of a variable font?
     pub fn is_variable(&self) -> bool {
@@ -341,6 +390,13 @@ impl FontFace {
     /// Does the face map `c` to a glyph?
     pub fn covers(&self, c: char) -> bool {
         let cp = c as u32;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let FontBytes::File(file) = &self.bytes {
+            // An added font's face: its character map alone, so fallback searches over hundreds of
+            // added fonts don't read them whole.
+            let ranges = self.ranges.get_or_init(|| file.coverage(self.index));
+            return !file.failed() && super::fallback_data::ranges_hold(ranges, cp);
+        }
         if cp < 0x1_0000 {
             let bits = self.bmp.get_or_init(|| {
                 let mut b = vec![0u64; 1024].into_boxed_slice();
@@ -361,6 +417,10 @@ impl FontFace {
     /// Indic…) need it to reorder and stack; fonts with only Apple's AAT tables draw them unshaped.
     pub fn has_layout_tables(&self) -> bool {
         use skrifa::raw::TableProvider;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(d) = &self.described {
+            return d.layout_tables;
+        }
         self.skrifa().is_some_and(|f| f.gsub().is_ok())
     }
     /// Units per em.
@@ -394,11 +454,19 @@ impl FontFace {
     /// (Shift-JIS, GB2312, Wansung, Big5, Johab), or, without them, it maps common ideographs.
     /// Word applies such a font to East Asian text too (`w:eastAsia`).
     pub fn is_east_asian(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(d) = &self.described {
+            return d.east_asian;
+        }
         self.skrifa().is_some_and(|f| east_asian_font(&f))
     }
     /// Is this a serif face? Checks family name conventions (e.g. Mincho, Song, Times vs Sans, Gothic, Arial),
     /// falling back to the OS/2 family class and Panose serif style.
     pub fn is_serif(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(d) = &self.described {
+            return d.serif;
+        }
         if is_explicit_sans(&self.family) {
             return false;
         }

@@ -162,8 +162,6 @@ impl Coverage {
 /// kilobytes. Empty when the file can't be read.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn file_coverage(path: &std::path::Path) -> Box<[(u32, u32)]> {
-    /// The longest character map read (a format 12 map of every code point is 13 MB).
-    const MAX_CMAP: u32 = 16 << 20;
     let mut coverage = Coverage::default();
     let Some(mut file) = TableReader::open(path) else { return coverage.finish() };
     // The faces of a collection often share one map: each is read once.
@@ -174,15 +172,37 @@ pub(super) fn file_coverage(path: &std::path::Path) -> Box<[(u32, u32)]> {
             continue;
         }
         read.push(at);
-        let Some(cmap) = file.read(at, MAX_CMAP) else { continue };
-        // A font holding just the map, to read it as the font itself would.
-        let font = mini_font(&[(*b"cmap", cmap)]);
-        let Ok(f) = skrifa::FontRef::new(&font) else { continue };
-        if !coverage.add(&f) {
+        if add_cmap(&mut file, at, &mut coverage) == Some(false) {
             break;
         }
     }
     coverage.finish()
+}
+
+/// The code points face `index` of the font file at `path` maps, read from its character map
+/// alone, as [`file_coverage`] reads every face's. Empty when it can't be read.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn face_coverage(path: &std::path::Path, index: u32) -> Box<[(u32, u32)]> {
+    let mut coverage = Coverage::default();
+    if let Some(mut file) = TableReader::open(path)
+        && let Some(at) = usize::try_from(index).ok().and_then(|face| file.locate(face, b"cmap"))
+    {
+        add_cmap(&mut file, at, &mut coverage);
+    }
+    coverage.finish()
+}
+
+/// Add the code points of the character map at `at` in `file` to `coverage`: `None` when it can't
+/// be read, `Some(false)` once a bound of `coverage` is reached.
+#[cfg(not(target_arch = "wasm32"))]
+fn add_cmap(file: &mut TableReader, at: (u32, u32), coverage: &mut Coverage) -> Option<bool> {
+    /// The longest character map read (a format 12 map of every code point is 13 MB).
+    const MAX_CMAP: u32 = 16 << 20;
+    let cmap = file.read(at, MAX_CMAP)?;
+    // A font holding just the map, to read it as the font itself would.
+    let font = mini_font(&[(*b"cmap", cmap)]);
+    let f = skrifa::FontRef::new(&font).ok()?;
+    Some(coverage.add(&f))
 }
 
 /// An installed font file's bytes, `None` when it can't be read or is larger than

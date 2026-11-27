@@ -506,3 +506,302 @@ fn a_woff2_collection_font_listing_a_table_twice_is_refused() {
     let file = woff2_collection(3, &[vec![0, 1, 2], vec![0, 1, 2]]);
     assert_ne!(decode_font_file(&file), Err(UserFontError::BadWebFont(BAD_COLLECTION.into())));
 }
+
+/// A bundled font file with its family `from` renamed `to` (as long as `from`).
+fn renamed_from(file: &str, from: &str, to: &str) -> Vec<u8> {
+    assert_eq!(from.len(), to.len());
+    let mut data = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts").join(file)).unwrap();
+    let utf16 = |s: &str| s.encode_utf16().flat_map(u16::to_be_bytes).collect::<Vec<u8>>();
+    for (from, to) in [(utf16(from), utf16(to)), (from.as_bytes().to_vec(), to.as_bytes().to_vec())] {
+        let mut i = 0;
+        while let Some(at) = data[i..].windows(from.len()).position(|w| w == from) {
+            data[i + at..i + at + to.len()].copy_from_slice(&to);
+            i += at + to.len();
+        }
+    }
+    data
+}
+
+/// A small added font of its own family, `Userfont NNNNN` (Source Serif 4 Italic renamed).
+fn numbered(n: usize) -> Vec<u8> {
+    renamed_from("SourceSerif4-It.ttf", "Source Serif 4", &format!("Userfont {n:05}"))
+}
+
+/// Font files `db` read, whole or in part, so far.
+fn reads(db: &FontDb) -> usize {
+    db.files.reads.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A database started afresh over the font folder `dir`, as the next start of the app makes one.
+fn restart(dir: &Path) -> (FontDb, Vec<UserFont>, Vec<(String, String)>) {
+    let db = db();
+    let (loaded, skipped) = db.load_user_fonts(dir);
+    (db, loaded, skipped)
+}
+
+#[test]
+fn a_start_reads_none_of_the_fonts_its_catalogue_describes() {
+    // What a start costs doesn't grow with the added fonts it doesn't use: with 1 font or 8, the
+    // catalogue lists them all and no font file is read, nor any byte of one kept.
+    for n in [1, 8] {
+        let dir = temp_dir(&format!("unused-{n}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..n {
+            std::fs::write(dir.join(format!("u{i}.ttf")), numbered(i)).unwrap();
+        }
+        let (first, _, _) = restart(&dir);
+        assert_eq!(reads(&first), n, "the first start reads each font once, to catalogue it");
+        let (db, loaded, skipped) = restart(&dir);
+        assert_eq!(reads(&db), 0, "{n} fonts");
+        assert_eq!((loaded.len(), skipped.len()), (n, 0));
+        assert!((0..n).all(|i| db.has_family(&format!("Userfont {i:05}"))));
+        assert_eq!(db.loaded_font_bytes(), 0, "no added font is held until it is used");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[test]
+fn an_added_font_is_read_when_a_document_first_uses_it() {
+    let dir = temp_dir("first-use");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.ttf"), numbered(1)).unwrap();
+    std::fs::write(dir.join("b.ttf"), numbered(2)).unwrap();
+    restart(&dir);
+    let (db, _, _) = restart(&dir);
+    // Resolving the family and measuring its lines read nothing: the catalogue has the metrics.
+    let face = db.face("Userfont 00001", "Italic");
+    assert_eq!(face.family, "Userfont 00001");
+    assert!(face.ascent > 0.0);
+    assert_eq!(reads(&db), 0);
+    // Shaping text in it reads that one file, once.
+    assert!(crate::shape(&face, "office", &[], |c| c).iter().all(|g| g.gid != 0 && g.x_advance > 0));
+    crate::shape(&face, "affine", &[], |c| c);
+    assert_eq!(reads(&db), 1);
+    assert_eq!(db.loaded_font_bytes(), std::fs::metadata(dir.join("a.ttf")).unwrap().len() as usize);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_catalogue_follows_files_replaced_or_removed_since() {
+    let dir = temp_dir("refresh");
+    std::fs::create_dir_all(&dir).unwrap();
+    for i in 0..3 {
+        std::fs::write(dir.join(format!("u{i}.ttf")), numbered(i)).unwrap();
+    }
+    restart(&dir);
+    // Replaced by another font (another size, so the change shows on any file system's clock).
+    std::fs::write(dir.join("u1.ttf"), renamed("SourceSans3-Bold.ttf", "Replaced Sans")).unwrap();
+    std::fs::remove_file(dir.join("u2.ttf")).unwrap();
+    let (db, loaded, _) = restart(&dir);
+    assert_eq!(reads(&db), 1, "only the replaced file is read again");
+    assert_eq!(loaded.len(), 2);
+    assert!(db.has_family("Replaced Sans") && db.has_family("Userfont 00000"));
+    assert!(!db.has_family("Userfont 00001") && !db.has_family("Userfont 00002"));
+    // The catalogue no longer describes them: the next start reads nothing.
+    let (db, loaded, _) = restart(&dir);
+    assert_eq!((reads(&db), loaded.len()), (0, 2));
+    assert!(db.has_family("Replaced Sans"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_damaged_file_is_skipped_with_its_reason_at_every_start() {
+    let dir = temp_dir("damaged");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("good.ttf"), numbered(1)).unwrap();
+    std::fs::write(dir.join("cut.ttf"), &numbered(2)[..100]).unwrap();
+    std::fs::write(dir.join("empty.ttf"), b"").unwrap();
+    let (_, loaded, first) = restart(&dir);
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(first.iter().map(|(f, _)| f.as_str()).collect::<Vec<_>>(), ["cut.ttf", "empty.ttf"]);
+    let (db, loaded, again) = restart(&dir);
+    assert_eq!(again, first, "skipped for the same reasons");
+    assert_eq!((reads(&db), loaded.len()), (0, 1), "without reading them again");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `font` (TrueType) with `name` replaced by a table naming family `family` with `instances`
+/// (style, weight) named instances on a `wght` axis from 100 to 900: a variable font whose
+/// instances share its outlines.
+fn with_named_instances(font: &[u8], family: &str, instances: &[(&str, u16)]) -> Vec<u8> {
+    let mut names: Vec<(u16, String)> = vec![(1, family.into()), (2, "Regular".into())];
+    names.extend(instances.iter().enumerate().map(|(i, (style, _))| (256 + i as u16, style.to_string())));
+    let mut name = vec![0, 0];
+    name.extend_from_slice(&(names.len() as u16).to_be_bytes());
+    name.extend_from_slice(&(6 + 12 * names.len() as u16).to_be_bytes());
+    let mut strings = Vec::new();
+    for (id, text) in &names {
+        let utf16: Vec<u8> = text.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        for v in [3, 1, 0x409, *id, utf16.len() as u16, strings.len() as u16] {
+            name.extend_from_slice(&v.to_be_bytes());
+        }
+        strings.extend(utf16);
+    }
+    name.extend(strings);
+    let mut fvar = Vec::new();
+    for v in [1u16, 0, 16, 2, 1, 20, instances.len() as u16, 8] {
+        fvar.extend_from_slice(&v.to_be_bytes());
+    }
+    fvar.extend_from_slice(b"wght");
+    for v in [100u32 << 16, 400 << 16, 900 << 16] {
+        fvar.extend_from_slice(&v.to_be_bytes());
+    }
+    fvar.extend_from_slice(&[0, 0, 0, 2]);
+    for (i, (_, weight)) in instances.iter().enumerate() {
+        fvar.extend_from_slice(&(256 + i as u16).to_be_bytes());
+        fvar.extend_from_slice(&[0, 0]);
+        fvar.extend_from_slice(&(u32::from(*weight) << 16).to_be_bytes());
+    }
+    let mut t: Vec<([u8; 4], Vec<u8>)> = tables(font).into_iter().filter(|(tag, _)| tag != b"name").collect();
+    t.push((*b"name", name));
+    t.push((*b"fvar", fvar));
+    t.sort_by_key(|(tag, _)| *tag);
+    super::super::mini_font(&t)
+}
+
+/// What layout, fallback and the font lists read of a face, and what drawing it gives.
+fn described(face: &super::super::FontFace) -> String {
+    let sample = "aAgé€ß–—…ΩЖ中😀\u{0E01}";
+    let covers: String = sample.chars().map(|c| if face.covers(c) { '1' } else { '0' }).collect();
+    let shaped: Vec<(u32, i32)> = crate::shape(face, "office Wave", &[], |c| c).iter().map(|g| (g.gid, g.x_advance)).collect();
+    let location: Vec<f32> = face.location().coords().iter().map(|c| c.to_f32()).collect();
+    format!(
+        "{} | {} | {} | {:?} {:?} {:?} | w{} i{} | {} {} {} {} {} {} | ea{} se{} lt{} | {:?} {:?} | {covers} | {shaped:?} | {:?}",
+        face.family,
+        face.style,
+        face.legacy_family,
+        face.full_name,
+        face.postscript,
+        face.local_names,
+        face.weight,
+        face.italic,
+        face.upem,
+        face.ascent,
+        face.descent,
+        face.cap_height,
+        face.x_height,
+        face.avg_char_width,
+        face.is_east_asian(),
+        face.is_serif(),
+        face.has_layout_tables(),
+        face.coords,
+        location,
+        face.shaper_instance().is_some(),
+    )
+}
+
+#[test]
+fn catalogued_faces_answer_and_draw_as_loaded_faces_do() {
+    // Each face listed from the catalogue (and read when used) gives what the same face made from
+    // the whole file gives: names, weight, metrics, the answers fallback asks, and its glyphs.
+    let regular = renamed("SourceSans3-Regular.ttf", "Userfont Coll");
+    let bold = renamed("SourceSans3-Bold.ttf", "Userfont Coll");
+    let fonts: Vec<(&str, Vec<u8>)> = vec![
+        ("it.ttf", renamed("SourceSans3-It.ttf", FAMILY)),
+        ("serif.ttf", renamed_from("SourceSerif4-BoldIt.ttf", "Source Serif 4", "Userfont Serif")),
+        ("mono.ttf", renamed_from("JetBrainsMono-Regular.ttf", "JetBrains Mono", "Userfont Monos")),
+        ("medium.ttf", renamed_from("Inter-Medium.ttf", "Inter", "Ufont")),
+        ("coll.ttc", super::super::tests::sysfonts::collection(&[regular, bold])),
+        ("vars.ttf", with_named_instances(&renamed("SourceSans3-Regular.ttf", "Userfont Vars"), "Userfont Vars", &[("Light", 300), ("Black", 900)])),
+    ];
+    let dir = temp_dir("described");
+    std::fs::create_dir_all(&dir).unwrap();
+    for (file, bytes) in &fonts {
+        std::fs::write(dir.join(file), bytes).unwrap();
+    }
+    restart(&dir);
+    let (db, loaded, skipped) = restart(&dir);
+    assert!(skipped.is_empty(), "{skipped:?}");
+    assert_eq!(reads(&db), 0);
+    let mut faces = 0;
+    for (file, bytes) in &fonts {
+        let font = loaded.iter().find(|f| f.file == *file).unwrap();
+        let whole = check_faces(Arc::new(bytes.clone())).unwrap();
+        assert_eq!(font.faces.len(), whole.len(), "{file}");
+        for made in &whole {
+            let listed = db.face(&made.family, &made.style);
+            assert_eq!(described(&listed), described(made), "{file}");
+            faces += 1;
+        }
+    }
+    assert_eq!(faces, 8, "one face per file, two in the collection, two named instances");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_added_font_whose_file_is_gone_when_first_used_falls_back() {
+    let dir = temp_dir("gone");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.ttf"), numbered(1)).unwrap();
+    restart(&dir);
+    let (db, _, _) = restart(&dir);
+    std::fs::remove_file(dir.join("a.ttf")).unwrap();
+    let face = db.face("Userfont 00001", "Italic");
+    let generation = db.generation();
+    assert!(crate::shape(&face, "abc", &[], |c| c).iter().all(|g| g.gid == 0), "nothing to draw it with");
+    assert!(!face.usable() && !face.covers('a'));
+    assert!(db.generation() > generation, "lookups made with it are made again");
+    assert_eq!(db.face("Userfont 00001", "Italic").family, super::super::FALLBACK_FAMILY);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn previewing_an_added_font_it_does_not_use_keeps_none_of_it() {
+    // As with installed fonts (#848): a font list draws each family's name in its own face.
+    let dir = temp_dir("preview");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.ttf"), numbered(1)).unwrap();
+    restart(&dir);
+    let (db, _, _) = restart(&dir);
+    let preview = db.preview_face("Userfont 00001").unwrap();
+    assert!(preview.glyph_for('W') != 0);
+    assert_eq!(db.loaded_font_bytes(), 0);
+    // Once a document uses the font, the preview shares its face.
+    let used = db.face("Userfont 00001", "Italic");
+    used.glyph_for('W');
+    assert_eq!(db.preview_face("Userfont 00001").unwrap().id(), used.id());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_damaged_or_impossible_catalogue_is_made_again_from_the_fonts() {
+    let dir = temp_dir("bad-catalogue");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.ttf"), numbered(1)).unwrap();
+    restart(&dir);
+    let path = dir.join(catalog::CATALOG_FILE);
+    let good = std::fs::read_to_string(&path).unwrap();
+    let upem = number_after(&good, "\"upem\":");
+    let zero_upem = good.replacen(&format!("\"upem\":{upem}"), "\"upem\":0.0", 1);
+    assert_ne!(zero_upem, good);
+    for bad in [good[..good.len() / 2].to_string(), zero_upem, "[1, 2".to_string()] {
+        std::fs::write(&path, &bad).unwrap();
+        let (db, loaded, skipped) = restart(&dir);
+        assert_eq!((loaded.len(), skipped.len()), (1, 0));
+        assert_eq!(reads(&db), 1, "the font is read again");
+        assert_eq!(db.face("Userfont 00001", "Italic").upem, upem.parse::<f64>().unwrap());
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The number written after the first `key` in `json`, as written.
+fn number_after(json: &str, key: &str) -> String {
+    let at = json.find(key).unwrap() + key.len();
+    json[at..].chars().take_while(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | 'e' | 'E' | '+')).collect()
+}
+
+#[test]
+fn fonts_added_or_removed_in_a_session_are_catalogued_for_the_next_start() {
+    let dir = temp_dir("session");
+    let db = db();
+    db.load_user_fonts(&dir);
+    db.install_font("one.ttf", &numbered(1)).unwrap();
+    db.install_font("two.ttf", &numbered(2)).unwrap();
+    let (next, loaded, _) = restart(&dir);
+    assert_eq!((reads(&next), loaded.len()), (0, 2), "listed without reading them");
+    next.remove_user_font("Userfont 00001").unwrap();
+    let (last, loaded, _) = restart(&dir);
+    assert_eq!((reads(&last), loaded.len()), (0, 1));
+    assert!(last.has_family("Userfont 00002") && !last.has_family("Userfont 00001"));
+    let _ = std::fs::remove_dir_all(&dir);
+}

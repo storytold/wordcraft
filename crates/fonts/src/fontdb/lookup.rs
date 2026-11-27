@@ -50,11 +50,11 @@ impl FontDb {
     /// file is too large to read just for a preview.
     pub fn preview_face(&self, family: &str) -> Option<Arc<FontFace>> {
         if let Some(f) = self.find(family, "Regular") {
-            return Some(f);
+            return Some(unshared_if_unread(f));
         }
         let english = self.english_family(family).filter(|en| !en.eq_ignore_ascii_case(family));
         if let Some(f) = english.as_deref().and_then(|en| self.find(en, "Regular")) {
-            return Some(f);
+            return Some(unshared_if_unread(f));
         }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(f) = self.unshared_face(family).or_else(|| english.as_deref().and_then(|en| self.unshared_face(en))) {
@@ -93,17 +93,23 @@ impl FontDb {
     }
 
     /// Bytes of font data held by loaded faces (each file once; compiled-in fonts not counted).
-    /// It grows as families load for use; font list previews leave it as is (#848).
+    /// It grows as families load for use (an added font's file once it is first used); font list
+    /// previews leave it as is (#848).
     pub fn loaded_font_bytes(&self) -> usize {
-        let mut seen: Vec<*const Vec<u8>> = Vec::new();
+        let mut seen: Vec<*const u8> = Vec::new();
         let mut total = 0usize;
         for f in self.read_faces().iter() {
-            if let FontBytes::Owned(d) = &f.bytes {
-                let p = Arc::as_ptr(d);
-                if !seen.contains(&p) {
-                    seen.push(p);
-                    total = total.saturating_add(d.len());
-                }
+            let held = match &f.bytes {
+                FontBytes::Owned(d) => Some(d.as_slice()),
+                #[cfg(not(target_arch = "wasm32"))]
+                FontBytes::File(file) if file.loaded() => Some(file.data()),
+                _ => None,
+            };
+            if let Some(d) = held
+                && !seen.contains(&d.as_ptr())
+            {
+                seen.push(d.as_ptr());
+                total = total.saturating_add(d.len());
             }
         }
         total
@@ -178,24 +184,25 @@ impl FontDb {
         if style.contains('{') {
             {
                 let faces = self.read_faces();
-                if let Some(f) = faces.iter().find(|f| f.named(family) && f.style == style) {
+                if let Some(f) = faces.iter().find(|f| f.usable() && f.named(family) && f.style == style) {
                     return Some(f.clone());
                 }
             }
             return self.instance(family, style);
         }
         let faces = self.read_faces();
-        let mut cands: Vec<&Arc<FontFace>> = faces.iter().filter(|f| f.family.eq_ignore_ascii_case(family)).collect();
+        // An added font whose file couldn't be read when first used is passed over.
+        let usable = || faces.iter().filter(|f| f.usable());
+        let mut cands: Vec<&Arc<FontFace>> = usable().filter(|f| f.family.eq_ignore_ascii_case(family)).collect();
         if cands.is_empty() {
             // A legacy family name: choose among the faces it names (bold and italic as usual).
-            cands = faces.iter().filter(|f| f.legacy_family.eq_ignore_ascii_case(family)).collect();
+            cands = usable().filter(|f| f.legacy_family.eq_ignore_ascii_case(family)).collect();
         }
         if cands.is_empty() {
             // Exact full names keep precedence over PostScript aliases; either selects one face.
-            return faces
-                .iter()
+            return usable()
                 .find(|f| f.full_name.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family)))
-                .or_else(|| faces.iter().find(|f| f.postscript.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family))))
+                .or_else(|| usable().find(|f| f.postscript.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family))))
                 .cloned();
         }
         let ns = norm(style);
@@ -264,4 +271,27 @@ impl FontDb {
         cache.insert(key, p.clone());
         p
     }
+}
+
+/// `face`, or for an added font's face whose file hasn't been read, a copy read from the file that
+/// the database doesn't keep: a font list preview of an added font it doesn't use then costs no
+/// lasting memory, as with an installed one (#848).
+fn unshared_if_unread(face: Arc<FontFace>) -> Arc<FontFace> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let FontBytes::File(file) = &face.bytes
+        && !file.loaded()
+        && let Some(bytes) = file.read_unkept()
+        && let Some(mut copy) = make_face(
+            FontBytes::Owned(Arc::new(bytes)),
+            face.index,
+            face.family.clone(),
+            face.style.clone(),
+            face.legacy_family.clone(),
+            face.coords.clone(),
+        )
+    {
+        copy.local_names = face.local_names.clone();
+        return Arc::new(copy);
+    }
+    face
 }

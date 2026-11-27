@@ -22,3 +22,7 @@ unicode-bidi = { workspace = true }
 unicode-script = { workspace = true }
 log = { workspace = true }
 serde_json = { workspace = true }
+
+# The added fonts' catalogue (`fontdb/user/catalog.rs`); the web keeps added fonts in the browser.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+serde = { workspace = true }
