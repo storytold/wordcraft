@@ -411,7 +411,7 @@ impl<'a> Shaped<'a> {
 
     /// A field: a legacy form field, its code in braces, or its result.
     fn field(&mut self, cx: &Cx, (k, o): (usize, &InlineObject), slot: Slot, rc: &Arc<ResolvedChar>) {
-        let InlineObject::Field { instr, result, code, .. } = o else { return };
+        let InlineObject::Field { instr, result, code, locked, .. } = o else { return };
         let env = cx.env;
         let form = if env.field_codes != *code { None } else { o.legacy_form() };
         if let Some(wordcraft_doc::legacy_form::LegacyForm::CheckBox { size, .. }) = form {
@@ -426,6 +426,9 @@ impl<'a> Shaped<'a> {
                 shaded.shading = Some(FIELD_SHADING);
             }
             self.b.shape_atomic(&field_code_text(instr), slot.start, slot.end, &Arc::new(shaded));
+        } else if *locked && crate::fields::field_name(instr) == "PAGEREF" {
+            // A locked page reference keeps its result, as Word prints and exports it.
+            self.b.shape_atomic(result, slot.start, slot.end, &linked(rc, instr));
         } else {
             self.field_result(cx, (instr, result), slot, rc);
         }
@@ -530,13 +533,14 @@ fn mark_break_opportunities(clusters: &mut [Cluster], bt: &BreakText, rp: &Resol
     }
 }
 
-/// The list label, shaped; none on a paragraph containing only a page break: Word hides it there.
-/// The list counter has already advanced, so the following item keeps its number.
+/// The list label, shaped; none on a paragraph containing only a page break, nor on one that goes
+/// on from the line of the paragraph before (#3986): Word hides it there. The list counter has
+/// already advanced, so the following item keeps its number.
 fn list_label(cx: &Cx, b: &mut Builder, mark_style: u32) -> Option<Label> {
     let (p, rp) = (cx.p, cx.rp);
     let break_only =
         b.clusters.iter().any(|c| c.kind == ClKind::PageBreak) && b.clusters.iter().all(|c| matches!(c.kind, ClKind::PageBreak | ClKind::Marker));
-    let (text, lvl) = cx.env.label.as_ref().filter(|_| !break_only)?;
+    let (text, lvl) = cx.env.label.as_ref().filter(|_| !break_only && !cx.env.joined)?;
     let rc = cx.res.char(&p.mark.clone().overlaid(&lvl.chr));
     // A bullet no installed font can draw would come from whatever icon font has its
     // private-use code (Font Awesome's Twitter logo at U+F081, #1683): it shows the level's
@@ -645,6 +649,8 @@ fn shown_text(cx: &Cx) -> Option<String> {
 
 /// Lay out one paragraph.
 pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
+    #[cfg(test)]
+    crate::test_fonts();
     let doc = env.doc;
     let rp = paragraph_props(p, env);
     let res = Resolver { doc, style: p.props.style.as_deref(), table: env.table.map(|t| &t.chr) };
@@ -708,6 +714,8 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         left_out: Vec::new(),
         enclosures,
         auto_space,
+        joined: env.joined,
+        row_est: 0.0,
     };
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&bt.text, |i| bt.to_para(i), &pl, auto, env.doc.settings.hyphenate_caps, &runs);
@@ -810,13 +818,24 @@ fn break_text<'a>(source: &'a str, skip: &[std::ops::Range<usize>]) -> (std::bor
     }
 }
 
+/// A character that continues a word or a path segment after a slash: a letter, a digit or `_`.
+fn word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
 fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec<usize> {
     let mut found = Vec::new();
     for (i, o) in unicode_linebreak::linebreaks(text) {
-        // Word keeps "and/or" and web addresses whole: no break right after a slash (a word
-        // too long for the line still breaks anywhere).
-        let after_slash =
-            text.get(..i).is_some_and(|t| t.ends_with('/')) && text.get(i..).and_then(|t| t.chars().next()).is_some_and(char::is_alphanumeric);
+        // Word keeps "and/or" and web addresses whole: no break right after a slash before a letter,
+        // digit or underscore ("/_back"), nor after the question mark of a query ("/?type="), which
+        // takes an ASCII one (a question mark in CJK text keeps its break). A word too long for
+        // the line still breaks anywhere.
+        let next = text.get(i..).and_then(|t| t.chars().next());
+        let after_slash = match text.get(..i).and_then(|t| t.chars().next_back()) {
+            Some('/') => next.is_some_and(word_char),
+            Some('?') => next.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_'),
+            _ => false,
+        };
         if (o == unicode_linebreak::BreakOpportunity::Allowed || i < text.len()) && !after_slash {
             found.push(i);
         }
@@ -828,7 +847,7 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
         .match_indices('/')
         .filter(|&(i, _)| {
             text.get(..i).and_then(|t| t.chars().next_back()).is_some_and(|c| c.is_whitespace() && !matches!(c, '\u{a0}' | '\u{2007}' | '\u{202f}'))
-                && text.get(i + 1..).and_then(|t| t.chars().next()).is_some_and(char::is_alphanumeric)
+                && text.get(i + 1..).and_then(|t| t.chars().next()).is_some_and(word_char)
         })
         .map(|(i, _)| i)
         .collect();
@@ -840,8 +859,11 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
     // keeps a hyphen and a number together (LB25), and when a slash and a letter follow
     // ("Dataprotection-" / "/Secrecyviolation", #3408), where LB13 forbids a break before the
     // slash: add those positions back. Word keeps "fitness-/1589" whole, so a slash before a digit
-    // gains no break. Only U+002D is added here; a non-breaking hyphen (U+2011) and a minus sign
-    // (U+2212) stay unbreakable, and the other dashes keep their ordinary UAX #14 breaks.
+    // gains no break. Word also breaks between two hyphens in a row ("--------" is a ruled line
+    // that wraps at any hyphen), where UAX #14 keeps them together (LB21): without it a row of
+    // hyphens after a gap moves to the next line whole instead of filling the line first. Only
+    // U+002D is added here; a non-breaking hyphen (U+2011) and a minus sign (U+2212) stay
+    // unbreakable, and the other dashes keep their ordinary UAX #14 breaks.
     let hyphen_breaks: Vec<usize> = text
         .match_indices('-')
         .filter_map(|(pos, _)| {
@@ -850,6 +872,7 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
             match next.next() {
                 Some(n) if n.is_ascii_digit() => Some(i),
                 Some('/') => next.next().is_some_and(char::is_alphabetic).then_some(i),
+                Some('-') => Some(i),
                 _ => None,
             }
         })
