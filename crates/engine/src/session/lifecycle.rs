@@ -22,7 +22,7 @@ impl Session {
         let name = path.to_string_lossy();
         if let Err(e) = crate::file_access::check_read(&name)
             .and_then(|()| crate::file_access::check_write(&name))
-            .and_then(|()| wordcraft_proof::save_user_dictionary(path, removed).map_err(|e| e.to_string()))
+            .and_then(|()| crate::custom_dict::save_custom_dictionary(path, removed))
         {
             log::warn!("custom dictionary: save failed: {e}");
         }
@@ -41,6 +41,7 @@ impl Session {
             sel,
             view,
             pending,
+            pending_at,
             path,
             file_name,
             dirty,
@@ -68,6 +69,8 @@ impl Session {
             layout,
             typing,
             originals,
+            md_source,
+            md_file,
             picture_looks,
             versions,
             autosave,
@@ -89,15 +92,18 @@ impl Session {
             sel,
             view,
             pending,
+            pending_at,
             last_highlight: wordcraft_doc::props::Highlight::Yellow,
             path,
             file_name,
             user_dict_path: None,
+            default_user_dict_path: None,
             dirty,
             clipboard: None,
             pending_move,
             clipboard_text: String::new(),
             clipboard_html: String::new(),
+            clipboard_rtf: String::new(),
             clip_history: Default::default(),
             find,
             goal_x,
@@ -106,9 +112,11 @@ impl Session {
             author: "WordCraft User".into(),
             initials: String::new(),
             painter: None,
+            copied_format: None,
             status: String::new(),
             new_header_parts,
             hf_return,
+            review_style: None,
             history,
             undo_evicted,
             redo,
@@ -135,6 +143,8 @@ impl Session {
             layout,
             typing,
             originals,
+            md_source,
+            md_file,
             picture_looks,
             last_command: None,
             recording: None,
@@ -149,12 +159,15 @@ impl Session {
             math_latex: false,
             math_normal_text: false,
             also_selected,
+            member: None,
             prefs: Prefs::default(),
             system_region: Default::default(),
-            keymap: crate::KeyMap::default(),
+            keymap: craft_keymap::Overrides::default(),
+            findings: None,
             ribbon: crate::RibbonLayout::default(),
             editing_lang: None,
             read_aloud: Default::default(),
+            windows: Default::default(),
             password,
             #[cfg(not(target_arch = "wasm32"))]
             recovery: None,

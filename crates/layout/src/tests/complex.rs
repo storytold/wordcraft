@@ -29,6 +29,7 @@ const MYANMAR: &str = "\u{1019}\u{103C}\u{1014}\u{103A}\u{1019}\u{102C}\u{1005}\
 
 #[test]
 fn myanmar_syllables_are_single_clusters() {
+    crate::test_fonts();
     let l = lay(&Document::from_text(MYANMAR));
     let pl = para_layout(&l, 0);
     let starts: Vec<usize> = pl.clusters.iter().map(|c| c.start).collect();
@@ -46,6 +47,7 @@ fn myanmar_syllables_are_single_clusters() {
 
 #[test]
 fn myanmar_without_spaces_wraps_between_syllables() {
+    crate::test_fonts();
     let text = MYANMAR.repeat(80);
     let l = lay(&Document::from_text(&text));
     let pl = para_layout(&l, 0);
@@ -66,11 +68,13 @@ fn myanmar_without_spaces_wraps_between_syllables() {
 
 /// A face with Myanmar letters (an installed system font), or `None` to skip.
 fn myanmar_face() -> Option<wordcraft_fonts::FaceRef> {
+    crate::test_fonts();
     wordcraft_fonts::FontDb::global().fallback_for('\u{1000}', 0).map(|f| wordcraft_fonts::FaceRef::of(&f)).filter(|f| f.has_layout_tables())
 }
 
 #[test]
 fn myanmar_prevowel_is_drawn_before_its_consonant() {
+    crate::test_fonts();
     let Some(face) = myanmar_face() else {
         eprintln!("skipped: no Myanmar font with OpenType tables installed");
         return;
@@ -92,6 +96,7 @@ fn myanmar_prevowel_is_drawn_before_its_consonant() {
 
 #[test]
 fn myanmar_in_a_latin_font_falls_back_to_a_regular_myanmar_face() {
+    crate::test_fonts();
     if myanmar_face().is_none() {
         eprintln!("skipped: no Myanmar font with OpenType tables installed");
         return;
@@ -115,12 +120,14 @@ const THAI_RUN: &str = "[D] น้ำ ค่ำ ปั้น ฝั่ง ปู
 
 /// Is a font with Thai letters installed? `false` skips the test.
 fn thai_font_installed() -> bool {
+    crate::test_fonts();
     wordcraft_fonts::FontDb::global().fallback_for('\u{0E19}', 0).is_some()
 }
 
 /// Is a Thai font with Latin letters and digits installed (Tahoma, Leelawadee UI, Thonburi, the
 /// TLWG fonts…)? Noto Sans Thai alone has none, so no face covers [`THAI_RUN`]: `false` skips.
 fn thai_latin_font_installed() -> bool {
+    crate::test_fonts();
     let face = wordcraft_fonts::word::resolve("TH Sarabun New", false, false).face;
     THAI_RUN.chars().filter(|c| !c.is_whitespace()).all(|c| face.covers(c))
 }
@@ -139,6 +146,7 @@ fn cluster_faces(text: &str, font: Option<&str>) -> Vec<(usize, wordcraft_fonts:
 
 #[test]
 fn a_missing_thai_font_draws_the_whole_run_in_one_thai_face() {
+    crate::test_fonts();
     if !thai_latin_font_installed() {
         eprintln!("skipped: no Thai font with Latin letters installed");
         return;
@@ -159,8 +167,60 @@ fn a_missing_thai_font_draws_the_whole_run_in_one_thai_face() {
     }
 }
 
+/// Body paragraph 0 of `text` at 16 pt, its run set in `font` whose font table alternate
+/// (`w:altName`) is `alt`, and the face of every cluster: (cluster start, face).
+fn cluster_faces_with_alternate(text: &str, font: &str, alt: &str) -> Vec<(usize, wordcraft_fonts::FaceRef)> {
+    let mut d = Document::from_text(text);
+    d.settings.font_alt_names = vec![(font.into(), alt.into())];
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.runs[0].props.font = Some(font.into());
+    p.runs[0].props.size = Some(16.0);
+    let l = lay(&d);
+    let pl = para_layout(&l, 0);
+    pl.clusters.iter().map(|c| (c.start, pl.styles[c.style as usize].face)).collect()
+}
+
+#[test]
+fn a_missing_thai_font_with_a_latin_alternate_still_draws_the_run_in_one_face() {
+    if !thai_font_installed() {
+        eprintln!("skipped: no Thai font installed");
+        return;
+    }
+    // #2702 draws a missing font in its font table alternate. When the font is Thai and the
+    // installed alternate has no Thai letters, the run still takes one face for its Thai and
+    // Latin text (#1549), not the alternate for the Latin and per-letter fallback for the Thai.
+    let alt = "Source Sans 3";
+    let alt_face = wordcraft_fonts::word::resolve(alt, false, false).face;
+    assert!(!alt_face.covers('\u{0E19}'), "{} has no Thai, so the run must move", alt_face.family);
+    let db = wordcraft_fonts::FontDb::global();
+    // One face for the run needs a Thai font with Latin letters and digits too.
+    let thai_latin = thai_latin_font_installed();
+    if !thai_latin {
+        eprintln!("skipped the one-face cases: no Thai font with Latin letters installed");
+    }
+    for font in ["TH Sarabun New", "Angsana New"] {
+        if !thai_latin || db.has_family(font) {
+            continue;
+        }
+        let faces = cluster_faces_with_alternate(THAI_RUN, font, alt);
+        let first = faces[0].1;
+        let names: Vec<&str> = faces.iter().map(|(_, f)| f.family.as_str()).collect();
+        assert!(faces.iter().all(|(_, f)| f.id() == first.id()), "{font} (alternate {alt}): one face for the run, not {names:?}");
+        assert!(first.covers('\u{0E19}') && first.covers('D') && first.covers('1') && first.covers('\u{0E3F}'), "{font} → {}", first.family);
+        // A Latin-only run in the same font is drawn in the alternate, as #2702 has it.
+        let latin = cluster_faces_with_alternate("Lanterns 1,250", font, alt);
+        assert!(latin.iter().all(|(_, f)| f.id() == alt_face.id()), "{font}: Latin text in {alt}");
+    }
+    // A missing Latin font with the same alternate isn't Thai: its Latin text stays in the
+    // alternate and only the Thai letters fall back.
+    let faces = cluster_faces_with_alternate("Hello \u{0E2A}\u{0E27}\u{0E31}\u{0E2A}\u{0E14}\u{0E35}", "No Such Latin Font 2702", alt);
+    assert!(faces.iter().filter(|(at, _)| *at < 5).all(|(_, f)| f.id() == alt_face.id()), "Hello stays in {alt}");
+    assert!(faces.iter().any(|(at, f)| *at >= 6 && f.id() != alt_face.id()), "the Thai letters fall back");
+}
+
 #[test]
 fn a_thai_substitute_without_latin_hands_the_run_to_one_face_covering_it() {
+    crate::test_fonts();
     if !thai_latin_font_installed() {
         eprintln!("skipped: no Thai font with Latin letters installed");
         return;
@@ -184,6 +244,7 @@ fn a_thai_substitute_without_latin_hands_the_run_to_one_face_covering_it() {
 
 #[test]
 fn latin_text_in_a_missing_latin_font_stays_in_its_substitute_beside_thai() {
+    crate::test_fonts();
     if !thai_font_installed() {
         eprintln!("skipped: no Thai font installed");
         return;
@@ -215,6 +276,7 @@ fn latin_text_in_a_missing_latin_font_stays_in_its_substitute_beside_thai() {
 
 #[test]
 fn thai_in_an_installed_latin_font_keeps_the_latin_face_for_latin() {
+    crate::test_fonts();
     if !thai_font_installed() {
         eprintln!("skipped: no Thai font installed");
         return;
@@ -230,6 +292,7 @@ fn thai_in_an_installed_latin_font_keeps_the_latin_face_for_latin() {
 
 #[test]
 fn a_missing_latin_font_with_a_thai_complex_script_font_keeps_both() {
+    crate::test_fonts();
     if !thai_font_installed() {
         eprintln!("skipped: no Thai font installed");
         return;
@@ -251,6 +314,7 @@ fn a_missing_latin_font_with_a_thai_complex_script_font_keeps_both() {
 
 #[test]
 fn a_missing_roman_thai_font_is_not_drawn_in_cambria() {
+    crate::test_fonts();
     // Word draws a missing font the font table classes as roman in Cambria, but a missing Thai
     // font keeps its Thai substitute: the same face whether or not the table calls it roman.
     let db = wordcraft_fonts::FontDb::global();
