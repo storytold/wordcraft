@@ -1536,6 +1536,8 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-12 | minor | Progress log: layout.fitOnePage condenses a multi-page document by one page while preserving typography hierarchy (#6433) |
 | 2026-11-03 | trivial | Progress log: a line breaks after a hyphen before a slash (#3408) |
 
+> 2026-11-10 · #2454 merged with main's #3984 rule for lines of only in-line pictures: a text box, or a shape holding text, is no picture, so its line keeps the font's descent like a line with text (`layout::tests::textbox_keeps_line_descent`). Picture-only leading, list labels and hidden anchors follow #3984's measurements. Source merge; no new native measurements.
+
 ### Format Painter integration refresh, 2026-10-30
 
 Single-click release applies the armed painter to the target word without trailing spaces and disarms it. Explicit selections retain their scope (#1455, partial). Source and UI regressions are retained after the canvas/input module split. Earlier Windows pointer and browser qualification are historical; current-head hosted validation is pending, and native shortcut/Mint qualification is not newly claimed.
