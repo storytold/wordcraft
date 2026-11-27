@@ -993,3 +993,51 @@ fn entries_expose_names_selection_and_picking() {
     let answer = h.state_mut().dialog_host.take::<FileChooser>();
     assert_eq!(answer, Some(DialogResult::Ok(Answer::Paths(vec![PathBuf::from("/d/chapter.docx")]))));
 }
+
+/// #6131: File › Export to DOCX, ODT or RTF writes a copy. It ran a plain Save As, which made
+/// the copy the document's file and cleared its unsaved changes, so the next Save updated the
+/// copy and the original kept its old text.
+#[test]
+fn export_writes_a_copy_and_keeps_the_documents_file() {
+    let dir = scratch("export-copy");
+    for ext in ["docx", "odt", "rtf"] {
+        let original = dir.join(format!("a-{ext}.docx"));
+        let (mut a, _) = async_app();
+        a.run("text.insert", json!({"text": "first"})).unwrap();
+        a.run("file.save", json!({"path": original.to_string_lossy()})).unwrap();
+        a.run("text.insert", json!({"text": " edited"})).unwrap();
+        let copy = dir.join(format!("copy.{ext}"));
+        a.finish_pick(AfterPick::Export { ext: ext.into() }, Some(copy.to_string_lossy().into_owned())).unwrap();
+        assert_eq!(saved_text(&copy), "first edited", "{ext}: the copy has the edits");
+        assert_eq!(a.session.path.as_deref(), Some(original.as_path()), "{ext}: the document keeps its file");
+        assert!(a.session.dirty, "{ext}: the document keeps its unsaved changes");
+        a.run("file.save", json!({})).unwrap();
+        assert_eq!(saved_text(&original), "first edited", "{ext}: Save still writes the original");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #6131, browser: exporting a DOCX, ODT or RTF copy downloads it and leaves the document's
+/// unsaved changes and save stamps alone.
+#[test]
+fn web_export_downloads_a_copy_and_keeps_unsaved_changes() {
+    let files = Arc::new(ScriptedFiles::new().in_browser().saving_suggested());
+    let mut a = app_over(&files, wordcraft_doc::Document::new());
+    typed(&mut a);
+    for ext in ["docx", "odt", "rtf"] {
+        let revision = a.session.doc.core.revision;
+        let name = format!("copy.{ext}");
+        let result = a.finish_pick(AfterPick::Export { ext: ext.into() }, Some(name.clone())).unwrap();
+        assert_eq!(result["downloaded"], name, "{ext}");
+        let request = files.requests().pop().unwrap();
+        assert_eq!(request.file_name.as_deref(), Some(name.as_str()), "{ext}");
+        assert!(!request.save_as, "{ext}: a copy is never Save As");
+        let bytes = files.file(std::path::Path::new(&name)).unwrap();
+        let back = wordcraft_engine::io::open_bytes(&name, &bytes).unwrap();
+        assert_eq!(back.plain_text(wordcraft_doc::StoryRef::Body), UNSAVED, "{ext}: the copy has the text");
+        a.settle_saves();
+        assert!(a.session.dirty, "{ext}: the document keeps its unsaved changes");
+        assert!(a.session.path.is_none(), "{ext}: the document keeps no file of its own");
+        assert_eq!(a.session.doc.core.revision, revision, "{ext}: the document's save stamps are untouched");
+    }
+}

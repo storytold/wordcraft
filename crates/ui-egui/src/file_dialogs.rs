@@ -321,9 +321,11 @@ impl WordApp {
                     }
                     // Word XML even over a Word 2003 XML file, which a save by path would keep.
                     let format = if ext == "xml" { wordcraft_engine::cmd::file::FORMAT_FLAT_OPC } else { crate::print_page::EXPORT_WORD_2003 };
-                    self.run("file.saveAs", json!({"path": path, "format": format}))
+                    // An export is a copy: the document keeps its own file and changes (#6131).
+                    self.run("file.saveAs", json!({"path": path, "format": format, "copy": true}))
                 } else {
-                    self.run("file.saveAs", json!({"path": path}))
+                    // An export is a copy: the document keeps its own file and changes (#6131).
+                    self.run("file.saveAs", json!({"path": path, "copy": true}))
                 };
                 match &r {
                     Ok(_) => {

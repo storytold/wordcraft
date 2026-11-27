@@ -7004,6 +7004,64 @@ fn saving_a_text_file_over_itself_saves_the_document() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #6131: File › Export to DOCX, ODT or RTF writes a copy (`copy: true`). It made the copy the
+/// document's file and cleared its unsaved changes, so the next Save went to the copy and the
+/// original kept its old text. The copy has the edits; the document keeps its file, its changes
+/// and its save stamps.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn exporting_a_copy_keeps_the_documents_file() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-export-copy-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let body = |p: &std::path::Path| crate::io::open_path(p).unwrap().plain_text(wordcraft_doc::StoryRef::Body);
+    for ext in ["docx", "odt", "rtf"] {
+        let original = dir.join(format!("a-{ext}.docx"));
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        run(&mut s, "text.insert", json!({"text": "first"}));
+        run(&mut s, "file.save", json!({"path": original.to_string_lossy()}));
+        run(&mut s, "text.insert", json!({"text": " edited"}));
+        let stamps = (s.doc.core.revision, s.doc.core.modified.clone());
+        let copy = dir.join(format!("copy.{ext}"));
+        let r = run(&mut s, "file.saveAs", json!({"path": copy.to_string_lossy(), "copy": true}));
+        assert_eq!(r["saved"], true, "{ext}");
+        assert_eq!(body(&copy), "first edited", "{ext}: the copy has the edits");
+        assert_eq!(s.path.as_deref(), Some(original.as_path()), "{ext}: the document keeps its file");
+        assert!(s.dirty, "{ext}: the document keeps its unsaved changes");
+        assert_eq!((s.doc.core.revision, s.doc.core.modified.clone()), stamps, "{ext}: the document's save stamps are untouched");
+        run(&mut s, "file.save", json!({}));
+        assert_eq!(body(&original), "first edited", "{ext}: Save still writes the original");
+        assert!(!s.dirty);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A copy with no path would open the Save As picker on an untitled document (whose answer is an
+/// ordinary save that adopts the file) or fall back to the open file's path and overwrite it while
+/// leaving the document dirty: refused in both cases (#6131 review).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_copy_without_a_path_is_refused() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "text.insert", json!({"text": "first"}));
+    let e = s.run("file.save", &json!({"copy": true})).unwrap_err();
+    assert!(e.to_string().contains("copy"), "{e}");
+    assert!(s.ui_requests.is_empty(), "no picker opens");
+
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-copy-no-path-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let original = dir.join("doc.docx");
+    run(&mut s, "file.save", json!({"path": original.to_string_lossy()}));
+    run(&mut s, "text.insert", json!({"text": " edited"}));
+    let e = s.run("file.save", &json!({"copy": true})).unwrap_err();
+    assert!(e.to_string().contains("copy"), "{e}");
+    assert!(s.dirty, "the document keeps its unsaved changes");
+    let on_disk = crate::io::open_path(&original).unwrap().plain_text(wordcraft_doc::StoryRef::Body);
+    assert_eq!(on_disk, "first", "the original file on disk was not overwritten");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A Markdown file saved as another Markdown file is that file from now on: the next save goes
 /// there and the first file stays as it was. Other formats keep the #2376 rule.
 #[cfg(not(target_arch = "wasm32"))]
