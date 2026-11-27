@@ -536,8 +536,8 @@ fn run_convert(rest: &[String], open: impl Fn(&str, Option<&str>) -> Result<Sess
     if let Err(e) = r {
         return Err(if strict { refusal(&mut s, e, markup, to_png.then_some(1)) } else { engine_error(e) });
     }
-    eprintln!("wrote {o}");
-    Ok(())
+    // The confirmation is a result, so it goes to stdout with the others (#7070).
+    write_stdout(|w| writeln!(w, "wrote {o}"))
 }
 
 fn load_run_script(rest: &[String], script_path: Option<&Path>) -> Result<Option<script::Script>, Failure> {
@@ -708,7 +708,11 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                     s.run("file.save", &json!({"path": out}))
                 };
                 r.map_err(engine_error)?;
-                eprintln!("wrote {out}");
+                // A reader that hung up only loses the confirmation; the remaining saves still run.
+                match write_stdout(|w| writeln!(w, "wrote {out}")) {
+                    Ok(()) | Err(Failure::StdoutClosed) => {}
+                    Err(e) => return Err(e),
+                }
             }
             Ok(())
         }
@@ -799,7 +803,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             eprintln!("{} calls, {}", out.calls, if out.completed { "completed" } else { "ended without completing (cancelled?)" });
             if let Some(o) = arg_value(&rest, "--save") {
                 s.run("file.save", &json!({"path": o})).map_err(engine_error)?;
-                eprintln!("wrote {o}");
+                write_stdout(|w| writeln!(w, "wrote {o}"))?;
             }
             Ok(())
         }
