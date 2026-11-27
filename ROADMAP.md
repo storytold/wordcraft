@@ -153,6 +153,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-27: Layout: contextual spacing reaches across a continuous section break, as in Word: the first paragraph of a section starting mid-page drops its space before under a paragraph of its own style, the paragraph closing the section drops its own contextual space after (the new section's columns starting that much higher), and an empty mark closing the section counts as the paragraph above; under a shorter last column of balanced columns the text stays below the tallest one (docxide-pdf `continuous-context-*`; it kept its 12 pt). Readiness unchanged.
 - 2026-11-24: Pasting a plain table over selected cells overwrites from the selection's top-left, even when the copy is wider than the selection (#6742).
 - 2026-11-21: Layout: strict column balancing measures a kept paragraph again in each candidate column, so a float in one column does not make the paragraph skip another where it fits (#6821). Readiness estimates unchanged.
 
@@ -980,6 +981,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-27 | trivial | Progress log: contextual spacing across a continuous section break |
 | 2026-11-18 | trivial | DOCX validation reports undeclared binary tombstones in coverage notes when relationship discovery establishes that no relationship targets the part. |
 | 2026-11-18 | trivial | DOCX validation excludes the content-type manifest from main-part cardinality and reports untargeted ordinary document parts in coverage when one ordinary main is established. |
 | 2026-11-18 | trivial | DOCX validation warns on an image signature mismatch when the image is unused or can be decoded in another raster format. Used, unusable images retain their error. |

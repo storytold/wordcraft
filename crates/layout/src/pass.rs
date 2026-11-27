@@ -212,6 +212,7 @@ fn new_page_builder<'p>(
         orig_bottom: 0.0,
         prev: None,
         after_break_mark: false,
+        prev_at_top: false,
         joint: None,
         next_starts_page: false,
         restart_at: None,
@@ -362,10 +363,14 @@ fn start_section_page<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<
 }
 
 /// Continuous: new column layout below the current text (its tallest column).
-fn continue_page(pb: &mut PageBuilder, sect: &SectionProps, block: usize) {
+/// `noted`: the section before ended with its endnotes, so its last paragraph isn't right above.
+fn continue_page(pb: &mut PageBuilder, sect: &SectionProps, (block, noted): (usize, bool)) {
     pb.close_column_lines();
     pb.cols = sect.column_boxes();
     pb.col = 0;
+    // Its lines' bottom, without its space after: a space after reaching a taller column's bottom
+    // doesn't put it there.
+    pb.prev_at_top = !noted && pb.y - pb.prev.as_ref().map_or(0.0, |p| p.2.max(0.0)) + 0.01 >= pb.max_y;
     pb.top = pb.text_bottom();
     pb.y = pb.top;
     pb.max_y = pb.top;
@@ -425,17 +430,24 @@ fn place_section_blocks<'p>(
     (block, discarded)
 }
 
-/// Endnotes at the end of the section: those referenced so far.
-fn section_endnotes(ctx: &mut Ctx, pb: &mut PageBuilder, endnotes: &mut VecDeque<(u32, usize)>, (sect, si, block): (&SectionProps, usize, usize)) {
+/// Endnotes at the end of the section: those referenced so far. Whether there were any.
+fn section_endnotes(
+    ctx: &mut Ctx,
+    pb: &mut PageBuilder,
+    endnotes: &mut VecDeque<(u32, usize)>,
+    (sect, si, block): (&SectionProps, usize, usize),
+) -> bool {
     if ctx.doc.note_options(sect, true).pos != wordcraft_doc::section::NotePos::SectEnd || pb.pages.is_empty() {
-        return;
+        return false;
     }
     let mut here = Vec::new();
     while let Some((id, _)) = endnotes.front().filter(|(_, s)| *s <= si).copied() {
         endnotes.pop_front();
         here.push(id);
     }
+    let noted = !here.is_empty();
     place_endnotes(ctx, pb, here, block.saturating_sub(1));
+    noted
 }
 
 /// Finish the pages: vertical alignment, the footnotes still continuing after the last page
@@ -573,6 +585,8 @@ pub(crate) fn layout_pass(
     let mut block = 0usize;
     let turned = turned_sections(&mut ctx, sections, mode.web);
     let mut prev_turn = TextDirection::Horizontal;
+    // The section before ended with its endnotes, below its last paragraph.
+    let mut noted = false;
     for (si, (end, sect)) in sections.iter().enumerate() {
         let page_format = sect.page_num_format;
         let turn = if mode.reflow { TextDirection::Horizontal } else { sect.text_direction };
@@ -602,7 +616,7 @@ pub(crate) fn layout_pass(
         } else if pb.pages.is_empty() || start != SectionStart::Continuous || turn != prev_turn {
             start_section_page(&mut ctx, &mut pb, &hf, &sec, (mode, block));
         } else {
-            continue_page(&mut pb, sect, block);
+            continue_page(&mut pb, sect, (block, noted));
         }
         prev_turn = turn;
         pb.foot_top = sec.tops.foot;
@@ -610,7 +624,7 @@ pub(crate) fn layout_pass(
         let balance = prepare_section_end(&mut pb, sections, (si, mode.web));
         let (next, discarded) = place_section_blocks(&mut ctx, &mut pb, &outline, (block, last), (balance, sec.tops.body));
         (block, boxes_discarded) = (next, boxes_discarded + discarded);
-        section_endnotes(&mut ctx, &mut pb, &mut endnotes, (sect, si, block));
+        noted = section_endnotes(&mut ctx, &mut pb, &mut endnotes, (sect, si, block));
     }
     if pb.pages.is_empty() {
         pb.new_page(0, sect_ref.margin_top);
