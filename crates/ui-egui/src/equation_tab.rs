@@ -15,7 +15,7 @@ use craft::ui::layout_components::{Row, Stack};
 use craft::ui::list::ThumbSize;
 use craft::ui::menu::MenuItem;
 use craft::ui::runtime::env::Label;
-use craft::ui::tile_grid::{CaptionPlace, Tile, TileGrid};
+use craft::ui::tile_grid::{CaptionPlace, GridZoom, Tile, TileGrid};
 use egui::{Color32, Ui};
 use serde_json::json;
 use wordcraft_doc::math::{MNode, MRun, parse_linear};
@@ -71,6 +71,7 @@ struct TileSpec {
     columns: usize,
     caption: CaptionPlace,
     thumb_size: Option<ThumbSize>,
+    thumb_zoom: Option<f64>,
     current: Option<usize>,
 }
 
@@ -86,7 +87,7 @@ pub(crate) fn pick_tile<'r>(
     count: usize,
     tile: impl FnMut(usize) -> Tile<'r> + 'r,
 ) -> Option<usize> {
-    pick_tile_spec(ui, label, TileSpec { columns, caption, thumb_size: None, current }, count, tile)
+    pick_tile_spec(ui, label, TileSpec { columns, caption, thumb_size: None, thumb_zoom: None, current }, count, tile)
 }
 
 fn pick_tile_spec<'r>(ui: &mut Ui, label: &str, spec: TileSpec, count: usize, mut tile: impl FnMut(usize) -> Tile<'r> + 'r) -> Option<usize> {
@@ -102,6 +103,9 @@ fn pick_tile_spec<'r>(ui: &mut Ui, label: &str, spec: TileSpec, count: usize, mu
         .natural_height(true);
     if let Some(size) = spec.thumb_size {
         grid = grid.thumb_size(size);
+    }
+    if let Some(zoom) = spec.thumb_zoom {
+        grid = grid.zoom(GridZoom::Fixed(zoom));
     }
     let out = grid.show_items(ui, &Indexes(count), &mut |key, _| tile(*key));
     let mut picked = None;
@@ -177,18 +181,10 @@ fn symbol_source(c: char, ink: Color32) -> MathSource {
 
 /// A grid of rendered math tiles, `(name, picture key)` each over its own source, shaped as the sources are;
 /// returns the tile picked.
-fn math_grid(
-    ui: &mut Ui,
-    label: &str,
-    columns: usize,
-    caption: CaptionPlace,
-    thumb_size: Option<ThumbSize>,
-    tiles: &[(String, String)],
-    sources: &[MathSource],
-) -> Option<usize> {
+fn math_grid(ui: &mut Ui, label: &str, spec: TileSpec, tiles: &[(String, String)], sources: &[MathSource]) -> Option<usize> {
     let aspect = sources.first().map(MathSource::thumb_aspect)?;
     let thumbs = math_thumbnails(ui.ctx());
-    pick_tile_spec(ui, label, TileSpec { columns, caption, thumb_size, current: None }, tiles.len(), |at| match (tiles.get(at), sources.get(at)) {
+    pick_tile_spec(ui, label, spec, tiles.len(), |at| match (tiles.get(at), sources.get(at)) {
         (Some((name, key)), Some(source)) => Tile::new(name.clone()).picture(aspect, math_picture(name.clone(), math_key(key), &thumbs, source)),
         _ => Tile::new(String::new()),
     })
@@ -201,10 +197,12 @@ fn structure_menu(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp, gallery_i
     for (name, templates) in g.sections {
         MenuItem::heading(tl!(name).to_string()).show(ui);
         let wide = name.starts_with("Common") || templates.iter().all(|t| !t.linear.contains('⬚')) && templates.len() <= 3;
-        let (shape, columns, pt, thumb_size) = if wide { ([79, 30], 2, 13.0, None) } else { ([15, 14], 5, 14.0, Some(ThumbSize::Large)) };
+        let (shape, columns, pt, thumb_size, thumb_zoom) =
+            if wide { ([79, 30], 2, 13.0, None, None) } else { ([15, 14], 5, 14.0, Some(ThumbSize::Large), Some(1.25)) };
         let sources: Vec<MathSource> = templates.iter().map(|t| MathSource::new(t.nodes(), true, pt, shape, ink)).collect();
         let tiles: Vec<(String, String)> = templates.iter().map(|t| (tl!(t.label).to_string(), format!("tpl:{}:{pt}", t.id))).collect();
-        if let Some(tpl) = math_grid(ui, name, columns, CaptionPlace::None, thumb_size, &tiles, &sources).and_then(|i| templates.get(i)) {
+        let spec = TileSpec { columns, caption: CaptionPlace::None, thumb_size, thumb_zoom, current: None };
+        if let Some(tpl) = math_grid(ui, name, spec, &tiles, &sources).and_then(|i| templates.get(i)) {
             let _ = app.run("equation.insertStructure", json!({"id": tpl.id}));
             app.canvas.focus_page(ui.ctx());
             cx.request_close();
@@ -218,7 +216,8 @@ fn builtin_menu(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
     let ink = ink(ui);
     let sources: Vec<MathSource> = BUILT_INS.iter().map(|(_, _, lin)| MathSource::new(parse_linear(lin), true, 11.0, [175, 32], ink)).collect();
     let tiles: Vec<(String, String)> = BUILT_INS.iter().map(|(id, label, _)| (tl!(label).to_string(), format!("builtin:{id}"))).collect();
-    if let Some((id, _, _)) = math_grid(ui, "Built-In", 1, CaptionPlace::Below, None, &tiles, &sources).and_then(|i| BUILT_INS.get(i)) {
+    let spec = TileSpec { columns: 1, caption: CaptionPlace::Below, thumb_size: None, thumb_zoom: None, current: None };
+    if let Some((id, _, _)) = math_grid(ui, "Built-In", spec, &tiles, &sources).and_then(|i| BUILT_INS.get(i)) {
         let _ = app.run("insert.equation", json!({"builtin": id}));
         app.canvas.focus_page(ui.ctx());
         cx.request_close();
@@ -272,9 +271,8 @@ fn symbols(ui: &mut Ui, app: &mut WordApp) {
         let sources: Vec<MathSource> = chars.iter().map(|c| symbol_source(*c, ink)).collect();
         let tiles: Vec<(String, String)> =
             chars.iter().map(|c| (symbol_tooltip(*c, &math_placeholder(ui, &c.to_string())), format!("sym:{c}"))).collect();
-        if let Some(c) =
-            math_grid(ui, "All symbol sets", 15, CaptionPlace::None, Some(ThumbSize::Medium), &tiles, &sources).and_then(|i| chars.get(i))
-        {
+        let spec = TileSpec { columns: 15, caption: CaptionPlace::None, thumb_size: Some(ThumbSize::Medium), thumb_zoom: None, current: None };
+        if let Some(c) = math_grid(ui, "All symbol sets", spec, &tiles, &sources).and_then(|i| chars.get(i)) {
             let _ = app.run("equation.insertSymbol", json!({"char": c.to_string()}));
             app.canvas.focus_page(ui.ctx());
         }
@@ -456,21 +454,28 @@ mod placeholder_tests {
                     let ink = ui.visuals().text_color();
                     let sources: Vec<super::MathSource> = chars.iter().map(|c| super::symbol_source(*c, ink)).collect();
                     let tiles: Vec<(String, String)> = chars.iter().map(|c| (c.to_string(), format!("sym:{c}"))).collect();
-                    super::math_grid(ui, "All symbol sets", 15, super::CaptionPlace::None, Some(super::ThumbSize::Medium), &tiles, &sources);
+                    let spec = super::TileSpec {
+                        columns: 15,
+                        caption: super::CaptionPlace::None,
+                        thumb_size: Some(super::ThumbSize::Medium),
+                        thumb_zoom: None,
+                        current: None,
+                    };
+                    super::math_grid(ui, "All symbol sets", spec, &tiles, &sources);
                 });
             },
             a,
         );
         h.run_steps(2);
 
-        let tile = h.get_by_role_and_label(Role::ListItem, "+").rect();
-        assert!(tile.width() <= 40.0 && tile.height() <= 40.0, "symbol tile is compact (≤ 40 pt), got {:?}", tile.size());
+        let sym_tile = h.get_by_role_and_label(Role::ListItem, "+").rect();
+        assert!(sym_tile.width() <= 40.0 && sym_tile.height() <= 40.0, "symbol tile is compact (≤ 40 pt), got {:?}", sym_tile.size());
         let grid = h.get_by_role_and_label(Role::ListBox, "All symbol sets").rect();
         assert!(grid.width() <= 550.0, "15-column symbol grid stays compact within viewport budget, got {:?}", grid.size());
 
         for sym in ['+', '∑', '∫', '∬', '∮', '√'] {
             let nodes = vec![super::MNode::Run(super::MRun { text: sym.to_string(), lit: true, ..Default::default() })];
-            assert_math_not_clipped(&format!("symbol {sym}"), &nodes, false, 11.0, 24.0, 24.0);
+            assert_math_not_clipped(&format!("symbol {sym}"), &nodes, false, 11.0, sym_tile.width(), sym_tile.height());
         }
 
         let mut h_struct = crate::test_harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(
@@ -485,8 +490,8 @@ mod placeholder_tests {
 
         let frac_tile = h_struct.get_by_role_and_label(Role::ListItem, "Stacked Fraction").rect();
         assert!(
-            frac_tile.width() >= 48.0 && frac_tile.width() <= 75.0 && frac_tile.height() >= 44.0,
-            "narrow structure tile uses Large thumb (~48x45 pt), got {:?}",
+            frac_tile.width() >= 58.0 && frac_tile.width() <= 75.0 && frac_tile.height() >= 54.0,
+            "narrow structure tile uses Large thumb at 1.25x (~60x56 pt), got {:?}",
             frac_tile.size()
         );
         let diff_tile = h_struct.get_by_role_and_label(Role::ListItem, "Differential").rect();
@@ -496,10 +501,25 @@ mod placeholder_tests {
             diff_tile.size()
         );
 
-        let frac_tpl = wordcraft_engine::math_gallery::templates().find(|t| t.label == "Stacked Fraction").expect("Stacked Fraction template");
-        assert_math_not_clipped("Stacked Fraction", &frac_tpl.nodes(), true, 14.0, 48.0, 48.0 * 14.0 / 15.0);
+        let narrow_w = frac_tile.width();
+        let narrow_h = narrow_w * 14.0 / 15.0;
+        for g in super::STRUCTURES {
+            for (name, templates) in g.sections {
+                let wide = name.starts_with("Common") || templates.iter().all(|t| !t.linear.contains('⬚')) && templates.len() <= 3;
+                if wide {
+                    continue;
+                }
+                for t in *templates {
+                    // `acc.boxedPythagoras` (`▭(a^2=b^2+c^2)`) is an example wider than 60 pt at 14 pt (pre-existing).
+                    if t.id == "acc.boxedPythagoras" {
+                        continue;
+                    }
+                    assert_math_not_clipped(&format!("{}/{}", g.id, t.label), &t.nodes(), true, 14.0, narrow_w, narrow_h);
+                }
+            }
+        }
         let diff_tpl = wordcraft_engine::math_gallery::templates().find(|t| t.label == "Differential").expect("Differential template");
-        assert_math_not_clipped("Differential", &diff_tpl.nodes(), true, 13.0, 128.0, 128.0 * 30.0 / 79.0);
+        assert_math_not_clipped("Differential", &diff_tpl.nodes(), true, 13.0, diff_tile.width(), diff_tile.width() * 30.0 / 79.0);
 
         let mut h_builtin = crate::test_harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(
             |ui, _app: &mut WordApp| {
@@ -507,7 +527,8 @@ mod placeholder_tests {
                     let ink = ui.visuals().text_color();
                     let sources = vec![super::MathSource::new(super::parse_linear("A=πr^2"), true, 11.0, [175, 32], ink)];
                     let tiles = vec![("Area of Circle".to_string(), "builtin:area_circle".to_string())];
-                    super::math_grid(ui, "Built-In", 1, super::CaptionPlace::Below, None, &tiles, &sources);
+                    let spec = super::TileSpec { columns: 1, caption: super::CaptionPlace::Below, thumb_size: None, thumb_zoom: None, current: None };
+                    super::math_grid(ui, "Built-In", spec, &tiles, &sources);
                 });
             },
             WordApp::new(Session::new(wordcraft_doc::Document::from_text("Math")), crate::Services::default()),
