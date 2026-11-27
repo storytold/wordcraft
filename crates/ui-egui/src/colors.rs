@@ -1,9 +1,10 @@
 //! Colour drop-downs and the Colors dialog (More Colors…, #606).
 //!
 //! Every colour drop-down (Font Color, Shading, Page Color, Shape Fill/Outline, pen colours, and
-//! the colour fields inside dialogs) shows the theme colours, a Recent Colors row and a More
-//! Colors… row. More Colors… opens the framework's tabbed [`ColorPickerDialog`]: a Standard tab
-//! (a honeycomb of colours and a row of greys) and a Custom tab (the compact picker).
+//! the colour fields inside dialogs and panes) shows its swatches under captions: Theme Colors
+//! (each theme colour over its tints and shades), Standard Colors and Recent Colors, then More
+//! Colors… under a rule. More Colors… opens the framework's tabbed [`ColorPickerDialog`]: a
+//! Standard tab (a honeycomb of colours and a row of greys) and a Custom tab (the compact picker).
 //!
 //! What a pick does is a [`Target`]: run a command with the colour put into its params, or only
 //! report it. The colour a command takes is any `RRGGBB`, so a custom colour needs nothing new
@@ -13,14 +14,16 @@ use craft::color_ui::ui::{ColorPickerDialog, ColorPickerDialogLayout, ColorPicke
 use craft::keymap::CommandRef;
 use craft::theme::Srgba;
 use craft::ui::buttons::{SplitButton, SplitMenu};
-use craft::ui::choice::{CellMarks, SwatchTable};
-use craft::ui::contract::{BodyCx, Hover, NoValue, Props as _, Show as _, clicked};
+use craft::ui::choice::{CellMarks, SwatchSpacing, SwatchTable};
+use craft::ui::contract::{BodyCx, Gap, Hover, NoValue, Props as _, Show as _, ShowContainer as _, clicked};
 use craft::ui::dialog::{DialogId, DialogResult};
+use craft::ui::display::{Divider, Shade, Text};
+use craft::ui::layout_components::Stack;
 use craft::ui::menu::{MenuItem, MenuItemOutput};
-use craft::ui::primitives::{IconMark, IconSpec};
+use craft::ui::primitives::{Glyph, IconMark, IconSpec};
 use craft::ui::runtime::env::Label;
-use craft::ui::style::DataColor;
-use egui::{Color32, Ui};
+use craft::ui::style::{DataColor, TypeRole, UiTokens, rgba_color};
+use egui::{Color32, Painter, Rect, Shape, Stroke, Ui, vec2};
 use serde_json::{Value, json};
 use wordcraft_doc::Rgb;
 
@@ -35,8 +38,31 @@ pub const RECENT_MAX: usize = 10;
 /// drop-down.
 const MORE_KEY: &str = "wordcraft.moreColors";
 
-/// Cells to a row of the theme colours.
+/// Cells to a row of the theme colours and of Standard Colors.
 const THEME_PER_ROW: usize = 10;
+
+/// The columns of the theme colours, as places in the document's theme: light 1, dark 1, light 2,
+/// dark 2, then the six accents. The document lists each dark before its light; its two hyperlink
+/// colours are not swatches.
+const THEME_COLUMNS: [usize; THEME_PER_ROW] = [1, 0, 3, 2, 4, 5, 6, 7, 8, 9];
+
+/// The rows of the theme colours: each column's colour, then three tints, a share of the way to
+/// white, and two shades, a share of the way to black (as v0.19.1 drew them).
+const THEME_ROWS: [f32; 6] = [0.0, 0.8, 0.6, 0.4, -0.25, -0.5];
+
+/// The Standard Colors row.
+const STANDARD_COLORS: [Rgb; THEME_PER_ROW] = [
+    Rgb(0xC0, 0x00, 0x00),
+    Rgb(0xFF, 0x00, 0x00),
+    Rgb(0xFF, 0xC0, 0x00),
+    Rgb(0xFF, 0xFF, 0x00),
+    Rgb(0x92, 0xD0, 0x50),
+    Rgb(0x00, 0xB0, 0x50),
+    Rgb(0x00, 0xB0, 0xF0),
+    Rgb(0x00, 0x70, 0xC0),
+    Rgb(0x00, 0x20, 0x60),
+    Rgb(0x70, 0x30, 0xA0),
+];
 
 /// Rings of the Standard tab's honeycomb around its white centre.
 const HONEYCOMB_RINGS: i32 = 6;
@@ -92,6 +118,23 @@ pub fn recent(list: &[String]) -> Vec<Rgb> {
         }
     }
     out
+}
+
+/// `c` moved a share `k` of the way to white, for `k` above zero, or to black, for `k` below.
+fn tint(c: Rgb, k: f32) -> Rgb {
+    let f = |v: u8| {
+        let v = f32::from(v);
+        (if k >= 0.0 { v + (255.0 - v) * k } else { v * (1.0 + k) }) as u8
+    };
+    Rgb(f(c.0), f(c.1), f(c.2))
+}
+
+/// The theme swatches row by row, and how many lie in a row: each column's theme colour over its
+/// tints and shades. A theme short of colours has fewer columns.
+fn theme_swatches(theme: &[Rgb]) -> (Vec<Rgb>, usize) {
+    let columns: Vec<Rgb> = THEME_COLUMNS.iter().filter_map(|&i| theme.get(i).copied()).collect();
+    let rows = THEME_ROWS.iter().flat_map(|&k| columns.iter().map(move |&c| tint(c, k))).collect();
+    (rows, columns.len())
 }
 
 /// The framework colour of a document colour.
@@ -306,6 +349,8 @@ fn swatch_table(
     let swatches: Vec<(Label, Srgba)> = colors.iter().map(|c| (Label::from(format!("#{}", c.hex())), srgba(*c))).collect();
     let out = SwatchTable::new(name.to_string(), &swatches)
         .per_row(per_row)
+        .spacing(SwatchSpacing::Rows)
+        .hairline(true)
         .tips(true)
         .marks(|i: &usize| CellMarks::default().edge(colors.get(*i).copied() == current && current.is_some()))
         .show_all(ui);
@@ -329,23 +374,72 @@ fn merge_preview(a: craft::behavior::Preview<Rgb>, b: craft::behavior::Preview<R
     }
 }
 
-/// The theme and recent swatches of `palette`; the colour in effect carries the selection mark.
+/// One section of swatches: its caption, in small muted type over the start of the grid, then, a row gap below it,
+/// the table it names.
+fn section(ui: &mut Ui, caption: &str, colors: &[Rgb], per_row: usize, current: Option<Rgb>) -> (Option<Rgb>, craft::behavior::Preview<Rgb>) {
+    let mut out = (None, craft::behavior::Preview::Unchanged);
+    Stack::new().gap(Gap::Row).show(ui, |ui, _| {
+        let _ = Text::new(caption.to_string()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+        let (picked, preview, _) = swatch_table(ui, caption, colors, per_row, current);
+        out = (picked, preview);
+    });
+    out
+}
+
+/// The swatches of `palette` under their captions: Theme Colors (each theme colour over its tints
+/// and shades), Standard Colors and, when there are any, Recent Colors. The colour in effect carries
+/// the selection mark.
 fn swatches(ui: &mut Ui, palette: &Palette, current: Option<Rgb>) -> (Option<Rgb>, craft::behavior::Preview<Rgb>) {
-    let (mut picked, mut preview, _) = swatch_table(ui, "Theme Colors", &palette.theme, THEME_PER_ROW, current);
-    if !palette.recent.is_empty() {
-        let (p, v, _) = swatch_table(ui, "Recent Colors", &palette.recent, RECENT_MAX, current);
-        picked = picked.or(p);
-        preview = merge_preview(preview, v);
+    let (theme, columns) = theme_swatches(&palette.theme);
+    let mut picked = None;
+    let mut preview = craft::behavior::Preview::Unchanged;
+    let mut sections: Vec<(&str, &[Rgb], usize)> = Vec::new();
+    if !theme.is_empty() {
+        sections.push((tl!("Theme Colors"), &theme, columns));
     }
+    sections.push((tl!("Standard Colors"), &STANDARD_COLORS, THEME_PER_ROW));
+    if !palette.recent.is_empty() {
+        sections.push((tl!("Recent Colors"), &palette.recent, RECENT_MAX));
+    }
+    // The sections a section gap apart, as the captioned groups of a drop-down.
+    Stack::new().gap(Gap::Section).show(ui, |ui, _| {
+        for &(caption, colors, per_row) in &sections {
+            let (p, v) = section(ui, caption, colors, per_row, current);
+            picked = picked.or(p);
+            preview = merge_preview(std::mem::replace(&mut preview, craft::behavior::Preview::Unchanged), v);
+        }
+    });
     (picked, preview)
 }
 
-/// The More Colors… row.
-fn more_row(ui: &mut Ui) -> MenuItemOutput {
-    MenuItem::new(tl!("More Colors…").to_string()).show(ui)
+/// The More Colors… row's icon: a wheel of twelve hues in a hairline ring.
+#[derive(craft::ui::contract::MemoProps)]
+struct HueWheel;
+
+static HUE_WHEEL: HueWheel = HueWheel;
+
+impl Glyph for HueWheel {
+    fn paint(&self, painter: &Painter, tokens: &UiTokens, rect: Rect, _color: Color32, _mirrored: bool) {
+        let centre = rect.center();
+        let radius = rect.width().min(rect.height()) * 0.4;
+        let step = std::f32::consts::TAU / 12.0;
+        for i in 0..12u8 {
+            let at = |a: f32| centre + vec2(a.cos(), a.sin()) * radius;
+            let (from, to) = (f32::from(i) * step, f32::from(i + 1) * step);
+            let Rgb(r, g, b) = Rgb::from_hsl(f64::from(i) / 12.0, 1.0, 0.5);
+            painter.add(Shape::convex_polygon(vec![centre, at(from), at(to)], Color32::from_rgb(r, g, b), Stroke::NONE));
+        }
+        painter.circle_stroke(centre, radius, Stroke::new(1.0 / painter.pixels_per_point(), rgba_color(tokens.color.line.border)));
+    }
 }
 
-/// The drop-down's body: theme colours, Recent Colors and More Colors…. A pick runs `target` and
+/// The More Colors… row, under a rule, with the hue wheel.
+fn more_row(ui: &mut Ui) -> MenuItemOutput {
+    let _ = Divider::horizontal().show(ui);
+    MenuItem::new(tl!("More Colors…").to_string()).icon(IconSpec::glyph(&HUE_WHEEL)).show(ui)
+}
+
+/// The drop-down's body: the captioned swatches and More Colors…. A pick runs `target` and
 /// is remembered in Recent Colors; More Colors… opens the Colors dialog for `target`. The
 /// returned `response` is the More Colors… row's. The body's owner closes the drop-down when
 /// `picked` is set or the response is clicked (`BodyCx::request_close`).

@@ -1966,8 +1966,8 @@ fn font_dialog_effects_stand_two_to_a_line_and_kerning_on_one() {
 fn dialogs_their_tabs_and_colour_fields_say_what_they_are() {
     use egui::accesskit::Role;
     let mut app = app_with("Lanterns");
-    // The framework palette lists the document theme; use a known colour rather than its default.
-    app.session.doc.settings.theme_colors = vec![wordcraft_doc::Rgb(0xC0, 0, 0)];
+    // The framework palette lists the document theme; use a made-up colour, one no Standard Colors swatch shares.
+    app.session.doc.settings.theme_colors = vec![wordcraft_doc::Rgb(0x5B, 0x3A, 0x8E)];
     let mut h = app_harness(app);
     open_named(&mut h, "paragraph", json!({}));
     assert!(h.query_by_role_and_label(Role::Dialog, "Paragraph").is_some(), "Paragraph is a dialog");
@@ -1982,10 +1982,10 @@ fn dialogs_their_tabs_and_colour_fields_say_what_they_are() {
     // The framework's split field has a face and a menu arrow; the latter opens the palette.
     h.query_all_by_role_and_label(Role::Button, "Font color: Automatic").last().expect("named colour field").click();
     h.run_steps(3);
-    assert!(h.query_by_label("#C00000").is_some(), "the swatches say their colour");
-    h.get_by_label("#C00000").click();
+    assert!(h.query_by_label("#5B3A8E").is_some(), "the swatches say their colour");
+    h.get_by_label("#5B3A8E").click();
     h.run_steps(3);
-    assert!(h.query_all_by_role_and_label(Role::Button, "Font color: #C00000").next().is_some(), "the field says the colour picked");
+    assert!(h.query_all_by_role_and_label(Role::Button, "Font color: #5B3A8E").next().is_some(), "the field says the colour picked");
 }
 
 /// #5057: every caller retains its translated label and selected colour.
@@ -1993,8 +1993,8 @@ fn dialogs_their_tabs_and_colour_fields_say_what_they_are() {
 fn colour_fields_say_their_label_and_colour_in_the_interface_language() {
     use egui::accesskit::Role;
     let mut app = app_with("Lanterns");
-    // The framework palette lists the document theme; use a known colour rather than its default.
-    app.session.doc.settings.theme_colors = vec![wordcraft_doc::Rgb(0xC0, 0, 0)];
+    // The framework palette lists the document theme; use a made-up colour, one no Standard Colors swatch shares.
+    app.session.doc.settings.theme_colors = vec![wordcraft_doc::Rgb(0x5B, 0x3A, 0x8E)];
     let mut h = app_harness(app);
     for (dialog, names) in [("font", vec!["Font color: Automatic"]), ("borders", vec!["Color: Automatic"]), ("shading", vec!["Fill No Color"])] {
         let ctx = h.ctx.clone();
@@ -2007,9 +2007,9 @@ fn colour_fields_say_their_label_and_colour_in_the_interface_language() {
     }
     h.query_all_by_role_and_label(Role::Button, "Fill No Color").last().expect("shading colour field").click();
     h.run_steps(3);
-    h.get_by_label("#C00000").click();
+    h.get_by_label("#5B3A8E").click();
     h.run_steps(3);
-    assert!(h.query_all_by_role_and_label(Role::Button, "Fill #C00000").next().is_some());
+    assert!(h.query_all_by_role_and_label(Role::Button, "Fill #5B3A8E").next().is_some());
     let ctx = h.ctx.clone();
     close_all(h.state_mut(), &ctx);
     h.state_mut().run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();

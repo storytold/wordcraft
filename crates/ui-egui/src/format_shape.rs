@@ -348,7 +348,7 @@ fn line_section(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], line: &CurrentLin
         return;
     }
     if let Some(color) = line.stroke {
-        let palette = Palette { theme: theme.to_vec(), recent: Vec::new() };
+        let palette = Palette { theme: theme.to_vec(), recent: colors::recent(&app.ui.recent_colors) };
         let mut hex = color.hex();
         let label: Label = tl!("Color").into();
         let picked = ui.push_id("line_color", |ui| color_field(ui, &label, &mut hex, &ColorFieldEmpty::NoColor, &palette)).inner;
@@ -504,8 +504,7 @@ fn layout_section(app: &mut WordApp, ui: &mut Ui, layout: &CurrentLayout) {
 /// Draws a solid fill's colour field and transparency slider, applying each changed fill as a
 /// whole.
 fn solid(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], color: Rgb, transparency: f32) {
-    // PLAN: the recent colours are the colour drop-downs' (rb.A4); none are offered here
-    let palette = Palette { theme: theme.to_vec(), recent: Vec::new() };
+    let palette = Palette { theme: theme.to_vec(), recent: colors::recent(&app.ui.recent_colors) };
     let mut hex = color.hex();
     let label: Label = tl!("Color").into();
     let picked = color_field(ui, &label, &mut hex, &ColorFieldEmpty::NoColor, &palette);
@@ -1041,6 +1040,26 @@ mod tests {
             let InlineObject::Shape { fill, .. } = para.object_at(off).unwrap() else { panic!("expected shape {i}") };
             assert_eq!(*fill, None, "shape {i} fill cleared");
         }
+    }
+
+    /// #7938: the Line color field offers the app's Recent Colors, as every colour drop-down does, and a pick
+    /// there applies its exact colour.
+    #[test]
+    fn format_shape_pane_line_color_offers_recent_colors() {
+        use egui::accesskit::Role;
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.textBox", json!({"text": "Hello"})).unwrap();
+        a.run("view.formatShapePane", json!({"value": true})).unwrap();
+        a.ui.recent_colors = vec!["7A3EC8".into()];
+        let mut h = harness(a);
+        h.run_steps(4);
+
+        h.query_all_by_role_and_label(Role::Button, "Color #000000").last().expect("line color field").click();
+        h.run_steps(3);
+        assert!(h.query_by_role_and_label(Role::ListBox, "Recent Colors").is_some(), "the field lists Recent Colors");
+        h.get_by_role_and_label(Role::ListBoxOption, "#7A3EC8").click();
+        h.run_steps(3);
+        assert_eq!(stroke(h.state()), Some(wordcraft_doc::Rgb(0x7A, 0x3E, 0xC8)));
     }
 
     /// Selecting More Colors… in the Line color picker opens the Colors dialog and applies
