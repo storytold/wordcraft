@@ -28,9 +28,10 @@ fn refusal_log_lines_are_escaped_and_bounded() {
     assert_eq!(log_line("rejected: a\nb\u{1b}[2J C:\\x"), "rejected: a\\nb\\u{1b}[2J C:\\x");
     let huge = format!("rejected: {}", "é\n".repeat(300_000));
     let line = log_line(&huge);
-    // At most 4 KiB of the message is kept (each kept character may grow when escaped).
-    let kept = line.split("… (").next().unwrap_or_default().replace("\\n", "\n");
-    assert!(kept.len() <= MAX_LOG_LINE, "{} bytes", kept.len());
+    // At most 4 KiB is written, escapes included; the note counts the message bytes left out.
+    let shown = line.split("… (").next().unwrap_or_default();
+    assert!(shown.len() <= MAX_LOG_LINE, "{} bytes", shown.len());
+    let kept = shown.replace("\\n", "\n");
     assert!(line.ends_with(&format!("… ({} more bytes)", huge.len() - kept.len())));
     assert!(!line.chars().any(|c| c.is_control()));
 }

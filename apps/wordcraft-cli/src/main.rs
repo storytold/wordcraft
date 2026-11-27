@@ -248,15 +248,22 @@ fn install_refusal_log() {
     }
 }
 
-/// The most a logged line may take: a path can be as long as the agent likes.
+/// The most a logged line may take, escapes included, before the note on what was cut: a path
+/// can be as long as the agent likes.
 const MAX_LOG_LINE: usize = 4096;
 
 /// A refusal as one terminal line: the path comes from the agent, so it must not end the line or
 /// drive the terminal, and a huge one is cut short.
 fn log_line(message: &str) -> String {
-    let cut = message.floor_char_boundary(MAX_LOG_LINE);
-    let line = escape_text(message.get(..cut).unwrap_or_default(), false);
-    if cut < message.len() { format!("{line}… ({} more bytes)", message.len() - cut) } else { line }
+    let mut line = String::new();
+    for (i, c) in message.char_indices() {
+        let shown = escape_text(c.encode_utf8(&mut [0; 4]), false);
+        if line.len() + shown.len() > MAX_LOG_LINE {
+            return format!("{line}… ({} more bytes)", message.len() - i);
+        }
+        line.push_str(&shown);
+    }
+    line
 }
 
 /// `mcp`'s headless backend: a session confined to `roots`, its author `author` when given. The caller confines the
