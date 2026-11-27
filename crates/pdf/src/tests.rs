@@ -3592,18 +3592,22 @@ fn thai_text_extracts_correctly() {
 /// still emits `/ActualText` so viewers extract the original `U+0E33` spelling.
 #[test]
 fn thai_sara_am_in_footer_and_untagged_export_preserves_actual_text() {
-    let mut d = Document::from_text("บริษัท จำกัด");
-    let footer_para = Paragraph::with_text("บริษัท จำกัด", Default::default());
+    let body_phrase = "บริษัท จำกัด";
+    let footer_phrase = "น้ำดื่ม";
+    let mut d = Document::from_text(body_phrase);
+    let footer_para = Paragraph::with_text(footer_phrase, Default::default());
     let footer_id = d.add_part(wordcraft_doc::PartKind::Footer, vec![Arc::new(Block::Para(footer_para))]);
     d.last_section.footers.default = Some(footer_id);
 
     let tagged_bytes = export(&d, &PdfOptions::default()).unwrap();
     let tagged_text = extract_text(&tagged_bytes).concat();
-    assert!(tagged_text.contains("บริษัท จำกัด"), "tagged export must preserve footer SARA AM: {tagged_text:?}");
+    assert!(tagged_text.contains(body_phrase), "tagged export must preserve body SARA AM: {tagged_text:?}");
+    assert!(tagged_text.contains(footer_phrase), "tagged export must preserve footer SARA AM: {tagged_text:?}");
 
     let untagged_bytes = export(&d, &PdfOptions { tagged: false, ..PdfOptions::default() }).unwrap();
     let untagged_text = extract_text(&untagged_bytes).concat();
-    assert!(untagged_text.contains("บริษัท จำกัด"), "untagged export must preserve body/footer SARA AM: {untagged_text:?}");
+    assert!(untagged_text.contains(body_phrase), "untagged export must preserve body SARA AM: {untagged_text:?}");
+    assert!(untagged_text.contains(footer_phrase), "untagged export must preserve footer SARA AM: {untagged_text:?}");
 }
 
 /// Verifies that Lao text with composite vowels (`\u{0EB3}`) extracts cleanly
