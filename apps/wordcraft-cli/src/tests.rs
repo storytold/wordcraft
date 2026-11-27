@@ -644,8 +644,12 @@ fn script_value_missing_is_reported() {
 
 #[test]
 fn script_reads_from_a_stream_and_caps_its_size() {
-    let s = script::load_from(&br#"{"commands":["caret.docEnd"],"save":["o.docx"]}"#[..], "-", None).unwrap();
-    assert_eq!((s.commands.len(), s.save), (1, vec!["o.docx".to_string()]));
+    let plain = br#"{"commands":["caret.docEnd"],"save":["o.docx"]}"#;
+    let bom = b"\xef\xbb\xbf{\"commands\":[\"caret.docEnd\"],\"save\":[\"o.docx\"]}";
+    for input in [&plain[..], &bom[..]] {
+        let s = script::load_from(input, "-", None).unwrap();
+        assert_eq!((s.commands.len(), s.save), (1, vec!["o.docx".to_string()]));
+    }
     let big = std::io::repeat(b' ').take(script::MAX_SCRIPT_BYTES + 10);
     let e = script::load_from(big, "-", None).unwrap_err();
     assert!(e.contains("too large"), "{e}");
