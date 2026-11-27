@@ -35,7 +35,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("references.sources", "Manage Sources", "References › Citations & Bibliography", sources)
             .params(r#"{"add"?: Source, "remove"?: tag, "import"?: path (a Word bibliography file, `b:Sources` / `Sources.xml`)} → list"#),
-        CommandSpec::new("references.citation", "Insert Citation", "References › Citations & Bibliography", citation).params(r#"{"tag"?: string, "source"?: Source (added if new), "pages"?: string}"#),
+        CommandSpec::new("references.citation", "Insert Citation", "References › Citations & Bibliography", citation).params(r#"{"tag"?: string, "source"?: Source (added, or edited when its tag exists, and cited when no tag is given), "pages"?: string}"#),
         CommandSpec::new("references.citationStyle", "Style", "References › Citations & Bibliography", |s, v| {
             let st = p::str(v, "style").unwrap_or("APA");
             let st = find_style(st).ok_or_else(|| {
