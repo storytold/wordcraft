@@ -255,6 +255,9 @@ pub struct CanvasState {
     /// selection, and the document's own layout, which a view change replaces), so a still pointer
     /// doesn't lay the document out every frame. Set only while the page shows the preview.
     table_preview_layout: Option<(TablePreviewKey, wordcraft_doc::Document, wordcraft_engine::Selection, Arc<DocLayout>)>,
+    /// Snapshot of `session.doc` for `(document_id, rev)`, shared via `Arc::clone` across
+    /// unchanged frames instead of cloning the full `Document` every pass.
+    doc_snapshot: Option<((u64, u64), Arc<wordcraft_doc::Document>)>,
 }
 
 type TablePreviewKey = ((String, serde_json::Value, u64, u64, wordcraft_engine::Selection), Arc<DocLayout>);
@@ -452,6 +455,7 @@ impl Default for CanvasState {
             list_preview: None,
             preview_scroll: None,
             table_preview_layout: None,
+            doc_snapshot: None,
         }
     }
 }

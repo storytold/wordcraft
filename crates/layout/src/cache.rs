@@ -32,6 +32,14 @@ pub(crate) struct Key {
     pub(crate) joined: Option<(u32, bool)>,
 }
 
+pub(crate) struct StylesEnv {
+    styles: std::sync::Weak<wordcraft_doc::styles::StyleSheet>,
+    numbering: std::sync::Weak<wordcraft_doc::numbering::Numbering>,
+    default_tab: u32,
+    footnote_format: wordcraft_doc::section::NumFormat,
+    hash: u64,
+}
+
 /// Memoised paragraph layouts.
 #[derive(Default)]
 pub struct LayoutCache {
@@ -44,6 +52,7 @@ pub struct LayoutCache {
     /// kept, so no other picture's bytes can come to have its address ([`Outlines`]).
     pub(crate) outlines: Outlines,
     pub(crate) env: u64,
+    pub(crate) styles_env: Option<StylesEnv>,
     pub(crate) used: HashSet<Key>,
     /// The STYLEREF style index of the last pass and what it was built from: the body blocks
     /// (shared, so an edited block is a different pointer) and `env` (styles and numbering). Kept
@@ -67,6 +76,7 @@ impl LayoutCache {
         self.paras.clear();
         self.measures.clear();
         self.outlines.clear();
+        self.styles_env = None;
         self.styleref = None;
     }
 
@@ -91,12 +101,54 @@ pub(crate) fn hash_of<T: Hash>(t: &T) -> u64 {
     h.finish()
 }
 
-pub(crate) fn env_hash(doc: &Document, opts: &LayoutOptions) -> u64 {
-    let s = serde_json::to_string(&(&doc.styles, &doc.numbering, doc.settings.default_tab, &doc.settings.footnote_format)).unwrap_or_default();
+struct HashWriter<'a>(&'a mut std::collections::hash_map::DefaultHasher);
+
+impl std::io::Write for HashWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.write(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Fingerprint of stylesheet, numbering, default tab, and footnote format, memoised on
+/// [`LayoutCache::styles_env`] via `Weak` pointers so unchanged passes skip JSON serialisation.
+/// Holding live `Weak` references keeps the underlying `ArcInner` allocations reserved, ensuring a
+/// fresh `Arc` allocation cannot reuse a still-cached address.
+fn styles_env_hash(doc: &Document, cache: &mut LayoutCache) -> u64 {
+    let tab = doc.settings.default_tab.to_bits();
+    if let Some(cached) = &cache.styles_env
+        && cached.styles.as_ptr() == Arc::as_ptr(&doc.styles)
+        && cached.styles.strong_count() > 0
+        && cached.numbering.as_ptr() == Arc::as_ptr(&doc.numbering)
+        && cached.numbering.strong_count() > 0
+        && cached.default_tab == tab
+        && cached.footnote_format == doc.settings.footnote_format
+    {
+        return cached.hash;
+    }
+    let mut sh = std::collections::hash_map::DefaultHasher::new();
+    let _ = serde_json::to_writer(HashWriter(&mut sh), &(&doc.styles, &doc.numbering, doc.settings.default_tab, &doc.settings.footnote_format));
+    let hash = sh.finish();
+    cache.styles_env = Some(StylesEnv {
+        styles: Arc::downgrade(&doc.styles),
+        numbering: Arc::downgrade(&doc.numbering),
+        default_tab: tab,
+        footnote_format: doc.settings.footnote_format,
+        hash,
+    });
+    hash
+}
+
+pub(crate) fn env_hash(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> u64 {
+    let styles = styles_env_hash(doc, cache);
     // Outline view lays paragraphs out changed (no indents; plain without text formatting).
     let outline = (opts.view == ViewMode::Outline).then(|| opts.outline.as_ref().is_some_and(|o| o.plain));
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    s.hash(&mut h);
+    styles.hash(&mut h);
     opts.show_hidden.hash(&mut h);
     opts.hide_deleted.hash(&mut h);
     opts.hide_marked.hash(&mut h);

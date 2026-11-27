@@ -17799,3 +17799,32 @@ fn header_text_covers_the_whole_band_of_centred_and_right_lines() {
         assert!(hit(x + left - 60.0), "{align:?}: beyond 40pt left of the band the picture is hit");
     }
 }
+
+#[test]
+fn env_hash_memoizes_styles_and_invalidates_on_change() {
+    let mut d = Document::new();
+    let mut cache = LayoutCache::new();
+    let opts = LayoutOptions::default();
+    let h0 = crate::cache::env_hash(&d, &mut cache, &opts);
+    assert_eq!(h0, crate::cache::env_hash(&d, &mut cache, &opts));
+
+    Arc::make_mut(&mut d.styles).default_para.space_after = Some(12.0);
+    let h1 = crate::cache::env_hash(&d, &mut cache, &opts);
+    assert_ne!(h1, h0, "modifying stylesheet must invalidate env hash");
+    assert_eq!(h1, crate::cache::env_hash(&d, &mut cache, &opts));
+
+    Arc::make_mut(&mut d.numbering).abstracts.push(Default::default());
+    let h2 = crate::cache::env_hash(&d, &mut cache, &opts);
+    assert_ne!(h2, h1, "modifying numbering must invalidate env hash");
+
+    d.settings.default_tab = 54.0;
+    let h3 = crate::cache::env_hash(&d, &mut cache, &opts);
+    assert_ne!(h3, h2, "modifying default tab must invalidate env hash");
+
+    d.settings.footnote_format = wordcraft_doc::section::NumFormat::LowerRoman;
+    let h4 = crate::cache::env_hash(&d, &mut cache, &opts);
+    assert_ne!(h4, h3, "modifying footnote format must invalidate env hash");
+
+    cache.clear();
+    assert_eq!(h4, crate::cache::env_hash(&d, &mut cache, &opts), "recomputing after clear matches");
+}
