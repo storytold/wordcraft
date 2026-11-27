@@ -858,3 +858,86 @@ fn a_right_click_keeps_selected_cells_only_on_them() {
     assert_menu(&h, &["Split Cells"], true);
     assert_menu(&h, &["Merge Cells"], false);
 }
+
+// ---------------------------------------------------------------------------------------
+// Tracked change tips
+// ---------------------------------------------------------------------------------------
+
+/// #7887: resting the pointer on a tracked insertion shows a tip with the change's kind, its
+/// author and its time; beside the change, or with markup hidden, there is none.
+#[test]
+fn hovering_a_tracked_change_shows_its_author_and_time() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Plain words here")), Default::default());
+    a.session.author = "Ada Reviewer".into();
+    a.run("caret.docStart", json!({})).unwrap();
+    a.run("review.trackChanges", json!({"value": true})).unwrap();
+    a.run("text.insert", json!({"text": "Inserted "})).unwrap();
+    assert_eq!(a.session.doc.revisions.len(), 1, "one tracked insertion");
+    a.session.doc.revisions[0].date = "2026-11-20T14:05:00Z".into();
+    let mut h = window(a);
+    let point_at = |h: &mut H, off: usize| {
+        let c = h.state_mut().session.layout().caret(&Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off }).unwrap();
+        let at = screen(h, c.x, c.top + c.height / 2.0);
+        h.event(egui::Event::PointerMoved(at));
+        super::rest_for_tip(h);
+    };
+    let tips = |h: &H| h.query_all_by_label_contains("Inserted\nAda Reviewer\n2026-11-20 14:05").count();
+    // Between "Inserted" and its "e", then on "words", which was there before tracking began.
+    point_at(&mut h, 2);
+    assert!(tips(&h) > 0, "the inserted text's tip says it was inserted, by whom and when");
+    point_at(&mut h, "Inserted Plain w".len());
+    assert_eq!(tips(&h), 0, "text that wasn't changed has no tip");
+    h.state_mut().session.view.show_markup = false;
+    point_at(&mut h, 2);
+    assert_eq!(tips(&h), 0, "with markup hidden the change isn't marked, so it has no tip");
+}
+
+/// #7887: a paragraph whose own formatting changed while tracking (here its alignment) shows a
+/// Formatted tip on its text, while the markup shows formatting.
+#[test]
+fn hovering_a_paragraph_with_tracked_formatting_shows_formatted() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("A centred line")), Default::default());
+    a.session.author = "Ada Reviewer".into();
+    a.run("review.trackChanges", json!({"value": true})).unwrap();
+    a.run("para.alignCenter", json!({})).unwrap();
+    assert!(a.session.doc.body[0].as_para().is_some_and(|p| p.props.fmt_change.is_some()), "the alignment is a tracked change");
+    let mut h = window(a);
+    let point_at = |h: &mut H| {
+        let c = h.state_mut().session.layout().caret(&Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 4 }).unwrap();
+        let at = screen(h, c.x, c.top + c.height / 2.0);
+        h.event(egui::Event::PointerMoved(at));
+        super::rest_for_tip(h);
+    };
+    let tips = |h: &H| h.query_all_by_label_contains("Formatted\nAda Reviewer").count();
+    point_at(&mut h);
+    assert!(tips(&h) > 0, "the paragraph's text shows its formatting change");
+    h.state_mut().session.prefs.markup.formatting = false;
+    point_at(&mut h);
+    assert_eq!(tips(&h), 0, "with formatting markup off the change isn't marked, so it has no tip");
+}
+
+/// #7887 review: a link in a footnote shows its tip while the caret is in the body. The hover
+/// looks in the story under the pointer, so the link's tip still comes before the tracked
+/// change tip there.
+#[test]
+fn a_footnote_link_shows_its_tip_with_the_caret_in_the_body() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Body text")), Default::default());
+    a.run("caret.docEnd", json!({})).unwrap();
+    a.run("review.trackChanges", json!({"value": true})).unwrap();
+    a.run("references.footnote", json!({"text": "Note link"})).unwrap();
+    let note = a.session.sel.focus.story;
+    let pos = |off: usize| json!({"story": note, "path": [0], "off": off});
+    a.run("select.range", json!({"anchor": pos(5), "focus": pos(9)})).unwrap();
+    a.run("insert.link", json!({"url": "https://example.com/note"})).unwrap();
+    a.run("caret.set", json!({"pos": {"block": 0, "off": 2}})).unwrap();
+    assert_eq!(a.session.sel.focus.story, StoryRef::Body);
+    // The whole page in the window, footnote area and all.
+    a.run("view.zoom", json!({"value": 40})).unwrap();
+    let mut h = window(a);
+    let c = h.state_mut().session.layout().caret(&Pos { story: note, path: wordcraft_doc::Path::top(0), off: 7 }).unwrap();
+    let at = screen(&mut h, c.x, c.top + c.height / 2.0);
+    h.event(egui::Event::PointerMoved(at));
+    super::rest_for_tip(&mut h);
+    assert!(h.query_all_by_label_contains("https://example.com/note").count() > 0, "the footnote's link shows its tip (pointer at {at:?})");
+    assert_eq!(h.query_all_by_label_contains("Inserted\n").count(), 0, "not the tracked insertion's tip");
+}

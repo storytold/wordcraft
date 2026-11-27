@@ -44,6 +44,7 @@ mod navigation;
 mod pages;
 mod reading;
 mod reading_metrics;
+mod revision_tip;
 pub(crate) mod rulers;
 mod source;
 mod story;
