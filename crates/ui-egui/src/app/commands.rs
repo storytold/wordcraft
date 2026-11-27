@@ -511,6 +511,12 @@ impl WordApp {
                 "pasteSpecial" if self.user_origin => {
                     let _ = dialogs::open(self, "pasteSpecial", req);
                 }
+                // A user's save over a damaged DOCX asks first. During a close operation the Save Changes flow
+                // asks instead (`save_for_prompt`), so the request is dropped there.
+                "confirmDamagedSave" if self.user_origin && self.closing.is_none() => {
+                    dialogs::prompts::open_damaged_save_request(self, req);
+                }
+                "confirmDamagedSave" => {}
                 "newWindow" => self.new_window(),
                 "pasteSpecial" => {}
                 other if self.user_origin => {

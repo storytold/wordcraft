@@ -8,6 +8,8 @@ pub(crate) enum PromptSave {
     NotSaved,
     /// Web: the browser's save picker finishes later; its ticket.
     Later,
+    /// The file is a damaged DOCX the save would overwrite: the user confirms first (`file.save`'s result).
+    Damaged(serde_json::Value),
 }
 
 /// Why AutoSave can't cover the document ([`WordApp::autosave_block`]); the switch is greyed out

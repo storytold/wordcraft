@@ -98,6 +98,19 @@ impl WordApp {
                             self.status(tl!("Waiting for the save to finish…"));
                             return Ok(json!({"pending": "save"}));
                         }
+                        // The overwrite of a damaged DOCX waits for the user's confirmation.
+                        Ok(PromptSave::Damaged(result)) => {
+                            let skipped: Vec<String> = result
+                                .get("skippedParts")
+                                .and_then(Value::as_array)
+                                .map_or_else(Vec::new, |parts| parts.iter().filter_map(Value::as_str).map(str::to_owned).collect());
+                            let shown: Vec<String> = skipped.iter().take(3).cloned().collect();
+                            let more = skipped.len().saturating_sub(3);
+                            let path = self.session.path.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+                            let document = self.session.document_id();
+                            crate::dialogs::prompts::open_damaged_save(self, path, &shown, more, document, json!({}));
+                            return Ok(json!({"pending": "damagedSave"}));
+                        }
                         Err(error) => return Err(self.save_failed(&error)),
                     }
                 }
@@ -172,7 +185,7 @@ impl WordApp {
     }
 
     /// End the operation without running anything; the prompt closes with it.
-    fn cancel_closing(&mut self) {
+    pub(crate) fn cancel_closing(&mut self) {
         if let Some(id) = self.closing.take().and_then(|c| c.prompt) {
             self.close_prompt(id);
         }
@@ -263,6 +276,9 @@ impl WordApp {
     /// In the browser the save picker may write the file later ([`PromptSave::Later`], #1315).
     fn save_for_prompt(&mut self) -> Result<PromptSave, String> {
         let v = self.execute("file.save", json!({}))?;
+        if v.get("confirmationRequired").and_then(Value::as_str) == Some("damagedDocx") {
+            return Ok(PromptSave::Damaged(v));
+        }
         let saved = v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some();
         if !self.safely_saved(saved) {
             return Ok(PromptSave::NotSaved);
@@ -290,7 +306,7 @@ impl WordApp {
     }
 
     /// The document's name as the Save Changes prompt shows it: its file's name, else its title.
-    pub(super) fn prompt_name(&self) -> String {
+    pub(crate) fn prompt_name(&self) -> String {
         self.session.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| self.title_stem())
     }
 
@@ -307,7 +323,7 @@ impl WordApp {
 
     /// The Save Changes prompt comes back with `message` (also on the status bar) for the document
     /// whose save failed. Returns `message`.
-    fn prompt_again(&mut self, message: String) -> String {
+    pub(crate) fn prompt_again(&mut self, message: String) -> String {
         self.status(message.clone());
         let step = self.with_guard(|g| g.retry_after_failure());
         if self.closing.is_some()

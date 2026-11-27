@@ -1,5 +1,5 @@
-//! The small questions: a protected file's password, the password a document is saved with, and
-//! discarding a recovery copy.
+//! The small questions: a protected file's password, the password a document is saved with,
+//! discarding a recovery copy, and overwriting a damaged DOCX.
 
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, PromptChoice, StackDialog, StandardPrompt, dialog_id};
 use craft::ui::patterns::form_dialogs::{PasswordDialog, PasswordPurpose, Secret};
@@ -177,6 +177,99 @@ fn settle_discard(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Sett
         && let Err(e) = app.execute("file.recover", json!({"discard": recovery}))
     {
         app.status(e);
+    }
+    Settle::Done
+}
+
+/// A save over a damaged DOCX that waits for the user: the document it is for, the path, and the
+/// `file.save` parameters to repeat with `confirmDamaged` (the password is not kept).
+struct DamagedSave {
+    document: u64,
+    path: String,
+    params: Value,
+}
+
+/// Asks before a save overwrites the damaged DOCX at `path`. `shown` are the first omitted parts and
+/// `more` how many others there are; Save Anyway repeats `params` with `confirmDamaged`.
+pub(crate) fn open_damaged_save(app: &mut WordApp, path: String, shown: &[String], more: usize, document: u64, params: Value) {
+    let mut text = wordcraft_engine::cmd::file::skipped_parts_warning(shown);
+    if more > 0 {
+        text.push(' ');
+        text.push_str(&crate::i18n::tn(
+            u64::try_from(more).unwrap_or(u64::MAX),
+            "Also {n} additional part was omitted.",
+            "Also {n} additional parts were omitted.",
+        ));
+    }
+    let prompt = StandardPrompt::custom(tl!("Some parts of this document could not be read and will be missing from the saved file."))
+        .title(tl!("Save damaged document?"))
+        .paragraph(text)
+        .button(PromptChoice::Proceed, tl!("Save Anyway"))
+        .button(PromptChoice::Cancel, tl!("Cancel"))
+        .tag(DamagedSave { document, path, params });
+    let _ = open_with(app, None, Keyed::new("confirmDamagedSave", prompt), DialogHooks { prepare: None, settle: settle_damaged_save });
+}
+
+/// Opens the confirmation a `confirmDamagedSave` request asks for (a user's save over a damaged DOCX).
+pub(crate) fn open_damaged_save_request(app: &mut WordApp, req: &Value) {
+    let Some(path) = req.get("path").and_then(Value::as_str) else {
+        return;
+    };
+    let shown: Vec<String> = req
+        .get("skippedParts")
+        .and_then(Value::as_array)
+        .map_or_else(Vec::new, |parts| parts.iter().filter_map(Value::as_str).map(str::to_owned).collect());
+    let more = req.get("skippedPartsMore").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok()).unwrap_or(0);
+    let document = req.get("document").and_then(Value::as_u64).unwrap_or_else(|| app.session.document_id());
+    let params = req.get("params").cloned().unwrap_or_else(|| json!({}));
+    open_damaged_save(app, path.to_owned(), &shown, more, document, params);
+}
+
+/// Save Anyway saves over the damaged file, and a save that ends a close operation lets it go on.
+/// Cancel brings the Save Changes prompt back, when a close operation waits for it.
+fn settle_damaged_save(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
+    let Some(result) = app.dialog_host.take_by_id::<Keyed<StandardPrompt>>(id) else {
+        return Settle::Keep;
+    };
+    let DialogResult::Ok(mut answer) = result else {
+        return Settle::Done;
+    };
+    let Some(save) = answer.take_tag::<DamagedSave>() else {
+        return Settle::Done;
+    };
+    if !matches!(answer.choice, PromptChoice::Proceed) {
+        if app.closing.is_some() {
+            let name = app.prompt_name();
+            let message = crate::i18n::fmt(tl!("Saving {name} was cancelled, so it is still open and nothing was lost."), &[("name", &name)]);
+            app.prompt_again(message);
+        }
+        return Settle::Done;
+    }
+    if app.session.document_id() != save.document {
+        app.cancel_closing();
+        app.status(tl!("The document changed while this confirmation was open. Save canceled.").to_string());
+        return Settle::Done;
+    }
+    let mut params = save.params;
+    if !params.is_object() {
+        params = json!({});
+    }
+    params["path"] = json!(save.path);
+    params["confirmDamaged"] = json!(true);
+    match app.run("file.save", params) {
+        Ok(result) if result.get("saved").and_then(Value::as_bool) == Some(true) => {
+            if app.closing.is_some()
+                && let Err(e) = app.continue_after_save(Some(Ok(result)), true)
+            {
+                app.status(e);
+            }
+        }
+        Ok(_) => {
+            app.prompt_again(tl!("The damaged document was not saved.").to_string());
+        }
+        Err(error) => {
+            app.save_failed(&error);
+        }
     }
     Settle::Done
 }
