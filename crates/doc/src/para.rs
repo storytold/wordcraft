@@ -60,6 +60,13 @@ impl Default for Paragraph {
     }
 }
 
+/// A character Ctrl+Left/Right and Ctrl+Backspace/Delete move over as part of a word:
+/// [`crate::bidi::is_word_char`], plus the typographic apostrophe (’) AutoCorrect types for `'`,
+/// which goes like `'`: `l’anno` and `dell’Italia` are one word, as `l'anno` is (#6588).
+fn is_word_move_char(c: char) -> bool {
+    crate::bidi::is_word_char(c) || c == '’'
+}
+
 impl Paragraph {
     pub fn new() -> Self {
         Paragraph {
@@ -517,7 +524,7 @@ impl Paragraph {
         let mut idx = off;
         let mut seen_word = false;
         for (i, c) in before.char_indices().rev() {
-            let w = crate::bidi::is_word_char(c);
+            let w = is_word_move_char(c);
             if w {
                 seen_word = true;
                 idx = i;
@@ -535,10 +542,10 @@ impl Paragraph {
         let Some(after) = self.text.get(off..) else { return self.text.len() };
         let it = after.char_indices().peekable();
         let mut end = self.text.len();
-        let first_word = after.chars().next().is_some_and(|c| crate::bidi::is_word_char(c) && c != '\'');
+        let first_word = after.chars().next().is_some_and(|c| is_word_move_char(c) && !matches!(c, '\'' | '’'));
         let mut in_space = false;
         for (i, c) in it {
-            let w = crate::bidi::is_word_char(c);
+            let w = is_word_move_char(c);
             if c == ' ' || c == NBSP {
                 in_space = true;
                 continue;
@@ -784,6 +791,27 @@ mod tests {
         assert_eq!(p.sentence_at(3), (0, 21));
         assert_eq!(p.next_boundary(0), 1);
         assert_eq!(p.prev_boundary(0), 0);
+    }
+
+    #[test]
+    fn word_moves_take_a_typographic_apostrophe_like_a_straight_one() {
+        // Byte offsets: `’` is three bytes, `à` two (#6588).
+        for text in ["Va dell'Italia bene", "Va dell’Italia bene"] {
+            let p = Paragraph::with_text(text, CharProps::default());
+            let bene = text.find("bene").unwrap();
+            assert_eq!(p.word_end(3), bene, "{text}: Ctrl+Right goes over the whole word and its space");
+            assert_eq!(p.word_start(bene - 1), 3, "{text}: Ctrl+Left goes back to the word's start");
+            assert_eq!(p.word_start(bene - 4), 3, "{text}: from inside, back over the apostrophe");
+        }
+        let p = Paragraph::with_text("la città l’anno più", CharProps::default());
+        let (anno, piu) = (p.text.find("l’anno").unwrap(), p.text.find("più").unwrap());
+        assert_eq!(p.word_end(anno), piu);
+        assert_eq!(p.word_start(piu), anno);
+        // An apostrophe opening the text stops alone, as `'` does.
+        for text in ["'tis here", "’tis here"] {
+            let p = Paragraph::with_text(text, CharProps::default());
+            assert_eq!(p.word_end(0), text.find('t').unwrap(), "{text}");
+        }
     }
 
     proptest::proptest! {
