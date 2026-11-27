@@ -1037,6 +1037,7 @@ fn launcher_profile_flag(args: &[OsString]) -> bool {
 }
 
 fn main() -> ExitCode {
+    wordcraft_engine::malloc_tuning::apply();
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     if launcher_profile_flag(&args) {
         eprintln!("wordcraft-cli: --launch-profile and --profile-root are the desktop app's Nightly bootstrap, not a CLI option");
