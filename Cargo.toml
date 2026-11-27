@@ -56,6 +56,10 @@ craft-metafile = { git = "https://github.com/storytold/craft-libs", rev = "0b8bb
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
 thiserror = "2"
+# Command lines: clap derive types, with completions and man pages generated from them (RFC-0018).
+clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
+clap_mangen = "0.2"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 quick-xml = "0.41"

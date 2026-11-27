@@ -22,6 +22,16 @@ printf '<%s>\n' "$@"
 RECORDER
 cp "$CARGO_TARGET_DIR/release/wordcraft" "$CARGO_TARGET_DIR/release/wordcraft-cli"
 chmod 755 "$CARGO_TARGET_DIR/release/wordcraft" "$CARGO_TARGET_DIR/release/wordcraft-cli"
+# The man-and-completions example writes the files it does for a real build; this one writes placeholders.
+mkdir -p "$CARGO_TARGET_DIR/release/examples"
+cat >"$CARGO_TARGET_DIR/release/examples/man-and-completions" <<'EXAMPLE'
+#!/bin/sh
+mkdir -p "$1"
+for f in wordcraft-cli.bash _wordcraft-cli wordcraft-cli.fish wordcraft-cli.1 wordcraft-cli-run.1; do
+  echo stub >"$1/$f"
+done
+EXAMPLE
+chmod 755 "$CARGO_TARGET_DIR/release/examples/man-and-completions"
 
 # The tar format is first in package.sh's default set; a broken nightly tar aborted every run here.
 (cd "$ROOT" && bash packaging/linux/package.sh --skip-build --formats tar)

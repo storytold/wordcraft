@@ -3,6 +3,7 @@ mod closed_stdout;
 mod convert_fields;
 mod convert_region;
 mod help;
+mod man_and_completions;
 mod mcp_roots;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod non_utf8_args;

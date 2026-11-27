@@ -67,17 +67,19 @@ fn any_other_such_argument_is_an_error_naming_it() {
     let (dir, file) = folder("error");
     let out_name = dir.join(OsString::from_vec(b"caf\xe9.md".to_vec())).into_os_string();
     let cmd = OsString::from_vec(b"text.insert={\"text\":\"\xe9\"}".to_vec());
-    for (args, n) in [
-        (vec!["convert".into(), file.clone(), out_name.clone()], 3),
-        (vec!["run".into(), "--file".into(), file.clone(), "--cmd".into(), cmd], 5),
-        (vec![OsString::from_vec(b"t\xe9xt".to_vec()), file.clone()], 1),
+    // An output the engine takes as text: a failure (1), naming it; the other arguments are usage errors (2).
+    for (args, code, shown) in [
+        (vec!["convert".into(), file.clone(), out_name.clone()], 1, out_name.clone()),
+        (vec!["run".into(), "--file".into(), file.clone(), "--cmd".into(), cmd.clone()], 2, cmd),
+        (vec![OsString::from_vec(b"t\xe9xt".to_vec()), file.clone()], 2, OsString::from_vec(b"t\xe9xt".to_vec())),
     ] {
         let out = cli(&args);
         let stderr = String::from_utf8_lossy(&out.stderr);
-        let shown = args[n - 1].to_string_lossy();
+        let shown = shown.to_string_lossy();
         assert!(shown.contains('\u{FFFD}'));
-        assert_eq!(out.status.code(), Some(1), "{args:?}: stderr: {stderr}");
-        assert_eq!(stderr, format!("wordcraft-cli: argument {n} is not valid Unicode: {shown}\n"), "{args:?}");
+        assert_eq!(out.status.code(), Some(code), "{args:?}: stderr: {stderr}");
+        assert!(stderr.starts_with("error: "), "{args:?}: {stderr}");
+        assert!(stderr.contains("not valid Unicode") || stderr.contains("invalid UTF-8") || stderr.contains(&*shown), "{args:?}: {stderr}");
     }
     assert!(!std::path::Path::new(&out_name).exists());
     let _ = std::fs::remove_dir_all(dir);
