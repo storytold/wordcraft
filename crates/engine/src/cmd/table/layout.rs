@@ -279,3 +279,117 @@ pub(super) fn borders(s: &mut Session, v: &Value) -> CmdResult {
         }
     })
 }
+
+/// Home › Paragraph › Borders with whole cells selected (the table, rows, columns or a block of
+/// cells): the border goes on the cells as one block, as in Word, not on the paragraphs in them
+/// (#7874). `all` borders every cell, `outside` the block's edges, `inside` the lines between its
+/// cells, `none` clears every side, and one side toggles along that edge of the block. Other kinds
+/// change nothing.
+pub(crate) fn cell_block_borders(s: &mut Session, range: &crate::CellRange, kind: &str, b: Border) -> CmdResult {
+    let nil = Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 };
+    let b = Border { space: 0.0, ..b };
+    let one_side = ["top", "left", "bottom", "right"].iter().position(|k| *k == kind);
+    if one_side.is_none() && !matches!(kind, "all" | "none" | "outside" | "inside") {
+        return sel_result(s);
+    }
+    let t = s.doc.table_mut(range.story, &range.table)?;
+    let ((r0, r1), (g0, g1)) = (range.rows, range.cols);
+    // Each selected cell, and which of its sides (top, left, bottom, right) are on the block's edge.
+    // A row's first and last cells are on it too when the row skips grid columns (`w:gridBefore`,
+    // `w:gridAfter`): the layout draws those as the table's outer edge.
+    let cells: Vec<(usize, usize, [bool; 4])> = range
+        .cells(t)
+        .into_iter()
+        .map(|(r, c)| {
+            let (a, z) = super::grid_cols(t, r, c);
+            let last = t.rows.get(r).map_or(0, |row| row.cells.len().saturating_sub(1));
+            (r, c, [r <= r0, a <= g0 || c == 0, r >= r1, z >= g1 || c >= last])
+        })
+        .collect();
+    // One side is taken off when every cell along that edge already shows it, as the button toggles.
+    let shown = one_side.is_some_and(|i| {
+        cells.iter().filter(|(_, _, edge)| edge[i]).all(|(r, c, _)| {
+            let own = t.rows.get(*r).and_then(|row| row.cells.get(*c)).and_then(|cl| cl.props.borders);
+            own.as_ref().and_then(|x| side(x, i)).is_some_and(|x| x.is_visible())
+        })
+    });
+    // The sides to set: (row, cell, side, border).
+    let mut writes: Vec<(usize, usize, usize, Border)> = Vec::new();
+    for (r, c, edge) in cells {
+        for (i, on_edge) in edge.into_iter().enumerate() {
+            let new = match kind {
+                "all" => Some(b),
+                "none" => Some(nil),
+                "outside" if on_edge => Some(b),
+                "inside" if !on_edge => Some(b),
+                _ if one_side == Some(i) && on_edge => Some(if shown { nil } else { b }),
+                _ => None,
+            };
+            let Some(new) = new else { continue };
+            writes.push((r, c, i, new));
+            // Each cell draws its own sides, so a line on the block's edge is also the facing
+            // side of the cell beyond it: that gets the same border, or No Border would leave
+            // the neighbour's line showing.
+            if on_edge {
+                writes.extend(beside(t, r, c, i, (g0, g1)).into_iter().map(|(nr, nc)| (nr, nc, (i + 2) % 4, new)));
+            }
+        }
+    }
+    for (r, c, i, new) in writes {
+        let Some(cl) = t.rows.get_mut(r).and_then(|row| row.cells.get_mut(c)) else { continue };
+        let mut cur = cl.props.borders.unwrap_or_default();
+        *side_mut(&mut cur, i) = Some(new);
+        cl.props.borders = Some(cur);
+    }
+    touch_cells(s, &range.table)?;
+    sel_result(s)
+}
+
+/// The cells across side `i` (top, left, bottom, right) of cell (`r`, `c`) whose facing edge lies
+/// wholly on that line. Above and below, only cells within grid columns `cols` (the selected
+/// block's), so a wider cell's edge beyond the block keeps its line.
+fn beside(t: &Table, r: usize, c: usize, i: usize, (g0, g1): (usize, usize)) -> Vec<(usize, usize)> {
+    let Some(row) = t.rows.get(r) else { return Vec::new() };
+    match i {
+        1 => c.checked_sub(1).map(|p| vec![(r, p)]).unwrap_or_default(),
+        3 => {
+            if c + 1 < row.cells.len() {
+                vec![(r, c + 1)]
+            } else {
+                Vec::new()
+            }
+        }
+        _ => {
+            let nr = if i == 0 { r.checked_sub(1) } else { Some(r + 1) };
+            let Some((nr, next)) = nr.and_then(|nr| t.rows.get(nr).map(|x| (nr, x))) else { return Vec::new() };
+            let (a, z) = super::grid_cols(t, r, c);
+            (0..next.cells.len())
+                .filter(|&nc| {
+                    let (na, nz) = super::grid_cols(t, nr, nc);
+                    na <= z && nz >= a && na >= g0 && nz <= g1
+                })
+                .map(|nc| (nr, nc))
+                .collect()
+        }
+    }
+}
+
+/// Side `i` of `b`: top, left, bottom, right.
+fn side(b: &Borders, i: usize) -> Option<Border> {
+    match i {
+        0 => b.top,
+        1 => b.left,
+        2 => b.bottom,
+        _ => b.right,
+    }
+}
+
+/// Side `i` of `b` to set: top, left, bottom, right.
+fn side_mut(b: &mut Borders, i: usize) -> &mut Option<Border> {
+    match i {
+        0 => &mut b.top,
+        1 => &mut b.left,
+        2 => &mut b.bottom,
+        _ => &mut b.right,
+    }
+}
