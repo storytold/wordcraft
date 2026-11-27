@@ -4341,3 +4341,26 @@ fn enter_in_a_drop_cap_paragraph_makes_a_normal_paragraph() {
         assert_eq!(second.drop_cap_font, None, "{position}");
     }
 }
+
+/// #3447: Ctrl+Shift+2 (`text.zwnj`) types the Persian half-space (U+200C) at the caret, between
+/// the parts of a word typed around it, and the word stays one word for Select Word.
+#[test]
+fn zwnj_types_the_persian_half_space_inside_a_word() {
+    let mut s = s();
+    assert_eq!(s.registry.get("text.zwnj").map(|c| c.shortcut), Some("Mod+Shift+2"));
+    typ(&mut s, "می");
+    run(&mut s, "text.zwnj", json!({}));
+    typ(&mut s, "خواهم بروم");
+    let text = "می\u{200C}خواهم بروم";
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, text);
+    // Select Word from inside the second part takes the whole word, half-space included.
+    let mut pos = s.sel.focus.clone();
+    pos.off = "می\u{200C}خو".len();
+    s.sel = crate::Selection::caret(pos);
+    run(&mut s, "select.word", json!({}));
+    let (a, b) = s.sel.ordered();
+    assert_eq!(text.get(a.off..b.off).map(str::trim_end), Some("می\u{200C}خواهم"));
+    // Over a selection it replaces the selection, like typing.
+    run(&mut s, "text.zwnj", json!({}));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text.chars().next(), Some('\u{200C}'));
+}

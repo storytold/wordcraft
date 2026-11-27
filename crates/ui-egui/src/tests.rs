@@ -197,6 +197,17 @@ fn row_ctrl_alt_q_types_at() {
     assert_eq!(body_text(h.state()), "@", "Ctrl+Alt+Q types the @ character");
 }
 
+/// #3447: Ctrl+Shift+2 (Cmd+Shift+2 on macOS) types the Persian half-space between the parts of a word.
+fn row_mod_shift_2_types_a_half_space() {
+    let mut h = blank_rig();
+    h.event(egui::Event::Text("می".into()));
+    h.step();
+    press(&mut h, egui::Key::Num2, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT);
+    h.event(egui::Event::Text("خواهم".into()));
+    h.step();
+    assert_eq!(body_text(h.state()), "می\u{200C}خواهم", "Mod+Shift+2 types U+200C");
+}
+
 fn row_mod_minus_does_not_zoom_the_window() {
     let mut h = blank_rig();
     h.event(mod_key(egui::Key::Minus));
@@ -356,6 +367,7 @@ fn default_chords_fire_their_commands() {
         ("Ctrl+Alt+1 applies Heading 1 and types nothing", row_heading_shortcut),
         ("Ctrl+Q resets the paragraph and does not close", row_ctrl_q_resets_the_paragraph),
         ("Mod+- does not zoom the window", row_mod_minus_does_not_zoom_the_window),
+        ("Mod+Shift+2 types a half-space", row_mod_shift_2_types_a_half_space),
         ("Mod+Shift+C then Mod+Shift+V pastes formatting, not text", row_mod_shift_c_then_v_pastes_formatting_not_text),
         ("Mod+Shift+V without copied formatting pastes text only", row_mod_shift_v_without_copied_formatting_pastes_text_only),
         ("Shift+Delete cuts, Shift+Backspace erases", row_shift_delete_cuts_and_shift_backspace_erases),
