@@ -858,3 +858,17 @@ fn a_right_click_keeps_selected_cells_only_on_them() {
     assert_menu(&h, &["Split Cells"], true);
     assert_menu(&h, &["Merge Cells"], false);
 }
+
+/// With just the caret in a cell, right-click › Insert › Insert Rows Below adds a row in one undo step (#694).
+#[test]
+fn a_right_click_in_a_cell_inserts_a_row_below() {
+    let mut h = table_window();
+    let b = cell(&mut h, 0, 1);
+    let at = screen(&mut h, b.x + b.w / 2.0, b.y + b.h / 2.0);
+    right_click(&mut h, at);
+    let depth = h.state().session.undo_depth();
+    pick(&mut h, &["Insert", "Insert Rows Below"]);
+    let rows = h.state().session.doc.body.iter().find_map(|b| b.as_table()).expect("table").rows.len();
+    assert_eq!(rows, 3, "Insert Rows Below adds a row");
+    assert_eq!(h.state().session.undo_depth(), depth + 1, "one undo step");
+}

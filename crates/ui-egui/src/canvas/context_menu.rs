@@ -277,3 +277,54 @@ fn table_pick(s: &wordcraft_engine::Session) -> TablePick {
         _ => TablePick::Cell,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use wordcraft_doc::{Document, Path, Pos};
+    use wordcraft_engine::{CellRange, ColumnBlock, Selection, Session};
+
+    fn table_session() -> Session {
+        let mut s = Session::new(Document::new());
+        s.run("insert.table", &json!({"rows": 2, "cols": 3})).unwrap();
+        s
+    }
+
+    #[test]
+    fn table_pick_follows_selection() {
+        let mut s = table_session();
+        assert_eq!(table_pick(&s), TablePick::Cell, "caret in a cell");
+
+        let table = s.sel.focus.path.cell().unwrap().0;
+        let story = s.sel.focus.story;
+        let t_idx = table.0[0];
+
+        s.run("table.selectCell", &json!({})).unwrap();
+        assert_eq!(table_pick(&s), TablePick::Cell, "single-cell selection");
+
+        s.column = Some(ColumnBlock {
+            sel: s.sel.clone(),
+            anchor_x: 0.0,
+            focus_x: 0.0,
+            segments: Vec::new(),
+            cells: Some(CellRange { story, table, rows: (0, 0), cols: (0, 1), stream: true }),
+        });
+        assert_eq!(table_pick(&s), TablePick::Cells, "partial-row cell range");
+
+        s.run("table.selectRow", &json!({})).unwrap();
+        assert_eq!(table_pick(&s), TablePick::Rows, "whole row selected");
+
+        s.column = None;
+        s.sel = Selection::caret(Pos::new(story, Path(vec![t_idx, 0, 0, 0]), 0));
+        s.run("table.selectColumn", &json!({})).unwrap();
+        assert_eq!(table_pick(&s), TablePick::Columns, "whole column selected");
+
+        s.run("table.selectTable", &json!({})).unwrap();
+        assert_eq!(table_pick(&s), TablePick::Table, "whole table selected");
+
+        s.column = None;
+        s.sel = Selection { anchor: Pos::new(story, Path(vec![t_idx, 0, 0, 0]), 0), focus: Pos::new(story, Path(vec![t_idx, 1, 2, 0]), 0) };
+        assert_eq!(table_pick(&s), TablePick::Cells, "cross-cell text selection");
+    }
+}
