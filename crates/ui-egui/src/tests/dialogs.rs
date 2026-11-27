@@ -230,6 +230,27 @@ fn table_properties_percent_width_dialog() {
     assert_eq!(h.get_by_label("Width in").value().as_deref(), Some("%"), "the select shows %");
 }
 
+/// #7885: cancelling the Width in select leaves the form's unit and number alone.
+#[test]
+fn table_properties_width_unit_select_cancel_keeps_the_form() {
+    use egui_kittest::kittest::Queryable;
+    let mut a = app();
+    a.run("insert.table", json!({"rows": 1, "cols": 1})).unwrap();
+    a.run("table.properties", json!({"width": 300.0})).unwrap();
+    a.run("table.properties", json!({})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| a);
+    h.run_steps(4);
+    h.get_by_label("Width in").click();
+    h.run_steps(3);
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(1);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    let host = h.state().dialog_host.get::<FormHost<dialogs::TableProperties>>().expect("the table dialog");
+    let form = &host.form().form;
+    assert_eq!((form.width_unit.as_str(), form.width), ("length", 300.0), "Escape cancels the unit switch");
+}
+
 /// Table Layout › Cell Margins opens with the table defaults and does not replace imported
 /// values until the user changes a value and confirms.
 #[test]

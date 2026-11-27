@@ -515,10 +515,14 @@ impl WordForm for TableProperties {
             if f.width_unit.is_empty() {
                 f.width_unit = "length".into();
             }
-            let mut chosen_unit = f.width_unit.clone();
-            Select::new(tl!("Width in").to_string(), Bind::bound(&mut chosen_unit), &unit_entries).enabled(f.width_on).show(ui);
-            if chosen_unit != f.width_unit {
-                f.switch_width_unit(&chosen_unit);
+            let picked_unit = Select::new(tl!("Width in").to_string(), Bind::given(f.width_unit.clone()), &unit_entries)
+                .enabled(f.width_on)
+                .show(ui)
+                .events
+                .committed()
+                .cloned();
+            if let Some(unit) = picked_unit {
+                f.switch_width_unit(&unit);
             }
             if f.width_unit == "percent" {
                 let mut percent = Some(f64::from(f.width));
