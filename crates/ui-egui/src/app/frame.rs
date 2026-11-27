@@ -155,6 +155,12 @@ impl WordApp {
         self.dialog_host.run(ui);
         crate::dialogs::host::settle(self, ctx);
         crate::dialogs::chrome::apply_modal_nudge(self, ui);
+        crate::calc_ui::show_dialog(self, ctx);
+        if !self.session.view.read_mode {
+            crate::calc_ui::hover(self, ui);
+            crate::calc_ui::bar(self, ctx);
+            crate::calc_ui::table_markers(self, ctx);
+        }
         if moved(self) {
             return;
         }

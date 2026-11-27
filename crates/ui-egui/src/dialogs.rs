@@ -17,6 +17,7 @@ mod find_replace;
 mod font;
 mod forms;
 pub(crate) mod host;
+pub(crate) mod import_review;
 mod link;
 mod macros;
 mod mailings;

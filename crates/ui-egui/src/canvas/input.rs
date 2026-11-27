@@ -309,6 +309,13 @@ pub(crate) fn handle_secondary_selection(app: &mut WordApp, body: &PageBody<'_>,
         }
     }
     match layout.equation_hit(page, x, y, app.session.sel.focus.story) {
+        Some((pos, _)) if crate::calc_ui::region_at(&app.session.doc, &pos).is_some() => {
+            if app.session.math.is_some() {
+                let _ = app.run("equation.exit", json!({}));
+            }
+            app.session.set_selection(wordcraft_engine::Selection::caret(pos));
+            return;
+        }
         Some((pos, inner)) => {
             app.session.set_selection(wordcraft_engine::Selection::caret(pos));
             let _ = app.run("equation.edit", json!({"pos": serde_json::to_value(&inner).unwrap_or_default()}));
@@ -388,8 +395,15 @@ fn handle_primary_press(
     if !mods.shift
         && let Some((at, inner)) = layout.equation_hit(page, x, y, story)
     {
+        let calculation = crate::calc_ui::region_at(&app.session.doc, &at).is_some();
         app.session.set_selection(wordcraft_engine::Selection::caret(at));
-        let _ = app.run("equation.edit", json!({"pos": serde_json::to_value(&inner).unwrap_or_default()}));
+        if calculation {
+            if app.session.math.is_some() {
+                let _ = app.run("equation.exit", json!({}));
+            }
+        } else {
+            let _ = app.run("equation.edit", json!({"pos": serde_json::to_value(&inner).unwrap_or_default()}));
+        }
         app.session.page_hint = page;
         return true;
     }
@@ -554,7 +568,14 @@ fn handle_completed_click(app: &mut WordApp, pointer: &PagePointer<'_>) -> bool 
 fn skip_equation_or_outline(app: &mut WordApp, pointer: &PagePointer<'_>) -> bool {
     let PagePointer { layout, page, x, y, story, clicks } = *pointer;
     // Inside an equation, clicks place the caret in it (and double-clicks don't select words).
-    if clicks >= 2 && layout.equation_hit(page, x, y, story).is_some() {
+    if clicks >= 2
+        && let Some((at, _)) = layout.equation_hit(page, x, y, story)
+    {
+        if crate::calc_ui::region_at(&app.session.doc, &at).is_some() {
+            app.session.set_selection(wordcraft_engine::Selection::caret(at));
+            app.session.page_hint = page;
+            let _ = crate::calc_ui::open_dialog(app, "editCalculation");
+        }
         return true;
     }
     // Outline view: a paragraph's symbol selects it with what is under it; a double-click

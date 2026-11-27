@@ -239,7 +239,12 @@ fn math_image(nodes: &wordcraft_doc::math::Arg, display: bool, pt: f32, w: f32, 
     p.props.space_before = Some(0.0);
     p.props.space_after = Some(0.0);
     p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
-    let eq = wordcraft_doc::InlineObject::Equation { linear: to_linear(nodes), display, math: Math { nodes: nodes.clone(), ..Default::default() } };
+    let eq = wordcraft_doc::InlineObject::Equation {
+        linear: to_linear(nodes),
+        display,
+        math: Math { nodes: nodes.clone(), ..Default::default() },
+        calc: None,
+    };
     p.insert_object(0, eq, &props).ok()?;
     let mut d = Document::new();
     d.body = vec![para_block(p)];

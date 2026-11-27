@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use serde_json::{Value, json};
-use wordcraft_doc::chart::{ChartAxis, ChartSeries, ChartSpec, ChartType, LegendPos, MAX_POINTS, MAX_SERIES, value_axis};
+use wordcraft_doc::chart::{ChartAxis, ChartSeries, ChartSpec, ChartType, LegendPos, MAX_POINTS, MAX_SERIES, PlotSpec, value_axis};
 use wordcraft_doc::graphic::{Graphic, GraphicKind};
 use wordcraft_doc::para::{Float, InlineObject};
 use wordcraft_doc::props::Rgb;
@@ -27,12 +27,20 @@ const DATA: &str = r#"{"categories": [string], "series": [{"name": string, "valu
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        CommandSpec::new("insert.functionPlot", "Function Plot", "Insert › Symbols", |s, v| function_plot(s, v, false))
+            .params(r#"{"variable": string, "expression": string, "range": string}"#),
+        CommandSpec::new("chart.editFunctionPlot", "Edit Function Plot", "Chart Design › Data", |s, v| function_plot(s, v, true))
+            .params(r#"{"variable": string, "expression": string, "range": string}"#)
+            .when(|s| selected_chart(s).is_none_or(|chart| chart.plot.is_none()).then_some("select a function plot first")),
         CommandSpec::new("insert.chart", "Chart", "Insert › Illustrations", insert).params(
             r#"{"type"?: "column|columnStacked|bar|barStacked|line|area|pie|doughnut|scatter", "data"?: {"categories": [string], "series": [{"name": string, "values": [number|null]}]}, "title"?: string, "legend"?: "right|left|top|bottom|none", "dataLabels"?: bool, "width"?: pt, "height"?: pt} (no params: the chart type picker)"#,
         ),
         CommandSpec::new("chart.type", "Change Chart Type", "Chart Design › Type", |s, v| {
             let kind = chart_type(v)?.ok_or_else(|| CmdError::Params(format!("`type` is required: {TYPES}")))?;
             edit(s, |c| {
+                if c.plot.is_some() && kind != ChartType::Scatter {
+                    return Err(CmdError::Params("Function plots use XY axes".into()));
+                }
                 // A scatter series is drawn as markers without a line; the other types draw it.
                 if (c.kind == ChartType::Scatter) != (kind == ChartType::Scatter) {
                     for series in &mut c.series {
@@ -65,6 +73,9 @@ pub fn specs() -> Vec<CommandSpec> {
             let cats = cats.map(categories).transpose()?;
             let series = series.map(series_list).transpose()?;
             edit(s, move |c| {
+                if c.plot.is_some() {
+                    return Err(CmdError::Params("Use Edit Function Plot to change the data".into()));
+                }
                 if let Some(cats) = &cats {
                     c.categories = cats.clone();
                 }
@@ -161,6 +172,97 @@ pub fn chart_graphic(spec: ChartSpec, theme: &[Rgb], w: f32, h: f32) -> Graphic 
     Graphic { kind: GraphicKind::Chart, items, w, h, source: None, chart: Some(Arc::new(spec)), smart_art: None }
 }
 
+fn apply_samples(chart: &mut ChartSpec, points: Vec<(f64, f64)>) {
+    let (x, y): (Vec<_>, Vec<_>) = points.into_iter().map(|(x, y)| (x.to_string(), Some(y))).unzip();
+    chart.categories = x;
+    if let Some(plot) = &chart.plot {
+        chart.cat_axis.title = Some(plot.variable.clone());
+        chart.val_axis.title = Some(plot.expression.clone());
+    }
+    if let Some(series) = chart.series.first_mut() {
+        series.values = y;
+        if let Some(plot) = &chart.plot {
+            series.name = plot.expression.clone();
+        }
+    } else {
+        let name = chart.plot.as_ref().map_or("", |plot| plot.expression.as_str());
+        let mut series = ChartSeries::new(ChartType::Scatter, name.to_owned(), y);
+        series.no_line = false;
+        series.markers = Some(false);
+        chart.series.push(series);
+    }
+}
+
+fn function_plot(s: &mut Session, v: &Value, editing: bool) -> CmdResult {
+    let plot: PlotSpec = serde_json::from_value(v.clone()).map_err(|e| CmdError::Params(e.to_string()))?;
+    let input = std::slice::from_ref(&plot);
+    let points = crate::cmd::calc::on_pass_stack(|| wordcraft_calc::sample_plots(&s.doc, input))
+        .pop()
+        .ok_or_else(|| CmdError::Failed("No plot data".into()))?
+        .map_err(|error| CmdError::Params(error.to_string()))?;
+    if editing {
+        return edit(s, |chart| {
+            chart.plot = Some(plot);
+            apply_samples(chart, points);
+            Ok(())
+        });
+    }
+    if s.sel.focus.story != wordcraft_doc::StoryRef::Body {
+        return Err(CmdError::Disabled("Function plots belong in the document body".into()));
+    }
+    let mut spec = ChartSpec { kind: ChartType::Scatter, plot: Some(plot), ..Default::default() };
+    apply_samples(&mut spec, points);
+    insert_spec(s, v, spec)
+}
+
+pub(crate) fn plot_positions(doc: &wordcraft_doc::Document) -> Vec<(wordcraft_doc::Pos, PlotSpec)> {
+    use wordcraft_doc::{Pos, StoryRef};
+    doc.para_paths(StoryRef::Body)
+        .into_iter()
+        .flat_map(|path| {
+            let Some(para) = doc.para(StoryRef::Body, &path) else { return Vec::new() };
+            para.objects_with_offsets()
+                .filter_map(|(off, object)| {
+                    let InlineObject::Graphic { graphic, .. } = object else { return None };
+                    Some((Pos::new(StoryRef::Body, path.clone(), off), graphic.chart.as_ref()?.plot.clone()?))
+                })
+                .collect()
+        })
+        .collect()
+}
+
+pub(crate) fn refresh_plots(doc: &mut wordcraft_doc::Document) {
+    let (positions, plots): (Vec<_>, Vec<_>) = plot_positions(doc).into_iter().unzip();
+    if plots.is_empty() {
+        return;
+    }
+    let results = crate::cmd::calc::on_pass_stack(|| wordcraft_calc::sample_plots(doc, &plots));
+    let theme = doc.settings.theme_colors.clone();
+    for (at, result) in positions.into_iter().zip(results) {
+        let Ok(para) = doc.para_mut(at.story, &at.path) else { continue };
+        if let Some(InlineObject::Graphic { w, h, alt, graphic, .. }) = para.object_at_mut(at.off)
+            && let Some(chart) = graphic.chart.as_deref()
+        {
+            let mut spec = chart.clone();
+            match result {
+                Ok(points) => {
+                    apply_samples(&mut spec, points);
+                    *alt = "Function plot".into();
+                }
+                Err(error) => {
+                    apply_samples(&mut spec, Vec::new());
+                    *alt = format!("Function plot: {error}");
+                    spec.val_axis.title = Some(error.to_string());
+                }
+            }
+            if &spec != chart {
+                *graphic = Arc::new(chart_graphic(spec, &theme, *w, *h));
+            }
+            para.touch();
+        }
+    }
+}
+
 /// `type` of the params, if given.
 fn chart_type(v: &Value) -> Result<Option<ChartType>, CmdError> {
     match p::str(v, "type") {
@@ -200,6 +302,10 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
         None => {}
     }
     spec.data_labels = p::bool(v, "dataLabels").unwrap_or(false);
+    insert_spec(s, v, spec)
+}
+
+fn insert_spec(s: &mut Session, v: &Value, spec: ChartSpec) -> CmdResult {
     // Fitted to the text width, as Word sizes a new chart.
     let max_w = s.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0).max(36.0);
     let w = p::f32(v, "width").unwrap_or(DEFAULT_W).clamp(36.0, 2000.0).min(max_w);
@@ -208,14 +314,15 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
     let out = json!({"chart": graphic.chart.as_deref(), "width": w, "height": h});
     let props = s.typing_props();
     let at = delete_selection(s)?;
-    let obj = InlineObject::Graphic { w, h, alt: String::new(), float: Float::default(), graphic: Arc::new(graphic) };
+    let alt = if graphic.chart.as_ref().is_some_and(|chart| chart.plot.is_some()) { "Function plot".into() } else { String::new() };
+    let obj = InlineObject::Graphic { w, h, alt, float: Float::default(), graphic: Arc::new(graphic) };
     let end = s.doc.insert_object(&at, obj, &props)?;
     s.sel = Selection { anchor: at, focus: end };
     Ok(out)
 }
 
 /// Change the selected chart's model with `f`, then draw it again at its size.
-fn edit(s: &mut Session, f: impl Fn(&mut ChartSpec) -> Result<(), CmdError>) -> CmdResult {
+fn edit(s: &mut Session, f: impl FnOnce(&mut ChartSpec) -> Result<(), CmdError>) -> CmdResult {
     let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("select a chart first".into()))?;
     let InlineObject::Graphic { w, h, graphic, .. } = obj else { return Err(CmdError::Disabled("select a chart first".into())) };
     let mut spec = graphic.chart.as_deref().cloned().ok_or_else(|| CmdError::Disabled("this chart can't be edited".into()))?;

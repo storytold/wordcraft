@@ -113,6 +113,7 @@ impl Session {
             autocap: _,
             rev: _,
             protect_facts: _,
+            calc_pages: _,
             cache: _,
             layout: _,
             // The word being typed, like `column`: valid only while `sel` is where typing left it.

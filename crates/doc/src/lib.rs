@@ -12,6 +12,7 @@
 
 pub mod bidi;
 mod byte_store;
+pub mod calc;
 pub mod cfb_guard;
 pub mod chart;
 mod cjk_numbers;
@@ -149,6 +150,20 @@ pub struct Document {
     /// Cumulative fit-to-page typography reduction state; internal tracking outside user-visible custom properties.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fit_state: Option<shrink::FitState>,
+    /// Calculation settings (unit system, precision, manual mode); `None` = the defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calc_settings: Option<calc::CalcSettings>,
+    /// The calculation store of a file just read, or about to be written (`.docx`): what
+    /// `wordcraft-calc` turns back into live calculations, or made from them. Transient: never
+    /// saved natively, and taken as soon as the file is opened.
+    #[serde(skip)]
+    pub calc_store: Option<calc::CalcStore>,
+    /// Plain scalar results saved by a worksheet, keyed by imported calculation id.
+    #[serde(skip)]
+    pub worksheet_saved_results: std::collections::BTreeMap<u64, f64>,
+    /// This open document was imported from a worksheet and can be reviewed again.
+    #[serde(skip)]
+    pub worksheet_imported: bool,
 }
 
 #[cfg(test)]

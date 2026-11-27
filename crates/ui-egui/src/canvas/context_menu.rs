@@ -117,6 +117,13 @@ fn rule(ui: &mut Ui) {
 
 /// The text menu's rows.
 fn rows(app: &mut WordApp, ui: &mut Ui) {
+    let calculations = crate::calc_ui::menu_items(app);
+    if !calculations.is_empty() {
+        for (label, id, params) in calculations {
+            item(ui, label, id, params);
+        }
+        rule(ui);
+    }
     if let Some(issue) = app.canvas.context_issue.clone() {
         let sugg: Vec<String> = issue
             .get("suggestions")
@@ -240,6 +247,9 @@ fn rows(app: &mut WordApp, ui: &mut Ui) {
         item(ui, "Text Direction", "table.textDirection", json!({}));
         if pick == TablePick::Table {
             item(ui, "Insert Caption…", "references.caption", json!({}));
+        }
+        if let Some((label, params)) = crate::calc_ui::data_table_item(app) {
+            item(ui, label, "calc.dataTable", params);
         }
         item(ui, "Table Properties…", "table.properties", json!({}));
     }

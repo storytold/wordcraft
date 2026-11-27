@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::edit::Fragment;
-use wordcraft_doc::{Path, Pos, StoryRef};
+use wordcraft_doc::{InlineObject, Path, Pos, StoryRef, calc::CalcState, para::OBJ};
 
 use super::{delete_selection, find_pattern, pos_json, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
@@ -123,7 +123,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("edit.find", "Find", "Home › Editing", find)
             .key("Mod+F")
-            .params(r#"{"text": string, "matchCase"?: bool, "wholeWord"?: bool, "matchPrefix"?: bool, "matchSuffix"?: bool, "ignorePunct"?: bool, "ignoreSpace"?: bool, "wildcards"?: bool, "special"?: bool (^p ^t ^# … codes, default true), "regex"?: bool}"#)
+            .params(r#"{"text": string, "matchCase"?: bool, "wholeWord"?: bool, "matchPrefix"?: bool, "matchSuffix"?: bool, "ignorePunct"?: bool, "ignoreSpace"?: bool, "wildcards"?: bool, "special"?: bool (^p ^t ^# … codes, default true), "regex"?: bool, "includeCalculations"?: bool (default true)}"#)
             .pure(),
         CommandSpec::new("edit.advancedFind", "Advanced Find", "Home › Editing › Find", advanced_find)
             .params(r#"{"text"?: string, …options of edit.find, "in"?: "main|selection", "highlight"?: bool}"#)
@@ -496,6 +496,7 @@ pub(crate) struct Found {
     pub a: Pos,
     pub b: Pos,
     pub rep: Option<String>,
+    calc_names: Vec<std::ops::Range<usize>>,
 }
 
 /// A stretch of searched text: `len` bytes from `hay` are paragraph `para`'s bytes from `raw`.
@@ -640,14 +641,71 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
                     let group = |n: usize| caps.get_group(n).and_then(|g| hay.get(g.range())).map(str::to_string);
                     find_pattern::expand(pc, hay.get(m.range()).unwrap_or(""), &group, &s.clipboard_text)
                 });
-                out.push(Found { a, b, rep });
+                out.push(Found { a, b, rep, calc_names: Vec::new() });
                 if out.len() >= 100_000 {
                     return Ok(out);
                 }
             }
         }
     }
+    if story == StoryRef::Body
+        && !f.exclude_calculations
+        && !(opts.regex || opts.wildcards || opts.prefix || opts.suffix || opts.ignore_punct || opts.ignore_space)
+        && is_calc_name(&f.query)
+    {
+        for path in paths {
+            let Some(para) = s.doc.para(story, &path) else { continue };
+            for (off, object) in para.objects_with_offsets() {
+                let InlineObject::Equation { calc: Some(region), .. } = object else { continue };
+                if region.state == CalcState::EditedOutside || para.props_of_char(off).del.is_some() {
+                    continue;
+                }
+                let calc_names: Vec<_> = wordcraft_calc::identifier_ranges(&region.source)
+                    .into_iter()
+                    .filter(|span| {
+                        let name = &region.source[span.clone()];
+                        re.find(name).is_some_and(|m| m.start() == 0 && m.end() == name.len())
+                    })
+                    .collect();
+                if calc_names.is_empty() {
+                    continue;
+                }
+                let a = Pos { story, path: path.clone(), off };
+                let b = Pos { off: off + OBJ.len_utf8(), ..a.clone() };
+                out.push(Found { a, b, rep: None, calc_names });
+                if out.len() >= 100_000 {
+                    break;
+                }
+            }
+            if out.len() >= 100_000 {
+                break;
+            }
+        }
+        out.sort_by(|x, y| x.a.cmp(&y.a));
+    }
     Ok(out)
+}
+
+fn is_calc_name(name: &str) -> bool {
+    matches!(wordcraft_calc::identifier_ranges(name).as_slice(), [span] if *span == (0..name.len()))
+}
+
+fn replace_calc_names(s: &mut Session, found: &Found, count: usize) -> Result<(), CmdError> {
+    if s.doc.settings.track_changes {
+        return Err(CmdError::Disabled("calculation names cannot be replaced while Track Changes is on".into()));
+    }
+    if !is_calc_name(&s.find.replace) {
+        return Err(CmdError::Params("the replacement must be a calculation identifier".into()));
+    }
+    let Some(InlineObject::Equation { calc: Some(region), .. }) = s.doc.para_at(&found.a).and_then(|p| p.object_at(found.a.off)) else {
+        return Err(CmdError::Failed("no calculation there".into()));
+    };
+    let id = region.id;
+    let mut source = region.source.clone();
+    for span in found.calc_names.iter().take(count).rev() {
+        source.replace_range(span.clone(), &s.find.replace);
+    }
+    super::calc::update_source(s, &found.a, source, id)
 }
 
 fn read_opts(s: &mut Session, v: &Value) {
@@ -682,6 +740,9 @@ fn read_opts(s: &mut Session, v: &Value) {
     }
     if let Some(b) = p::bool(v, "ignoreSpace") {
         s.find.ignore_space = b;
+    }
+    if let Some(include) = p::bool(v, "includeCalculations") {
+        s.find.exclude_calculations = !include;
     }
     if let Some(t) = p::str(v, "with") {
         s.find.replace = t.to_string();
@@ -780,7 +841,12 @@ fn replace(s: &mut Session, v: &Value) -> CmdResult {
     // happened (#6877): a first call that only selects a match reads as `replaced: 0`.
     let mut replaced = 0;
     if let Some(f) = results.into_iter().find(|f| f.a == a && f.b == b) {
-        super::paste_text(s, &f.rep.unwrap_or_default())?;
+        if f.calc_names.is_empty() {
+            super::paste_text(s, &f.rep.unwrap_or_default())?;
+        } else {
+            super::controls::check_deletions(s, story, [(&f.a, &f.b)])?;
+            replace_calc_names(s, &f, 1)?;
+        }
         replaced = 1;
     }
     let selected = match step(s, 1) {
@@ -800,9 +866,14 @@ fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
     read_opts(s, v);
     let story = s.sel.focus.story;
     let results = search_full(s, story, true)?;
-    let n = results.len();
+    let n: usize = results.iter().map(|f| f.calc_names.len().max(1)).sum();
     super::controls::check_deletions(s, story, results.iter().map(|f| (&f.a, &f.b)))?;
-    for Found { a, b, rep } in results.into_iter().rev() {
+    for found in results.into_iter().rev() {
+        if !found.calc_names.is_empty() {
+            replace_calc_names(s, &found, found.calc_names.len())?;
+            continue;
+        }
+        let Found { a, b, rep, .. } = found;
         let with = rep.unwrap_or_default();
         if s.doc.settings.track_changes {
             // Same path as a single replace, so the change is a reviewable revision.

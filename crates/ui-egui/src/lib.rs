@@ -29,6 +29,7 @@ macro_rules! tl {
 pub mod a11y;
 pub mod a11y_pane;
 pub mod backstage;
+pub mod calc_ui;
 pub mod canvas;
 pub mod caret_glide;
 pub mod chrome;
@@ -542,6 +543,7 @@ pub struct WordApp {
     pub(crate) keytips_active: bool,
     /// The dialogs this window has open.
     pub dialog_host: craft::ui::dialog::DialogHost,
+    pub(crate) calc_dialog: Option<calc_ui::CalcDialog>,
     /// What the window's dialogs ask of the app, by dialog.
     pub(crate) dialog_hooks: Vec<(craft::ui::dialog::DialogId, dialogs::host::DialogHooks)>,
     /// A finished child form's answer for its parent form, by parent dialog and form key; the parent's pass takes it.

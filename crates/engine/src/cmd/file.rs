@@ -268,7 +268,19 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(z) = s.doc.settings.zoom {
         super::view::restore_zoom(s, z);
     }
-    s.path = Some(path.into());
+    if let Some(notice) = super::calc::take_open_notice() {
+        s.status = notice;
+    }
+    let worksheet = std::path::Path::new(path)
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("xmcd") || ext.eq_ignore_ascii_case("mcdx"));
+    if worksheet {
+        s.path = None;
+        s.dirty = true;
+    } else {
+        s.path = Some(path.into());
+    }
     // A Markdown file's own text, for the view to show and Save to write back as it is.
     if super::md_source::is_markdown_file(std::path::Path::new(path)) {
         s.md_file = markdown_file_text(path, v);
@@ -277,9 +289,54 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     if encrypted {
         s.password = password.map(crate::io::Password::new);
     }
-    Ok(
-        json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()}),
-    )
+    let mut result = json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()});
+    if worksheet {
+        result["importReview"] = json!(worksheet_review(&s.doc));
+    }
+    Ok(result)
+}
+
+pub(super) fn worksheet_review(doc: &Document) -> Vec<Value> {
+    use wordcraft_doc::{InlineObject, Pos, calc::CalcState, para::WorksheetNoteKind};
+    let roots = wordcraft_calc::worksheet_error_roots(doc);
+    let mut entries = Vec::new();
+    for path in doc.para_paths(StoryRef::Body) {
+        let Some(paragraph) = doc.para(StoryRef::Body, &path) else { continue };
+        for note in &paragraph.worksheet_notes {
+            let kind = match note.kind {
+                WorksheetNoteKind::Unsupported => "unsupported",
+                WorksheetNoteKind::SavedSnapshot => "savedSnapshot",
+            };
+            entries.push(json!({"kind": kind, "message": note.message, "pos": Pos::new(StoryRef::Body, path.clone(), note.off)}));
+        }
+        for (off, object) in paragraph.objects_with_offsets() {
+            let InlineObject::Equation { calc: Some(calc), linear, .. } = object else { continue };
+            let pos = Pos::new(StoryRef::Body, path.clone(), off);
+            match &calc.state {
+                CalcState::Error(message) => {
+                    let mut entry = json!({"kind": "calculationError", "id": calc.id, "source": calc.source, "message": message, "pos": pos});
+                    if let Some(root) = roots.get(&calc.id) {
+                        entry["upstreamId"] = json!(root);
+                    }
+                    entries.push(entry);
+                }
+                CalcState::Fresh => {
+                    if let Some(saved) = doc.worksheet_saved_results.get(&calc.id)
+                        && let Some(displayed) = wordcraft_calc::render::displayed_unitless_scalar(linear)
+                    {
+                        entries.push(json!({
+                            "kind": "savedResult", "source": calc.source, "saved": saved,
+                            "displayed": displayed, "pos": pos,
+                        }));
+                    }
+                }
+                CalcState::Stale | CalcState::EditedOutside => {
+                    entries.push(json!({"kind": "calculationUnverified", "source": calc.source, "pos": pos}));
+                }
+            }
+        }
+    }
+    entries
 }
 
 /// A Markdown file's own text as `file.open` finds it: the bytes the caller hands over (base64 in
@@ -310,6 +367,8 @@ fn markdown_file_text(path: &str, v: &Value) -> super::md_source::FileText {
 /// one) is a new blank document (#1384). Plain text and Markdown carry no language, so they are
 /// in the editing language.
 fn read_document(s: &Session, path: &str, v: &Value) -> Result<(Document, bool), CmdError> {
+    // A message left by an earlier open isn't this file's.
+    let _ = super::calc::take_open_notice();
     let password = p::str(v, "password");
     let (mut doc, encrypted) = if let Some(data) = p::str(v, "data") {
         let bytes = super::insert::base64_decode(data).ok_or_else(|| CmdError::Params("bad base64".into()))?;
@@ -346,6 +405,9 @@ pub(crate) fn new_from_template(s: &mut Session, v: &Value) -> CmdResult {
         s.set_document(doc);
     } else {
         s.add_document(doc);
+    }
+    if let Some(notice) = super::calc::take_open_notice() {
+        s.status = notice;
     }
     s.dirty = true;
     sel_result(s)

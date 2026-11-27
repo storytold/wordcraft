@@ -13,7 +13,7 @@ fn ragged_matrix_save_stays_small() {
     rows.extend(std::iter::repeat_with(Vec::new).take(n));
     let math = Math { nodes: vec![MNode::Matrix { rows, col_jc: Vec::new() }], ..Default::default() };
     let mut p = Paragraph::new();
-    p.insert_object(0, InlineObject::Equation { linear: String::new(), display: true, math }, &CharProps::default()).unwrap();
+    p.insert_object(0, InlineObject::Equation { linear: String::new(), display: true, math, calc: None }, &CharProps::default()).unwrap();
     let mut doc = Document::new();
     doc.body = vec![para_block(p)];
     let bytes = wordcraft_docx::write(&doc).unwrap();

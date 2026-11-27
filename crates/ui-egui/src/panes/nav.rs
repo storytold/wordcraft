@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use craft::behavior::{DisplayOrder, EditEvent, ItemSource, Selection, SelectionChange, keyed};
+use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, CollectionEvent, Props, SelectMode, Show, ShowCollection};
 use craft::ui::display::Text;
 use craft::ui::list::{List, ListRow, RowEvent};
@@ -67,11 +68,16 @@ fn search(app: &mut WordApp, ui: &mut Ui, ctx: &egui::Context) {
             _ => {}
         }
     }
-    if picked.is_some() || q != stored {
+    let include = !app.session.find.exclude_calculations;
+    let changed = Checkbox::new(Bind::given(include)).label(tl!("Include live calculations")).show(ui).value().copied();
+    if picked.is_some() || q != stored || changed.is_some() {
+        let include = changed.unwrap_or(include);
+        app.session.find.exclude_calculations = !include;
+        app.session.find.highlights = None;
         app.ui.nav_tab = "results".into();
         ui.data_mut(|d| d.insert_temp(qid, q.clone()));
         if !q.is_empty() {
-            let _ = app.session.run("edit.find", &json!({"text": q}));
+            let _ = app.session.run("edit.find", &json!({"text": q, "includeCalculations": include}));
         } else {
             app.session.find.results.clear();
         }
@@ -132,6 +138,13 @@ fn results(app: &mut WordApp, ui: &mut Ui) {
     let mut hits: Vec<Hit> = Vec::new();
     for (a, b) in results.iter().take(500) {
         let Some(p) = app.session.doc.para_at(a) else { continue };
+        if a.path == b.path
+            && b.off == a.off + wordcraft_doc::para::OBJ.len_utf8()
+            && let Some(wordcraft_doc::InlineObject::Equation { calc: Some(calc), .. }) = p.object_at(a.off)
+        {
+            hits.push(Hit { text: calc.source.clone(), spans: vec![Span::new(calc.source.clone())] });
+            continue;
+        }
         let from = p.clamp(a.off.saturating_sub(30));
         let to = p.clamp((b.off + 40).min(p.len())).max(from);
         let start = p.clamp(a.off).clamp(from, to);

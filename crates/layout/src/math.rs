@@ -66,6 +66,29 @@ pub enum MItem {
 }
 
 impl MItem {
+    fn scale(&mut self, factor: f32) {
+        match self {
+            MItem::Glyphs { size, glyphs, .. } => {
+                *size *= factor;
+                for (_, x, y) in glyphs {
+                    *x *= factor;
+                    *y *= factor;
+                }
+            }
+            MItem::Rect { x, y, w, h, .. } => {
+                for value in [x, y, w, h] {
+                    *value *= factor;
+                }
+            }
+            MItem::Line { x0, y0, x1, y1, width, .. } => {
+                for value in [x0, y0, x1, y1, width] {
+                    *value *= factor;
+                }
+            }
+            MItem::ScreenOnly(item) => item.scale(factor),
+        }
+    }
+
     fn shift(&mut self, dx: f32, dy: f32) {
         match self {
             MItem::Glyphs { glyphs, .. } => {
@@ -114,6 +137,25 @@ pub struct MathLayout {
 }
 
 impl MathLayout {
+    pub(crate) fn fit_width(&mut self, width: f32) {
+        if !width.is_finite() || width <= 0.0 || self.width <= width {
+            return;
+        }
+        let factor = width / self.width;
+        self.width = width;
+        self.ascent *= factor;
+        self.descent *= factor;
+        for item in &mut self.items {
+            item.scale(factor);
+        }
+        for slot in &mut self.slots {
+            slot.x *= factor;
+            slot.y *= factor;
+            slot.a *= factor;
+            slot.d *= factor;
+        }
+    }
+
     /// Where the caret at (`path`, `off`) is drawn.
     pub fn slot(&self, path: &[(usize, usize)], off: usize) -> Option<&Slot> {
         self.slots

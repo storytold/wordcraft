@@ -11,7 +11,7 @@ impl WordApp {
     /// except those on a shell slot drawn over it (the ribbon dropped down in Focus): `regions`
     /// are this pass's slot rects.
     pub(super) fn refocus_after_chrome_click(&mut self, ctx: &egui::Context, regions: &ShellRegions) {
-        if self.ui.backstage || !self.dialog_host.is_empty() {
+        if self.ui.backstage || !self.dialog_host.is_empty() || self.calc_dialog.is_some() {
             return;
         }
         let Some(pos) = ctx.input(|i| if i.pointer.any_click() { i.pointer.interact_pos() } else { None }) else { return };

@@ -519,7 +519,10 @@ fn handle_input(app: &mut WordApp, ctx: &egui::Context, pass: &ToolPass, e: &Edi
             let _ = app.run(id, json!({}));
         }
         EditorInput::Newline { .. } => {
-            if !crate::objects::key(app, Key::Enter, Modifiers::NONE) {
+            if crate::calc_ui::selected_calc(app) {
+                ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Enter));
+                let _ = app.run("calc.edit", json!({}));
+            } else if !crate::objects::key(app, Key::Enter, Modifiers::NONE) {
                 let _ = app.run("text.newParagraph", json!({}));
             }
         }

@@ -272,6 +272,16 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     });
     row.group(RibbonGroup::new("Symbols", crate::tl!("Symbols"), crate::icons::spec("symbol")), |ui| {
         crate::equation_tab::insert_button(ui, app);
+        for (key, label, id) in [
+            ("formula", "Calculation", "insert.calculation"),
+            ("mergeField", "Calculated Value", "insert.calcValue"),
+            ("chart", "Function Plot", "insert.functionPlot"),
+        ] {
+            IconButton::command(crate::icons::spec(key), CommandRef::with_params(id, json!({})))
+                .label(crate::tl!(label))
+                .tooltip(crate::tl!(label))
+                .show(ui);
+        }
         menu_button(
             ui,
             Button::new(crate::tl!("Symbol")).icon(crate::icons::spec("symbol")).tooltip(crate::tl!("Symbol")).arrangement(Arrangement::Stacked),

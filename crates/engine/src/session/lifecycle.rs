@@ -131,6 +131,7 @@ impl Session {
             untitled,
             made_rev,
             protect_facts: std::sync::Mutex::new(None),
+            calc_pages: None,
             ime_body_epoch,
             ime_state_revision: None,
             ime_state_seen: None,

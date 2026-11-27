@@ -336,6 +336,9 @@ impl WordApp {
             let id = fired.command.id.as_str();
             let params = if fired.command.params.is_null() { json!({}) } else { fired.command.params.clone() };
             let from_key = fired.source == FireSource::Key;
+            if from_key && (self.calc_dialog.is_some() || crate::calc_ui::held_keys_this_frame(ctx)) {
+                continue;
+            }
 
             let (id, params) = if id == "edit.pasteFormat" && from_key { self.paste_format_command(ctx, params) } else { (id, params) };
             // An Undo or Redo that is not a focused field's own edit (S-L187 sends that one to the

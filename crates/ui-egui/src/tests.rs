@@ -9,6 +9,7 @@ use craft::platform::open::{DroppedFile, FileIntake};
 use craft::ui::shell::ScreenMode;
 use std::sync::Arc;
 
+mod calc;
 mod perf;
 // The new test files are children of `tests` so they reach its private helpers (`app`, `harness`, ...).
 // They are not named `chrome`, `dialogs` or `ribbon`: inside `tests` those names must keep meaning the

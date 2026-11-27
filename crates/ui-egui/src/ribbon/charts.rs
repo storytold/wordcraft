@@ -156,11 +156,9 @@ pub(super) fn chart_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         });
     });
     row.group(RibbonGroup::new("data", tl!("Data").to_string(), IconId::new("chartData").into()), |ui| {
-        Button::command(CommandRef::new("chart.editData"))
-            .label(tl!("Edit\nData").to_string())
-            .icon(IconId::new("chartData"))
-            .arrangement(Arrangement::Stacked)
-            .show(ui);
+        let (command, name) =
+            if chart.plot.is_some() { ("chart.editFunctionPlot", tl!("Edit Function Plot")) } else { ("chart.editData", tl!("Edit\nData")) };
+        Button::command(CommandRef::new(command)).label(name.to_string()).icon(IconId::new("chartData")).arrangement(Arrangement::Stacked).show(ui);
     });
     row.group(RibbonGroup::new("type", tl!("Type").to_string(), IconId::new("changeChartType").into()), |ui| {
         Button::command(CommandRef::new("chart.type"))

@@ -23,6 +23,20 @@ pub use inline_kinds::{NoteKind, PTabAlign, PTabBase, RubyAlign, ShapeKind, ruby
 pub use inline_object::{CanvasStyle, GroupChild, InlineObject, MAX_GROUP_CHILDREN};
 pub use run::{COLUMN_BREAK, LINE_BREAK, NB_HYPHEN, NBSP, OBJ, PAGE_BREAK, Run, SOFT_HYPHEN, next_rev};
 
+/// A diagnostic attached to a worksheet paragraph during import.
+#[derive(Clone, Debug)]
+pub enum WorksheetNoteKind {
+    Unsupported,
+    SavedSnapshot,
+}
+
+#[derive(Clone, Debug)]
+pub struct WorksheetNote {
+    pub kind: WorksheetNoteKind,
+    pub off: usize,
+    pub message: String,
+}
+
 /// A paragraph.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Paragraph {
@@ -41,6 +55,8 @@ pub struct Paragraph {
     /// Change counter for caches (not part of equality).
     #[serde(skip, default = "next_rev")]
     pub rev: u64,
+    #[serde(skip)]
+    pub worksheet_notes: Vec<WorksheetNote>,
 }
 
 impl PartialEq for Paragraph {
@@ -70,6 +86,7 @@ impl Paragraph {
             objects: Vec::new(),
             section: None,
             rev: next_rev(),
+            worksheet_notes: Vec::new(),
         }
     }
     /// A paragraph of plain text in one run.
@@ -469,6 +486,7 @@ impl Paragraph {
             objects: tail_objs,
             section: self.section.take(),
             rev: next_rev(),
+            worksheet_notes: Vec::new(),
         };
         if tail.text.is_empty() {
             tail.mark = self.props_at(off).unlinked();

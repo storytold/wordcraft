@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::calc::CalcTable;
 use crate::control::ControlWrap;
 use crate::props::{CellProps, RowProps, TableProps, VMerge};
 use crate::{Blocks, Paragraph, para_block};
@@ -66,6 +67,10 @@ pub struct Table {
     /// Content controls whose content starts or ends with this table (see [`crate::control`]).
     #[serde(default, skip_serializing_if = "ControlWrap::is_empty")]
     pub controls: ControlWrap,
+    /// Present when the table is calculation data: each column defines a vector (see
+    /// [`crate::calc::CalcTable`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calc: Option<Box<CalcTable>>,
 }
 
 /// Hard limits that keep hostile input from exhausting memory.
@@ -112,8 +117,10 @@ impl Table {
 
     /// A copy of rows `rows` of this table holding, of each row, the cells that reach into grid
     /// columns `cols` (both inclusive): what Copy takes from selected rows or cells. Content
-    /// controls around rows and the table aren't copied (they'd lose their other end); a cell
-    /// that continues a vertical merge from a row left out starts the merge instead.
+    /// controls around rows and the table aren't copied (they'd lose their other end), nor is a
+    /// calculation-data mark unless every row and column is (part of a data table isn't its data;
+    /// a whole one pasted is a copy, given its own id by recalculation); a cell that continues a
+    /// vertical merge from a row left out starts the merge instead.
     pub fn slice(&self, rows: (usize, usize), cols: (usize, usize)) -> Table {
         let (r0, r1) = rows;
         let kept = || self.rows.iter().take(r1.saturating_add(1)).skip(r0);
@@ -150,7 +157,9 @@ impl Table {
             }
             props.width_pct = None;
         }
-        Table { props, grid, rows: out_rows, controls: ControlWrap::default() }
+        let all_rows = r0 == 0 && r1.saturating_add(1) >= self.rows.len();
+        let calc = if whole && all_rows { self.calc.clone() } else { None };
+        Table { props, grid, rows: out_rows, controls: ControlWrap::default(), calc }
     }
 
     /// A `rows × cols` table spanning `width` points, "Table Grid" style.
@@ -175,6 +184,7 @@ impl Table {
                 })
                 .collect(),
             controls: ControlWrap::default(),
+            calc: None,
         }
     }
 
@@ -267,6 +277,10 @@ impl Table {
             grid: self.grid.clone(),
             rows: self.rows.split_off(at),
             controls: ControlWrap { open: Vec::new(), close: std::mem::take(&mut self.controls.close) },
+            // Calculation data split in two stays data in both parts: recalculation gives the tail an
+            // id of its own and reads its first row as headings, so the split shows as errors rather
+            // than as silently shorter vectors.
+            calc: self.calc.clone(),
         };
         if let Some(last) = self.rows.last_mut() {
             last.controls.close = last.controls.close.saturating_add(u32::try_from(open.len()).unwrap_or(u32::MAX));
@@ -703,6 +717,19 @@ mod tests {
         // Nothing in range: no rows.
         assert!(t.slice((5, 6), (0, 2)).rows.is_empty());
         assert!(t.slice((0, 2), (9, 9)).rows.is_empty());
+    }
+
+    /// A calculation data table copied whole stays data, and so do both parts of a split; part of
+    /// one copied is a plain table.
+    #[test]
+    fn slice_keeps_the_calculation_data_mark_only_whole() {
+        let mut t = Table::new(3, 3, 300.0);
+        t.calc = Some(Box::new(CalcTable { id: 4, errors: Vec::new() }));
+        assert_eq!(t.slice((0, 2), (0, 2)).calc, t.calc);
+        assert_eq!(t.slice((0, 1), (0, 2)).calc, None);
+        assert_eq!(t.slice((0, 2), (1, 2)).calc, None);
+        assert_eq!(t.split_off(1).calc, t.calc, "both parts of a split stay data");
+        assert!(t.calc.is_some());
     }
 
     #[test]

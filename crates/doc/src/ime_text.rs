@@ -512,7 +512,7 @@ mod tests {
         let mut p = Paragraph::new();
         p.text = format!("a{OBJ}b");
         p.runs = vec![Run { len: p.text.len(), props: CharProps::default() }];
-        p.objects.push(InlineObject::Equation { linear: "x+y".into(), display: false, math: Default::default() });
+        p.objects.push(InlineObject::Equation { linear: "x+y".into(), display: false, math: Default::default(), calc: None });
         let view = VisibleParagraph::new(&p);
         assert_eq!(view.visible_len(), 5);
         assert_eq!(view.visible_offset(1), Some(1));
@@ -613,7 +613,7 @@ mod tests {
         let mut p = Paragraph::new();
         p.text = format!("a{OBJ}b");
         p.runs = vec![Run { len: p.text.len(), props: CharProps::default() }];
-        p.objects.push(InlineObject::Equation { linear: "x+y".into(), display: false, math: Default::default() });
+        p.objects.push(InlineObject::Equation { linear: "x+y".into(), display: false, math: Default::default(), calc: None });
         doc.body = vec![std::sync::Arc::new(crate::Block::Para(p))];
         let caret = Pos::body(0, 5);
         // Two bytes before the caret end inside `x+y` (`y` is the last byte): the start rounds

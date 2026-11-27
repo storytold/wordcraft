@@ -77,6 +77,7 @@ impl WordApp {
             backstage_state,
             chrome,
             dialog_host,
+            calc_dialog,
             dialog_hooks,
             dialog_answers,
             edits,
@@ -165,6 +166,7 @@ impl WordApp {
             backstage_state,
             chrome,
             dialog_host,
+            calc_dialog,
             dialog_hooks,
             dialog_answers,
             edits,
@@ -301,7 +303,7 @@ impl WordApp {
     /// clicks, keys or shortcuts until it closes (#3859). Another window's dialog does not block
     /// this one.
     pub(crate) fn modal_open(&self) -> bool {
-        self.dialog_host.shows_modal()
+        self.dialog_host.shows_modal() || self.calc_dialog.is_some()
     }
 
     /// The drawn window's dialog host.
@@ -424,6 +426,7 @@ impl WordApp {
         let t0 = monotonic_ms();
         let ctx = ui.ctx().clone();
         self.escape_free = self.dialog_host.is_empty()
+            && self.calc_dialog.is_none()
             && !self.ui.backstage
             && !self.keytips_active
             && !craft::ui::runtime::overlay::any_open(&ctx, craft::ui::runtime::overlay::OpenFilter::Keys)
