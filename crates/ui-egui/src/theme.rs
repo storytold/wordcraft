@@ -231,6 +231,12 @@ impl Animations {
         }
     }
 
+    /// [`Self::motion`] for a window drawn by the processor when `software`: `System` is then no
+    /// motion at all, since every animated frame is the whole window drawn in software (#2221).
+    pub fn motion_drawn(self, software: bool) -> MotionChoice {
+        if software && self == Animations::System { MotionChoice::Off } else { self.motion() }
+    }
+
     /// The runtime's motion choice: `System` is the OS's reduced-motion answer, else full motion.
     pub fn motion(self) -> MotionChoice {
         match self {

@@ -167,6 +167,7 @@ impl WordApp {
             ime_origin: _,
             user_origin: _,
             native_scale: _,
+            software_drawing: _,
             auto_scale_limit: _,
             legacy_interface_size: _,
             applied_editing: _,

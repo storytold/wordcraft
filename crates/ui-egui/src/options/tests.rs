@@ -221,6 +221,20 @@ fn animation_effects_is_an_accessibility_option() {
     assert_eq!(system_help(&h), None, "only said while the system is followed");
 }
 
+/// #2221: a window drawn by the processor stops the animations that follow the system; On still plays.
+#[test]
+fn software_drawing_stops_animations_that_follow_the_system() {
+    use crate::theme::Animations;
+    use craft::behavior::MotionMode;
+    let mut a = app();
+    assert_eq!(a.ui.animations, Animations::System);
+    assert_ne!(a.resolved_root().motion, MotionMode::Off, "a graphics card animates");
+    a.set_software_drawing(true);
+    assert_eq!(a.resolved_root().motion, MotionMode::Off);
+    a.ui.animations = Animations::On;
+    assert_eq!(a.resolved_root().motion, MotionMode::Full, "the person's own choice stands");
+}
+
 /// #838: in a Polish region lengths read `2,54 cm` (the region's unit and decimal comma).
 #[test]
 fn length_fields_follow_the_region() {

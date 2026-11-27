@@ -456,6 +456,11 @@ pub struct WordApp {
     /// The display scale (native pixels per point) seen in the last frame, 1.0 before the first;
     /// `ui.interfaceSize` reports the size Auto draws at with it.
     native_scale: f32,
+    /// The window is drawn by the processor, not a graphics card (WARP on Windows, llvmpipe on
+    /// Linux; #2221): the desktop app sets it once it knows the adapter. Every animated frame is
+    /// then the whole window drawn in software, so animations that follow the system stop
+    /// ([`WordApp::set_software_drawing`]).
+    software_drawing: bool,
     /// The most pixels per point Auto may draw at on this screen ([`theme::auto_scale_limit`], #4030).
     auto_scale_limit: f32,
     /// A pre-#822 interface size (percent on top of the display scale) waiting for the first frame
