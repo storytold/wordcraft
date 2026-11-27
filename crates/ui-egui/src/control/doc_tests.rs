@@ -122,3 +122,70 @@ fn closing_an_addressed_document_keeps_unsaved_work_unless_forced() {
     assert!(!a.session.is_open(clean) && a.session.is_open(second));
     assert_eq!(a.session.document_id(), active);
 }
+
+/// #6266: `ui.render` draws tracked changes in the Track Changes Options colours, as the page
+/// on screen does, for the active document and for one addressed by `doc`.
+#[test]
+fn render_uses_the_track_changes_colours() {
+    let mut a = app();
+    let first = a.session.document_id();
+    assert_eq!(exec(&mut a, "text.insert", json!({"text": "Plain "}))["ok"], true);
+    assert_eq!(exec(&mut a, "review.trackChanges", json!({"value": true}))["ok"], true);
+    assert_eq!(exec(&mut a, "text.insert", json!({"text": "Inserted while tracking"}))["ok"], true);
+    let render = |a: &mut WordApp, colour: &str, doc: Option<u64>| {
+        assert_eq!(exec(a, "review.trackingOptions", json!({"insertColor": colour}))["ok"], true);
+        let mut params = json!({"scale": 1.0});
+        if let Some(doc) = doc {
+            params["doc"] = json!(doc);
+        }
+        let r = send(a, "ui.render", params);
+        r["result"]["png"].as_str().unwrap_or_else(|| panic!("{r}")).to_string()
+    };
+    let green = render(&mut a, "00A000", None);
+    let red = render(&mut a, "C00000", None);
+    assert!(green != red, "the insertion colour reaches the rendered page");
+
+    assert_eq!(exec(&mut a, "file.new", json!({}))["ok"], true);
+    let green = render(&mut a, "00A000", Some(first));
+    let red = render(&mut a, "C00000", Some(first));
+    assert!(green != red, "a document in the background takes the colours too");
+}
+
+/// #6266 review: `ui.render` without a path draws `export_layout`, which hides deletions when
+/// Track Changes Options say Hidden or Insertions and Deletions off. Neither leaves a blank gap
+/// where the deleted word sat: with margin change bars off (`changedLines: "none"` for Hidden,
+/// which otherwise keeps its change bar, and `insertionsDeletions: false`), both match rendering
+/// the text without the deleted word.
+#[test]
+fn render_never_leaves_a_gap_for_hidden_deletions() {
+    let render = |a: &mut WordApp| {
+        let r = send(a, "ui.render", json!({"scale": 1.0}));
+        r["result"]["png"].as_str().unwrap_or_else(|| panic!("{r}")).to_string()
+    };
+
+    let mut clean = app();
+    assert_eq!(exec(&mut clean, "document.setText", json!({"text": "Plain tail"}))["ok"], true);
+    let plain = render(&mut clean);
+
+    let mut a = app();
+    assert_eq!(exec(&mut a, "document.setText", json!({"text": "Plain gone tail"}))["ok"], true);
+    assert_eq!(exec(&mut a, "review.trackChanges", json!({"value": true}))["ok"], true);
+    let word = json!({"anchor": {"block": 0, "off": 6}, "focus": {"block": 0, "off": 11}});
+    assert_eq!(exec(&mut a, "select.range", word)["ok"], true);
+    assert_eq!(exec(&mut a, "text.delete", json!({}))["ok"], true);
+
+    assert_eq!(exec(&mut a, "review.trackingOptions", json!({"deleteMark": "strikethrough", "insertionsDeletions": true}))["ok"], true);
+    let struck = render(&mut a);
+    assert!(struck != plain, "strikethrough draws the deleted word");
+
+    assert_eq!(exec(&mut a, "review.trackingOptions", json!({"deleteMark": "hidden", "changedLines": "none"}))["ok"], true);
+    let hidden = render(&mut a);
+    assert!(hidden == plain, "Deletions = Hidden omits the deleted word with no gap");
+
+    assert_eq!(
+        exec(&mut a, "review.trackingOptions", json!({"deleteMark": "strikethrough", "insertionsDeletions": false, "changedLines": "outside"}))["ok"],
+        true
+    );
+    let off = render(&mut a);
+    assert!(off == plain, "Insertions and Deletions off omits the deleted word with no gap");
+}
