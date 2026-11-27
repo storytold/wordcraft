@@ -243,13 +243,13 @@ pub fn apply(app: &mut WordApp, target: &Target, hex: &str) {
 
 /// The colour a target has now (the dialog's Current swatch).
 fn current_of(app: &mut WordApp, target: &Target) -> Option<Rgb> {
-    let Target::Run { cmd, .. } = target else { return None };
+    let Target::Run { cmd, params, at, .. } = target else { return None };
     match cmd.as_str() {
         "format.color" => {
             let st = wordcraft_engine::cmd::format::state(&app.session);
             st.get("color").and_then(Value::as_str).and_then(parse)
         }
-        _ => None,
+        _ => params.pointer(at).and_then(Value::as_str).and_then(parse),
     }
 }
 

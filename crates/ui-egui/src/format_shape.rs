@@ -13,7 +13,7 @@ use craft::theme::Srgba;
 use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
 use craft::ui::choice::{Checkbox, Radio, RadioGroup};
-use craft::ui::contract::{Bind, Entry, Outcome as _, Props as _, Show as _, ShowContainer as _, Trigger};
+use craft::ui::contract::{Bind, Entry, Outcome as _, Props as _, Show as _, ShowContainer as _, Trigger, clicked};
 use craft::ui::form::{Field, SliderField};
 use craft::ui::layout_components::Stack;
 use craft::ui::menu::Menu;
@@ -509,6 +509,10 @@ fn solid(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], color: Rgb, transparency
     let mut hex = color.hex();
     let label: Label = tl!("Color").into();
     let picked = color_field(ui, &label, &mut hex, &ColorFieldEmpty::NoColor, &palette);
+    if picked.more_colors {
+        colors::open_for(app, &Target::cmd("shape.fill"), Some(color), craft::color_ui::ui::ColorPickerTab::Standard);
+        return;
+    }
     if picked.changed
         && let Some(n) = Rgb::parse(&hex)
     {
@@ -677,17 +681,22 @@ fn gradient(app: &mut WordApp, ui: &mut Ui, g: &Gradient) {
     // PLAN: the framework has no public kept-value write; the open flag goes through the saved value
     let was: bool = saved_value(&ctx, &key);
     let mut open = was || editor.color_requested.is_some();
-    let mut chosen = None;
-    Popover::new(tl!("Stop color"), Bind::bound(&mut open)).opened_by(editor.response()).show(ui, |ui, _| {
-        // PLAN: assumed colors::palette(ui, app, Target::Pick) -> ColorPick (ribbon-w11, rb.A4)
-        chosen = colors::palette(ui, app, Target::Pick).picked;
+    let stop_at = editor.color_requested.as_ref().map(|c| c.index).or(match editor.selected {
+        Some(StopRef::Color(at)) => Some(at),
+        _ => None,
     });
-    if let (Some(color), Some(StopRef::Color(at))) = (chosen, editor.selected) {
-        let mut stops = stops_of(g);
-        if let Some(stop) = stops.color.get_mut(at) {
-            stop.color = srgba(color, stop.color.a);
-            apply(app, Some(&with_stops(g, &stops)));
+    let stop_target = match stop_at.filter(|&at| at < g.stops.len()) {
+        Some(at) => Target::at("shape.fill", shape_fill::params(Some(&Fill::Gradient(Arc::new(g.clone())))), &format!("/gradient/stops/{at}/color")),
+        None => Target::Pick,
+    };
+    let mut close_popover = false;
+    Popover::new(tl!("Stop color"), Bind::bound(&mut open)).opened_by(editor.response()).show(ui, |ui, _| {
+        let pick = colors::palette(ui, app, stop_target.clone());
+        if pick.picked.is_some() || clicked(&pick.response) {
+            close_popover = true;
         }
+    });
+    if close_popover {
         open = false;
     }
     if open != was {
@@ -1064,6 +1073,64 @@ mod tests {
         assert!(h.state_mut().dialog_host.confirm::<craft::color_ui::ui::ColorPickerDialog>(&ctx));
         crate::dialogs::host::settle(h.state_mut(), &ctx);
         assert_eq!(stroke(h.state()), Some(wordcraft_doc::Rgb(255, 0, 0)));
+    }
+
+    /// Selecting More Colors… in the Solid fill color picker applies the custom color via `shape.fill`
+    /// while preserving transparency.
+    #[test]
+    fn format_shape_pane_solid_more_colors_applies_fill() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.shape", json!({"kind": "rectangle"})).unwrap();
+        a.run("shape.fill", json!({"color": "112233", "transparency": 35})).unwrap();
+        a.run("view.formatShapePane", json!({"value": true})).unwrap();
+        let mut h = harness(a);
+        h.run_steps(4);
+
+        h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Color #112233").last().expect("solid fill color field").click();
+        h.run_steps(3);
+        h.get_by_label("More Colors…").click();
+        h.run_steps(3);
+
+        let dialog = h.state_mut().dialog_host.get_mut::<craft::color_ui::ui::ColorPickerDialog>().expect("Colors dialog opened");
+        assert_eq!(dialog.opening().map(|p| super::rgb_of(p.color)), Some(wordcraft_doc::Rgb(0x11, 0x22, 0x33)));
+        dialog.set_color(craft::color_ui::ui::PickedColor::rgb(craft::theme::Srgba::rgb(0.0, 1.0, 0.0)));
+        let ctx = h.ctx.clone();
+        assert!(h.state_mut().dialog_host.confirm::<craft::color_ui::ui::ColorPickerDialog>(&ctx));
+        crate::dialogs::host::settle(h.state_mut(), &ctx);
+        assert_eq!(fill(h.state()), Some(Fill::Solid { color: wordcraft_doc::Rgb(0, 255, 0), transparency: 35.0 }));
+    }
+
+    /// Selecting More Colors… from a gradient stop's color popover applies the custom color to that
+    /// stop while keeping the other stops and gradient settings intact.
+    #[test]
+    fn format_shape_pane_gradient_stop_more_colors_applies_stop_color() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.shape", json!({"kind": "rectangle"})).unwrap();
+        let stops = json!([{"pos": 0, "color": "FFFFFF", "transparency": 20}, {"pos": 100, "color": "156082", "transparency": 50}]);
+        a.run("shape.fill", json!({"gradient": {"stops": stops, "angle": 90}})).unwrap();
+        a.run("view.formatShapePane", json!({"value": true})).unwrap();
+        let mut h = harness(a);
+        h.run_steps(4);
+
+        h.get_by_label("Color stop 2 of 2").click();
+        h.run_steps(3);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        h.get_by_label("More Colors…").click();
+        h.run_steps(3);
+
+        let dialog = h.state_mut().dialog_host.get_mut::<craft::color_ui::ui::ColorPickerDialog>().expect("Colors dialog opened");
+        assert_eq!(dialog.opening().map(|p| super::rgb_of(p.color)), Some(wordcraft_doc::Rgb(0x15, 0x60, 0x82)));
+        dialog.set_color(craft::color_ui::ui::PickedColor::rgb(craft::theme::Srgba::rgb(1.0, 0.0, 0.0)));
+        let ctx = h.ctx.clone();
+        assert!(h.state_mut().dialog_host.confirm::<craft::color_ui::ui::ColorPickerDialog>(&ctx));
+        crate::dialogs::host::settle(h.state_mut(), &ctx);
+
+        let Some(Fill::Gradient(g)) = fill(h.state()) else { panic!("expected gradient fill, got {:?}", fill(h.state())) };
+        assert_eq!(g.stops.len(), 2);
+        assert_eq!(g.stops[0].color, wordcraft_doc::Rgb(0xFF, 0xFF, 0xFF));
+        assert_eq!(g.stops[1].color, wordcraft_doc::Rgb(255, 0, 0));
+        assert_eq!(g.stops[1].transparency, 50.0);
     }
 
     fn png_data() -> String {
