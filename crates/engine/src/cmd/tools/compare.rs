@@ -216,7 +216,7 @@ fn diff_blocks(doc: &mut Document, old: &[Arc<Block>], new: &[Arc<Block>], ctx: 
                                 out.push(Arc::new(mark_block(x, &|c| c.del = Some(ctx.del))));
                             }
                             if let Some(x) = b {
-                                out.push(Arc::new(mark_block(x, &|c| c.ins = Some(ctx.ins))));
+                                out.push(Arc::new(mark_block(x, &|c| c.ins = c.ins.or(Some(ctx.ins)))));
                             }
                         }
                     }

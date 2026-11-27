@@ -1363,8 +1363,29 @@ impl Document {
             }
         };
         let mut media = BTreeMap::new();
-        for (key, data) in &src.media {
-            let ext = key.rsplit_once('.').map(|(_, e)| e).unwrap_or("png");
+        // Compare imports only the media the compared content references (the body and the
+        // note, comment and text-box stories adopted below): unreferenced media in parts the
+        // comparison never looks at (headers, footers) stays out of the result, and an
+        // extensionless key falls back to "bin", as the compare adoption has always done.
+        // Other modes adopt the whole of the source's media, as before.
+        let referenced: BTreeMap<String, Arc<Vec<u8>>> = if compare {
+            let blocks: Vec<Block> = src
+                .body
+                .iter()
+                .map(|b| (**b).clone())
+                .chain(
+                    src.parts
+                        .values()
+                        .filter(|p| matches!(p.kind, PartKind::Footnote | PartKind::Endnote | PartKind::Comment | PartKind::TextBox))
+                        .flat_map(|p| p.blocks.iter().map(|b| (**b).clone())),
+                )
+                .collect();
+            src.media_of_blocks(&blocks)
+        } else {
+            src.media.clone()
+        };
+        for (key, data) in &referenced {
+            let ext = key.rsplit_once('.').map(|(_, e)| e).unwrap_or(if compare { "bin" } else { "png" });
             media.insert(key.clone(), self.add_media(data.to_vec(), ext));
         }
         let next_abs = self.numbering.abstracts.iter().map(|a| a.id.saturating_add(1)).max().unwrap_or(0);
