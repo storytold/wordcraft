@@ -16,7 +16,7 @@ craft = { workspace = true, features = [
     "color", "color-ui", "control", "draw", "font-manager", "gpu", "menu", "pages", "print", "review", "table", "text",
     "text-find", "web-api", "web-host", "window",
 ] }
-craft-fonts-build = { git = "https://github.com/hshamilt/craft-libs", rev = "f79572f1fcf640ff802bbb2e85e213a00e510f7a" }
+craft-fonts-build = { git = "https://github.com/hshamilt/craft-libs", rev = "163af3d929e5daa4f77e24a610c0cffdbdc32282" }
 wordcraft-geom = { workspace = true, features = ["image"] }
 wordcraft-doc = { workspace = true }
 wordcraft-fonts = { workspace = true }
@@ -76,7 +76,7 @@ craft-ui-test-kit = { workspace = true }
 craft = { workspace = true, features = ["ui-testing"] }
 
 [build-dependencies]
-craft-fonts-build = { git = "https://github.com/hshamilt/craft-libs", rev = "f79572f1fcf640ff802bbb2e85e213a00e510f7a", features = ["subset"] }
+craft-fonts-build = { git = "https://github.com/hshamilt/craft-libs", rev = "163af3d929e5daa4f77e24a610c0cffdbdc32282", features = ["subset"] }
 serde_json = { workspace = true }
 toml = "1"
 
