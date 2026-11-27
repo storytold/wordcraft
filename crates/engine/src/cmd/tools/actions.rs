@@ -182,11 +182,11 @@ pub(super) fn quick_parts(s: &mut Session, v: &Value, gallery: &str) -> CmdResul
         if a == b {
             return Err(CmdError::Params("select the content to save".into()));
         }
+        if name.trim().is_empty() {
+            return Err(CmdError::Params("a building block needs a name".into()));
+        }
         let frag = s.doc.copy_range(&a, &b);
         if in_document {
-            if name.trim().is_empty() {
-                return Err(CmdError::Params("a building block needs a name".into()));
-            }
             let blocks: wordcraft_doc::Blocks = frag.blocks.into_iter().map(Arc::new).collect();
             match s.doc.glossary.iter_mut().find(|e| e.name == name && e.gallery == gallery) {
                 Some(e) => e.blocks = blocks,
@@ -491,4 +491,21 @@ pub(super) fn spreadsheet_rows(v: &Value) -> Result<Vec<Vec<String>>, CmdError> 
         rows.push(out);
     }
     Ok(rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CmdError, Document, Session, json};
+
+    #[test]
+    fn quick_parts_reject_blank_session_names() {
+        let mut s = Session::new(Document::from_text("Reusable text"));
+        s.run("select.text", &json!({"text": "Reusable text"})).unwrap();
+        for name in ["", " \t\u{a0}"] {
+            let error = s.run("insert.quickParts", &json!({"save": name})).unwrap_err();
+            assert!(matches!(error, CmdError::Params(message) if message == "a building block needs a name"));
+        }
+        let listed = s.run("insert.quickParts", &json!({})).unwrap();
+        assert_eq!(listed["parts"], json!([]));
+    }
 }
