@@ -24,11 +24,11 @@ pub fn specs() -> Vec<CommandSpec> {
             };
             with_sect(s, |x| x.set_landscape(land))
         })
-        .params(r#"{"value": "portrait|landscape"}"#),
-        CommandSpec::new("layout.size", "Size", "Layout › Page Setup", size).params(r#"{"name"?: "Letter|Legal|A4|…", "width"?: pt, "height"?: pt} (each side clamped to 7.2–1584 pt, 0.1–22 in; the section keeps its orientation)"#),
+        .params(r#"{"value"?: "portrait|landscape"} (default: toggle)"#),
+        CommandSpec::new("layout.size", "Size", "Layout › Page Setup", size).params(r#"{"name": "Letter|Legal|A4|…"} | {"width": pt, "height": pt} (each side clamped to 7.2–1584 pt, 0.1–22 in; the section keeps its orientation)"#),
         CommandSpec::new("layout.columns", "Columns", "Layout › Page Setup", columns)
             .params(
-                r#"{"count": 1-12, "space"?: pt, "separator"?: bool, "preset"?: "left|right", "widths"?: [[width pt, space after pt], …] (unequal columns; sets the count), "apply"?: "section|document|forward|selection"} (default: selection when text is selected in the main text — section breaks around it — else section)"#,
+                r#"{"count"?: 1-12 (default 1; left/right presets default 2), "space"?: pt, "separator"?: bool, "preset"?: "left|right", "widths"?: [[width pt, space after pt], …] (unequal columns; sets the count), "apply"?: "section|document|forward|selection"} (default: selection when text is selected in the main text — section breaks around it — else section)"#,
             ),
         CommandSpec::new("layout.break", "Breaks", "Layout › Page Setup", breaks)
             .params(r#"{"kind": "page|column|textWrapping|nextPage|continuous|evenPage|oddPage"}"#),
@@ -68,11 +68,13 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("layout.differentFirstPage", "Different First Page", "Header & Footer › Options", |s, v| {
             let on = p::bool(v, "value").unwrap_or(!sect(s).title_page);
             with_sect(s, |x| x.title_page = on)
-        }),
+        })
+        .params(r#"{"value"?: bool} (default: toggle)"#),
         CommandSpec::new("layout.differentOddEven", "Different Odd & Even Pages", "Header & Footer › Options", |s, v| {
             s.doc.settings.even_odd_headers = p::bool(v, "value").unwrap_or(!s.doc.settings.even_odd_headers);
             sel_result(s)
-        }),
+        })
+        .params(r#"{"value"?: bool} (default: toggle)"#),
         CommandSpec::new("layout.pageNumberFormat", "Format Page Numbers", "Insert › Header & Footer › Page Number", |s, v| {
             let fmt = p::str(v, "format").map(wordcraft_doc::section::NumFormat::from_ooxml);
             with_sect(s, |x| {
