@@ -465,6 +465,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-11-01 | Rulers: in a section of several text columns the horizontal ruler shades the space between each two columns like the margins (Print Layout, in the main text outside tables, with the selection in one section); dragging an edge of a space changes the spacing (equal columns stay equal, as in Word for Mac), one undo step per drag (#5197) |
 | 2026-11-01 | trivial | N-up and booklet print imposition (#641): integrate current print-job link handling (#4734), preserve markup preview and sheet/copy planning; readiness estimates unchanged. |
 | 2026-11-01 | trivial | Printing (#641): pin booklet page order and blank left/right slots for every count from five through nine pages and both bindings; integrate current main. Readiness estimates unchanged. |
+| 2026-10-25 | Inherited turned headers measure percentage tables at their defining section width. Header measurement restores list counters, including synthetic page-colour paragraphs. Synthetic regressions; no new native observation. |
 | 2026-10-31 | trivial | Preserve recipient columns after an unquoted whitespace-only prefix in a headered CSV (#4249); keep quoted headers, headerless whitespace records and shared CSV parsing. |
 | 2026-10-31 | trivial | Integrate complete-record recipient CSV delimiter detection (#4249) with current main; preserve leading blank-line detection (#5042), original regressions and readiness estimates. |
 | 2026-10-31 | A picture or shape anchored in a line of a long paragraph on a later page is drawn on that page, as in Word, instead of the page the paragraph starts on; one dropped on such a page stays where it was dropped (#4250) |
@@ -981,6 +982,9 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | trivial | #2578 retains page-colour header ownership, Header-style clearance and inherited turned/filler defining widths. No new native or corpus qualification. |
+| 2026-11-01 | trivial | #2578: Port page-colour header ownership, isolated numbering and inherited turned/filler defining widths to current modules and precomputed header links. Source checks only; primary qualification pending. |
+| 2026-10-25 | trivial | Inherited turned headers measure percentage tables at their defining section width. Header measurement restores list counters, including synthetic page-colour paragraphs. Synthetic regressions; no new native observation. |
 | 2026-11-18 | trivial | DOCX validation reports undeclared binary tombstones in coverage notes when relationship discovery establishes that no relationship targets the part. |
 | 2026-11-18 | trivial | DOCX validation excludes the content-type manifest from main-part cardinality and reports untargeted ordinary document parts in coverage when one ordinary main is established. |
 | 2026-11-18 | trivial | DOCX validation warns on an image signature mismatch when the image is unused or can be decoded in another raster format. Used, unusable images retain their error. |

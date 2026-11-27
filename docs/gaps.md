@@ -177,6 +177,7 @@ Small follow-ups from the 2026-10-25 field, table and AutoFormat batch (#4232):
 Ink replay, eraser picking, lasso selection and arrow-candidate discovery reuse the paragraph prefixes they have already scanned (#3614). Page item order, stroke geometry and saved data retain their behavior. This narrows the stability work; ink import fidelity, native pen input and broader corpus qualification remain open.
 MATH glyphs that reference the same construction now share its immutable variants and assembly data (#3630). Glyph mappings, values and the existing partial-record fallback stay unchanged. Repeated glyph IDs keep their last valid reference without retaining superseded constructions. Distinct overlapping constructions and assembly-only sharing remain separate.
 Recipient label generation (#4880) now includes all selected recipients across as many sheets as needed, retaining filtered/sorted order and the chosen product geometry. This fixes the one-sheet omission; Update Labels and Finish & Merge template behavior remain separate, and gap 21 remains open. Readiness estimates are unchanged.
+Inherited turned headers measure percentage tables at their defining section width. Header measurement restores list counters, including synthetic page-colour paragraphs. Synthetic regressions; no new native observation.
 
 File > Print offers 2, 4, 6, 9 or 16 logical pages per physical sheet side and left/right-bound booklets (#641). Preview and print PDF share the sheet plan, selected pages, parity, copy padding and markup geometry. Custom-range changes reset the preview to the first sheet; Print Markup invalidates preview layout and textures. Native jobs omit link annotations as required by upstream #4734, while saved print PDFs keep their remapped links. Native printing submits copies to the spooler without multiplying them in the PDF. Ordinary PDF export remains single-page by default. Translations are reviewed separately in craft-i18n#38. Physical-printer qualification and driver-specific options remain unverified.
 
@@ -202,6 +203,9 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | trivial | #2578 retains page-colour header ownership, Header-style clearance and inherited turned/filler defining widths. No new native or corpus qualification. |
+| 2026-11-01 | trivial | #2578: Port page-colour header ownership, isolated numbering and inherited turned/filler defining widths to current modules and precomputed header links. Source checks only; primary qualification pending. |
+| 2026-10-25 | trivial | Inherited turned headers measure percentage tables at their defining section width. Header measurement restores list counters, including synthetic page-colour paragraphs. Synthetic regressions; no new native observation. |
 | 2026-11-21 | trivial | Pagination gap #4: strict column balancing measures kept paragraphs again after moving them to account for wrap areas in the new column (#6821). Readiness estimates unchanged |
 | 2026-11-19 | trivial | Pagination gap #4: strict widow/orphan control releases the wrap area of a float whose anchor moves to another column during balancing (#6821). Readiness estimates unchanged |
 | 2026-11-19 | trivial | #4 narrowed: a narrow Square, Tight or Through logo leaves legacy header lines in place at mode 14. The same lines flow beside the logo at mode 15. Measured in Word for Windows with a synthetic document (#6805). |
