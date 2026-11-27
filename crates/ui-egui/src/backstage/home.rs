@@ -4,7 +4,8 @@
 use craft::ui::buttons::Button;
 use craft::ui::contract::{Bind, Props as _, Show as _, clicked};
 use craft::ui::shell::{RecentFile, RecentList, RecentSort, RecentView, StartAction, StartLayout, StartScreen, Template};
-use egui::Ui;
+use craft::ui::style::DataColor;
+use egui::{Color32, Ui};
 use serde_json::json;
 
 use super::{HOME_TEMPLATES, TEMPLATES, TemplateThumbs, error_line, heading, label, open_recent, thumbs};
@@ -29,7 +30,7 @@ pub(super) fn template_cards(list: &[(&str, &str)]) -> Vec<Template> {
 
 /// Runs what the user did on a start screen or recent list. A failed open stays on the page as its
 /// error (`BackstageState::open_error`); a later success clears it.
-fn run_actions(app: &mut WordApp, ctx: &egui::Context, actions: Vec<StartAction>) {
+fn run_actions(app: &mut WordApp, actions: Vec<StartAction>) {
     for action in actions {
         match action {
             StartAction::New | StartAction::MoreTemplates => app.ui.backstage_page = "new".into(),
@@ -39,7 +40,7 @@ fn run_actions(app: &mut WordApp, ctx: &egui::Context, actions: Vec<StartAction>
             StartAction::OpenRecent(path) => {
                 let failed = open_recent(app, &path.to_string_lossy()).err();
                 if failed.is_none() {
-                    app.canvas.focus_page(ctx);
+                    app.canvas.focus_page_after_pass();
                 }
                 app.backstage_state.open_error = failed;
             }
@@ -52,7 +53,7 @@ fn run_actions(app: &mut WordApp, ctx: &egui::Context, actions: Vec<StartAction>
             StartAction::UseTemplate(id) => {
                 let _ = app.run("file.new", json!({"template": id}));
                 app.ui.backstage = false;
-                app.canvas.focus_page(ctx);
+                app.canvas.focus_page_after_pass();
             }
             // Pins, folders and reveal are not part of File.
             _ => {}
@@ -77,22 +78,29 @@ pub(super) fn home(ui: &mut Ui, app: &mut WordApp) {
     let recent = recent_files(app);
     let cards = template_cards(&TEMPLATES[..HOME_TEMPLATES.min(TEMPLATES.len())]);
     let store = thumbs::store(&ctx);
-    let source = TemplateThumbs { region: app.session.region() };
+    let region = app.session.region();
+    let (wide, high) = thumbs::page_aspect(&region);
+    let source = TemplateThumbs { region };
     let (mut view, mut sort) = (RecentView::List, RecentSort::Opened);
     let out = StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &recent)
         .layout(StartLayout::Greeting)
+        // The File rail beside the page has New and Open; production's Home had no second pair.
+        .offers_new(false)
+        .offers_open(false)
         .title(label(greeting))
         .templates(&cards)
         .more_templates(label("More templates →"))
         .max_recent(app.ui.recent_shown())
+        .picture_aspect(wide, high)
+        .card_zoom(1.0)
+        .page_paper(DataColor::new(Color32::WHITE))
         .thumbnails(&store, &source)
         .show(ui);
-    run_actions(app, &ctx, out.actions);
+    run_actions(app, out.actions);
 }
 
 /// Open: Browse for a file, then the recent documents.
 pub(super) fn open(ui: &mut Ui, app: &mut WordApp) {
-    let ctx = ui.ctx().clone();
     heading(ui, "Open");
     if clicked(&Button::new(label("Browse…")).id_salt("open-browse").show(ui)) {
         let _ = app.run("ui.openFileDialog", json!({}));
@@ -112,12 +120,6 @@ pub(super) fn open(ui: &mut Ui, app: &mut WordApp) {
         error_line(ui, &error);
     }
     let recent = recent_files(app);
-    let store = thumbs::store(&ctx);
-    let source = TemplateThumbs { region: app.session.region() };
-    let out = RecentList::new(&recent)
-        .max_recent(app.ui.recent_shown())
-        .empty(label("Documents you open will show up here."))
-        .thumbnails(&store, &source)
-        .show(ui);
-    run_actions(app, &ctx, out.actions);
+    let out = RecentList::new(&recent).max_recent(app.ui.recent_shown()).empty(label("Documents you open will show up here.")).show(ui);
+    run_actions(app, out.actions);
 }

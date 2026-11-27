@@ -133,10 +133,11 @@ impl Exporter<'_> {
         let upem = face.upem.max(1.0) as f32;
         let needs_reorder = is_rtl && !left_to_right(glyphs);
         let has_thai_or_lao_clusters = is_thai_or_lao && ranges.windows(2).any(|w| w[0] == w[1]);
+        let can_write_actual = para_tag.is_some() && self.opts.tagged;
         let (order, ranges, txt, actual_spans) = if !needs_reorder && !has_thai_or_lao_clusters {
             ((0..glyphs.len()).collect(), ranges, txt, Vec::new())
         } else {
-            let (new_txt, parts, actual_spans) = split_clusters_with_actual(&txt, glyphs, &ranges, &self.cmap(face));
+            let (new_txt, parts, actual_spans) = split_clusters_with_actual(&txt, glyphs, &ranges, &self.cmap(face), can_write_actual);
             let order = if needs_reorder {
                 visual_order(&txt, glyphs, &ranges, &parts)
             } else if has_thai_or_lao_clusters && !is_rtl {

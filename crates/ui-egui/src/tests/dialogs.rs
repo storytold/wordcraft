@@ -69,14 +69,7 @@ fn table_properties_dialog_sets_every_selected_row() {
     a.run("table.properties", json!({})).unwrap();
 
     // Drawn: one click on the mixed box turns breaking on for every row.
-    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            crate::test_harness::driver_logic(&ctx, app);
-            app.ui(ui);
-        },
-        a,
-    );
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| a);
     for _ in 0..4 {
         h.step();
     }
@@ -305,14 +298,7 @@ fn recipient_grid_edits_the_right_record_through_the_ui() {
     a.run("mailings.recipients", json!({"csv": "Name,City\nAda,London\nAlan,Wilmslow\nGrace,London\nÉmile,Paris"})).unwrap();
     a.run("mailings.filterRecipients", json!({"rules": [{"field": "City", "op": "equal", "value": "London"}]})).unwrap();
     dialogs::open(&mut a, "recipientList", &json!({})).expect("the dialog opens");
-    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut State| {
-            let ctx = ui.ctx().clone();
-            crate::test_harness::driver_logic(&ctx, app);
-            app.ui(ui);
-        },
-        a,
-    );
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| a);
     h.run_steps(4);
     let dlg = |h: &egui_kittest::Harness<'_, State>| {
         let d = h.state().dialog_host.get::<RecipientListDialog>().expect("the recipient dialog is open");
@@ -436,14 +422,7 @@ fn an_existing_list_picked_on_the_web_loads_recipients() {
 /// pane's search box (with the selected text in it), not a dialog.
 #[test]
 fn find_replace_and_go_to_keys_like_word() {
-    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            crate::test_harness::driver_logic(&ctx, app);
-            app.ui(ui);
-        },
-        app(),
-    );
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| app());
     for _ in 0..6 {
         h.step();
     }
@@ -451,14 +430,17 @@ fn find_replace_and_go_to_keys_like_word() {
     h.event(egui::Event::Text("Kilns fire clay. Kilns cool.".into()));
     h.step();
     let nav_query = |h: &egui_kittest::Harness<WordApp>| h.ctx.data(|d| d.get_temp::<String>(h.state().window_id("nav_query"))).unwrap_or_default();
+    let release = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers };
     // Ctrl+F: the pane, and typing goes into its search box.
     h.event(key(egui::Key::F, egui::Modifiers::COMMAND));
+    h.event(release(egui::Key::F, egui::Modifiers::COMMAND));
     h.step();
     h.step();
     assert!(h.state().session.view.nav_pane, "the Navigation pane opened");
     assert_eq!(h.state().ui.nav_tab, "results", "Find exposes its results (#2096)");
     assert!(h.state().dialog_host.open_dialogs().is_empty(), "no dialog: {:?}", open_key(h.state()));
     h.event(key(egui::Key::C, egui::Modifiers::NONE));
+    h.event(release(egui::Key::C, egui::Modifiers::NONE));
     h.event(egui::Event::Text("cool".into()));
     h.step();
     h.step();
@@ -481,6 +463,7 @@ fn find_replace_and_go_to_keys_like_word() {
     h.state_mut().canvas.focus_page(&ctx);
     h.step();
     h.event(key(egui::Key::F, egui::Modifiers::COMMAND));
+    h.event(release(egui::Key::F, egui::Modifiers::COMMAND));
     h.step();
     h.step();
     assert_eq!(nav_query(&h), "Kilns");

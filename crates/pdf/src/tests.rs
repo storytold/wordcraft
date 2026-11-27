@@ -2591,7 +2591,7 @@ fn decomposed_sara_am_splits_into_base_nikhahit_and_sara_aa() {
     let glyphs = [(1, 0.0, 0.0), (2, 5.0, 0.0), (3, 10.0, 0.0)];
     let ranges = [0..6, 0..6, 0..6];
     let rev: std::collections::HashMap<u32, char> = [(1, 'น'), (2, '\u{0E4D}'), (3, '\u{0E32}')].into_iter().collect();
-    let (split_text, parts, actual) = split_clusters_with_actual(text, &glyphs, &ranges, &rev);
+    let (split_text, parts, actual) = split_clusters_with_actual(text, &glyphs, &ranges, &rev, true);
     assert_eq!(split_text, "น\u{0E4D}\u{0E32}");
     assert_eq!(parts, [0..3, 3..6, 6..9]);
     assert_eq!(actual, [(3..9, "\u{0E33}")]);
@@ -2600,7 +2600,7 @@ fn decomposed_sara_am_splits_into_base_nikhahit_and_sara_aa() {
     let lao_glyphs = [(1, 0.0, 0.0), (2, 4.0, 0.0), (3, 4.0, 0.0), (4, 8.0, 0.0)];
     let lao_ranges = [0..9, 0..9, 0..9, 0..9];
     let lao_rev: std::collections::HashMap<u32, char> = [(1, 'ນ'), (2, '\u{0ECD}'), (3, '\u{0EC9}'), (4, '\u{0EB2}')].into_iter().collect();
-    let (lao_split, lao_parts, lao_actual) = split_clusters_with_actual(lao_text, &lao_glyphs, &lao_ranges, &lao_rev);
+    let (lao_split, lao_parts, lao_actual) = split_clusters_with_actual(lao_text, &lao_glyphs, &lao_ranges, &lao_rev, true);
     assert_eq!(lao_split, "ນ\u{0EC9}\u{0ECD}\u{0EB2}");
     assert_eq!(lao_parts, [0..3, 6..9, 3..6, 9..12]);
     assert_eq!(lao_actual, [(6..12, "\u{0EB3}")]);
@@ -3586,6 +3586,24 @@ fn thai_text_extracts_correctly() {
     assert!(raw.contains('\u{0E48}'), "ToUnicode missing MAI EK: {raw:?}");
     assert!(raw.contains('\u{0E4B}'), "ToUnicode missing MAI CHATTAWA: {raw:?}");
     assert!(raw.contains('\u{0E35}'), "ToUnicode missing SARA II: {raw:?}");
+}
+
+/// #5883: Thai SARA AM in untagged paths (footers via `draw()`, and `tagged: false` exports)
+/// still emits `/ActualText` so viewers extract the original `U+0E33` spelling.
+#[test]
+fn thai_sara_am_in_footer_and_untagged_export_preserves_actual_text() {
+    let mut d = Document::from_text("บริษัท จำกัด");
+    let footer_para = Paragraph::with_text("บริษัท จำกัด", Default::default());
+    let footer_id = d.add_part(wordcraft_doc::PartKind::Footer, vec![Arc::new(Block::Para(footer_para))]);
+    d.last_section.footers.default = Some(footer_id);
+
+    let tagged_bytes = export(&d, &PdfOptions::default()).unwrap();
+    let tagged_text = extract_text(&tagged_bytes).concat();
+    assert!(tagged_text.contains("บริษัท จำกัด"), "tagged export must preserve footer SARA AM: {tagged_text:?}");
+
+    let untagged_bytes = export(&d, &PdfOptions { tagged: false, ..PdfOptions::default() }).unwrap();
+    let untagged_text = extract_text(&untagged_bytes).concat();
+    assert!(untagged_text.contains("บริษัท จำกัด"), "untagged export must preserve body/footer SARA AM: {untagged_text:?}");
 }
 
 /// Verifies that Lao text with composite vowels (`\u{0EB3}`) extracts cleanly

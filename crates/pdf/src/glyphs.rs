@@ -47,20 +47,25 @@ pub(crate) fn split_clusters<'a>(
     ranges: &[std::ops::Range<usize>],
     rev: &HashMap<u32, char>,
 ) -> (std::borrow::Cow<'a, str>, Vec<std::ops::Range<usize>>) {
-    let (txt, parts, _) = split_clusters_with_actual(text, glyphs, ranges, rev);
+    let (txt, parts, _) = split_clusters_with_actual(text, glyphs, ranges, rev, true);
     (txt, parts)
 }
 
 /// Same as [`split_clusters`], plus `(byte_range_in_output, original_text)` spans for any
 /// compatibility-decomposed Thai/Lao composite vowels so callers can preserve the original source
 /// spelling in `/ActualText` while keeping per-glyph `ToUnicode` entries decomposed.
+///
+/// When `decompose_sara_am` is `false` (untagged paths that cannot wrap runs in `/ActualText`),
+/// SARA AM clusters keep their shared logical range so `krilla` preserves the original spelling.
 pub(crate) fn split_clusters_with_actual<'a>(
     text: &'a str,
     glyphs: &[(u32, f32, f32)],
     ranges: &[std::ops::Range<usize>],
     rev: &HashMap<u32, char>,
+    decompose_sara_am: bool,
 ) -> (std::borrow::Cow<'a, str>, Vec<std::ops::Range<usize>>, Vec<(std::ops::Range<usize>, &'a str)>) {
-    let has_sara_am = ranges.iter().any(|r| text.get(r.clone()).is_some_and(|t| t.contains(['\u{0E33}', '\u{0EB3}']) && r.start < r.end));
+    let has_sara_am =
+        decompose_sara_am && ranges.iter().any(|r| text.get(r.clone()).is_some_and(|t| t.contains(['\u{0E33}', '\u{0EB3}']) && r.start < r.end));
     if !has_sara_am {
         let mut out = ranges.to_vec();
         let mut i = 0;

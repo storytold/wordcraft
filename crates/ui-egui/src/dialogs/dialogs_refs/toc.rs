@@ -322,8 +322,8 @@ impl WordForm for TocStylesForm {
         // A level is always picked: Clear and a Toggle off keep the current one.
         for event in shown.events {
             let picked = match event {
-                CollectionEvent::Selection(SelectionChange::Set(keys)) => keys.last().copied(),
-                CollectionEvent::Selection(SelectionChange::Toggle(key)) => Some(key),
+                CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => keys.last().copied(),
+                CollectionEvent::Selection { change: SelectionChange::Toggle(key), .. } => Some(key),
                 _ => None,
             };
             if let Some(at) = picked {
