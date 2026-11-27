@@ -528,6 +528,26 @@ mod tests {
         assert_eq!(rc.draw_size(), 11.0, "baseline text keeps its size");
     }
 
+    /// A table style's run formatting differs from the chain's only in a colour's theme colour
+    /// (the same colour shown): the patch still gives the colour with its record, which replaces
+    /// the two together where it is applied, so the colour isn't lost there.
+    #[test]
+    fn a_table_style_patch_gives_a_theme_colour_with_its_colour() {
+        use crate::props::{CharColorSources, ColorSource, ThemeColor, ThemeRef};
+        let shown = TextColor::Rgb(Rgb(0x15, 0x60, 0x82));
+        let mut sheet = StyleSheet::empty();
+        sheet.default_chr.color = Some(shown);
+        let source = ColorSource { theme: ThemeRef { color: ThemeColor::Accent1, tint: None, shade: None }, value: Some(shown), shown: Some(shown) };
+        let table = CharProps {
+            color: Some(shown),
+            color_sources: Some(Box::new(CharColorSources { color: Some(source), ..Default::default() })),
+            ..Default::default()
+        };
+        let patch = sheet.table_char_patch(None, None, &table);
+        assert_eq!(patch.color_sources.as_deref().and_then(|s| s.color), Some(source));
+        assert_eq!(sheet.default_chr.clone().overlaid(&patch).color, Some(shown));
+    }
+
     /// #2036: only a character itself (direct formatting) has a symbol font of its own; a
     /// style never gives one to its text.
     #[test]

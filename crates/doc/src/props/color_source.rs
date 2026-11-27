@@ -430,6 +430,12 @@ impl ColorSource {
             *now = Some(c);
         }
     }
+
+    /// Whether its theme colour gives, under `p`, the colour it was shown in: saved under `p`,
+    /// it shows that colour again.
+    fn agrees(&self, p: Palette) -> bool {
+        p.resolve(&self.theme).map(TextColor::Rgb) == self.shown
+    }
 }
 
 impl ShadingSource {
@@ -463,6 +469,11 @@ impl ShadingSource {
             *now = self.resolve(p);
             self.shown = *now;
         }
+    }
+
+    /// [`ColorSource::agrees`] for a shading.
+    fn agrees(&self, p: Palette) -> bool {
+        self.resolve(p) == self.shown
     }
 }
 
@@ -609,28 +620,33 @@ enum ThemeColored<'a> {
 /// colours isn't copied.
 fn each_in_blocks(blocks: &mut [std::sync::Arc<crate::Block>], f: &mut dyn FnMut(ThemeColored<'_>), depth: usize) {
     for b in blocks.iter_mut().filter(|b| block_has_theme_colors(b, depth)) {
-        match std::sync::Arc::make_mut(b) {
-            crate::Block::Para(para) => {
-                f(ThemeColored::Para(&mut para.props));
-                f(ThemeColored::Char(&mut para.mark));
-                for r in &mut para.runs {
-                    f(ThemeColored::Char(&mut r.props));
-                }
-                if let Some(s) = para.section.as_deref_mut() {
-                    f(ThemeColored::Section(s));
-                }
+        each_in_block(std::sync::Arc::make_mut(b), f, depth);
+    }
+}
+
+/// Hand `f` each owner in a block `depth` tables deep, and in the tables it holds.
+fn each_in_block(b: &mut crate::Block, f: &mut dyn FnMut(ThemeColored<'_>), depth: usize) {
+    match b {
+        crate::Block::Para(para) => {
+            f(ThemeColored::Para(&mut para.props));
+            f(ThemeColored::Char(&mut para.mark));
+            for r in &mut para.runs {
+                f(ThemeColored::Char(&mut r.props));
             }
-            crate::Block::Table(t) => {
-                f(ThemeColored::Table(&mut t.props));
-                for r in &mut t.rows {
-                    if let Some(x) = r.props.exceptions.as_deref_mut() {
-                        f(ThemeColored::Table(x));
-                    }
-                    for c in &mut r.cells {
-                        f(ThemeColored::Cell(&mut c.props));
-                        if depth < MAX_TABLE_DEPTH {
-                            each_in_blocks(&mut c.blocks, f, depth + 1);
-                        }
+            if let Some(s) = para.section.as_deref_mut() {
+                f(ThemeColored::Section(s));
+            }
+        }
+        crate::Block::Table(t) => {
+            f(ThemeColored::Table(&mut t.props));
+            for r in &mut t.rows {
+                if let Some(x) = r.props.exceptions.as_deref_mut() {
+                    f(ThemeColored::Table(x));
+                }
+                for c in &mut r.cells {
+                    f(ThemeColored::Cell(&mut c.props));
+                    if depth < MAX_TABLE_DEPTH {
+                        each_in_blocks(&mut c.blocks, f, depth + 1);
                     }
                 }
             }
@@ -672,39 +688,106 @@ fn style_has_theme_colors(st: &crate::Style) -> bool {
         })
 }
 
-impl super::CharProps {
-    /// Drop the theme colour records (the tracked change's colours before it too): the colours
-    /// stay as shown, as fixed colours.
-    fn forget_theme_colors(&mut self) {
-        self.color_sources = None;
-        if let Some(ch) = &mut self.fmt_change {
-            ch.old.forget_theme_colors();
+impl CharColorSources {
+    /// Keep the records whose theme colour gives, under `p`, the colour shown ([`ColorSource::agrees`]).
+    fn keep_agreeing(&mut self, p: Palette) {
+        self.color = self.color.filter(|c| c.agrees(p));
+        self.underline = self.underline.filter(|c| c.agrees(p));
+        self.border = self.border.filter(|c| c.agrees(p));
+        self.shading = self.shading.take().filter(|s| s.agrees(p));
+    }
+}
+
+impl BorderColorSources {
+    /// [`CharColorSources::keep_agreeing`] for each side.
+    fn keep_agreeing(&mut self, p: Palette) {
+        for side in self.sides_mut() {
+            *side = side.filter(|c| c.agrees(p));
         }
     }
 }
 
-/// [`super::CharProps::forget_theme_colors`] for the owners of a shading and borders.
-macro_rules! forget_block {
+impl BlockColorSources {
+    /// [`CharColorSources::keep_agreeing`] for a shading and borders.
+    fn keep_agreeing(&mut self, p: Palette) {
+        self.shading = self.shading.take().filter(|s| s.agrees(p));
+        self.borders.keep_agreeing(p);
+    }
+}
+
+impl super::CharProps {
+    /// Keep the theme colour records that give, under `p`, the colours shown (the tracked
+    /// change's colours before it too); the others go, their colours staying as shown, as fixed
+    /// colours.
+    fn keep_theme_colors_shown(&mut self, p: Palette) {
+        if let Some(s) = self.color_sources.as_deref_mut() {
+            s.keep_agreeing(p);
+            if s.is_empty() {
+                self.color_sources = None;
+            }
+        }
+        if let Some(ch) = &mut self.fmt_change {
+            ch.old.keep_theme_colors_shown(p);
+        }
+    }
+}
+
+/// [`super::CharProps::keep_theme_colors_shown`] for the owners of a shading and borders.
+macro_rules! keep_shown_block {
     ($($owner:ty),*) => {
         $( impl $owner {
-            fn forget_theme_colors(&mut self) {
-                self.color_sources = None;
+            fn keep_theme_colors_shown(&mut self, p: Palette) {
+                if let Some(s) = self.color_sources.as_deref_mut() {
+                    s.keep_agreeing(p);
+                    if s.is_empty() {
+                        self.color_sources = None;
+                    }
+                }
                 if let Some(ch) = &mut self.fmt_change {
-                    ch.old.forget_theme_colors();
+                    ch.old.keep_theme_colors_shown(p);
                 }
             }
         } )*
     };
 }
 
-forget_block!(super::ParaProps, super::TableProps, super::CellProps);
+keep_shown_block!(super::ParaProps, super::TableProps, super::CellProps);
 
 impl crate::section::SectionProps {
-    fn forget_theme_colors(&mut self) {
-        self.page_border_sources = None;
-        if let Some(ch) = &mut self.fmt_change {
-            ch.old.forget_theme_colors();
+    fn keep_theme_colors_shown(&mut self, p: Palette) {
+        if let Some(s) = self.page_border_sources.as_deref_mut() {
+            s.keep_agreeing(p);
+            if s.is_empty() {
+                self.page_border_sources = None;
+            }
         }
+        if let Some(ch) = &mut self.fmt_change {
+            ch.old.keep_theme_colors_shown(p);
+        }
+    }
+}
+
+impl crate::styles::PartFormat {
+    fn keep_theme_colors_shown(&mut self, p: Palette) {
+        self.chr.keep_theme_colors_shown(p);
+        if let Some(s) = self.color_sources.as_deref_mut() {
+            s.keep_agreeing(p);
+            if s.is_empty() {
+                self.color_sources = None;
+            }
+        }
+    }
+}
+
+/// Keep the records of `owner` whose theme colour gives the colour shown under `p`.
+fn keep_shown(owner: ThemeColored<'_>, p: Palette) {
+    match owner {
+        ThemeColored::Char(c) => c.keep_theme_colors_shown(p),
+        ThemeColored::Para(c) => c.keep_theme_colors_shown(p),
+        ThemeColored::Table(c) => c.keep_theme_colors_shown(p),
+        ThemeColored::Cell(c) => c.keep_theme_colors_shown(p),
+        ThemeColored::Part(c) => c.keep_theme_colors_shown(p),
+        ThemeColored::Section(c) => c.keep_theme_colors_shown(p),
     }
 }
 
@@ -774,29 +857,61 @@ impl crate::Document {
         });
     }
 
-    /// Drop every theme colour record, the colours staying as shown: for content brought into
-    /// a document whose theme gives theme colours other colours (`Document::adopt`).
-    pub fn forget_theme_colors(&mut self) {
-        self.settings.page_color_source = None;
-        self.each_theme_colored(&mut |owner| match owner {
-            ThemeColored::Char(c) => c.forget_theme_colors(),
-            ThemeColored::Para(c) => c.forget_theme_colors(),
-            ThemeColored::Table(c) => c.forget_theme_colors(),
-            ThemeColored::Cell(c) => c.forget_theme_colors(),
-            ThemeColored::Part(c) => {
-                c.chr.forget_theme_colors();
-                c.color_sources = None;
-            }
-            ThemeColored::Section(c) => c.forget_theme_colors(),
-        });
+    /// This document as `to` shows and saves it, for content or styles brought from here into
+    /// `to` (`Document::adopt`, Compare, a style copy): each theme colour record goes whose theme
+    /// colour gives another colour under `to`'s theme than the one it was shown in, so that colour
+    /// stays as shown, as a fixed colour, as [`Self::fit_theme_colors`] fits a pasted block. Under
+    /// the same theme ([`Self::same_theme_colors`]) every record stays.
+    pub fn fit_theme_colors_to(&mut self, to: &crate::Document) {
+        if self.same_theme_colors(to) {
+            return;
+        }
+        let p = to.palette();
+        self.settings.page_color_source = self.settings.page_color_source.filter(|s| s.agrees(p));
+        self.each_theme_colored(&mut |owner| keep_shown(owner, p));
+    }
+
+    /// Formatting picked up elsewhere (in another open document, or here before the theme
+    /// changed) as this document shows and saves it, for Paste Formatting: its theme colour
+    /// records are fitted as [`Self::fit_theme_colors`] fits a pasted block.
+    pub fn fit_formatting(&self, chr: &mut super::CharProps, para: &mut super::ParaProps) {
+        let p = self.palette();
+        chr.keep_theme_colors_shown(p);
+        para.keep_theme_colors_shown(p);
     }
 
     /// Whether `other` resolves theme colours as this document does: the same theme colours and
     /// colour scheme mapping.
     pub fn same_theme_colors(&self, other: &crate::Document) -> bool {
-        self.settings.theme_colors == other.settings.theme_colors && self.settings.theme_color_map == other.settings.theme_color_map
+        // No mapping is the identity, which Word writes out in full.
+        let map = |d: &crate::Document| d.settings.theme_color_map.unwrap_or(IDENTITY_MAP);
+        self.settings.theme_colors == other.settings.theme_colors && map(self) == map(other)
+    }
+
+    /// The colours this document's theme gives theme colours.
+    fn palette(&self) -> Palette<'_> {
+        Palette { colors: &self.settings.theme_colors, map: self.settings.theme_color_map.as_ref() }
+    }
+
+    /// A block about to be placed in this document (pasted, or inserted as a building block), as
+    /// this document shows and saves it: each theme colour record goes whose theme colour gives
+    /// another colour here than the one it was shown in, so that colour stays as shown, as a
+    /// fixed colour. A record that gives the same colour here stays, and follows this document's
+    /// theme from now on; content copied under the same theme keeps them all.
+    pub fn fit_theme_colors(&self, b: &mut crate::Block) {
+        let p = self.palette();
+        each_in_block(b, &mut |owner| keep_shown(owner, p), 0);
+    }
+
+    /// [`Self::fit_theme_colors`] for a story's blocks; a block without theme colours isn't copied.
+    pub(crate) fn fit_shared_theme_colors(&self, blocks: &mut [std::sync::Arc<crate::Block>]) {
+        let p = self.palette();
+        each_in_blocks(blocks, &mut |owner| keep_shown(owner, p), 0);
     }
 }
+
+/// The colour scheme mapping that maps each theme colour to its own scheme colour.
+const IDENTITY_MAP: [u8; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 
 impl BorderColorSources {
     /// The records of the sides `new` keeps as `old` has them; a side it changes loses its own

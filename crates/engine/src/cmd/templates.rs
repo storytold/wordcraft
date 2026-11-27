@@ -7,6 +7,7 @@
 //! The template path comes from the document, so it is never read on its own (not on open
 //! either): only an explicit `tools.updateStyles` or `tools.attachTemplate` with `update` reads it.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -101,10 +102,24 @@ fn update_styles(s: &mut Session, v: &Value) -> CmdResult {
 
 /// What [`update_styles`] does to a document: all of `src`'s styles and its defaults.
 pub fn apply_template_styles(doc: &mut Document, src: &Document) -> Value {
+    let src = in_theme_of(doc, src);
     Arc::make_mut(&mut doc.styles).default_chr = src.styles.default_chr.clone();
     Arc::make_mut(&mut doc.styles).default_para = src.styles.default_para.clone();
     let ids: Vec<String> = src.styles.styles.iter().map(|st| st.id.clone()).collect();
-    copy_styles(doc, src, &ids)
+    copy_shown_styles(doc, &src, &ids)
+}
+
+/// `src` as `doc` shows it (`Document::fit_theme_colors_to`): a theme colour that gives another
+/// colour in `doc` than the one it shows in `src` becomes that colour, fixed, as in content
+/// `Document::adopt` brings in, so the styles copied from it look as they did there, also once
+/// saved and reopened.
+fn in_theme_of<'a>(doc: &Document, src: &'a Document) -> Cow<'a, Document> {
+    if doc.same_theme_colors(src) {
+        return Cow::Borrowed(src);
+    }
+    let mut src = src.clone();
+    src.fit_theme_colors_to(doc);
+    Cow::Owned(src)
 }
 
 fn organizer(s: &mut Session, v: &Value) -> CmdResult {
@@ -299,6 +314,12 @@ fn percent_decode(s: &str) -> String {
 /// and `linked` are mapped to the document's ids, and lists a style numbers with are copied.
 /// Returns `{"added": [name], "replaced": [name], "skipped": [name]}`.
 pub fn copy_styles(doc: &mut Document, src: &Document, ids: &[String]) -> Value {
+    let src = in_theme_of(doc, src);
+    copy_shown_styles(doc, &src, ids)
+}
+
+/// [`copy_styles`] from `src` as `doc` shows it ([`in_theme_of`]).
+fn copy_shown_styles(doc: &mut Document, src: &Document, ids: &[String]) -> Value {
     let sheet = &src.styles;
     let same_name = |doc: &Document, st: &Style| doc.styles.styles.iter().find(|d| d.name.eq_ignore_ascii_case(&st.name)).map(|d| d.id.clone());
     // What to copy: the asked-for styles, their linked halves, and missing bases.
