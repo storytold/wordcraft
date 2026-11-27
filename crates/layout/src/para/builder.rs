@@ -294,6 +294,8 @@ impl<'a> Builder<'a> {
         // instead of mixing faces per character (e.g. a bundled Japanese Mincho for JIS-covered
         // ideographs beside a Simplified-Chinese sans for the rest). Whitespace and characters the
         // primary covers don't constrain the choice. `None` keeps the per-character fallback.
+        // The face suits the run's East Asian language ([`east_asian_lang`]), so the ideographs
+        // Japanese shares with Chinese aren't drawn in the other language's forms.
         let ea_face: Option<FaceRef> = {
             let ea: Vec<char> = text
                 .chars()
@@ -302,7 +304,8 @@ impl<'a> Builder<'a> {
             if ea.is_empty() {
                 None
             } else {
-                wordcraft_fonts::FontDb::global().fallback_for_run(&ea, primary.id(), rc.bold, rc.italic).map(|f| FaceRef::of(&f))
+                let lang = east_asian_lang(rc.lang_ea.as_deref(), text);
+                wordcraft_fonts::FontDb::global().fallback_for_run_in(&ea, primary.id(), rc.bold, rc.italic, lang).map(|f| FaceRef::of(&f))
             }
         };
         let segs = self.segment_keys(SegmentInput {
@@ -760,4 +763,12 @@ impl Builder<'_> {
 /// tracked deletions in the final text. It takes no room, draws nothing and is no place to break.
 pub(crate) fn left_out(doc: &Document, rc: &ResolvedChar, show_hidden: bool, hide_deleted: crate::HideDeleted) -> bool {
     (rc.hidden && !show_hidden) || hide_deleted.hides(doc, rc.del)
+}
+
+/// The East Asian language a run's fallback face is chosen for: the one its `w:lang w:eastAsia`
+/// names (Japanese, Chinese or Korean), else Japanese when the run has kana, also ones the primary
+/// font draws, else none. A tag that names a language wins over kana: の in a name in Chinese text
+/// doesn't make the text Japanese.
+pub(crate) fn east_asian_lang(tag: Option<&str>, text: &str) -> wordcraft_fonts::EastAsianLang {
+    tag.map_or(wordcraft_fonts::EastAsianLang::Unknown, wordcraft_fonts::EastAsianLang::of_tag).or_kana(text.chars())
 }

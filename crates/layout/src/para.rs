@@ -28,6 +28,8 @@ mod proof;
 mod tabs;
 
 pub use bidi::{bidi_levels, visual_order};
+#[cfg(test)]
+pub(crate) use builder::east_asian_lang;
 pub(crate) use builder::left_out;
 #[cfg(test)]
 use chars::{MISSING_ROMAN_FONT, lookup_family};
