@@ -518,11 +518,9 @@ fn first_lin_char(n: &MNode) -> Option<char> {
     }
 }
 
-/// An argument as an operand: bare when it's a single simple atom, parenthesised otherwise.
-fn lin_operand(a: &[MNode], s: &mut String, depth: usize) {
-    let mut inner = String::new();
-    lin_arg(a, &mut inner, depth);
-    let simple = match a {
+/// Whether `a` is written bare as an operand: a single simple atom.
+fn simple_operand(a: &[MNode]) -> bool {
+    match a {
         [MNode::Run(r)] => {
             let mut cs = r.text.chars();
             match (cs.next(), cs.next()) {
@@ -532,13 +530,39 @@ fn lin_operand(a: &[MNode], s: &mut String, depth: usize) {
         }
         [MNode::Delim { .. }] => true,
         _ => false,
-    };
-    if simple && !inner.is_empty() {
+    }
+}
+
+/// An argument as an operand: bare when it's a single simple atom, parenthesised otherwise.
+fn lin_operand(a: &[MNode], s: &mut String, depth: usize) {
+    let mut inner = String::new();
+    lin_arg(a, &mut inner, depth);
+    if simple_operand(a) && !inner.is_empty() {
         s.push_str(&inner);
     } else {
         s.push('(');
         s.push_str(&inner);
         s.push(')');
+    }
+}
+
+/// A script base: bare when simple, else in invisible brackets `〖…〗`, as Word's Linear format
+/// writes it. The parser reads them back as grouping only, so `〖a^b〗^c` keeps its tree, where
+/// `(a^b)^c` would gain a visible delimiter (#6075). A base that is itself one invisible delimiter
+/// (LaTeX `\left.a\right.`) gets an outer pair too, so the inner one reads back as that delimiter.
+/// So does an operator (`⊗`, `×`, `<`…): a script after one reads as a pre-script, so `⊗_i` would
+/// come back as `⊗` and a pre-script, where `〖⊗〗_i` keeps it the base.
+fn lin_base(a: &[MNode], s: &mut String, depth: usize) {
+    let mut inner = String::new();
+    lin_arg(a, &mut inner, depth);
+    let invisible = matches!(a, [MNode::Delim { beg: None, end: None, elems, .. }] if elems.len() == 1);
+    let operator = matches!(a, [MNode::Run(r)] if r.text.chars().all(crate::math_linear::is_boundary));
+    if simple_operand(a) && !inner.is_empty() && !invisible && !operator {
+        s.push_str(&inner);
+    } else {
+        s.push('〖');
+        s.push_str(&inner);
+        s.push('〗');
     }
 }
 
@@ -586,7 +610,7 @@ fn lin_node(n: &MNode, s: &mut String, depth: usize) {
                 lin_operand(base, s, depth);
                 return;
             }
-            lin_operand(base, s, depth);
+            lin_base(base, s, depth);
             if matches!(kind, ScriptKind::Sub | ScriptKind::SubSup) {
                 s.push('_');
                 lin_script(sub, s, depth);
