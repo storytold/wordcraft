@@ -300,7 +300,7 @@ impl WordApp {
     /// Whether a modal dialog is open on the drawn window: the rest of the window takes no
     /// clicks, keys or shortcuts until it closes (#3859). Another window's dialog does not block
     /// this one.
-    pub(crate) fn modal_open(&self) -> bool {
+    pub fn modal_open(&self) -> bool {
         self.dialog_host.shows_modal()
     }
 

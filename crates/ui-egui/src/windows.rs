@@ -204,6 +204,41 @@ impl Windows {
     }
 }
 
+/// Queued input for a window in a viewport of its own: eframe's raw-input hook
+/// ([`WordApp::raw_input_hook`]) sees only the root viewport's input, and egui runs a plugin's
+/// input hook for every viewport.
+#[derive(Default)]
+pub(crate) struct ViewportInput {
+    /// The viewport the queued events go to, on its next pass.
+    target: Option<ViewportId>,
+    events: Vec<egui::Event>,
+}
+
+impl egui::Plugin for ViewportInput {
+    fn debug_name(&self) -> &'static str {
+        "wordcraft_viewport_input"
+    }
+
+    fn input_hook(&mut self, _ctx: &egui::Context, input: &mut egui::RawInput) {
+        let viewport = input.viewport_id;
+        if viewport == ViewportId::ROOT {
+            return;
+        }
+        if self.target != Some(viewport) || self.events.is_empty() {
+            return;
+        }
+        self.target = None;
+        let events = std::mem::take(&mut self.events);
+        if events
+            .iter()
+            .any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::Cut | egui::Event::Copy | egui::Event::Paste(_)))
+        {
+            input.focused = true;
+        }
+        input.events.extend(events);
+    }
+}
+
 impl WordApp {
     /// How many windows are open.
     pub fn window_count(&self) -> usize {
@@ -637,6 +672,37 @@ impl WordApp {
         }
     }
 
+    /// Delivers input events to the active window: into `raw` when it is in the root viewport,
+    /// or queued through [`ViewportInput`] when it has a viewport of its own.
+    pub fn route_input(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput, events: Vec<egui::Event>) {
+        if events.is_empty() {
+            return;
+        }
+        let target = self.active_viewport();
+        let is_roots = !self.windows.native || ctx.embed_viewports() || target == ViewportId::ROOT;
+        let has_plugin = ctx
+            .with_plugin(|p: &mut ViewportInput| {
+                // Never retarget input left over from a different (possibly closed) window.
+                // Drop it when focus changes; only events for the same window can be appended.
+                if p.target != Some(target) {
+                    p.target = None;
+                    p.events.clear();
+                }
+            })
+            .is_some();
+        if is_roots {
+            raw.events.extend(events);
+        } else {
+            if !has_plugin {
+                ctx.add_plugin(ViewportInput::default());
+            }
+            ctx.with_plugin(|p: &mut ViewportInput| {
+                p.target = Some(target);
+                p.events.extend(events);
+            });
+            ctx.request_repaint_of(target);
+        }
+    }
     /// The id of the drawn window's own `name` in egui's memory, which every viewport shares: a
     /// search box's text, a gallery's first tile.
     pub(crate) fn window_id(&self, name: &'static str) -> egui::Id {

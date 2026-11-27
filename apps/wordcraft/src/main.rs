@@ -20,6 +20,8 @@ mod build_flavor;
 mod control_server;
 mod default_apps;
 mod launch_profile;
+#[cfg(any(target_os = "macos", test))]
+mod native_menu;
 mod nightly_session;
 mod prefs;
 mod process_identity;
@@ -68,6 +70,9 @@ struct App {
     /// The app binary's last step as the app leaves, run once at the end of `finish` (a Nightly
     /// quit ends the process inside AppKit's terminate, after eframe's `on_exit`).
     exit: Option<Box<dyn FnOnce()>>,
+    /// The macOS menu bar (File, Edit, View, Go…), built on the first frame.
+    #[cfg(target_os = "macos")]
+    menu: Option<native_menu::NativeMenu>,
 }
 
 impl App {
@@ -75,6 +80,10 @@ impl App {
     /// path. Without `frame` (a test over no window) the dialogs have no parent window.
     fn logic_pass(&mut self, ctx: &egui::Context, frame: Option<&eframe::Frame>) {
         self.app.logic(ctx);
+        #[cfg(target_os = "macos")]
+        if frame.is_some() && std::env::var_os("WORDCRAFT_NO_NATIVE_MENU").is_none() {
+            native_menu::NativeMenu::frame(&mut self.menu, &mut self.app, ctx);
+        }
         self.panels.pump_with(self.app.dialog_host_mut(), frame);
         // A quit that waits for nothing (the documents are answered for) closes the root window.
         if self.app.quit_requested && !self.app.printing.busy() {
@@ -122,6 +131,11 @@ impl eframe::App for App {
         let files = dropped_files(raw);
         if !files.is_empty() {
             self.drops.dropped(files);
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(menu) = self.menu.as_mut() {
+            let events = std::mem::take(&mut menu.input);
+            self.app.route_input(ctx, raw, events);
         }
         embed::before_input(ctx, |out| self.app.frame_input(out));
     }
@@ -807,6 +821,8 @@ fn main() -> eframe::Result {
                 exit: Some(Box::new(move || {
                     nightly_session::finish_once(&session_for_exit, noticed_for_exit.load(std::sync::atomic::Ordering::Relaxed));
                 })),
+                #[cfg(target_os = "macos")]
+                menu: None,
             }))
         }),
     );
@@ -1014,7 +1030,22 @@ mod smoke {
             let drops = intake.sender();
             let session = Session::new(wordcraft_doc::Document::new());
             let app = WordApp::new(session, services(spool.clone(), intake, false)).with_host(host).with_settings(settings.clone());
-            Run { app: App { app, panels, drops, settings, spool, control: None, exit: None }, frames, ctx, sender }
+            Run {
+                app: App {
+                    app,
+                    panels,
+                    drops,
+                    settings,
+                    spool,
+                    control: None,
+                    exit: None,
+                    #[cfg(target_os = "macos")]
+                    menu: None,
+                },
+                frames,
+                ctx,
+                sender,
+            }
         }
 
         /// One frame as eframe runs it: the input hook once, the logic once, the UI per pass.

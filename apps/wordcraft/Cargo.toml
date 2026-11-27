@@ -58,6 +58,15 @@ winresource = "0.1"
 # Finder double-click, Open With, Dock drops and `open -a WordCraft letter.docx` arrive as a
 # kAEOpenDocuments Apple event, which winit doesn't handle (#27).
 craft = { workspace = true, features = ["platform-apple-events"] }
+# The native menu bar (src/native_menu.rs): a safe API over NSMenu, since the workspace forbids
+# unsafe.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSMenu", "NSMenuItem"] }
+objc2 = "0.6"
+muda = { version = "0.21", default-features = false }
+
+[[test]]
+name = "mac_menu_appkit"
+harness = false
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 winit = { version = "0.30", default-features = false, features = ["x11"] }
