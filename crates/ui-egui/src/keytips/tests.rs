@@ -397,6 +397,59 @@ fn long_qat_badges_wait_for_the_complete_number_and_escape_cancels() {
     }
 }
 
+/// #819: Alt (or F10), then Q opens Search in the title bar, ends keytips, and never types into
+/// the document; while the Backstage is open, Q does not open Search.
+#[test]
+fn alt_then_q_opens_search() {
+    let mut h = harness(app());
+    assert!(!crate::chrome::search::is_open(h.state()), "Search starts closed");
+
+    // F10, then Q works on every platform (including macOS, where bare Option types characters).
+    h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
+    crate::test_harness::frame(&mut h);
+    assert!(h.state().keytips_active, "F10 activates keytips");
+
+    h.input_mut().events.extend([key_event(egui::Key::Q, true, egui::Modifiers::NONE), egui::Event::Text("q".into())]);
+    crate::test_harness::frames(&mut h, 2);
+    assert!(!h.state().keytips_active, "Q ends keytips");
+    assert!(crate::chrome::search::is_open(h.state()), "F10, Q opens Search");
+    assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "Q does not type into the document");
+
+    // On non-macOS, a bare Alt tap followed by Q opens Search without typing into the document.
+    if !cfg!(target_os = "macos") {
+        h.state_mut().chrome.search = false;
+        let ctx = h.ctx.clone();
+        h.state_mut().canvas.focus_page(&ctx);
+        crate::test_harness::frame(&mut h);
+
+        let alt = egui::Modifiers { alt: true, ..Default::default() };
+        h.input_mut().events.extend([key_event(egui::Key::AltLeft, true, egui::Modifiers::NONE), egui::Event::ModifiersChanged(alt)]);
+        crate::test_harness::frame(&mut h);
+        h.input_mut().events.extend([key_event(egui::Key::AltLeft, false, alt), egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
+        crate::test_harness::frame(&mut h);
+        assert!(h.state().keytips_active, "a bare Alt tap activates keytips");
+
+        h.input_mut().events.extend([key_event(egui::Key::Q, true, egui::Modifiers::NONE), egui::Event::Text("q".into())]);
+        crate::test_harness::frames(&mut h, 2);
+        assert!(!h.state().keytips_active, "Q ends keytips after bare Alt");
+        assert!(crate::chrome::search::is_open(h.state()), "Alt, Q opens Search");
+        assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "Alt, Q does not type into the document");
+    }
+
+    // With Backstage open, Q does not open Search behind it.
+    h.state_mut().chrome.search = false;
+    h.state_mut().run("ui.backstage", serde_json::json!({"value": true})).unwrap();
+    crate::test_harness::frame(&mut h);
+    assert!(h.state().ui.backstage, "Backstage is open");
+
+    h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
+    crate::test_harness::frame(&mut h);
+    h.input_mut().events.extend([key_event(egui::Key::Q, true, egui::Modifiers::NONE), egui::Event::Text("q".into())]);
+    crate::test_harness::frames(&mut h, 2);
+    assert!(!crate::chrome::search::is_open(h.state()), "Q does not open Search while Backstage is open");
+    assert!(h.state().dialog_host.open_dialogs().is_empty(), "Q does not open the Search dialog while Backstage is open");
+}
+
 #[test]
 fn qat_keytips_follow_custom_order_and_skip_disabled_commands() {
     let mut a = app();

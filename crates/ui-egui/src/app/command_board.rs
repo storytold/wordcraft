@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use craft::keymap::Overrides;
+use craft::ui::runtime::commands::CommandSet as _;
 use craft::ui::runtime::commands::{
     AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandState, CommandStates, FireSource, Scope, TypingRule,
 };
@@ -139,6 +140,13 @@ fn gate_registered(app: &WordApp, id: &str) -> (bool, Option<&'static str>) {
     (reason.is_none(), reason)
 }
 
+/// The framework edit commands the app's engine commands of the same id run through: the linked set owns their
+/// definition, the engine owns their chords.
+const LINKED_EDIT: [craft::ui::runtime::commands::EditCommands; 5] = {
+    use craft::ui::runtime::commands::EditCommands::{Copy, Cut, Paste, Redo, Undo};
+    [Cut, Copy, Paste, Undo, Redo]
+};
+
 impl WordApp {
     /// The app's commands as the keymap knows them: every engine command with its default
     /// chords, then the interface commands. The interface commands come last because a tie in the
@@ -171,7 +179,9 @@ impl WordApp {
                 }
                 defs.push(def);
             }
-            for spec in registry.all().iter().filter(|spec| seen.insert(spec.id)) {
+            // The framework's edit set defines Cut, Copy, Paste, Undo and Redo: a catalog def for them is shadowed (and
+            // warned about), so their chords go in as the set's replaced defaults (the `LINKED_EDIT` fold below).
+            for spec in registry.all().iter().filter(|spec| seen.insert(spec.id) && !LINKED_EDIT.iter().any(|c| c.id() == spec.id)) {
                 let mut def = CommandDef::new(CommandRef::new(spec.id), tl!(spec.label), Scope::app());
                 for binding in default_bindings(spec.shortcut) {
                     def = def.with_default(binding);
@@ -191,6 +201,8 @@ impl WordApp {
                 interface(CommandRef::new("ui.collapseRibbon"), "Collapse the Ribbon", "Mod+Alt+R");
             }
             interface(CommandRef::new("ui.resetInterfaceSize"), "Reset Interface Size", "Mod+Shift+0");
+            // The File keytips fire it (one badge per page); without an entry it shows its id as its label.
+            defs.push(CommandDef::new(CommandRef::new("ui.backstage"), tl!("File"), Scope::app()));
             for (id, label) in GATED_UI_COMMANDS {
                 defs.push(CommandDef::new(CommandRef::new(*id), tl!(*label), Scope::app()));
             }
@@ -204,6 +216,10 @@ impl WordApp {
             match AppCatalog::new(defs, generation) {
                 Ok(catalog) => {
                     let catalog = catalog.typing_rule(TypingRule::PlainKeysWait);
+                    let catalog = LINKED_EDIT.iter().fold(catalog, |catalog, command| {
+                        let chords = registry.get(command.id()).map(|spec| default_bindings(spec.shortcut).collect()).unwrap_or_default();
+                        catalog.replace_defaults(command.id(), chords)
+                    });
                     self.command_catalog = Some((registry, with_word_chords(catalog)));
                 }
                 Err(error) => {
@@ -328,6 +344,7 @@ impl WordApp {
                 let mut host = std::mem::take(&mut self.edits);
                 host.before_undo(ctx, self);
                 self.edits = host;
+                self.edits_gesture = None;
             }
             let result = if fired.source == FireSource::Automation { self.execute(id, params) } else { self.run(id, params) };
             if from_key && result.is_ok() {
@@ -397,11 +414,13 @@ mod tests {
         app.run_fired(&ctx, &output);
         let after_undo = app.session.undo_depth();
         assert_eq!(after_undo + 1, before, "the gesture left no step, and Undo took the one from before it");
+        assert!(app.edits_gesture.is_none(), "Undo clears running edit gesture state");
 
         let mut end = EditEvents::new();
         end.push(EditEvent::commit(id, Mixed::Same(11.0_f32), 20.0_f32));
         crate::undo_marks::apply_edits(&mut app, end, apply);
         assert_eq!(app.session.undo_depth(), after_undo, "the late Commit of the taken-back gesture adds no step");
+        assert!(app.edits_gesture.is_none());
     }
 
     /// #7310: unimplemented Word feature catalog commands publish a disabled state so ribbon

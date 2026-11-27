@@ -30,7 +30,7 @@ pub use face::{FALLBACK_FAMILY, FaceRef, FontFace, bundled};
 use fallback_data::{Coverage, RUN_FALLBACK_CACHE_CHARS, SYS_FALLBACK_MAX_FILE, file_coverage, ranges_hold};
 #[cfg(not(target_arch = "wasm32"))]
 use fallback_data::{CoverageIndex, SysFallback};
-use fallback_data::{FallbackCache, RunFallbackCache};
+use fallback_data::{DiagramFallbackCache, FallbackCache, RunFallbackCache};
 #[cfg(not(target_arch = "wasm32"))]
 use names::CatalogEntry;
 pub use names::{LocalName, base_style, name_language_matches, system_font_dirs};
@@ -56,6 +56,13 @@ pub struct FontDb {
     /// (Thai, #59) got slower with every font loaded.
     fallbacks: RwLock<FallbackCache>,
     run_fallbacks: RwLock<RunFallbackCache>,
+    diagram_fallbacks: RwLock<DiagramFallbackCache>,
+    #[cfg(test)]
+    diagram_searches: std::sync::atomic::AtomicU64,
+    #[cfg(test)]
+    diagram_search_hook: Mutex<Option<Box<dyn FnOnce(&FontDb) + Send>>>,
+    #[cfg(test)]
+    diagram_publish_hook: Mutex<Option<Box<dyn FnOnce(&FontDb) + Send>>>,
     #[cfg(not(target_arch = "wasm32"))]
     catalog: RwLock<Vec<CatalogEntry>>,
     /// Fonts the user added at run time, and the folder they are stored in (#582).
@@ -119,6 +126,13 @@ impl FontDb {
             hinters: Mutex::new(HashMap::new()),
             fallbacks: RwLock::new(FallbackCache::default()),
             run_fallbacks: RwLock::new(RunFallbackCache::default()),
+            diagram_fallbacks: RwLock::new(DiagramFallbackCache::default()),
+            #[cfg(test)]
+            diagram_searches: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(test)]
+            diagram_search_hook: Mutex::new(None),
+            #[cfg(test)]
+            diagram_publish_hook: Mutex::new(None),
             #[cfg(not(target_arch = "wasm32"))]
             catalog: RwLock::new(Vec::new()),
             user: RwLock::new(user::UserFonts::default()),
@@ -147,8 +161,10 @@ impl FontDb {
             self.sys.lock().unwrap_or_else(std::sync::PoisonError::into_inner).enabled = on;
         }
         // Misses remembered while it was off may be found now.
-        self.fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner).map.clear();
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        *self.fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner) = FallbackCache::default();
         *self.run_fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner) = RunFallbackCache::default();
+        *self.diagram_fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner) = DiagramFallbackCache::default();
         #[cfg(target_arch = "wasm32")]
         let _ = on;
     }
