@@ -144,19 +144,43 @@ fn results(app: &mut WordApp, ui: &mut Ui) {
         hits.push(Hit { text, spans });
     }
     let rows: Vec<Place> = hits.iter().enumerate().map(|(at, hit)| (at, hit.text.clone())).collect();
+    // The page is looked up only under the pointer, not for every listed match each frame.
+    let hover_id = egui::Id::unique("nav_result_hover");
+    let hovered = ui.data(|d| d.get_temp::<Option<usize>>(hover_id)).flatten();
     let out = List::<usize>::new(tl!("Results").to_owned()).natural_height(true).select(SelectMode::Single).show_items(
         ui,
         &places(&rows),
-        &mut |key, _| match hits.get(*key) {
-            Some(hit) => ListRow::new(hit.text.clone()).label_spans(hit.spans.clone()),
-            None => ListRow::new(String::new()),
+        &mut |key, _| {
+            let mut row = match hits.get(*key) {
+                Some(hit) => ListRow::new(hit.text.clone()).label_spans(hit.spans.clone()),
+                None => ListRow::new(String::new()),
+            };
+            if hovered == Some(*key)
+                && let Some((a, _)) = results.get(*key)
+                && let Some(page) = result_page(app, a)
+            {
+                row = row.tooltip(crate::i18n::fmt(tl!("Page {page}"), &[("page", &page.to_string())]));
+            }
+            row
         },
     );
+    ui.data_mut(|d| d.insert_temp(hover_id, out.hovered));
     for at in out.events.iter().filter_map(picked_row) {
         if let Some((a, b)) = results.get(at) {
             let _ = app.run("select.range", json!({"anchor": a, "focus": b}));
         }
     }
+}
+
+/// The page a search match is on, counted from the first page as the status bar and Go To count
+/// (#3938). A header or footer repeats on every page, so a match in one has no single page.
+fn result_page(app: &mut WordApp, at: &Pos) -> Option<usize> {
+    if let StoryRef::Part(id) = at.story
+        && app.session.doc.parts.get(&id).is_none_or(|p| matches!(p.kind, wordcraft_doc::PartKind::Header | wordcraft_doc::PartKind::Footer))
+    {
+        return None;
+    }
+    app.session.layout().page_of(at).map(|i| i + 1)
 }
 
 /// The outline as a tree source: the headings that show (none under a collapsed one), each keyed by its place in

@@ -298,3 +298,35 @@ fn headings_show_their_list_numbers() {
     let texts: Vec<String> = nav_headings(&doc).into_iter().map(|(_, _, t)| t).collect();
     assert_eq!(texts, ["1. Intro", "1.1. Scope", "1.3. Terms", "2. Method", "Appendix"]);
 }
+
+/// #3938: pointing at a search result in the Navigation pane shows the page it is on.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn search_results_tell_their_page_on_hover() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut app =
+        crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Kilns fire clay.")), crate::Services::default());
+    app.run("caret.docEnd", serde_json::json!({})).unwrap();
+    for _ in 0..2 {
+        app.run("insert.pageBreak", serde_json::json!({})).unwrap();
+    }
+    app.run("text.insert", serde_json::json!({"text": "Ovens bake bread."})).unwrap();
+    app.run("edit.find", serde_json::json!({"text": "bake"})).unwrap();
+    assert_eq!(app.session.find.results.len(), 1);
+    assert_eq!(app.session.layout().pages.len(), 3);
+    app.ui.nav_tab = "results".into();
+    // Only the pane is drawn, so no status bar or Pages list says "Page 3" for it.
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(300.0, 600.0)).build_ui_state(
+        |ui, app: &mut crate::WordApp| {
+            super::nav::nav(app, ui);
+        },
+        app,
+    );
+    h.run_steps(4);
+    assert!(h.query_by_label("Page 3").is_none(), "no tip before the pointer is on the result");
+    h.get_by_label_contains("Ovens bake bread.").hover();
+    // Craft tooltips appear after DELAY (0.6s), not on the first hovered frames.
+    crate::test_harness::frames(&mut h, 40);
+    assert!(h.query_by_label("Page 3").is_some(), "the result found on the third page says so");
+}
