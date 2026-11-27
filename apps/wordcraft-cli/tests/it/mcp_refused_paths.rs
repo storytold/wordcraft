@@ -53,6 +53,51 @@ fn a_refused_path_is_logged_once_with_its_resolved_form() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// The refusal lines in `stderr`.
+fn refusals(stderr: &str) -> Vec<&str> {
+    stderr.lines().filter(|l| l.contains("automation path rejected")).collect()
+}
+
+/// #4649 review: a save to an .xml file probes its head (is it Word 2003 XML?) without logging, so
+/// an allowed save logs nothing, and one outside both roots logs its write refusal only.
+#[test]
+fn a_save_probe_logs_nothing() {
+    let base = std::env::temp_dir().join(format!("wc-cli-refused-save-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    for d in ["in", "out", "outside"] {
+        std::fs::create_dir_all(base.join(d)).unwrap();
+    }
+    let calls = [
+        tool_call(1, "save_document", &base.join("out/report.xml").to_string_lossy()),
+        tool_call(2, "save_document", &base.join("outside/report.xml").to_string_lossy()),
+    ];
+    let (stdout, stderr) = serve(&[("--automation-read-root", &base.join("in")), ("--automation-write-root", &base.join("out"))], &calls);
+    assert!(base.join("out/report.xml").is_file(), "the allowed save is written: {stdout}");
+    let logged = refusals(&stderr);
+    assert_eq!(logged.len(), 1, "only the refused save, once: {stderr}");
+    assert!(logged[0].contains("outside the write root"), "{}", logged[0]);
+    let _ = std::fs::remove_dir_all(base);
+}
+
+/// #4649 review: an HTML file whose pictures point outside the read root is opened without them,
+/// and its pictures log nothing: one open never logs a line per picture.
+#[test]
+fn pictures_outside_the_root_log_nothing() {
+    let base = std::env::temp_dir().join(format!("wc-cli-refused-img-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    for d in ["in", "out", "outside"] {
+        std::fs::create_dir_all(base.join(d)).unwrap();
+    }
+    std::fs::write(base.join("outside/pic.png"), "not really a picture").unwrap();
+    let html = format!("<html><body><p>Hello</p>{}</body></html>", "<img src=\"../outside/pic.png\">".repeat(20));
+    std::fs::write(base.join("in/page.html"), html).unwrap();
+    let calls = [tool_call(1, "open_document", &base.join("in/page.html").to_string_lossy())];
+    let (stdout, stderr) = serve(&[("--automation-read-root", &base.join("in")), ("--automation-write-root", &base.join("out"))], &calls);
+    assert!(!stdout.contains("isError\":true"), "the page opens: {stdout}");
+    assert_eq!(refusals(&stderr), Vec::<&str>::new(), "{stderr}");
+    let _ = std::fs::remove_dir_all(base);
+}
+
 /// Runs `wordcraft-cli mcp` with `roots`, sends `calls`, and returns its stdout and stderr.
 fn serve(roots: &[(&str, &std::path::Path)], calls: &[String]) -> (String, String) {
     let mut cli = Command::new(env!("CARGO_BIN_EXE_wordcraft-cli"));

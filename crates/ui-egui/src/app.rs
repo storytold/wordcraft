@@ -6,6 +6,7 @@ use super::{
     theme, updates_ui, window_ui, windows, zotero,
 };
 use craft::platform::clock::monotonic_ms;
+use craft::theme::ComponentSet;
 use craft::ui::runtime::commands::CommandInput;
 use craft::ui::runtime::env::{AltCodePages, ResolvedRoot, RootEnv, WheelSpeed};
 use craft::ui::runtime::frame::{FrameInput, FrameOutput};
@@ -16,6 +17,8 @@ mod commands;
 mod control;
 mod files;
 pub(crate) use files::Closing;
+#[cfg(test)]
+pub(crate) use files::suggested_stem;
 pub(crate) mod fonts;
 mod frame;
 mod input;
@@ -77,6 +80,7 @@ impl WordApp {
             dialog_hooks,
             dialog_answers,
             edits,
+            edits_gesture,
             keytips_active,
             options_state,
             print,
@@ -101,6 +105,8 @@ impl WordApp {
             command_catalog_lang: "",
             key_overrides: Default::default(),
             command_states: Default::default(),
+            command_states_cache: None,
+            keytip_cache: None,
             fonts_frames: 0,
             clipboard_published: false,
             printing: Default::default(),
@@ -162,6 +168,7 @@ impl WordApp {
             dialog_hooks,
             dialog_answers,
             edits,
+            edits_gesture,
             keytips_active,
             options_state,
             print,
@@ -184,7 +191,7 @@ impl WordApp {
     }
 
     /// This frame's root values: the wheel speed, the Alt-code pages, the interface mode,
-    /// motion, scale and direction. Built from the saved settings every frame, so a change
+    /// motion, scale, direction and the component set (WordCraft takes the productivity set). Built from the saved settings every frame, so a change
     /// applies at once.
     pub fn root_env(&self) -> RootEnv {
         let lang = i18n::Lang::from_pref(&self.ui.language);
@@ -204,7 +211,8 @@ impl WordApp {
             .direction(direction)
             .mode(self.ui.theme.mode())
             .wheel_speed(WheelSpeed::new(line, point))
-            .alt_code_pages(AltCodePages::new(ansi, oem));
+            .alt_code_pages(AltCodePages::new(ansi, oem))
+            .set(ComponentSet::Productivity);
         env.motion = self.ui.animations.motion();
         env.sizes = std::sync::Arc::clone(&APP_SIZES);
         env
@@ -311,6 +319,7 @@ impl WordApp {
     pub fn logic(&mut self, ctx: &egui::Context) {
         let lang = i18n::Lang::from_pref(&self.ui.language);
         if self.ctx.is_none() {
+            theme::set_dark_text_curve(ctx);
             self.ctx = Some(ctx.clone());
         }
         updates_ui::tick(self, ctx);

@@ -113,6 +113,12 @@ fn confirm(h: &mut egui_kittest::Harness<'_, WordApp>, id: DialogId) {
     h.run_steps(3);
 }
 
+fn cancel(h: &mut egui_kittest::Harness<'_, WordApp>, id: DialogId) {
+    let ctx = h.ctx.clone();
+    h.state_mut().dialog_host.cancel_by_id(&ctx, id);
+    h.run_steps(3);
+}
+
 /// Opens the Paragraph dialog, edits what it shows through its fields, as automation does, and answers OK.
 fn apply_paragraph(h: &mut egui_kittest::Harness<'_, WordApp>, edit: impl FnOnce(&mut ParagraphFormat)) {
     let id = open_named(h, "paragraph", json!({}));
@@ -786,6 +792,26 @@ fn font_dialog_sets_the_asian_and_latin_fonts_separately() {
     assert_ne!(fonts(h.state()).0.as_deref(), Some("Georgia"));
 }
 
+/// #3859: the page's context menu closes when a modal dialog opens (Ctrl+D),
+/// while modeless dialogs (Find/Replace) leave it open.
+#[test]
+fn a_modal_dialog_closes_the_context_menu() {
+    let mut h = app_harness(WordApp::new(Session::new(wordcraft_doc::Document::from_text("Kilns")), crate::Services::default()));
+    h.run_steps(6);
+
+    let find_id = open_named(&mut h, "find", json!({}));
+    h.run_steps(2);
+    h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+    h.run_steps(2);
+    assert!(h.state().canvas.context_menu_open, "a modeless dialog keeps the context menu open");
+    cancel(&mut h, find_id);
+
+    let id = open_named(&mut h, "font", json!({}));
+    h.run_steps(2);
+    assert!(!h.state().canvas.context_menu_open, "the modal dialog closed it");
+    cancel(&mut h, id);
+}
+
 #[test]
 fn font_dialog_ok_keeps_what_the_user_left_alone() {
     // Issue #466: OK sent every field, clearing small caps, spacing and double underline
@@ -898,8 +924,8 @@ fn replace_all_with_regex_groups_from_the_dialog() {
         h.run_steps(2);
         h.state_mut().run("ui.dialog", json!({"name": "replace"})).unwrap();
         h.run_steps(2);
-        set_field(&mut h, "find", "query", json!(r"(?<last>\w+), (\w+)")); // PLAN: assumed key `find` for the Find and Replace dialog
-        set_field(&mut h, "find", "with", json!(with));
+        set_field(&mut h, "find", "find", json!(r"(?<last>\w+), (\w+)")); // PLAN: assumed key `find` for the Find and Replace dialog
+        set_field(&mut h, "find", "replace", json!(with));
         set_field(&mut h, "find", "regex", json!(true));
         h.get_by_label("Replace All").click();
         h.run_steps(2);
@@ -948,6 +974,83 @@ fn opened_paper(h: &mut egui_kittest::Harness<'_, WordApp>) -> (f32, f32) {
     h.state_mut().dialog_host.cancel_by_id(&ctx, id);
     h.run_steps(2);
     paper
+}
+
+/// #1433: in a right-to-left interface, typing a number wider than the field's column into a
+/// margin spin button keeps the dialog the same width; clicking the visible end of the blurred
+/// field enters editing again, and entering a normal value restores the field.
+#[test]
+fn page_setup_rtl_large_margin_can_be_edited_again_after_blur() {
+    use egui::accesskit::Role;
+    let mut app = app_with("Page");
+    app.run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+    let ar = crate::i18n::fixture_lang("ar", "\tMargins\tMargins\n");
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            // Draw the actual dialog in a fixture language even without embedded catalogs.
+            crate::i18n::apply_language(ar);
+            ctx.global_style_mut(|s| s.right_to_left = true);
+            assert!(crate::i18n::current().rtl() && ctx.global_style().right_to_left);
+            craft::ui::runtime::env::with_env(ui, |o| o.direction = Some(craft::i18n::Direction::Rtl), |ui| app.ui(ui));
+            ctx.global_style_mut(|s| s.right_to_left = false);
+            crate::i18n::apply_language(crate::i18n::Lang::EN);
+        },
+        app,
+    );
+    h.run_steps(4);
+    let initial = h.get_by_role_and_label(Role::SpinButton, "Bottom").rect();
+    assert!(h.get_by_role_and_label(Role::SpinButton, "Top").rect().center().x > initial.center().x, "the form is mirrored");
+    let window = |h: &egui_kittest::Harness<'_, WordApp>| h.get_by_role_and_label(Role::Dialog, "Page Setup").rect();
+    let before = window(&h).width();
+    let id = id_of(h.state(), "pageSetup");
+    let initial_bottom = h.state().dialog_host.get_by_id::<PageSetupHost>(id).unwrap().setup.margins.bottom;
+    assert!(initial_bottom < craft::pages::setup::MAX_PAGE_SIDE, "initial margin starts below the upper bound: {initial_bottom}");
+    h.get_by_role_and_label(Role::SpinButton, "Bottom").click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Paste(format!("1{}", "0".repeat(36))));
+    h.run_steps(3);
+    let id = id_of(h.state(), "pageSetup");
+    let value = h.state().dialog_host.get_by_id::<PageSetupHost>(id).unwrap().setup.margins.bottom;
+    assert!(
+        value > initial_bottom && (value - craft::pages::setup::MAX_PAGE_SIDE).abs() < 1e-3,
+        "oversized margin paste should be accepted and clamped to MAX_PAGE_SIDE: got {value}"
+    );
+    // While the 37-digit text is in the field, the dialog does not blow up to the typed text width.
+    assert!(window(&h).width() <= before + 15.0);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    let id = id_of(h.state(), "pageSetup");
+    assert_eq!(h.state().dialog_host.get_by_id::<PageSetupHost>(id).unwrap().setup.margins.bottom, value);
+    let field = h.get_by_role_and_label(Role::SpinButton, "Bottom");
+    assert!(!field.is_focused());
+    let wide = field.rect();
+    let visible = wide.intersect(initial).intersect(window(&h));
+    assert!(visible.is_positive());
+    // The inline notice "Margins do not fit" may add a few points, but the dialog does not blow up to the typed text width.
+    assert!(window(&h).width() <= before + 15.0);
+    // The AccessKit bounds include clipped text: click the visible part, not their centre.
+    let pos = visible.center();
+    h.event(egui::Event::PointerMoved(pos));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+    }
+    h.run_steps(3);
+    assert!(h.get_by_role_and_label(Role::SpinButton, "Bottom").is_focused(), "the visible field enters editing");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Paste("2".into()));
+    h.run_steps(3);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    let id = id_of(h.state(), "pageSetup");
+    let bottom = h.state().dialog_host.get_by_id::<PageSetupHost>(id).unwrap().setup.margins.bottom;
+    let unit = crate::options::unit_kind(h.state().session.units());
+    let expected =
+        unit.to_pixels(2.0, 0.0, craft::ui::runtime::env::UnitKind::POINTS_PER_INCH, craft::ui::runtime::env::UnitKind::POINTS_PER_INCH).unwrap();
+    assert!((bottom - expected).abs() < 1e-3, "the field accepts a normal value again: got {bottom}, expected {expected}");
+    assert!(window(&h).width() <= before + 2.0);
 }
 
 /// #1433: Page Setup's Paper size shows the named size the section has, in either
@@ -1500,6 +1603,56 @@ fn modal_dialogs_block_the_window_behind_them() {
     assert!(h.state().ui.backstage, "File opens beside Find");
 }
 
+/// Dismissing a dialog opened from a non-canvas command or control returns keyboard focus to the page (#7458).
+#[test]
+fn dismissing_a_dialog_from_non_canvas_control_returns_keyboard_focus_to_page() {
+    let mut h = app_harness(WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default()));
+    h.run_steps(6);
+
+    // 1. Move focus to a control outside the canvas (Navigation pane search box)
+    h.state_mut().run("view.navigationPane", json!({"value": true})).unwrap();
+    h.run_steps(3);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search document").click();
+    h.run_steps(2);
+    assert!(h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search document").is_focused());
+    assert!(!h.state().canvas.focused(&h.ctx), "canvas does not have focus");
+
+    // Open a dialog via command while Navigation pane has focus
+    h.state_mut().run("ui.dialog", json!({"name": "font"})).unwrap();
+    h.run_steps(3);
+    assert!(is_open(h.state(), "font"), "font dialog is open");
+
+    // Dismiss with Escape
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(!is_open(h.state(), "font"), "font dialog closed");
+
+    // Canvas must have regained keyboard focus
+    assert!(h.state().canvas.focused(&h.ctx), "the document canvas took keyboard focus back");
+    h.event(egui::Event::Text("!".into()));
+    h.run_steps(2);
+    assert_eq!(body_of(h.state()), "!", "typing reached the document canvas");
+
+    // 2. Focus Navigation pane search box again, open dialog, and dismiss via Cancel button
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search document").click();
+    h.run_steps(2);
+    assert!(h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search document").is_focused());
+    assert!(!h.state().canvas.focused(&h.ctx), "canvas does not have focus");
+
+    h.state_mut().run("ui.dialog", json!({"name": "font"})).unwrap();
+    h.run_steps(3);
+    assert!(is_open(h.state(), "font"), "font dialog is open");
+
+    press(&mut h, "Cancel");
+    h.run_steps(3);
+    assert!(!is_open(h.state(), "font"), "font dialog closed");
+
+    assert!(h.state().canvas.focused(&h.ctx), "the document canvas took keyboard focus back after Cancel");
+    h.event(egui::Event::Text("?".into()));
+    h.run_steps(2);
+    assert_eq!(body_of(h.state()), "!?", "typing reached the document canvas after Cancel");
+}
+
 /// Which dialogs leave the window working (#3859, Word for Mac 16.114.1): `shows_modal` and
 /// `modal_open` agree with it for each.
 #[test]
@@ -1534,6 +1687,71 @@ fn find_symbol_mark_entry_cross_reference_and_merge_fields_are_modeless() {
         h.run_steps(2);
         assert!(!h.state().dialog_host.shows_modal(), "{name}: closed");
     }
+}
+
+/// #3859: Escape in the fallback file chooser over a modal dialog (`templates`) cancels only the
+/// chooser; the dialog under it, drawn first on `dialog_host`, stays open and regains the top
+/// of the stack.
+#[test]
+fn escape_in_the_browser_leaves_the_dialog_under_it_open() {
+    use std::sync::Arc;
+
+    use craft::browse::places::{FakeDirectories, FolderCache};
+    use craft::dialogs::ui::FileChooser;
+    use craft::host::{ManualJobs, PickRequest, Wake};
+    use craft::ui::dialog::DialogResult;
+
+    let mut h = app_harness(app_with(""));
+    h.run_steps(6);
+    // A new window's page takes the keyboard from the first click or command; establish focus so
+    // the later blocked-input check actually tests modal blocking.
+    let ctx = h.ctx.clone();
+    h.state_mut().canvas.focus_page(&ctx);
+    h.run_steps(2);
+    h.event(egui::Event::Text("a".into()));
+    h.run_steps(2);
+    assert_eq!(body_of(h.state()), "a", "the page takes typing while no modal is open");
+
+    open_named(&mut h, "templates", json!({}));
+    assert_eq!(open_keys(h.state()), ["templates"]);
+
+    let jobs = Arc::new(ManualJobs::new());
+    let folders = FolderCache::new(Arc::new(FakeDirectories::new().folder("/d/drafts").file("/d/House.dotx")), jobs.clone(), Wake::none());
+    let req = PickRequest::open("template").directory("/d").fallback(true);
+    h.state_mut().dialog_host.open(FileChooser::new(req, None, folders));
+    for _ in 0..4 {
+        jobs.run_all();
+        h.step();
+    }
+
+    assert!(h.state().dialog_host.is_open::<FileChooser>(), "browser is open");
+    let open = h.state().dialog_host.open_dialogs();
+    assert_eq!(open.len(), 2, "browser is stacked over templates");
+    let ids: Vec<_> = open.iter().map(|d| d.id).collect();
+    assert_eq!(
+        ids,
+        [craft::ui::dialog::dialog_id("templates"), craft::ui::dialog::dialog_id("fileChooser")],
+        "browser is stacked on top of templates"
+    );
+    let listed = open.into_iter().find_map(|d| d.fields.and_then(|f| f.get("listed").cloned()));
+    assert_eq!(listed, Some(json!(true)), "the chooser finished listing its folder");
+
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+
+    assert!(!h.state().dialog_host.is_open::<FileChooser>(), "Escape closes the browser");
+    assert_eq!(h.state_mut().dialog_host.take::<FileChooser>(), Some(DialogResult::Cancel), "Escape cancels the browser");
+    assert_eq!(open_keys(h.state()), ["templates"], "and leaves the dialog under it open");
+
+    h.event(egui::Event::Text("x".into()));
+    h.run_steps(2);
+    assert_eq!(body_of(h.state()), "a", "the document behind templates stays blocked");
+    assert!(is_open(h.state(), "templates"), "templates stays open");
+
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(!is_open(h.state(), "templates"), "a second Escape closes templates once it is back on top");
+    assert!(h.state().dialog_host.is_empty(), "all dialogs are closed");
 }
 
 /// Every dialog name the name table knows opens its dialog under the key the host reports, or
@@ -1674,6 +1892,54 @@ fn word_count_shows_label_and_count_on_a_line_over_close_and_cancel() {
     assert!(!is_open(h.state(), "wordCount"), "Cancel closes Word Count");
 }
 
+/// #1885: the close control is at the title bar's right end; a click in the close box
+/// closes the dialog; one just under the title bar leaves it open; a drag that starts on the box
+/// doesn't move the dialog.
+#[test]
+fn the_title_bar_close_box_is_the_whole_corner() {
+    use egui::accesskit::Role;
+    fn press(h: &mut egui_kittest::Harness<'_, WordApp>, from: egui::Pos2, to: egui::Pos2) {
+        let button =
+            |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        h.event(egui::Event::PointerMoved(from));
+        h.step();
+        h.event(button(from, true));
+        h.step();
+        if to != from {
+            h.event(egui::Event::PointerMoved(to));
+            h.step();
+        }
+        h.event(button(to, false));
+        for _ in 0..4 {
+            h.step();
+        }
+    }
+    let mut app = app_with("Some text");
+    super::open(&mut app, "wordCount", &json!({})).expect("word count opens");
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    assert!(is_open(h.state(), "wordCount"), "dialog is open");
+    let before = h.get_by_role_and_label(Role::Dialog, "Word Count").rect();
+    let closes: Vec<_> = h.query_all_by_role_and_label(Role::Button, "Close").filter(|n| !n.accesskit_node().is_hidden()).collect();
+    let close_box = closes.into_iter().min_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y)).expect("title bar close");
+    let bx = close_box.rect();
+    assert!((bx.top() - before.top()).abs() <= 10.0, "box {bx:?} is in the title bar area of {before:?}");
+    assert!(
+        bx.right() <= before.right() && before.right() - bx.right() <= 10.0 && bx.left() > before.center().x,
+        "close button sits at the right: {bx:?} in {before:?}"
+    );
+    let under = egui::pos2(bx.center().x, bx.bottom() + 4.0);
+    press(&mut h, under, under);
+    assert!(is_open(h.state(), "wordCount"), "a click under the title bar keeps the dialog");
+    let at = bx.center();
+    press(&mut h, at, at + egui::vec2(-150.0, 90.0));
+    assert!(is_open(h.state(), "wordCount"), "a drag from the box isn't a click");
+    let after = h.get_by_role_and_label(Role::Dialog, "Word Count").rect();
+    assert!((after.min - before.min).length() <= 1.0, "the box isn't a drag handle: {before:?} -> {after:?}");
+    press(&mut h, at, at);
+    assert!(!is_open(h.state(), "wordCount"), "a click in the box closes the dialog");
+}
+
 // ---------------------------------------------------------------- Font layout
 
 /// The Font dialog stands as the old one did: the Effects check boxes two to a line (Bold beside Italic, Underline
@@ -1784,4 +2050,236 @@ fn colour_fields_say_their_label_and_colour_in_the_interface_language() {
     for (name, present) in found {
         assert!(present, "the translated field is {name}");
     }
+}
+
+/// #7446: the SmartArt picker renders compact layout tiles capped at three rows (PICKER_HEIGHT = 304),
+/// instead of expanding each thumbnail to default card dimensions (~132×132 pt) and overflowing.
+#[test]
+fn smartart_layout_cells_keep_productions_size() {
+    use egui::accesskit::Role;
+
+    let mut h = app_harness(app_with("Text"));
+    open_named(&mut h, "insertSmartArt", json!({}));
+    crate::test_harness::frames(&mut h, 4);
+    let cell = h.get_by_role_and_label(Role::ListItem, "Basic List").rect();
+    assert!(cell.width() <= 80.0 && cell.height() <= 102.0, "a layout cell is 75×93, got {:?}", cell.size());
+    let grid = h.get_by_role_and_label(Role::ListBox, "Layouts").rect();
+    assert!(grid.height() <= 304.0, "the picker is three 96 pt rows, got {:?}", grid.size());
+}
+
+/// #7456: the Insert Chart dialog renders compact chart type tiles in its 3-column gallery,
+/// instead of expanding each thumbnail to default card dimensions (~132×104 pt) and ballooning the grid.
+#[test]
+fn insert_chart_tiles_render_within_compact_bounds() {
+    use egui::accesskit::Role;
+
+    let mut h = app_harness(app_with("Text"));
+    open_named(&mut h, "insertChart", json!({}));
+    crate::test_harness::frames(&mut h, 4);
+    let cell = h.get_by_role_and_label(Role::ListItem, "Clustered Column").rect();
+    assert!(cell.width() <= 90.0 && cell.height() <= 92.0, "chart tile should be compact (~85×87 pt), got {:?}", cell.size());
+    let grid = h.get_by_role_and_label(Role::ListBox, "Chart types").rect();
+    assert!(grid.width() <= 380.0, "3-column chart types grid should not exceed comfortable dialog proportions (~360 pt), got {:?}", grid.size());
+}
+
+/// The shake starts and ends where the dialog is and swings at most 6 points either way (#3859, #4076, #7321).
+#[test]
+fn the_shake_comes_back_to_rest() {
+    assert_eq!(chrome::shake_offset(0.0), 0.0);
+    assert!(chrome::shake_offset(1.0).abs() < 1e-4);
+    assert!((0..=100).map(|i| chrome::shake_offset(i as f32 / 100.0).abs()).all(|x| x <= 6.0));
+    assert!((0..=100).any(|i| chrome::shake_offset(i as f32 / 100.0).abs() > 3.0), "it does move");
+}
+
+/// #7321: clicking beside the Save Changes modal dialog nudges it (or flashes its edge under reduced motion),
+/// repeat clicks mid-nudge leave the animation running without restarting, and closing clears the nudge state.
+#[test]
+fn unsaved_changes_dialog_shakes_on_outside_click_and_clears_on_close() {
+    for animations in ["on", "off"] {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.run("text.insert", json!({"text": "Unsaved"})).unwrap();
+        app.run("ui.animations", json!({"value": animations})).unwrap();
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|_| app);
+        h.run_steps(6);
+
+        // Attempt window close while dirty. Prompt opens peacefully without shaking.
+        h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+        h.step();
+        h.step();
+
+        let prompt_id = h.state().closing.as_ref().and_then(|c| c.prompt).expect("Save Changes prompt is open");
+        let key = chrome::nudge_id(&h.ctx, prompt_id);
+        let started = |h: &egui_kittest::Harness<'_, WordApp>| h.ctx.data(|d| d.get_temp::<f64>(key));
+
+        assert_eq!(started(&h), None, "{animations:?}: prompt opens peacefully without shaking");
+
+        let look = |h: &egui_kittest::Harness<'_, WordApp>| {
+            let shapes = &h.output().shapes;
+            let mut flat = Vec::new();
+            fn walk<'a>(s: &'a egui::Shape, out: &mut Vec<&'a egui::Shape>) {
+                match s {
+                    egui::Shape::Vec(children) => {
+                        for c in children {
+                            walk(c, out);
+                        }
+                    }
+                    other => out.push(other),
+                }
+            }
+            for c in shapes {
+                walk(&c.shape, &mut flat);
+            }
+            let save_x = flat.iter().find_map(|s| match s {
+                egui::Shape::Text(t) if t.galley.text() == "Save" || t.galley.text() == "Don't Save" || t.galley.text() == "Cancel" => Some(t.pos.x),
+                _ => None,
+            });
+            let border_flashes =
+                flat.iter().filter(|s| matches!(s, egui::Shape::Rect(r) if r.stroke.width > 0.0 && r.fill == egui::Color32::TRANSPARENT)).count();
+            (save_x, border_flashes)
+        };
+
+        let rest_pos = look(&h).0;
+        let baseline_flashes = look(&h).1;
+
+        // Clicking beside the dialog triggers the nudge
+        let rect = craft::ui::runtime::overlay::top(&h.ctx)
+            .and_then(|id| craft::ui::runtime::overlay::entry(&h.ctx, id))
+            .map(|e| e.rect)
+            .or_else(|| h.ctx.memory(|m| m.top_modal_layer().and_then(|l| m.area_rect(l.id))))
+            .expect("dialog rect exists");
+        let beside = egui::pos2(rect.min.x - 20.0, rect.min.y - 20.0);
+        assert!(!rect.contains(beside));
+
+        h.event(egui::Event::PointerMoved(beside));
+        h.event(egui::Event::PointerButton { pos: beside, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.step();
+        h.event(egui::Event::PointerButton { pos: beside, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.step();
+
+        let first = started(&h).expect("clicking outside nudges the dialog");
+        let mut looks = vec![look(&h)];
+
+        // Repeat outside click while it runs does not restart it
+        h.event(egui::Event::PointerMoved(beside));
+        h.event(egui::Event::PointerButton { pos: beside, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.step();
+        h.event(egui::Event::PointerButton { pos: beside, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.step();
+        assert_eq!(started(&h), Some(first), "{animations:?}: repeat click does not reset start time mid-nudge");
+
+        for _ in 0..6 {
+            h.step();
+            looks.push(look(&h));
+        }
+
+        if animations == "on" {
+            assert!(looks.iter().any(|l| l.0 != rest_pos), "it shakes horizontally under full animations");
+        } else {
+            assert!(looks.iter().any(|l| l.1 > baseline_flashes), "it flashes accent border under reduced motion");
+            assert!(looks.iter().all(|l| l.0 == rest_pos), "it does not translate horizontally under reduced motion");
+        }
+
+        // Run until shake completes
+        h.run_steps(30);
+        let final_look = look(&h);
+        assert_eq!(final_look.0, rest_pos, "it comes back to rest");
+        assert_eq!(final_look.1, baseline_flashes, "border flash ends at rest");
+
+        // Cancel closes the dialog and forgets nudge
+        h.state_mut().run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
+        h.step();
+        assert_eq!(started(&h), None, "{animations:?}: closing the dialog clears nudge state");
+    }
+}
+
+/// #7321: ordinary click inside a dialog with a popup open does not shake it;
+/// clicking outside the dialog shakes it; closing clears nudge so reopening within 0.4s opens still.
+#[test]
+fn modal_dialog_with_open_popup_does_not_shake_on_inside_click_but_shakes_on_outside_click() {
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|_| app);
+    h.run_steps(6);
+    let id = super::open(h.state_mut(), "font", &json!({})).expect("font dialog opens");
+    h.run_steps(4);
+
+    // Open a dropdown popup inside the Font dialog
+    let buttons: Vec<_> =
+        h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Font color: Automatic").filter(|n| !n.accesskit_node().is_hidden()).collect();
+    assert!(!buttons.is_empty(), "Font color button exists");
+    buttons.last().unwrap().click();
+    h.run_steps(3);
+
+    // Verify a popup is open on top of the overlay stack
+    let top = craft::ui::runtime::overlay::top(&h.ctx).expect("top overlay entry exists");
+    let top_entry = craft::ui::runtime::overlay::entry(&h.ctx, top).expect("top entry exists");
+    assert_eq!(top_entry.rank, craft::ui::runtime::overlay::Rank::Popup, "top entry is popup");
+
+    // Resolve the target modal dialog's own overlay entry by traversing parents
+    let mut cur = top_entry.clone();
+    while let Some(parent) = cur.parent.and_then(|p| craft::ui::runtime::overlay::entry(&h.ctx, p)) {
+        if cur.rank.is_modal() {
+            break;
+        }
+        cur = parent;
+    }
+    assert!(cur.rank.is_modal(), "found modal dialog overlay entry");
+    let modal_rect = cur.rect;
+    let popup_rect = top_entry.rect;
+
+    // A click inside the modal dialog (on body padding, outside the popup) must NOT nudge
+    let inside_point = egui::pos2(modal_rect.min.x + 40.0, modal_rect.min.y + 40.0);
+    assert!(modal_rect.contains(inside_point), "point is inside dialog");
+    assert!(!popup_rect.contains(inside_point), "point is outside popup");
+
+    h.event(egui::Event::PointerMoved(inside_point));
+    h.event(egui::Event::PointerButton { pos: inside_point, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.step();
+    h.event(egui::Event::PointerButton { pos: inside_point, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.step();
+
+    let key = chrome::nudge_id(&h.ctx, id);
+    assert!(h.ctx.data(|d| d.get_temp::<f64>(key)).is_none(), "click inside dialog with popup open does not nudge");
+    assert!(h.state().dialog_host.get_dyn(id).is_some(), "dialog remains open after inside click");
+
+    // A click inside the popup itself (or an extension of the popup) must also NOT nudge
+    let popup_point = popup_rect.center();
+    h.event(egui::Event::PointerMoved(popup_point));
+    h.event(egui::Event::PointerButton { pos: popup_point, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.step();
+    h.event(egui::Event::PointerButton { pos: popup_point, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.step();
+    assert!(h.ctx.data(|d| d.get_temp::<f64>(key)).is_none(), "click inside popup does not nudge");
+
+    // Dismiss the open dropdown popup
+    h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+    h.step();
+    h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE });
+    h.step();
+
+    // A click outside the modal dialog (even completed within a single frame) MUST nudge it
+    let beside_point = egui::pos2(modal_rect.min.x - 20.0, modal_rect.min.y - 20.0);
+    assert!(!modal_rect.contains(beside_point), "point is outside dialog");
+
+    h.event(egui::Event::PointerMoved(beside_point));
+    h.event(egui::Event::PointerButton { pos: beside_point, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.event(egui::Event::PointerButton { pos: beside_point, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.step();
+
+    assert!(h.ctx.data(|d| d.get_temp::<f64>(key)).is_some(), "click outside dialog nudges it");
+
+    let serial1 = h.state().dialog_host.open_serial(id).expect("dialog has open serial");
+
+    // Closing the dialog clears the nudge
+    let ctx = h.ctx.clone();
+    h.state_mut().dialog_host.cancel_by_id(&ctx, id);
+    h.run_steps(3);
+    assert!(h.ctx.data(|d| d.get_temp::<f64>(key)).is_none(), "closing dialog clears nudge");
+
+    // Reopening the dialog gets a new open serial and starts still
+    let id2 = super::open(h.state_mut(), "font", &json!({})).expect("font dialog reopens");
+    let serial2 = h.state().dialog_host.open_serial(id2).expect("reopened dialog has open serial");
+    assert_ne!(serial1, serial2, "successive opens have distinct open serials");
+    h.run_steps(2);
+    let key2 = chrome::nudge_id(&h.ctx, id2);
+    assert!(h.ctx.data(|d| d.get_temp::<f64>(key2)).is_none(), "reopened dialog starts still");
 }

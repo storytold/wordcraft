@@ -138,9 +138,11 @@ config works across the suite) keep the agent to the folders you give it:
   A refused write through a link also names the entry it would replace (`…, entry /elsewhere/link.docx`).
   A refusal for a missing root (no write root, say) shows the path as given only: it is refused
   before the path is looked up, and the log doesn't look it up either.
-  Control characters and bidi marks in a path are shown as `\u{…}` escapes, and a line longer
+  Control characters and bidi marks in a path are shown as escapes (`\n`, `\u{1b}`), and a line longer
   than 4 KiB is cut short with the number of bytes left out. A folder listing that
-  skips an entry outside the root logs nothing, and no other warnings are written.
+  skips an entry outside the root logs nothing, nor does a picture an opened web page points to
+  outside it, or a save's check whether the file it replaces is Word 2003 XML; no other warnings
+  are written.
 - The roots must be existing folders; a missing one stops the server with an error. Each flag is
   given once (`--flag <dir>` or `--flag=<dir>`).
 
