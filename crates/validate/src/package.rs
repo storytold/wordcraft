@@ -1087,9 +1087,11 @@ fn check_concatenated_archives(bytes: &[u8], readable: bool, acc: &mut Acc) {
             unresolved = true;
             continue;
         }
+        // An attempt is fully charged and completed before any successor is searched for: the lookahead runs
+        // only when another attempt is actually needed, so it cannot spend the budget the attempt in hand needs.
         while let Some((at, last, count)) = next {
-            next = plausible(at + 1, &mut walks);
             if count > acc.limits.entries as u64 {
+                next = plausible(at + 1, &mut walks);
                 continue;
             }
             // The claim is that the second archive is complete, so its package relationships must have been read
@@ -1103,6 +1105,7 @@ fn check_concatenated_archives(bytes: &[u8], readable: bool, acc: &mut Acc) {
             if first == second {
                 break;
             }
+            next = plausible(at + 1, &mut walks);
         }
         unresolved = true;
     }
@@ -1113,6 +1116,10 @@ fn check_concatenated_archives(bytes: &[u8], readable: bool, acc: &mut Acc) {
     }
 }
 
+/// Package loads of trailing slices one scan may perform: a bounded view and a whole-slice fallback for each
+/// of the two candidate splits. Further attempts are refused, never silently passed.
+const TRAILING_LOADS: usize = 4;
+
 /// Scan-wide accounting for central-record walks. Every walk of a directory is charged its declared record
 /// count against one budget, and a walk already done for the same directory is reused, so many footer-like
 /// records aimed at one directory cost one walk. Two archives at the entry limit, each with its footer, fit
@@ -1121,6 +1128,11 @@ struct FooterWalks {
     budget: usize,
     /// A walk was refused because the budget ran out; the scan must report incomplete coverage.
     spent: bool,
+    /// Whole or bounded package loads of a trailing slice still allowed in this scan. Loads are the expensive
+    /// work (extraction and XML), so they share one aggregate allowance across every candidate attempt.
+    loads_left: usize,
+    /// Package loads of a trailing slice performed so far in this scan.
+    loads: usize,
     /// (directory start, record count) -> the footer position walked from and its outcome. A walk that
     /// found the directory consistent holds for any later footer, since a later footer only adds room.
     done: HashMap<(usize, u64), (usize, Footer)>,
@@ -1137,7 +1149,7 @@ impl FooterWalks {
             package_loss: "independent";
         }
 
-        Self { budget: entries.saturating_mul(4), spent: false, done: HashMap::new() }
+        Self { budget: entries.saturating_mul(4), spent: false, loads_left: TRAILING_LOADS, loads: 0, done: HashMap::new() }
     }
 
     /// Spend `cost` units of the scan-wide budget; false (and `spent`) when it is exhausted.
@@ -1152,6 +1164,27 @@ impl FooterWalks {
                 false
             }
         }
+    }
+
+    /// Spend one trailing-slice package load; false (and `spent`) when the scan's load allowance is used up.
+    fn charge_load(&mut self) -> bool {
+        match self.loads_left.checked_sub(1) {
+            Some(rest) => {
+                self.loads_left = rest;
+                self.loads += 1;
+                true
+            }
+            None => {
+                self.spent = true;
+                false
+            }
+        }
+    }
+
+    /// Load a trailing slice in isolation, charged to the scan's shared load allowance. A refused charge
+    /// reports no archive and leaves `spent` set, so the scan keeps its incomplete-coverage note.
+    fn load(&mut self, bytes: &[u8], footer: usize, limits: crate::Limits) -> Option<bool> {
+        if self.charge_load() { standalone_opc(bytes, footer, limits) } else { None }
     }
 
     fn footer(&mut self, bytes: &[u8], footer: usize, limit: usize) -> Footer {
@@ -1496,15 +1529,15 @@ fn standalone_trailing(bytes: &[u8], footer: usize, limits: crate::Limits, walks
         && directory_at(bytes, footer).is_some_and(|(_, count)| usize::try_from(count).is_ok_and(|count| walks.charge(count)))
         && matches!(verify_footer(bytes, footer, limits.entries), Footer::Verified(_));
     if !proven {
-        return standalone_opc(bytes, footer, limits);
+        return walks.load(bytes, footer, limits);
     }
     let mut view = bytes.get(..footer + 22)?.to_vec();
     view.get_mut(footer + 20..footer + 22)?.fill(0);
     // Shortening moves find_eocd's scan window, so the bounded view is not a strict superset of what the whole
     // slice accepts: a view that does not certify defers to the whole-slice load.
-    match standalone_opc(&view, footer, limits) {
+    match walks.load(&view, footer, limits) {
         Some(true) => Some(true),
-        _ => standalone_opc(bytes, footer, limits),
+        _ => walks.load(bytes, footer, limits),
     }
 }
 

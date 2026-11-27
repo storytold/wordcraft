@@ -107,3 +107,107 @@ fn byte_readers_and_descriptor_lengths_survive_offsets_at_the_end_of_the_address
         assert_eq!(descriptor_lengths(&bytes, at, 0, 0, 0), 0);
     }
 }
+
+mod trailing_budget {
+    use super::raw_zip::{self, Record};
+    use super::*;
+    use crate::resolution_tests::common::Doc;
+    use crate::{Limits, Verdict, validate_bytes_limited};
+
+    const NOTE: &str = "could not resolve a candidate boundary";
+
+    fn concatenated(report: &crate::Report) -> bool {
+        report.findings.iter().any(|f| f.rule == "PKG-CONCATENATED")
+    }
+
+    fn with_comment(mut zip: Vec<u8>, comment: &[u8]) -> Vec<u8> {
+        let at = zip.len() - 2;
+        zip[at..].copy_from_slice(&u16::try_from(comment.len()).unwrap().to_le_bytes());
+        zip.extend(comment);
+        zip
+    }
+
+    fn footer_copy_with_count(zip: &[u8], count: u16) -> Vec<u8> {
+        let mut copy = zip[zip.len() - 22..].to_vec();
+        copy[8..10].copy_from_slice(&count.to_le_bytes());
+        copy[10..12].copy_from_slice(&count.to_le_bytes());
+        copy
+    }
+
+    /// The ordinary archive plus a stored entry holding `fakes` footer-like records whose comments run to the
+    /// end of the file once `tail` more bytes follow it, so each is an exact-end candidate below the real footer.
+    fn archive_with_inner_candidates(fakes: usize, tail: usize) -> Vec<u8> {
+        let build = |blob: &[u8]| {
+            let mut records: Vec<Record> = Doc::minimal().entries.into_iter().map(|(name, body)| Record::new(name, 0, body)).collect();
+            records.push(Record::new("word/media/blob.bin", 0, blob));
+            raw_zip::build(&records)
+        };
+        let record = |comment: u16| [b"PK\x05\x06".as_slice(), &[0u8; 16], &comment.to_le_bytes()].concat();
+        let probe = build(&vec![0u8; fakes * 22]);
+        let name = b"word/media/blob.bin";
+        let data = probe.windows(name.len()).position(|w| w == name).unwrap() + name.len();
+        let total = probe.len() + tail;
+        let blob: Vec<u8> = (0..fakes).flat_map(|at| record(u16::try_from(total - (data + at * 22 + 22)).unwrap())).collect();
+        let built = build(&blob);
+        assert_eq!(built.len(), probe.len());
+        built
+    }
+
+    /// An attempt is charged and completed before any successor is searched for. The trailing archive's real
+    /// footer is the one that certifies (through the verified view, because a footer copy in its comment misleads
+    /// the whole-slice load); candidates below it must not spend the budget its own directory walk needs.
+    #[test]
+    fn a_successor_lookahead_does_not_spend_the_current_attempts_budget() {
+        let first = Doc::minimal().build();
+        let entries = 5;
+        for fakes in [0usize, 4, 8, 9, 10, 16, 40] {
+            let probe = archive_with_inner_candidates(fakes, 0);
+            let lookalike = footer_copy_with_count(&probe, 1);
+            let second = with_comment(archive_with_inner_candidates(fakes, lookalike.len()), &lookalike);
+            let bytes = [first.as_slice(), second.as_slice()].concat();
+            let report = validate_bytes_limited(&bytes, Limits { entries, ..Limits::default() });
+            assert!(concatenated(&report), "{fakes} candidates below the real footer: {report:?}");
+            assert_eq!(report.verdict, Verdict::Fail, "{fakes}: {report:?}");
+        }
+    }
+
+    /// Whole-slice package loads of one trailing slice share one allowance across candidate attempts, so many
+    /// plausible footer copies cannot repeat the extraction and XML work without limit; refusal keeps the note.
+    #[test]
+    fn candidate_retries_share_one_aggregate_package_load_allowance() {
+        let ordinary = Doc::minimal().build();
+        let limits = Limits::default();
+        // An unproven footer (no comment) loads the whole slice each time it is attempted.
+        let footer = ordinary.len() - 22;
+        let mut walks = FooterWalks::new(limits.entries);
+        for _ in 0..TRAILING_LOADS * 3 {
+            standalone_trailing(&ordinary, footer, limits, &mut walks);
+        }
+        assert_eq!(walks.loads, TRAILING_LOADS, "loads past the allowance are refused, not performed");
+        assert!(walks.spent);
+        assert_eq!(standalone_trailing(&ordinary, footer, limits, &mut walks), None, "a refused load certifies nothing");
+
+        // Many plausible lookalikes in the comment of an unequal trailing slice: the work stays bounded and the
+        // undecided boundary is reported, never passed.
+        let lookalike = footer_copy_with_count(&ordinary, 1);
+        let copies = TRAILING_LOADS * 2;
+        // Each copy's own comment runs to the end of the slice, so every one is an exact-end candidate.
+        let chain: Vec<u8> = (0..copies)
+            .flat_map(|at| {
+                let mut copy = lookalike.clone();
+                copy[20..22].copy_from_slice(&u16::try_from((copies - 1 - at) * 22).unwrap().to_le_bytes());
+                copy
+            })
+            .collect();
+        let second = with_comment(ordinary.clone(), &chain);
+        let report = validate_bytes_limited(&[ordinary.as_slice(), second.as_slice()].concat(), limits);
+        assert_ne!(report.verdict, Verdict::Pass, "{report:?}");
+        assert!(report.coverage_notes.iter().any(|n| n.contains(NOTE)), "{report:?}");
+
+        // One lookalike is the committed fixture: its disposition is unchanged.
+        let one = with_comment(ordinary.clone(), &lookalike);
+        let report = validate_bytes_limited(&[ordinary.as_slice(), one.as_slice()].concat(), limits);
+        assert!(concatenated(&report), "{report:?}");
+        assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
+    }
+}
