@@ -213,6 +213,35 @@ fn legacy_header_reach(text_bottom: f32, reach: &[(f32, f32)]) -> f32 {
     reach.iter().filter(|(top, _)| *top < text_bottom).map(|(_, bottom)| *bottom).fold(0.0, f32::max)
 }
 
+/// Word treats the page/page frames in the reported header as ordinary paragraphs (#2361),
+/// while footer, note and cell frames keep their floating behavior.
+fn is_header_page_frame(ctx: &Ctx, story: StoryRef, in_cell: bool, pl: &ParaLayout) -> bool {
+    matches!(
+        story,
+        StoryRef::Part(id)
+            if ctx.doc.parts.get(&id).is_some_and(|part| part.kind == wordcraft_doc::PartKind::Header)
+                && !in_cell
+                && pl.rp.frame.as_ref().is_some_and(|fr| fr.h_anchor == "page" && fr.v_anchor == "page")
+    )
+}
+
+/// Offset-positioned floats stay inside the outer cell edges. Cell text margins and wrap
+/// distances do not move the object.
+fn clamp_offset_float_in_cell(r: &mut Rect, float: &Float, cell_edges: Option<(f32, f32)>) {
+    if let Some((left, right)) = cell_edges
+        && !float.outside_cell
+        && float.h_align.is_none()
+        && float.wrap != Wrap::InFrontOfText
+    {
+        r.x = keep_in_cell(r.x, r.w, left, right);
+    }
+}
+
+/// These objects do not reflow the legacy header's own text in Word (#6805).
+fn legacy_header_skips_text_wrap(legacy_header: bool, legacy_header_contours: bool, wrap: Wrap) -> bool {
+    (legacy_header && matches!(wrap, Wrap::TopAndBottom | Wrap::Square)) || (legacy_header_contours && matches!(wrap, Wrap::Tight | Wrap::Through))
+}
+
 /// Lay out a block list into a free-standing box of `width` (no page breaks): table cells,
 /// headers, footers, notes, text boxes. Returns items relative to (0, 0) and the height. `frame`
 /// says where the box sits on its page, for floating objects positioned relative to the page or
@@ -281,8 +310,10 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 let mut pl = ctx.para_labelled(p, width, table, &[], label.clone());
                 // A text frame (a footer's page number in a frame, say) is placed apart, like a
                 // floating object, and the text after it wraps around it; it takes no room in
-                // the flow.
-                if let Some(fr) = pl.rp.frame.clone().filter(|_| frames) {
+                // the flow. Word treats the page/page frames in the reported header as ordinary
+                // paragraphs (#2361), while footer, note and cell frames keep their floating
+                // behavior. Text boxes retain the no-frame rule (#2357).
+                if let Some(fr) = pl.rp.frame.clone().filter(|_| frames && !is_header_page_frame(ctx, story, in_cell, &pl)) {
                     let fw = fr.w.unwrap_or_else(|| natural_width(&pl)).clamp(1.0, 1584.0);
                     let pf = if (fw - width).abs() > 0.01 { ctx.para_labelled(p, fw, table, &[], label) } else { pl };
                     let h = match fr.h {
@@ -342,16 +373,8 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     let mut r = float_rect(frame, (0.0, width), float_y, w, h, float);
                     // Only move an offset-positioned float when its box crosses the outer
                     // cell edge. Cell text margins and wrap distances do not move the object.
-                    if let Some((left, right)) = cell_edges
-                        && !float.outside_cell
-                        && float.h_align.is_none()
-                        && float.wrap != Wrap::InFrontOfText
-                    {
-                        r.x = keep_in_cell(r.x, r.w, left, right);
-                    }
-                    if (legacy_header && matches!(float.wrap, Wrap::TopAndBottom | Wrap::Square))
-                        || (legacy_header_contours && matches!(float.wrap, Wrap::Tight | Wrap::Through))
-                    {
+                    clamp_offset_float_in_cell(&mut r, float, cell_edges);
+                    if legacy_header_skips_text_wrap(legacy_header, legacy_header_contours, float.wrap) {
                         // These objects do not reflow the legacy header's own text in Word.
                         legacy_reach.extend(legacy_reach_of(float, r));
                     } else {
