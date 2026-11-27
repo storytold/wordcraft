@@ -200,6 +200,11 @@ fn undo_arrow(app: &mut WordApp, ui: &mut Ui, enabled: bool) -> egui::Rect {
     app.chrome.undo_mark = if open { mark } else { UndoMark::default() };
     if let Some(count) = picked {
         let _ = app.run("edit.undoTo", json!({"count": count}));
+        // Picking a row closes the Undo History popover on its foreground layer; return keyboard
+        // focus to the document both now and after the pass's overlay-close focus hook (#3040).
+        app.canvas.focus_page(ui.ctx());
+        app.canvas.focus_page_after_pass();
+        ui.ctx().request_repaint();
     }
     out.response.rect
 }
@@ -256,7 +261,7 @@ fn trailing(app: &mut WordApp, ui: &mut Ui, step: usize) -> Option<egui::Rect> {
     if app.ui.show_discord {
         let tip = TooltipSpec::new(tl!("Join the ArtCraft community on Discord").to_string());
         let clicked = if step >= 1 {
-            let out = IconButton::new(IconId::new("discord"))
+            let out = IconButton::new(IconId::new("discordPill"))
                 .label(tl!("Discord").to_string())
                 .variant(Variant::Custom(DISCORD_ICON))
                 .glyphs(GlyphRole::Tool)
@@ -266,7 +271,7 @@ fn trailing(app: &mut WordApp, ui: &mut Ui, step: usize) -> Option<egui::Rect> {
             out.response.clicked()
         } else {
             let out =
-                Button::new(tl!("Discord").to_string()).icon(IconId::new("discord")).variant(Variant::Custom(DISCORD_PILL)).tooltip(tip).show(ui);
+                Button::new(tl!("Discord").to_string()).icon(IconId::new("discordPill")).variant(Variant::Custom(DISCORD_PILL)).tooltip(tip).show(ui);
             rects.push(out.response.rect);
             out.clicked()
         };
