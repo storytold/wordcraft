@@ -144,3 +144,90 @@ pub(crate) fn weight_menu(ui: &mut Ui, _app: &mut WordApp, id: &str, current: Op
             .show(ui);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::WordApp;
+    use egui::accesskit::Role;
+    use egui::vec2;
+    use egui_kittest::kittest::{By, Queryable};
+    use serde_json::json;
+    use wordcraft_engine::Session;
+
+    /// #7317: the real ribbon `Font Size` `ComboBox` places its dropdown chevron on the trailing
+    /// side of the field in LTR (right) and a `ComboBox` in an RTL flow places it on the left.
+    #[test]
+    fn combo_chevron_sits_on_the_trailing_side_in_ltr_and_rtl() {
+        use craft::ui::contract::{Bind, Entry, Show as _};
+        use craft::ui::pickers::ComboBox;
+
+        fn collect_stroke_rects(shape: &egui::Shape, out: &mut Vec<egui::Rect>) {
+            match shape {
+                egui::Shape::Vec(children) => {
+                    for child in children {
+                        collect_stroke_rects(child, out);
+                    }
+                }
+                egui::Shape::Rect(r) if r.stroke.width > 0.0 => out.push(r.rect),
+                _ => {}
+            }
+        }
+
+        fn assert_chevron_side<S: 'static>(h: &mut egui_kittest::Harness<'static, S>, rtl: bool) {
+            let combo_rect = h
+                .query_all(By::new().role(Role::ComboBox))
+                .map(|n| n.rect())
+                .filter(|r| r.min.y < 150.0)
+                .min_by(|a, b| a.width().total_cmp(&b.width()))
+                .expect("Font Size combo box");
+
+            let input_rect = h
+                .query_all(By::new().role(Role::TextInput))
+                .map(|n| n.rect())
+                .find(|r| combo_rect.contains_rect(r.shrink(2.0)))
+                .unwrap_or_else(|| panic!("rtl={rtl}: no TextInput inside combo {combo_rect:?}"));
+
+            let mut stroke_rects = Vec::new();
+            for clipped in &h.output().shapes {
+                collect_stroke_rects(&clipped.shape, &mut stroke_rects);
+            }
+
+            let outer = stroke_rects
+                .into_iter()
+                .filter(|r| r.min.y <= input_rect.min.y + 2.0 && r.max.y >= input_rect.max.y - 2.0 && r.contains_rect(input_rect.shrink(2.0)))
+                .min_by(|a, b| a.width().total_cmp(&b.width()))
+                .unwrap_or_else(|| panic!("rtl={rtl}: no outer combo outline around {input_rect:?}"));
+
+            let arrow_rect = h
+                .query_all(By::new().role(Role::Button))
+                .map(|n| n.rect())
+                .find(|r| r.width() < 30.0 && outer.contains_rect(r.shrink(1.0)))
+                .unwrap_or_else(|| panic!("rtl={rtl}: no dropdown arrow button inside {outer:?}"));
+
+            if rtl {
+                assert!(arrow_rect.center().x < input_rect.center().x, "rtl: arrow {arrow_rect:?} should sit left of field {input_rect:?}");
+            } else {
+                assert!(arrow_rect.center().x > input_rect.center().x, "ltr: arrow {arrow_rect:?} should sit right of field {input_rect:?}");
+            }
+        }
+
+        // 1. LTR: real WordApp ribbon Font Size ComboBox.
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Sample")), crate::Services::default());
+        app.run("ui.tab", json!({"tab": "Home"})).unwrap();
+        let mut h = crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).build_eframe(|_| app);
+        h.run_steps(3);
+        assert_chevron_side(&mut h, false);
+
+        // 2. RTL: ComboBox inside an RTL flow places its chevron on the left (trailing) side.
+        let entries = [Entry::new("12".to_string(), "12".to_string()), Entry::new("14".to_string(), "14".to_string())];
+        let mut value = "12".to_string();
+        let mut h_rtl = crate::test_harness::builder().with_size(vec2(300.0, 120.0)).build_ui(move |ui| {
+            let _ = ComboBox::new("Font Size", Bind::bound(&mut value), &entries).show(ui);
+        });
+        craft::ui::shell::embed::before_input(&h_rtl.ctx, |_| {
+            craft::ui::runtime::frame::FrameInput::new(craft::ui::runtime::env::RootEnv::new().direction(craft::i18n::Direction::Rtl))
+        });
+        h_rtl.step();
+        assert_chevron_side(&mut h_rtl, true);
+    }
+}
