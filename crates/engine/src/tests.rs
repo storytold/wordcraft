@@ -9122,6 +9122,22 @@ fn manage_styles_lists_paragraph_character_linked_and_table_styles() {
     assert!(!s.dirty);
 }
 
+/// Word writes Normal with no `w:uiPriority`: the recommended order still starts with it (#6884).
+#[test]
+fn manage_styles_puts_normal_without_a_priority_first() {
+    let mut s = s();
+    let mut styles = (*s.doc.styles).clone();
+    for st in &mut styles.styles {
+        if st.id == "Normal" {
+            st.priority = None;
+        }
+    }
+    s.doc.styles = std::sync::Arc::new(styles);
+    let rec = run(&mut s, "styles.manage", json!({}));
+    assert_eq!(rec[0]["name"], "Normal");
+    assert!(rec[0]["priority"].is_null(), "the file's missing priority is kept");
+}
+
 #[test]
 fn deleting_a_style_falls_back_to_its_base_and_undoes() {
     let mut s = s();

@@ -109,7 +109,7 @@ pub fn manage_list(s: &Session, alphabetical: bool) -> Value {
     if alphabetical {
         list.sort_by_cached_key(|st| st.name.to_lowercase());
     } else {
-        list.sort_by_cached_key(|st| (st.priority.unwrap_or(99), st.name.to_lowercase()));
+        list.sort_by_cached_key(|st| (wordcraft_doc::styles::StyleSheet::sort_priority(st), st.name.to_lowercase()));
     }
     Value::Array(
         list.into_iter()
