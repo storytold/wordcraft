@@ -1,5 +1,5 @@
-use super::generated::page_of;
-use super::{CharProps, CmdError, CmdResult, InlineObject, Paragraph, Pos, Selection, Session, StoryRef, Value, delete_selection, json, p};
+use super::{CharProps, CmdError, CmdResult, Document, InlineObject, Paragraph, Pos, Selection, Session, StoryRef, Value, delete_selection, json, p};
+use crate::cmd::references::page_label;
 
 pub(super) fn cross_ref(s: &mut Session, v: &Value) -> CmdResult {
     let to = p::str(v, "to").unwrap_or("heading");
@@ -10,9 +10,10 @@ pub(super) fn cross_ref(s: &mut Session, v: &Value) -> CmdResult {
     let find = |ts: Vec<(String, Pos)>| ts.into_iter().find(|(t, _)| t == target || t.starts_with(target));
     let (text, pos) = find(targets).ok_or_else(|| CmdError::Params(format!("no {to} `{target}`")))?;
     let show = p::str(v, "show").unwrap_or("text");
-    let page = page_of(s, &pos);
     let result = match show {
-        "page" => page.to_string(),
+        // The page the target's text starts on (after its leading page breaks), as its footer
+        // shows it.
+        "page" => page_label(s, &Pos { off: leading_breaks(&s.doc, &pos), ..pos.clone() }),
         "number" => text.split(':').next().unwrap_or(&text).trim().to_string(),
         "aboveBelow" => {
             if pos < s.sel.focus {
@@ -77,13 +78,19 @@ pub(super) fn caption_label(p: &Paragraph, text: &str) -> Option<String> {
     (!label.is_empty() && label.chars().count() <= 40).then_some(label)
 }
 
+/// Whether `p` is a caption: its style is Caption or one based on it, as a caption restyled with a
+/// style of its own (a `Table Caption` based on Caption) still is (#4411).
+pub(super) fn is_caption(doc: &Document, p: &Paragraph) -> bool {
+    p.props.style.as_deref().is_some_and(|id| id == "Caption" || doc.styles.chain(id).iter().any(|s| s.id == "Caption"))
+}
+
 /// The caption paragraphs of the body: (text, position, label).
 fn captions(s: &Session) -> Vec<(String, Pos, Option<String>)> {
     s.doc
         .para_paths(StoryRef::Body)
         .into_iter()
         .filter_map(|path| {
-            let p = s.doc.para(StoryRef::Body, &path).filter(|p| p.props.style.as_deref() == Some("Caption"))?;
+            let p = s.doc.para(StoryRef::Body, &path).filter(|p| is_caption(&s.doc, p))?;
             let text = p.plain_text();
             let label = caption_label(p, &text);
             Some((text, Pos { story: StoryRef::Body, path, off: 0 }, label))
@@ -125,7 +132,7 @@ pub fn ref_targets(s: &Session, to: &str) -> Vec<(String, Pos)> {
             };
             for path in s.doc.para_paths(StoryRef::Body) {
                 if let Some(p) = s.doc.para(StoryRef::Body, &path)
-                    && p.props.style.as_deref() == Some("Caption")
+                    && is_caption(&s.doc, p)
                     && p.plain_text().starts_with(label)
                 {
                     targets.push((p.plain_text(), Pos { story: StoryRef::Body, path: path.clone(), off: 0 }));
@@ -146,6 +153,23 @@ pub fn ref_targets(s: &Session, to: &str) -> Vec<(String, Pos)> {
     targets
 }
 
+/// The offset just past the page breaks at the start of the paragraph at `pos`, skipping bookmark
+/// marks among them (a `_Ref` bookmark may start before the breaks): its text starts there.
+pub(crate) fn leading_breaks(doc: &Document, pos: &Pos) -> usize {
+    let Some(p) = doc.para(pos.story, &pos.path) else { return 0 };
+    let mut after = 0;
+    for (i, c) in p.text.char_indices() {
+        if c == '\u{0C}' {
+            after = i.saturating_add(c.len_utf8());
+        } else if c != wordcraft_doc::para::OBJ
+            || !matches!(p.object_at(i), Some(InlineObject::BookmarkStart { .. } | InlineObject::BookmarkEnd { .. }))
+        {
+            break;
+        }
+    }
+    after
+}
+
 /// The hidden `_Ref` bookmark around the target paragraph at `pos` (its label and number only
 /// when `number_only`), reusing one already there. Returns its name and `at` moved past the
 /// bookmark marks inserted before it.
@@ -153,16 +177,22 @@ fn ref_bookmark(s: &mut Session, pos: &Pos, number_only: bool, mut at: Pos) -> R
     const MARK: usize = wordcraft_doc::para::OBJ.len_utf8();
     let para = s.doc.para(pos.story, &pos.path).ok_or_else(|| CmdError::Params("cross-reference target is gone".into()))?;
     let end = if number_only { para.text.find(':').unwrap_or(para.len()) } else { para.len() };
-    if let Some(InlineObject::BookmarkStart { name }) = para.object_at(0)
-        && name.starts_with("_Ref")
-    {
-        // Reuse it when it covers the same extent: up to the colon, or the whole paragraph.
-        let same = para.object_offsets().into_iter().any(|o| {
-            matches!(para.object_at(o), Some(InlineObject::BookmarkEnd { name: n }) if n == name)
-                && para.text.get(o.saturating_add(MARK)..).is_some_and(|rest| if number_only { rest.starts_with(':') } else { rest.is_empty() })
-        });
-        if same {
-            return Ok((name.clone(), at));
+    // The bookmark starts after the leading page breaks, so `PAGEREF` reads the page the text is on.
+    let start = leading_breaks(&s.doc, pos).min(end);
+    // Reuse one that starts there or at the paragraph's start (before the breaks): the field's
+    // result still reads the page the text is on.
+    for from in [start, 0] {
+        if let Some(InlineObject::BookmarkStart { name }) = para.object_at(from)
+            && name.starts_with("_Ref")
+        {
+            // Reuse it when it covers the same extent: up to the colon, or the whole paragraph.
+            let same = para.object_offsets().into_iter().any(|o| {
+                matches!(para.object_at(o), Some(InlineObject::BookmarkEnd { name: n }) if n == name)
+                    && para.text.get(o.saturating_add(MARK)..).is_some_and(|rest| if number_only { rest.starts_with(':') } else { rest.is_empty() })
+            });
+            if same {
+                return Ok((name.clone(), at));
+            }
         }
     }
     let next =
@@ -170,11 +200,11 @@ fn ref_bookmark(s: &mut Session, pos: &Pos, number_only: bool, mut at: Pos) -> R
     let name = format!("_Ref{next:09}");
     let props = CharProps::default();
     s.doc.insert_object(&Pos { off: end, ..pos.clone() }, InlineObject::BookmarkEnd { name: name.clone() }, &props)?;
-    s.doc.insert_object(&Pos { off: 0, ..pos.clone() }, InlineObject::BookmarkStart { name: name.clone() }, &props)?;
+    s.doc.insert_object(&Pos { off: start, ..pos.clone() }, InlineObject::BookmarkStart { name: name.clone() }, &props)?;
     if at.story == pos.story && at.path == pos.path {
         if at.off >= end {
             at.off = at.off.saturating_add(2 * MARK);
-        } else if at.off > 0 {
+        } else if at.off > start {
             at.off = at.off.saturating_add(MARK);
         }
     }

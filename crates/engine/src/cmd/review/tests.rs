@@ -799,6 +799,7 @@ fn deleting_a_comment_in_a_parent_cycle_ends() {
 /// A very long reply chain (as a hostile file could hold) is deleted in one pass over the
 /// comments, not one pass per reply: 50,000 replies would otherwise freeze the app.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn deleting_a_long_reply_chain_stays_fast() {
     let mut s = Session::new(Document::new());
     s.view.proofing = false;
@@ -1056,5 +1057,152 @@ fn rtf_tracked_changes_accept_and_reject_after_opening_and_round_trip() {
             assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), want, "{cmd}");
             assert!(s.run("review.changes", &json!({})).unwrap().as_array().unwrap().is_empty(), "{cmd}");
         }
+    }
+}
+
+#[cfg(test)]
+mod spelling_navigation_tests {
+    use super::*;
+    use wordcraft_doc::{Document, Pos, StoryRef};
+
+    use crate::Selection;
+
+    #[test]
+    fn spelling_review_dialog_navigation_moves_forward_and_wraps_only_when_requested() {
+        for text in ["The brwn fox and brwn dog.", "The brwn fox.\nThe brwn dog."] {
+            let mut s = Session::new(Document::from_text(text));
+            let first = s.run("review.spelling", &json!({"wrap": false})).unwrap();
+            assert_eq!(first["text"], "brwn");
+            let first_selection = s.sel.clone();
+            let second = s.run("review.spelling", &json!({"wrap": false})).unwrap();
+            assert_eq!(second["text"], "brwn");
+            assert_ne!(s.sel, first_selection);
+            assert_eq!(s.run("review.spelling", &json!({"wrap": false})).unwrap()["done"], true);
+            assert_eq!(s.run("review.spelling", &json!({})).unwrap()["start"], first["start"]);
+        }
+    }
+    #[test]
+    fn spelling_review_dialog_navigation_resolves_selected_spelling_before_overlapping_grammar() {
+        for reverse in [false, true] {
+            let mut s = Session::new(Document::from_text("A sentense sentense."));
+            s.sel = Selection::caret(Pos::body(0, 11));
+            let selected = s.run("review.spelling", &json!({"wrap": false})).unwrap();
+            assert_eq!(selected["kind"], "spelling");
+            assert_eq!(selected["start"]["off"], 11);
+            assert_eq!(selected["text"], "sentense");
+            let issues = s.run("review.issues", &json!({})).unwrap();
+            assert!(issues.as_array().unwrap().iter().any(|i| i["kind"] == "grammar" && i["text"] == "sentense sentense"));
+            if reverse {
+                std::mem::swap(&mut s.sel.anchor, &mut s.sel.focus);
+            }
+            assert_eq!(s.run("review.suggestions", &json!({})).unwrap(), selected);
+            let before_lookup = s.sel.clone();
+            let focus = s.sel.focus.off;
+            let explicit = s.run("review.suggestions", &json!({"pos": {"block": 0, "off": focus}})).unwrap();
+            assert_eq!(explicit["kind"], "grammar", "an explicit focus is a point lookup in either selection direction");
+            assert_eq!(explicit["text"], "sentense sentense");
+            assert_eq!(explicit["start"]["off"], 2);
+            assert_eq!(explicit["end"]["off"], 19);
+            assert_eq!(s.sel, before_lookup, "suggestion lookups do not move the selection");
+            for pos in [serde_json::Value::Null, json!({"off": "invalid"})] {
+                assert_eq!(
+                    s.run("review.suggestions", &json!({"pos": pos})).unwrap(),
+                    selected,
+                    "unparseable positions preserve implicit selection lookup"
+                );
+            }
+            assert_eq!(s.run("review.suggestions", &json!({})).unwrap(), selected);
+            let elsewhere = s.run("review.suggestions", &json!({"pos": {"block": 0, "off": 5}})).unwrap();
+            assert_eq!(elsewhere["kind"], "spelling");
+            assert_eq!(elsewhere["start"]["off"], 2, "an explicit other position keeps point lookup");
+            s.run("review.applySuggestion", &json!({"text": "sentence"})).unwrap();
+            assert_eq!(s.doc.plain_text(StoryRef::Body), "A sentense sentence.");
+            s.run("edit.undo", &json!({})).unwrap();
+            assert_eq!(s.doc.plain_text(StoryRef::Body), "A sentense sentense.");
+        }
+    }
+}
+
+/// #6086 review: A pre-existing table whose cell paragraphs and runs are all redlined (including an
+/// empty cell with a deleted/inserted paragraph mark) is not a structural table revision; Accept
+/// All / Reject All and whole-table selection resolution must preserve the table shell.
+#[test]
+fn preexisting_table_with_redlined_cell_content_preserves_table_shell() {
+    use std::sync::Arc;
+    use wordcraft_doc::{Block, CharProps, Paragraph, Path, Pos, Revision, RevisionKind, StoryRef, table::Table};
+
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let dir = std::env::temp_dir().join(format!("wc-review-preexisting-tbl-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _cleanup = Cleanup(dir.clone());
+
+    let make_redlined_table = |del: bool| -> Document {
+        let mut d = Document::new();
+        let kind = if del { RevisionKind::Delete } else { RevisionKind::Insert };
+        d.revisions.push(Revision::new(kind, "Alice", "2026-11-24T00:00:00Z"));
+        let rev = Some(0);
+        let mark_props = if del { CharProps { del: rev, ..Default::default() } } else { CharProps { ins: rev, ..Default::default() } };
+
+        let mut p0 = Paragraph::with_text("Cell text", mark_props.clone());
+        p0.mark = mark_props.clone();
+        let mut p1 = Paragraph::new();
+        p1.mark = mark_props;
+
+        let mut t = Table::new(1, 2, 240.0);
+        t.rows[0].cells[0].blocks = vec![Arc::new(Block::Para(p0))];
+        t.rows[0].cells[1].blocks = vec![Arc::new(Block::Para(p1))];
+        d.body = vec![Arc::new(Block::Table(t)), Arc::new(Block::Para(Paragraph::new()))];
+        d
+    };
+
+    let assert_shell_preserved = |doc: &Document, label: &str| {
+        let tables: Vec<&Table> = doc.body.iter().filter_map(|b| b.as_table()).collect();
+        assert_eq!(tables.len(), 1, "{label}: pre-existing table shell must remain");
+        assert_eq!(tables[0].rows.len(), 1, "{label}: row count must remain 1");
+        assert_eq!(tables[0].rows[0].cells.len(), 2, "{label}: cell count must remain 2");
+        assert_eq!(tables[0].rows[0].cells[0].blocks[0].as_para().unwrap().plain_text(), "", "{label}: cell 0 text cleared");
+        assert_eq!(tables[0].rows[0].cells[1].blocks[0].as_para().unwrap().plain_text(), "", "{label}: cell 1 stays empty");
+    };
+
+    for (del, all_cmd, sel_cmd, label) in [
+        (true, "review.acceptAll", "review.accept", "deleted cell content + Accept"),
+        (false, "review.rejectAll", "review.reject", "inserted cell content + Reject"),
+    ] {
+        let doc = make_redlined_table(del);
+
+        // Global Accept All / Reject All in memory.
+        let mut s_all = Session::new(doc.clone());
+        s_all.run(all_cmd, &json!({})).unwrap();
+        assert_shell_preserved(&s_all.doc, &format!("{label} (in-memory all)"));
+        assert!(s_all.run("review.changes", &json!({})).unwrap().as_array().unwrap().is_empty());
+
+        // Whole-body selection Accept / Reject.
+        let mut s_body = Session::new(doc.clone());
+        s_body.run("select.all", &json!({})).unwrap();
+        s_body.run(sel_cmd, &json!({})).unwrap();
+        assert_shell_preserved(&s_body.doc, &format!("{label} (whole-body sel)"));
+
+        // Whole-table selection Accept / Reject.
+        let mut s_tbl = Session::new(doc.clone());
+        s_tbl.sel = crate::Selection {
+            anchor: Pos { story: StoryRef::Body, path: Path(vec![0, 0, 0, 0]), off: 0 },
+            focus: Pos { story: StoryRef::Body, path: Path(vec![0, 0, 1, 0]), off: 0 },
+        };
+        s_tbl.run(sel_cmd, &json!({})).unwrap();
+        assert_shell_preserved(&s_tbl.doc, &format!("{label} (whole-table sel)"));
+
+        // DOCX save/open round-trip followed by Accept All / Reject All.
+        let path = dir.join(format!("preexisting-{del}.docx"));
+        crate::io::save_path(&path, &doc).unwrap();
+        let reopened = crate::io::open_path(&path).unwrap();
+        let mut s_rt = Session::new(reopened);
+        s_rt.run(all_cmd, &json!({})).unwrap();
+        assert_shell_preserved(&s_rt.doc, &format!("{label} (DOCX round-trip all)"));
+        assert!(s_rt.run("review.changes", &json!({})).unwrap().as_array().unwrap().is_empty());
     }
 }
