@@ -298,3 +298,60 @@ fn headings_show_their_list_numbers() {
     let texts: Vec<String> = nav_headings(&doc).into_iter().map(|(_, _, t)| t).collect();
     assert_eq!(texts, ["1. Intro", "1.1. Scope", "1.3. Terms", "2. Method", "Appendix"]);
 }
+
+/// Right-clicking a style in the Styles pane opens its context menu without applying the style,
+/// while a primary click applies it.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn right_clicking_a_style_in_styles_pane_opens_its_menu_without_applying_it() {
+    use egui_kittest::kittest::Queryable;
+
+    let app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default());
+    let mut fonts = false;
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(400.0, 1200.0)).build_ui_state(
+        |ui, app: &mut crate::WordApp| {
+            if !fonts {
+                crate::app::fonts::install_ui_fonts(ui.ctx(), crate::i18n::Lang::EN);
+                fonts = true;
+                return;
+            }
+            super::styles(app, ui);
+        },
+        app,
+    );
+    h.run_steps(4);
+    let undo_before = h.state().session.undo_depth();
+    let style_at_caret = |app: &crate::WordApp| {
+        wordcraft_engine::cmd::format::state(&app.session).get("style").and_then(serde_json::Value::as_str).unwrap_or_default().to_string()
+    };
+    assert_eq!(style_at_caret(h.state()), "Normal");
+
+    let over_list = h.get_by_label("Manage Styles…").rect().center() + egui::vec2(0.0, 120.0);
+    h.event(egui::Event::PointerMoved(over_list));
+    h.run_steps(1);
+    for _ in 0..40 {
+        if h.query_by_label("Heading 1").is_some() {
+            break;
+        }
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -120.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Default::default(),
+            source: egui::MouseWheelSource::Unknown,
+        });
+        h.run_steps(2);
+    }
+
+    h.get_by_label("Heading 1").click_secondary();
+    h.run_steps(3);
+    assert!(h.query_by_label("Modify…").is_some(), "right-clicking a style opens its context menu");
+    assert_eq!(style_at_caret(h.state()), "Normal", "right-clicking must not apply the style");
+    assert_eq!(h.state().session.undo_depth(), undo_before, "right-clicking leaves no undo step");
+
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    h.get_by_label("Heading 1").click();
+    h.run_steps(3);
+    assert_eq!(style_at_caret(h.state()), "Heading1", "primary click applies the style");
+}
