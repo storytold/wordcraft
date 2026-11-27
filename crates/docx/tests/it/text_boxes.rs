@@ -2,26 +2,22 @@
 //! `wps:txbx/@id`, `wps:linkedTxbx`). Fixtures are hand-written from ECMA-376 Part 1 §20.4
 //! (DrawingML WordprocessingML drawing) and §21.1.2.1.1 (`bodyPr`).
 
-use std::io::{Read, Write};
-
 use wordcraft_doc::para::ShapeKind;
 use wordcraft_doc::props::{TextVert, VAlign};
 use wordcraft_doc::{Document, InlineObject, PartKind, TextBody, para_block};
 
 fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, bytes) in entries {
-        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(bytes).unwrap();
+        zw.add(name, bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 fn document_xml(bytes: &[u8]) -> String {
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    let mut s = String::new();
-    z.by_name("word/document.xml").unwrap().read_to_string(&mut s).unwrap();
-    s
+    let mut z = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+
+    String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap()
 }
 
 /// The text boxes' stories in body order, a group's members among them
@@ -132,6 +128,15 @@ fn vml_text_boxes_keep_their_inset_fit_and_anchor() {
         shape("", r#"o:insetmode="auto" inset="0,0,0,0""#),
         // In a group, a member's margins go with that member's text, not an empty box's before it.
         format!(r#"<w:p><w:r><w:pict><v:group style="width:100pt;height:40pt"><v:shape><v:textbox inset="9pt,9pt,9pt,9pt"/></v:shape><v:shape><v:textbox inset="0,0,0,0">{content}</v:textbox></v:shape></v:group></w:pict></w:r></w:p>"#),
+        // Text direction (#5193), as Word for Windows reads it: `vertical` and
+        // `vertical-ideographic` are `vert`; a `bottom-to-top` alt is `vert270` with any
+        // `layout-flow` or none; `horizontal-ideographic` stays horizontal.
+        shape("", r#"style="layout-flow:vertical""#),
+        shape("", r#"style="layout-flow:vertical;mso-layout-flow-alt:bottom-to-top;mso-next-textbox:#Text Box 4""#),
+        shape("", r#"style="layout-flow:vertical-ideographic""#),
+        shape("", r#"style="mso-layout-flow-alt:bottom-to-top""#),
+        shape("", r#"style="layout-flow:horizontal;mso-layout-flow-alt:bottom-to-top""#),
+        shape("", r#"style="layout-flow:horizontal-ideographic""#),
     ]
     .concat();
     let doc = format!(
@@ -140,13 +145,15 @@ fn vml_text_boxes_keep_their_inset_fit_and_anchor() {
     let rels = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
     let d = wordcraft_docx::read(&zip(&[("_rels/.rels", rels), ("word/document.xml", doc.as_bytes())])).unwrap();
     let bodies: Vec<TextBody> = boxes(&d).iter().map(|id| d.parts[id].body).collect();
-    assert_eq!(bodies.len(), 6);
+    assert_eq!(bodies.len(), 12);
     assert_eq!(bodies[0].inset, Some([0, 0, 0, 0]));
     assert_eq!((bodies[1].inset, bodies[1].auto_fit, bodies[1].anchor), (Some([36_000, 45_720, 25_400, 45_720]), true, VAlign::Center));
     assert_eq!(bodies[2], TextBody::default());
     assert_eq!((bodies[3].inset, bodies[3].anchor), (Some([12_700, 45_720, 0, wordcraft_doc::MAX_TEXT_BOX_INSET]), VAlign::Bottom));
     assert_eq!(bodies[4].inset, None);
     assert_eq!(bodies[5].inset, Some([0, 0, 0, 0]));
+    let verts: Vec<TextVert> = bodies[6..].iter().map(|b| b.vert).collect();
+    assert_eq!(verts, [TextVert::Vert, TextVert::Vert270, TextVert::Vert, TextVert::Vert270, TextVert::Vert270, TextVert::Horz]);
     // Saved and read again, they stay.
     let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
     let again: Vec<TextBody> = boxes(&back).iter().map(|id| back.parts[id].body).collect();
@@ -206,7 +213,15 @@ fn picture_in_box_keeps_its_frame() {
     let outer = text_box(&mut d, "Label", body);
     let id = outer.text_box().unwrap();
     let mut bytes = std::io::Cursor::new(Vec::new());
-    image::RgbaImage::from_pixel(10, 4, image::Rgba([20, 40, 60, 255])).write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+    std::io::Write::write_all(
+        &mut bytes,
+        &wordcraft_geom::picture::encode_format(
+            &image::DynamicImage::from(image::RgbaImage::from_pixel(10, 4, image::Rgba([20, 40, 60, 255])).clone()),
+            image::ImageFormat::Png,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let media = d.add_media(bytes.into_inner(), "png");
     let image = InlineObject::Image {
         media: media.clone(),
@@ -246,5 +261,7 @@ fn story_shared_by_many_shapes_is_written_once() {
     }
     let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
     assert!(xml.len() < 2_000_000, "document.xml is {} bytes", xml.len());
-    assert_eq!(xml.matches(text.as_str()).count(), 1);
+    // The story is written for the first shape only: in its drawing and in that drawing's VML
+    // fallback. The other shapes do not repeat it.
+    assert_eq!(xml.matches(text.as_str()).count(), 2);
 }

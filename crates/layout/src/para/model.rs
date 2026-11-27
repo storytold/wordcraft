@@ -67,6 +67,9 @@ pub(super) fn undrawable_bullet(text: &str, lvl: &Level, rc: &ResolvedChar) -> b
 #[derive(Clone, Debug)]
 pub struct StyleRun {
     pub face: FaceRef,
+    /// The face the run's font resolves to, which `face` replaces where it lacks a character (a
+    /// fallback face, the East Asian font for CJK): the face new text typed in the run asks for.
+    pub requested_face: FaceRef,
     pub size: f32,
     pub synth_bold: bool,
     pub synth_italic: bool,
@@ -407,4 +410,7 @@ pub struct ParaEnv<'a> {
     /// Heights of the paragraph's inline text boxes that resize to fit their text, by object
     /// index: they take these instead of their saved heights.
     pub fitted: &'a [(usize, f32)],
+    /// The paragraph goes on from the line of the one before, whose mark is hidden (#3986): its
+    /// list number is counted and sets its indents, but isn't drawn.
+    pub joined: bool,
 }

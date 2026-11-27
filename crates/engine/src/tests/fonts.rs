@@ -149,12 +149,11 @@ fn docx_embedding(family: &str, font: Option<(&[u8], &str)>, text: &str) -> Vec<
     }
     table.push_str("</w:font></w:fonts>");
     files.push(("word/fontTable.xml".into(), table.into_bytes()));
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zip = craft_zip::Writer::new();
     for (name, bytes) in files {
-        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        std::io::Write::write_all(&mut zip, &bytes).unwrap();
+        zip.add(&name, &bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zip.finish().unwrap().into_inner()
+    zip.finish().unwrap()
 }
 
 #[test]
@@ -372,6 +371,27 @@ fn missing_fonts_from_command_search_say_so_in_the_status_line() {
     assert!(s.status.ends_with(" and 35 more") && s.status.len() < 300, "{}", s.status);
 }
 
+/// A missing font its publisher gives away says where to get it; others don't.
+#[test]
+fn a_missing_font_its_publisher_gives_away_names_the_download_page() {
+    if wordcraft_fonts::FontDb::global().families().iter().any(|f| f.eq_ignore_ascii_case("Aptos")) {
+        return; // Installed here: not missing.
+    }
+    let mut s = Session::new(doc_of(vec![para_in("Text", "Aptos"), para_in("Text", "Wordcraft Nowhere Face")]));
+    let layout = s.layout();
+    let m = crate::cmd::font::missing_fonts(&s.doc, &layout);
+    let aptos = m.iter().find(|f| f.font == "Aptos").unwrap();
+    assert_eq!(aptos.download.map(|d| d.publisher.as_str()), Some("Microsoft"));
+    assert!(m.iter().find(|f| f.font == "Wordcraft Nowhere Face").unwrap().download.is_none());
+    let out = s.run("font.missing", &json!({})).unwrap();
+    let listed = out["missing"].as_array().unwrap();
+    let aptos = listed.iter().find(|f| f["font"] == "Aptos").unwrap();
+    assert!(aptos["download"]["url"].as_str().unwrap().starts_with("https://www.microsoft.com/"), "{aptos}");
+    assert_eq!(aptos["download"]["publisher"], "Microsoft");
+    assert_eq!(aptos["download"]["restricted"], false);
+    assert!(listed.iter().find(|f| f["font"] == "Wordcraft Nowhere Face").unwrap().get("download").is_none());
+}
+
 #[test]
 fn a_huge_font_name_is_kept_short() {
     let name = format!("Wordcraft {}", "é".repeat(100_000));
@@ -468,4 +488,44 @@ fn an_east_asian_font_is_shown_as_the_face_its_text_is_drawn_in() {
     assert_eq!(m.iter().map(|f| f.font.as_str()).collect::<Vec<_>>(), [MINCHO], "{m:?}");
     assert_eq!(m[0].shown_as, [shown], "{m:?}");
     assert!(crate::cmd::font::east_asian_shown_as(&doc, "JetBrains Mono", "JetBrains Mono").is_none(), "installed");
+}
+
+/// A semicolon-separated LibreOffice font fallback list is not reported as missing when any
+/// candidate is installed, and substitutes by candidate family when none is.
+#[test]
+fn libreoffice_font_fallback_lists_are_not_reported_as_missing_when_installed() {
+    let db = wordcraft_fonts::FontDb::global();
+    let doc = doc_of(vec![para_in("Text", "Liberation Sans;Arial")]);
+    if db.has_family("Liberation Sans") || db.has_family("Arial") {
+        let m = missing_in(doc.clone());
+        assert!(m.is_empty(), "expected not to be reported as missing: {m:?}");
+    }
+    let bundled_fallback = doc_of(vec![para_in("Text", "NonExistentSans123;Source Sans 3")]);
+    assert!(missing_in(bundled_fallback).is_empty(), "bundled fallback candidate is installed");
+
+    // Roundtrip through DOCX export and import:
+    let docx_bytes = crate::io::save_bytes("out.docx", &doc).unwrap();
+    let loaded = wordcraft_docx::read(&docx_bytes).unwrap();
+    assert_eq!(loaded.body[0].as_para().unwrap().runs[0].props.font.as_deref(), Some("Liberation Sans;Arial"));
+    if db.has_family("Liberation Sans") || db.has_family("Arial") {
+        let m = missing_in(loaded);
+        assert!(m.is_empty(), "expected not to report installed fallback font as missing: {m:?}");
+    }
+
+    // When none of the fonts is installed, missing_fonts flags it with an appropriate substitute:
+    if !db.has_family("NonExistentSans123") && !db.has_family("Times New Roman") {
+        let m = missing_in(doc_of(vec![para_in("Text", "NonExistentSans123;Times New Roman")]));
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].font, "NonExistentSans123;Times New Roman");
+        let drawn = m[0].shown_as.first().expect("drawn face");
+        assert!(drawn.contains("Serif") || drawn == "Times" || drawn == "Tinos", "drawn: {drawn}");
+    }
+    let m = missing_in(doc_of(vec![para_in("Text", "NonExistentSans123;NonExistentSerif123")]));
+    assert_eq!(m.len(), 1);
+    assert_eq!(m[0].font, "NonExistentSans123;NonExistentSerif123");
+    let drawn = m[0].shown_as.first().expect("drawn face");
+    assert!(
+        drawn.contains("Serif") || drawn == "Times" || drawn == "Times New Roman" || drawn == "Tinos" || drawn == "Caladea" || drawn == "Georgia",
+        "drawn: {drawn}"
+    );
 }

@@ -4,8 +4,11 @@ use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::picfx::PicFx;
 use wordcraft_doc::props::NumRef;
 use wordcraft_doc::{Block, CharProps, Document, ListKind, Paragraph, Table, Watermark, para_block};
+use wordcraft_layout::display::{DeleteMark, MarkupOptions};
 
 use crate::*;
+use wordcraft_layout::LayoutOptions;
+use wordcraft_layout::display::DisplayOptions;
 
 /// Verify preset lines and connectors emit the requested PDF line-cap operator.
 #[test]
@@ -52,9 +55,8 @@ fn shape_line_caps_reach_pdf_content() {
 
 fn png() -> Vec<u8> {
     let img = image::RgbaImage::from_fn(16, 8, |x, y| image::Rgba([(x * 15) as u8, (y * 30) as u8, 200, 255]));
-    let mut buf = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png).unwrap();
-    buf
+
+    wordcraft_geom::picture::encode_format(&image::DynamicImage::from(img.clone()), image::ImageFormat::Png).unwrap()
 }
 
 /// Headings, a bold run, a hyperlink, an internal link, a list, a table and a picture.
@@ -164,6 +166,65 @@ fn extract_text(bytes: &[u8]) -> Vec<String> {
             ex.0
         })
         .collect()
+}
+
+/// Extract text runs with their RGB fill colour from `bytes`.
+fn extract_colored_text(bytes: &[u8]) -> Vec<(String, [u8; 3])> {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    use hayro_syntax::Pdf;
+    /// A testing device that records extracted text runs along with their RGB fill colour.
+    struct Ex(Vec<(String, [u8; 3])>);
+    impl Device<'_> for Ex {
+        /// Ignore soft masks during text extraction.
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        /// Ignore blend modes during text extraction.
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        /// Ignore paths during text extraction.
+        fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &Paint<'_>, _: &PathDrawMode) {}
+        /// Ignore clip paths during text extraction.
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        /// Ignore transparency groups during text extraction.
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        /// Records glyph text with its non-stroking RGB color, merging adjacent glyphs of identical color.
+        fn draw_glyph(&mut self, g: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, paint: &Paint<'_>, mode: &GlyphDrawMode) {
+            if matches!(mode, GlyphDrawMode::Stroke(_)) {
+                return;
+            }
+            let Paint::Color(color) = paint else { return };
+            let rgba = color.to_rgba().to_rgba8();
+            let rgb = [rgba[0], rgba[1], rgba[2]];
+            let ch = match g.as_unicode() {
+                Some(hayro_cmap::BfString::Char(c)) => c.to_string(),
+                Some(hayro_cmap::BfString::String(s)) => s.to_string(),
+                None => "\u{FFFD}".to_string(),
+            };
+            if let Some((last_text, last_rgb)) = self.0.last_mut()
+                && *last_rgb == rgb
+            {
+                last_text.push_str(&ch);
+                return;
+            }
+            self.0.push((ch, rgb));
+        }
+        /// Ignore images during text extraction.
+        fn draw_image(&mut self, _: Image<'_, '_>, _: kurbo::Affine) {}
+        /// Ignore clip path pop during text extraction.
+        fn pop_clip_path(&mut self) {}
+        /// Ignore transparency group pop during text extraction.
+        fn pop_transparency_group(&mut self) {}
+    }
+    let pdf = Pdf::new(bytes.to_vec()).expect("parse");
+    let cache = InterpreterCache::new();
+    let mut ex = Ex(Vec::new());
+    for page in pdf.pages().iter() {
+        let mut ctx = Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
+        interpret_page(page, &mut ctx, &mut ex);
+    }
+    ex.0
 }
 
 fn squash(s: &str) -> String {
@@ -292,6 +353,89 @@ fn tracked_deletions_are_left_out_without_markup() {
     assert_eq!(text, "Keep DELETEDTEXT INSERTED");
 }
 
+/// #5232: the Track Changes Options colours (blue insertions, red deletions) reach the PDF instead
+/// of every revision taking its author's colour.
+#[test]
+fn markup_takes_the_track_changes_option_colours() {
+    use wordcraft_doc::props::Rgb;
+    use wordcraft_doc::{Revision, RevisionKind};
+    let mut d = Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Ada".into(), date: String::new(), move_name: None });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Ada".into(), date: String::new(), move_name: None });
+    let mut p = Paragraph::with_text("Keep ", CharProps::default());
+    let n = p.len();
+    p.insert_text(n, "Kansas ", &CharProps { del: Some(0), ..Default::default() }).unwrap();
+    let n = p.len();
+    p.insert_text(n, "Missouri", &CharProps { ins: Some(1), ..Default::default() }).unwrap();
+    d.body = vec![para_block(p)];
+
+    // By author: both revisions take Ada's colour (#B01E8F = [176, 30, 143]), no pure blue or red.
+    let by_author_bytes = export(&d, &PdfOptions { include_markup: true, compress: false, ..Default::default() }).unwrap();
+    let by_author_runs = extract_colored_text(&by_author_bytes);
+    let kansas_author = by_author_runs.iter().find(|(s, _)| s.contains("Kansas")).map(|(_, c)| *c).expect("Kansas present");
+    let missouri_author = by_author_runs.iter().find(|(s, _)| s.contains("Missouri")).map(|(_, c)| *c).expect("Missouri present");
+    assert_eq!(kansas_author, missouri_author, "by-author colours must match for the same author");
+    assert_ne!(kansas_author, [255, 0, 0], "by-author is not red");
+    assert_ne!(missouri_author, [0, 0, 255], "by-author is not blue");
+
+    // With explicit Track Changes colours: insertions are blue, deletions are red.
+    let blue = Rgb(0, 0, 255);
+    let red = Rgb(255, 0, 0);
+    let coloured_opts = PdfOptions {
+        include_markup: true,
+        compress: false,
+        revisions: MarkupOptions { insert_color: Some(blue), delete_color: Some(red), ..Default::default() },
+        ..Default::default()
+    };
+    let coloured_bytes = export(&d, &coloured_opts).unwrap();
+    let coloured_runs = extract_colored_text(&coloured_bytes);
+    let kansas_color = coloured_runs.iter().find(|(s, _)| s.contains("Kansas")).map(|(_, c)| *c).expect("Kansas present");
+    let missouri_color = coloured_runs.iter().find(|(s, _)| s.contains("Missouri")).map(|(_, c)| *c).expect("Missouri present");
+    assert_eq!(kansas_color, [255, 0, 0], "deleted Kansas must be red");
+    assert_eq!(missouri_color, [0, 0, 255], "inserted Missouri must be blue");
+
+    // Also assert the PDF content stream has the corresponding color operators preceding each run.
+    let raw = String::from_utf8_lossy(&coloured_bytes);
+    let tokens: Vec<_> = raw.split_ascii_whitespace().collect();
+    let has = |op: &str| {
+        let want: Vec<_> = op.split_ascii_whitespace().collect();
+        tokens.windows(want.len()).any(|w| w == want.as_slice())
+    };
+    assert!(has("1 0 0 rg"), "raw PDF stream contains red non-stroking operator");
+    assert!(has("0 0 1 rg"), "raw PDF stream contains blue non-stroking operator");
+}
+
+/// #5232: deletions marked Hidden in Track Changes Options take no space and are omitted from
+/// the exported PDF with markup.
+#[test]
+fn hidden_deletions_stay_out_of_markup_pdf() {
+    use wordcraft_doc::{Revision, RevisionKind};
+    let mut d = Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Ada".into(), date: String::new(), move_name: None });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Ada".into(), date: String::new(), move_name: None });
+    let mut p = Paragraph::with_text("Keep ", CharProps::default());
+    let n = p.len();
+    p.insert_text(n, "Kansas ", &CharProps { del: Some(0), ..Default::default() }).unwrap();
+    let n = p.len();
+    p.insert_text(n, "Missouri", &CharProps { ins: Some(1), ..Default::default() }).unwrap();
+    d.body = vec![para_block(p)];
+
+    // Strikethrough: deleted Kansas is included in markup PDF.
+    let strike_opts = PdfOptions {
+        include_markup: true,
+        revisions: MarkupOptions { delete_mark: DeleteMark::Strikethrough, ..Default::default() },
+        ..Default::default()
+    };
+    let strike_text = squash(&extract_text(&export(&d, &strike_opts).unwrap()).concat());
+    assert_eq!(strike_text, "Keep Kansas Missouri");
+
+    // Hidden: deleted Kansas is omitted from markup PDF.
+    let hidden_opts =
+        PdfOptions { include_markup: true, revisions: MarkupOptions { delete_mark: DeleteMark::Hidden, ..Default::default() }, ..Default::default() };
+    let hidden_text = squash(&extract_text(&export(&d, &hidden_opts).unwrap()).concat());
+    assert_eq!(hidden_text, "Keep Missouri");
+}
+
 #[test]
 fn deleted_heading_text_stays_out_of_bookmarks_and_tags() {
     use wordcraft_doc::{Revision, RevisionKind};
@@ -389,6 +533,7 @@ fn cost_ratio(scale: usize, mut small: impl FnMut(), mut big: impl FnMut()) -> (
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn long_fragmented_hidden_headings_export_in_linear_time() {
     // Headings of n chars in one-char runs: all hidden with bold alternating, and hidden and visible
     // alternating. Layout and the bookmark/tag titles once scanned every left-out range for every
@@ -981,6 +1126,7 @@ fn inline_chart_is_a_figure_with_its_text_inside_it() {
         bold: false,
         align: TextAlign::Center,
         font: None,
+        angle: 0.0,
     }];
     let graphic = Graphic { kind: GraphicKind::Chart, items, ..Default::default() };
     let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: "Sales by quarter".into(), float: Default::default(), graphic: Arc::new(graphic) };
@@ -1115,8 +1261,8 @@ fn a_crop_keeping_a_sliver_draws_the_source_that_much_wider() {
 /// A JPEG whose headers say progressive (SOF2, a DC-only first scan) and `w` × `h`, its three
 /// components unsubsampled, with no pixel data that size.
 fn progressive_jpeg_header(w: u16, h: u16) -> Vec<u8> {
-    let mut jpeg = Vec::new();
-    image::RgbImage::new(16, 16).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+    let mut jpeg =
+        wordcraft_geom::picture::encode_format(&image::DynamicImage::from(image::RgbImage::new(16, 16).clone()), image::ImageFormat::Jpeg).unwrap();
     let sof = jpeg.windows(2).position(|m| m == [0xFF, 0xC0]).unwrap();
     jpeg[sof + 1] = 0xC2;
     jpeg[sof + 5..sof + 7].copy_from_slice(&h.to_be_bytes());
@@ -1135,8 +1281,8 @@ fn progressive_jpeg_header(w: u16, h: u16) -> Vec<u8> {
 fn progressive_jpeg_coefficients_count_toward_the_image_budget() {
     assert!(wordcraft_geom::decode_fits(7900, 7900, wordcraft_geom::MAX_DECODED_BYTES));
     assert!(load_image(&Arc::new(progressive_jpeg_header(7900, 7900)), PicFx::default()).is_none());
-    let mut baseline = Vec::new();
-    image::RgbImage::new(64, 64).write_to(&mut std::io::Cursor::new(&mut baseline), image::ImageFormat::Jpeg).unwrap();
+    let baseline =
+        wordcraft_geom::picture::encode_format(&image::DynamicImage::from(image::RgbImage::new(64, 64).clone()), image::ImageFormat::Jpeg).unwrap();
     assert!(load_image(&Arc::new(baseline), PicFx::default()).is_some(), "other JPEGs still embed");
 }
 
@@ -1190,6 +1336,8 @@ fn decorative_pictures_are_artifacts_not_figures() {
     let cases = [
         ("inline", Float::default()),
         ("rotated inline", Float { rot: 30.0, ..Default::default() }),
+        // Turned with no room kept for it: drawn cut at its line (a clip), still tagged.
+        ("bare turned inline", Float { rot: 45.0, bare_turn: true, ..Default::default() }),
         ("floating", floating.clone()),
         ("rotated floating", Float { rot: 30.0, ..floating }),
     ];
@@ -1200,6 +1348,43 @@ fn decorative_pictures_are_artifacts_not_figures() {
         assert!(!raw.contains("/Alt("), "{name}: a decorative picture has no Figure and no alt text");
         assert!(raw.contains("1 0 0 rg"), "{name}: the decorative picture is still drawn");
     }
+}
+
+/// A row of exact height cuts its cell's lines (one clip around them): text and a picture in
+/// it are tagged as they are in a row that fits, the text as the paragraph's, the picture as a
+/// Figure with its alt text.
+#[test]
+fn a_clipped_cell_tags_its_text_and_picture() {
+    let raw = |exact: bool| {
+        let mut d = Document::new();
+        let media = d.add_media(red_right_half_emf(), "emf");
+        let mut p = Paragraph::with_text("Cell text ", CharProps::default());
+        let n = p.len();
+        let obj = InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: "A red square".into(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            fx: Default::default(),
+        };
+        p.insert_object(n, obj, &CharProps::default()).unwrap();
+        let mut t = Table::new(1, 1, 300.0);
+        t.rows[0].cells[0].blocks = vec![para_block(p)];
+        if exact {
+            t.rows[0].props.height = Some(30.0);
+            t.rows[0].props.height_rule = wordcraft_doc::props::HeightRule::Exact;
+        }
+        d.body = vec![Arc::new(Block::Table(t)), para_block(Paragraph::with_text("Below", CharProps::default()))];
+        String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap()).into_owned()
+    };
+    let (fits, cut) = (raw(false), raw(true));
+    assert!(cut.contains("/Alt(A red square)"), "the picture in the cut cell is a Figure with its alt text");
+    // The same marked content either way: the cut cell's text is not dropped as an artifact.
+    assert_eq!(cut.matches("/MCID").count(), fits.matches("/MCID").count());
+    assert_eq!(cut.matches("/S/P").count(), fits.matches("/S/P").count());
 }
 
 /// In a rotated group, each picture is tagged on its own: the decorative one is an artifact, the
@@ -1263,6 +1448,211 @@ fn emf_rec(typ: u32, fields: &[i32]) -> Vec<u8> {
     v.extend(((8 + payload.len()) as u32).to_le_bytes());
     v.extend(payload);
     v
+}
+
+/// The PDF of a document holding one 70 pt metafile picture, uncompressed.
+fn metafile_pdf(emf: Vec<u8>) -> String {
+    String::from_utf8_lossy(&metafile_pdf_bytes(emf)).into_owned()
+}
+
+fn metafile_pdf_bytes(emf: Vec<u8>) -> Vec<u8> {
+    export(&metafile_doc(emf), &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap()
+}
+
+/// The uncompressed PDF of a document holding one 70 pt metafile picture, and the picture's box
+/// on the first page in PDF space (points, y up).
+fn metafile_pdf_and_box(emf: Vec<u8>) -> (Vec<u8>, kurbo::Rect) {
+    let d = metafile_doc(emf);
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap();
+    let lay = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let page = &lay.pages[0];
+    let h = f64::from(page.h);
+    let r = wordcraft_layout::display::page_display(&d, page, &DisplayOptions::default())
+        .into_iter()
+        .find_map(|item| if let Draw::Image { rect, .. } = item { Some(rect) } else { None })
+        .expect("the picture is laid out");
+    let (x, y, w, ph) = (f64::from(r.x), f64::from(r.y), f64::from(r.w), f64::from(r.h));
+    (bytes, kurbo::Rect::new(x, h - y - ph, x + w, h - y))
+}
+
+/// The right half of a box.
+fn right_half(r: kurbo::Rect) -> kurbo::Rect {
+    kurbo::Rect::new((r.x0 + r.x1) / 2.0, r.y0, r.x1, r.y1)
+}
+
+/// Whether two boxes have the same edges, to within half a point.
+fn same_box(a: kurbo::Rect, b: kurbo::Rect) -> bool {
+    [a.x0 - b.x0, a.y0 - b.y0, a.x1 - b.x1, a.y1 - b.y1].iter().all(|d| d.abs() < 0.5)
+}
+
+fn metafile_doc(emf: Vec<u8>) -> Document {
+    let mut d = Document::new();
+    let media = d.add_media(emf, "emf");
+    let mut p = Paragraph::with_text("Figure: ", CharProps::default());
+    let n = p.len();
+    p.insert_object(
+        n,
+        InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        },
+        &CharProps::default(),
+    )
+    .unwrap();
+    d.body = vec![para_block(p)];
+    d
+}
+
+/// #6636: an EMF+ only file whose EmfPlusDrawImage draws a 32bppPARGB bitmap: the bitmap is
+/// embedded as an image, and the page draws it into the EmfPlusDrawImage rectangle.
+#[test]
+fn emf_plus_only_bitmap_is_embedded() {
+    let plus_rec = |typ: u16, flags: u16, data: &[u8]| {
+        let mut v = typ.to_le_bytes().to_vec();
+        v.extend(flags.to_le_bytes());
+        v.extend(((12 + data.len()) as u32).to_le_bytes());
+        v.extend((data.len() as u32).to_le_bytes());
+        v.extend(data);
+        v
+    };
+    let le32 = |vals: &[i32]| -> Vec<u8> { vals.iter().flat_map(|v| v.to_le_bytes()).collect() };
+    let header = plus_rec(0x4001, 0, &le32(&[0xDBC0_1002_u32 as i32, 1, 96, 96]));
+    let mut image = le32(&[0xDBC0_1002_u32 as i32, 1, 2, 2, 8, 0x000E_200B, 0]);
+    image.extend([0u8, 0, 255, 255].repeat(4));
+    let object = plus_rec(0x4008, 0x0500, &image);
+    let mut draw = le32(&[-1, 2]);
+    draw.extend([0.0f32, 0.0, 2.0, 2.0, 50.0, 0.0, 50.0, 100.0].iter().flat_map(|v| v.to_le_bytes()));
+    let draw = plus_rec(0x401A, 0, &draw);
+    let mut comment = 0x2B46_4D45u32.to_le_bytes().to_vec();
+    comment.extend([header, object, draw, plus_rec(0x4002, 0, &[])].concat());
+    let mut rec = 70u32.to_le_bytes().to_vec();
+    rec.extend(((12 + comment.len()) as u32).to_le_bytes());
+    rec.extend((comment.len() as u32).to_le_bytes());
+    rec.extend(comment);
+    let (bytes, pic) = metafile_pdf_and_box(emf_file(&[rec, emf_rec(14, &[0; 3])]));
+    let images = pdf_images(&bytes);
+    assert!(images.iter().any(|(w, h, ..)| (*w, *h) == (2, 2)), "the 2 × 2 bitmap is embedded");
+    let drawn = pdf_drawn_images(&bytes);
+    assert!(
+        drawn.iter().any(|&(w, h, r)| (w, h) == (2, 2) && same_box(r, right_half(pic))),
+        "the page draws the bitmap over the right half of the picture at {pic:?}: {drawn:?}"
+    );
+    assert!(!String::from_utf8_lossy(&bytes).contains("0.8156"), "the gray placeholder box is not drawn");
+}
+
+/// #6636: an EMF+ only file whose EmfPlusDrawImage draws a bitmap in PixelFormat32bppARGB,
+/// 24bppRGB or 32bppRGB, or a compressed PNG or JPEG bitmap: the bitmap is embedded as an image,
+/// and the page draws it into the EmfPlusDrawImage rectangle.
+#[test]
+fn emf_plus_only_bitmap_formats_are_embedded() {
+    let plus_rec = |typ: u16, flags: u16, data: &[u8]| {
+        let mut v = typ.to_le_bytes().to_vec();
+        v.extend(flags.to_le_bytes());
+        v.extend(((12 + data.len()) as u32).to_le_bytes());
+        v.extend((data.len() as u32).to_le_bytes());
+        v.extend(data);
+        v
+    };
+    let le32 = |vals: &[i32]| -> Vec<u8> { vals.iter().flat_map(|v| v.to_le_bytes()).collect() };
+    let encoded = |png: bool| {
+        let red = [255u8, 0, 0].repeat(15);
+        if png {
+            let img = image::RgbImage::from_raw(5, 3, red).unwrap();
+            wordcraft_geom::picture::encode_png(&image::DynamicImage::from(img)).unwrap()
+        } else {
+            wordcraft_geom::picture::encode_jpeg(&red, 5, 3, 100).unwrap()
+        }
+    };
+    // Name, width, height, stride, pixel format, bitmap type (0 pixels, 1 compressed) and data.
+    let cases: [(&str, i32, i32, i32, u32, i32, Vec<u8>); 5] = [
+        ("32bppARGB", 2, 2, 8, 0x0026_200A, 0, [0u8, 0, 255, 255].repeat(4)),
+        ("24bppRGB", 2, 2, 8, 0x0002_1808, 0, [0u8, 0, 255, 0, 0, 255, 0, 0].repeat(2)),
+        ("32bppRGB", 2, 2, 8, 0x0002_2009, 0, [0u8, 0, 255, 0].repeat(4)),
+        ("PNG", 5, 3, 0, 0, 1, encoded(true)),
+        ("JPEG", 5, 3, 0, 0, 1, encoded(false)),
+    ];
+    for (name, w, h, stride, format, kind, data) in cases {
+        let header = plus_rec(0x4001, 0, &le32(&[0xDBC0_1002_u32 as i32, 1, 96, 96]));
+        let mut image = le32(&[0xDBC0_1002_u32 as i32, 1, w, h, stride, format as i32, kind]);
+        image.extend(data);
+        // Records are a multiple of 4 bytes long.
+        image.resize(image.len().next_multiple_of(4), 0);
+        let object = plus_rec(0x4008, 0x0500, &image);
+        let mut draw = le32(&[-1, 2]);
+        draw.extend([0.0f32, 0.0, w as f32, h as f32, 50.0, 0.0, 50.0, 100.0].iter().flat_map(|v| v.to_le_bytes()));
+        let draw = plus_rec(0x401A, 0, &draw);
+        let mut comment = 0x2B46_4D45u32.to_le_bytes().to_vec();
+        comment.extend([header, object, draw, plus_rec(0x4002, 0, &[])].concat());
+        let mut rec = 70u32.to_le_bytes().to_vec();
+        rec.extend(((12 + comment.len()) as u32).to_le_bytes());
+        rec.extend((comment.len() as u32).to_le_bytes());
+        rec.extend(comment);
+        let (bytes, pic) = metafile_pdf_and_box(emf_file(&[rec, emf_rec(14, &[0; 3])]));
+        let images = pdf_images(&bytes);
+        assert!(images.iter().any(|(iw, ih, ..)| (*iw, *ih) == (w as u32, h as u32)), "{name}: the {w} × {h} bitmap is embedded");
+        let drawn = pdf_drawn_images(&bytes);
+        assert!(
+            drawn.iter().any(|&(iw, ih, r)| (iw, ih) == (w as u32, h as u32) && same_box(r, right_half(pic))),
+            "{name}: the page draws the bitmap over the right half of the picture at {pic:?}: {drawn:?}"
+        );
+        assert!(!String::from_utf8_lossy(&bytes).contains("0.8156"), "{name}: the gray placeholder box is not drawn");
+    }
+}
+
+/// A dotted cosmetic pen (CREATEPEN, PS_DOT, width 0) draws hairline dots: its dashes and gaps are
+/// the hairline's width, not the file's device units scaled to the frame (0.7 pt here).
+#[test]
+fn metafile_cosmetic_dotted_pen_draws_hairline_dots() {
+    let recs = [emf_rec(38, &[1, 2, 0, 0, 0]), emf_rec(37, &[1]), emf_rec(27, &[0, 50]), emf_rec(54, &[100, 50]), emf_rec(14, &[0; 3])];
+    let raw = metafile_pdf(emf_file(&recs));
+    assert!(raw.contains("[0.25 0.25]0 d"), "the dots are hairline-sized");
+}
+
+/// A geometric PS_USERSTYLE pen whose dashes and gaps are far below the hairline draws its line
+/// solid: no dash array is written.
+#[test]
+fn metafile_sub_pixel_dashes_draw_solid() {
+    let mut emf = emf_file(&[]);
+    // 10,000 device pixels over 250 mm: a device unit is 0.025 mm. The picture is 1000 units wide.
+    let le32 = |vals: &[i32]| -> Vec<u8> { vals.iter().flat_map(|v| v.to_le_bytes()).collect() };
+    emf[8..24].copy_from_slice(&le32(&[0, 0, 1000, 1000]));
+    emf[72..80].copy_from_slice(&le32(&[10_000, 10_000]));
+    let pen = emf_rec(95, &[1, 0, 0, 0, 0, 0x0001_0207, 80, 0, 0, 0, 2, 1, 1]);
+    let recs = [pen, emf_rec(37, &[1]), emf_rec(27, &[0, 500]), emf_rec(54, &[1000, 500]), emf_rec(14, &[0; 3])];
+    emf.extend(recs.concat());
+    let raw = metafile_pdf(emf);
+    assert!(raw.contains(" w ") && !raw.contains("]0 d"), "a stroke with no dash array");
+}
+
+/// A clip region (INTERSECTCLIPRECT) adds a clip around the rectangle it clips.
+#[test]
+fn metafile_clip_region_is_a_clip() {
+    let clips = |raw: &str| raw.matches("\nW\nn").count() + raw.matches("\nW*\nn").count();
+    let draw = |clip: bool| {
+        let mut recs = vec![emf_rec(39, &[1, 0, 0x0000_00FF, 0]), emf_rec(37, &[1])];
+        if clip {
+            recs.push(emf_rec(30, &[0, 0, 50, 100]));
+        }
+        recs.extend([emf_rec(43, &[0, 0, 100, 100]), emf_rec(14, &[0; 3])]);
+        metafile_pdf(emf_file(&recs))
+    };
+    let (with, without) = (clips(&draw(true)), clips(&draw(false)));
+    assert!(without > 0 && with == without + 1, "one clip more with the region: {with} and {without}");
+}
+
+/// A hatched brush (CREATEBRUSHINDIRECT, BS_HATCHED) fills through a tiling pattern, not with a
+/// solid color.
+#[test]
+fn metafile_hatch_brush_is_a_tiling_pattern() {
+    let recs = [emf_rec(39, &[1, 2, 0x0000_00FF, 1]), emf_rec(37, &[1]), emf_rec(43, &[0, 0, 100, 100]), emf_rec(14, &[0; 3])];
+    let raw = metafile_pdf(emf_file(&recs));
+    assert!(raw.contains("/PatternType 1"), "the hatch is a tiling pattern");
 }
 
 #[test]
@@ -1383,6 +1773,17 @@ fn emf_text_records(text: &str) -> Vec<Vec<u8>> {
     out.extend(units);
     out.resize(76 + padded, 0);
     vec![font, emf_rec(37, &[1]), emf_rec(24, &[0]), out]
+}
+
+/// With the opaque background mode (the default) and a red background color (SETBKCOLOR), a text
+/// run's character cells are filled red behind the text.
+#[test]
+fn metafile_text_fills_its_opaque_background() {
+    let mut recs = vec![emf_rec(25, &[0x0000_00FF])];
+    recs.extend(emf_text_records("Hi"));
+    recs.push(emf_rec(14, &[0; 3]));
+    let raw = metafile_pdf(emf_file(&recs));
+    assert!(raw.contains("1 0 0 rg"), "the character cells are filled red");
 }
 
 /// #1764: the text of an EMF picture (EXTTEXTOUTW) is drawn, so it is in the PDF's text layer.
@@ -1660,6 +2061,7 @@ fn comments_print_in_balloons_beside_scaled_pages() {
 /// references) exports in time proportional to its length: each link looked its bookmark up by
 /// walking the whole document, so NIH's 67-page protocol template took 10.6 s (0.9 s now).
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn internal_links_export_in_linear_time() {
     let doc = |n: usize| {
         let mut d = Document::new();
@@ -2119,6 +2521,40 @@ fn pdf_images(bytes: &[u8]) -> Vec<(u32, u32, Vec<String>, Vec<Vec<u8>>)> {
     out
 }
 
+/// The images the pages draw, through hayro's interpreter: pixel width and height, and the box each
+/// one is drawn into, in PDF space (points, y up).
+fn pdf_drawn_images(bytes: &[u8]) -> Vec<(u32, u32, kurbo::Rect)> {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    struct Ex(Vec<(u32, u32, kurbo::Rect)>);
+    impl Device<'_> for Ex {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &Paint<'_>, _: &PathDrawMode) {}
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, _: &Paint<'_>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, image: Image<'_, '_>, t: kurbo::Affine) {
+            // The transform maps the image's pixel grid onto the page.
+            let (w, h) = (image.width(), image.height());
+            self.0.push((w, h, t.transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, f64::from(w), f64::from(h)))));
+        }
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+    let pdf = hayro_syntax::Pdf::new(bytes.to_vec()).expect("parse");
+    let cache = InterpreterCache::new();
+    let mut ex = Ex(Vec::new());
+    for page in pdf.pages().iter() {
+        let mut ctx = Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
+        interpret_page(page, &mut ctx, &mut ex);
+    }
+    ex.0
+}
+
 /// The fill opacities (`ca`) of the PDF's graphics states.
 fn pdf_fill_opacities(bytes: &[u8]) -> Vec<f32> {
     use hayro_syntax::object::Object;
@@ -2134,12 +2570,12 @@ fn pdf_fill_opacities(bytes: &[u8]) -> Vec<f32> {
 fn picture_fx_is_baked_into_the_embedded_image() {
     use wordcraft_doc::picfx::PicFx;
     let img = image::RgbImage::from_fn(32, 32, |x, _| image::Rgb([if x < 16 { 100 } else { 0 }, 100, 255]));
-    let mut png = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    let mut jpeg = Vec::new();
-    image::RgbImage::from_pixel(32, 32, image::Rgb([100, 100, 100]))
-        .write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg)
-        .unwrap();
+    let png = wordcraft_geom::picture::encode_format(&image::DynamicImage::from(img.clone()), image::ImageFormat::Png).unwrap();
+    let jpeg = wordcraft_geom::picture::encode_format(
+        &image::DynamicImage::from(image::RgbImage::from_pixel(32, 32, image::Rgb([100, 100, 100])).clone()),
+        image::ImageFormat::Jpeg,
+    )
+    .unwrap();
     let export_with = |bytes: &[u8], ext: &str, fxs: &[PicFx]| {
         let mut d = Document::new();
         let media = d.add_media(bytes.to_vec(), ext);
@@ -2221,7 +2657,7 @@ fn hostile_picture_header_is_refused_without_allocating() {
     png.extend_from_slice(&0u32.to_be_bytes());
     png.extend_from_slice(b"IDAT");
     png.extend_from_slice(&crc32(b"IDAT").to_be_bytes());
-    assert_eq!(image::ImageReader::new(std::io::Cursor::new(&png)).with_guessed_format().unwrap().into_dimensions().unwrap(), (20_000, 20_000));
+    assert_eq!(wordcraft_geom::picture::dimensions(&png).ok_or("bad image").unwrap(), (20_000, 20_000));
     let data = Arc::new(png.clone());
     // Refused from the header by the shared decode budget, before anything is decoded, not by
     // the missing pixel data that follows.
@@ -2442,15 +2878,14 @@ fn image_budget_is_checked_from_the_header() {
     assert!(load_image_within(&data, PicFx::default(), 1024).is_some());
     assert!(load_image_within(&data, PicFx::default(), 1023).is_none());
     // 16-bit RGBA decodes to 8 bytes a pixel, alive with its RGBA8 conversion: 12 bytes a pixel.
-    let mut wide = Vec::new();
     let img16 = image::ImageBuffer::<image::Rgba<u16>, _>::from_fn(16, 8, |x, y| image::Rgba([x as u16 * 999, y as u16, 9, 65535]));
-    image::DynamicImage::ImageRgba16(img16).write_to(&mut std::io::Cursor::new(&mut wide), image::ImageFormat::Png).unwrap();
+    let wide = wordcraft_geom::picture::encode_format(&image::DynamicImage::ImageRgba16(img16).clone(), image::ImageFormat::Png).unwrap();
     let wide = Arc::new(wide);
     assert!(load_image_within(&wide, PicFx::default(), 1024).is_none(), "two RGBA8 buffers' worth is not enough for RGBA16");
     assert!(load_image_within(&wide, PicFx::default(), 1536).is_some());
     // A header (valid CRC) claiming 30000x30000 with no pixel data reads fine, then the budget refuses it.
     let hdr = ihdr_only_png(30_000, 30_000);
-    let dims = image::ImageReader::new(std::io::Cursor::new(hdr.as_slice())).with_guessed_format().unwrap().into_dimensions().unwrap();
+    let dims = wordcraft_geom::picture::dimensions(hdr.as_slice()).unwrap();
     assert_eq!(dims, (30_000, 30_000));
     assert!(load_image(&Arc::new(hdr), PicFx::default()).is_none());
 }
@@ -2831,6 +3266,7 @@ fn only_safe_link_targets_become_annotations() {
 /// without one), found in one pass: a long run of glyphs sharing a cluster used to rescan the rest
 /// of the run for every glyph.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn cluster_ends_match_the_next_larger_cluster_in_linear_time() {
     let brute = |cl: &[usize], len: usize| -> Vec<usize> {
         (0..cl.len()).map(|i| cl.iter().skip(i + 1).copied().find(|n| *n > cl[i]).unwrap_or(len)).collect::<Vec<_>>()
@@ -2861,4 +3297,129 @@ fn baseline_is_the_most_shared_y() {
     assert_eq!(baseline(&[(1, 0.0, 7.5), (2, 3.0, 4.0), (3, 6.0, 7.5)]), Some(7.5));
     assert_eq!(baseline(&[(1, 0.0, 9.0), (2, 3.0, 4.0)]), Some(4.0));
     assert_eq!(baseline(&[(1, 0.0, -0.0), (2, 3.0, 0.0)]), Some(0.0));
+}
+
+/// The exported PDF shows a body page reference's page and Word's error for a missing bookmark,
+/// as Word's export does, where the document stores "9" for both.
+#[test]
+fn exported_page_references_show_the_page_or_words_error() {
+    let field =
+        |instr: &str| InlineObject::Field { instr: instr.into(), result: "9".into(), locked: false, dirty: false, code: false, form: String::new() };
+    let mut d = Document::from_text("See \nMissing \nTarget");
+    for (i, instr) in [(0, "PAGEREF Target"), (1, "PAGEREF NoSuchMark")] {
+        let p = d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(i)).unwrap();
+        let n = p.len();
+        p.insert_object(n, field(instr), &CharProps::default()).unwrap();
+    }
+    let target = d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(2)).unwrap();
+    target.props.page_break_before = Some(true);
+    target.insert_object(0, InlineObject::BookmarkStart { name: "Target".into() }, &CharProps::default()).unwrap();
+    let text = extract_text(&export(&d, &PdfOptions::default()).unwrap());
+    let first = squash(&text[0]);
+    assert!(first.contains("See 2"), "{first}");
+    assert!(first.contains("Missing Error! Bookmark not defined."), "{first}");
+}
+
+#[test]
+fn the_author_is_left_out_when_personal_information_is_removed() {
+    let mut d = Document::from_text("Private");
+    d.core.creator = "Ada Writer".into();
+    let opts = PdfOptions { tagged: false, compress: false, ..Default::default() };
+    let raw = |d: &Document| String::from_utf8_lossy(&export(d, &opts).unwrap()).to_string();
+    assert!(raw(&d).contains("Ada Writer"));
+    d.settings.remove_personal_info = true;
+    assert!(!raw(&d).contains("Ada Writer"), "the creator stays out of the PDF");
+}
+
+/// A page with text and three pictures that don't draw: garbage, a PNG cut off in its data and a
+/// metafile that is only its header. The export is the same bytes as before strict export
+/// existed (#6005): each is a grey box, and the rest of the page is untouched.
+#[test]
+fn undecodable_pictures_keep_their_grey_box_bytes() {
+    let mut whole = png();
+    let cut = whole.len() - 24;
+    whole.truncate(cut);
+    let mut d = Document::new();
+    d.core.created = "2024-01-02T03:04:05Z".into();
+    let mut p = Paragraph::new();
+    for (bytes, ext) in [(b"this is not a picture at all".to_vec(), "bin"), (whole, "png"), (vec![1, 0, 0, 0, 88, 0, 0, 0], "emf")] {
+        let media = d.add_media(bytes, ext);
+        let n = p.len();
+        let obj = InlineObject::Image {
+            media,
+            w: 60.0,
+            h: 40.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        };
+        p.insert_object(n, obj, &CharProps::default()).unwrap();
+    }
+    d.body = vec![para_block(p)];
+    let opts = PdfOptions { compress: false, ..Default::default() };
+    let a = export(&d, &opts).unwrap();
+    assert_eq!(a, export(&d, &opts).unwrap(), "the export must be deterministic for the golden hash to mean anything");
+    let text = String::from_utf8_lossy(&a);
+    assert!(text.contains("0.8157 0.8157 0.8157") || text.contains(".81"), "the grey box is drawn: {}", text.len());
+    // FNV-1a of the file, recorded from the export before the shared decode check existed.
+    let h = a.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x100000001b3));
+    assert_eq!(h, 0x1edbbffab353d744, "{h:#x}");
+}
+
+/// A page with a chart label and an equation, exported without compression. Chart and equation
+/// runs carry the text each glyph shows since strict export (#6005); this pins the PDF they
+/// produce, ToUnicode maps included, to what they were before.
+#[test]
+fn chart_and_equation_text_keep_their_pdf_bytes() {
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
+    let mut d = Document::from_text("Body text");
+    d.core.created = "2024-01-02T03:04:05Z".into();
+    let items = vec![GraphicItem::Text {
+        rect: [0.0, 100.0, 216.0, 20.0],
+        text: "Revenue 2024".into(),
+        size: 10.0,
+        color: wordcraft_doc::props::Rgb::BLACK,
+        bold: false,
+        align: TextAlign::Center,
+        font: None,
+        angle: 0.0,
+    }];
+    let graphic = Graphic { kind: GraphicKind::Chart, items, ..Default::default() };
+    let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
+    d.insert_object(&wordcraft_doc::Pos::body(0, 0), obj, &CharProps::default()).unwrap();
+    let linear = "x^2+1/2";
+    let math = wordcraft_doc::math::Math { nodes: wordcraft_doc::math::parse_linear(linear), ..Default::default() };
+    let n = d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().len();
+    d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0))
+        .unwrap()
+        .insert_object(n, InlineObject::Equation { linear: linear.into(), display: false, math }, &CharProps::default())
+        .unwrap();
+    let opts = PdfOptions { compress: false, ..Default::default() };
+    let a = export(&d, &opts).unwrap();
+    assert_eq!(a, export(&d, &opts).unwrap(), "the export must be deterministic for the golden hash to mean anything");
+    // What the ToUnicode maps say each glyph shows, across all fonts: the text of the body, the
+    // chart label and the equation (a mathematical italic x is one character beyond the BMP).
+    // Recorded on the code before strict export: the maps are the same. (The whole file's hash
+    // is not pinned: it follows the fonts the host resolves, which differ between runs.)
+    let text = String::from_utf8_lossy(&a).into_owned();
+    let mut shown = std::collections::BTreeSet::new();
+    for block in text.split("beginbfchar").skip(1) {
+        for line in block.split("endbfchar").next().unwrap_or("").lines() {
+            let Some((_, to)) = line.trim().split_once("> <") else { continue };
+            let units: Vec<u16> =
+                to.trim_end_matches('>').as_bytes().chunks(4).filter_map(|c| u16::from_str_radix(std::str::from_utf8(c).ok()?, 16).ok()).collect();
+            shown.insert(String::from_utf16_lossy(&units));
+        }
+    }
+    // The equation's x is the mathematical italic 𝑥 when the math face has that alphabet. A host
+    // without a math font (no STIX Two Math, Latin Modern Math…) sets math in a text face that
+    // lacks it, and the layout draws the plain letter slanted instead (`math/nodes.rs`), which the
+    // body's "x" already maps.
+    let (math_face, _) = wordcraft_fonts::math::resolve_math("Cambria Math");
+    let equation_x = if math_face.covers('\u{1D465}') { "\u{1D465}" } else { "x" };
+    let expected: std::collections::BTreeSet<String> =
+        ["B", "o", "d", "y", " ", "t", "e", "x", "R", "v", "n", "u", "2", "0", "4", "+", "1", equation_x].into_iter().map(String::from).collect();
+    assert_eq!(shown, expected, "math face: {}", math_face.family);
 }

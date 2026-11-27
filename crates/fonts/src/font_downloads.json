@@ -1,0 +1,50 @@
+{
+  "about": "Fonts a document may ask for that their publisher offers for download at no charge, and the publisher's own download page. WordCraft links to the page; it never downloads, bundles or redistributes the fonts, and the user is responsible for the publisher's licence terms. 'family' also covers every name that continues it after a space: 'Aptos' covers 'Aptos Display'. 'restricted': true marks a font whose publisher limits who may use it or what for; the app then says so beside the download.",
+  "downloads": [
+    {
+      "family": "Aptos",
+      "publisher": "Microsoft",
+      "url": "https://www.microsoft.com/download/details.aspx?id=106087",
+      "note": "Microsoft Download Center, 'Microsoft Aptos Fonts': the whole Aptos family."
+    },
+    {
+      "family": "Cascadia Code",
+      "publisher": "Microsoft",
+      "url": "https://github.com/microsoft/cascadia-code/releases",
+      "note": "Microsoft's own repository; SIL Open Font License."
+    },
+    {
+      "family": "Cascadia Mono",
+      "publisher": "Microsoft",
+      "url": "https://github.com/microsoft/cascadia-code/releases",
+      "note": "Comes in the Cascadia Code release."
+    },
+    {
+      "family": "Selawik",
+      "publisher": "Microsoft",
+      "url": "https://github.com/microsoft/fonts",
+      "note": "Microsoft's open-source stand-in for Segoe UI; SIL Open Font License."
+    },
+    {
+      "family": "Segoe UI Variable",
+      "publisher": "Microsoft",
+      "url": "https://learn.microsoft.com/windows/apps/design/downloads",
+      "restricted": true,
+      "note": "Microsoft's Windows design downloads page. Offered with the design resources for Windows apps; plain 'Segoe UI' is not offered for download and is not matched by this entry."
+    },
+    {
+      "family": "Segoe Fluent Icons",
+      "publisher": "Microsoft",
+      "url": "https://learn.microsoft.com/windows/apps/design/downloads",
+      "restricted": true,
+      "note": "Microsoft's Windows design downloads page."
+    },
+    {
+      "family": "Segoe MDL2 Assets",
+      "publisher": "Microsoft",
+      "url": "https://learn.microsoft.com/windows/apps/design/downloads",
+      "restricted": true,
+      "note": "Microsoft's Windows design downloads page."
+    }
+  ]
+}
