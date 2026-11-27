@@ -116,6 +116,7 @@ fn new_opens_a_second_window_and_each_keeps_its_state() {
     let first = a.session.document_id();
     rig.frames(&mut a, 3);
     a.ui.tab = "Insert".into();
+    a.run("ui.collapseRibbon", json!({})).unwrap();
     a.run("ui.dialog", json!({"name": "paragraph"})).unwrap();
     assert_eq!(prompt(&a).as_deref(), Some("paragraph"));
 
@@ -123,7 +124,8 @@ fn new_opens_a_second_window_and_each_keeps_its_state() {
     let second = a.session.document_id();
     assert_ne!(second, first);
     assert_eq!(a.window_count(), 2);
-    assert!(a.dialog_host.is_empty() && a.ui.tab == crate::DEFAULT_TAB, "the new window starts afresh");
+    assert!(a.dialog_host.is_empty() && a.ui.tab == crate::DEFAULT_TAB, "the new window starts afresh, on Home");
+    assert!(a.ui.ribbon_collapsed, "but keeps the ribbon hidden, as the window it came from has it");
     rig.frames(&mut a, 3);
     let child = a.active_viewport();
     assert_ne!(child, ViewportId::ROOT, "the new window has a viewport of its own, the one its container names");
@@ -136,10 +138,14 @@ fn new_opens_a_second_window_and_each_keeps_its_state() {
     rig.frames(&mut a, 2);
     assert_eq!(a.active_viewport(), ViewportId::ROOT);
     assert_eq!(a.session.document_id(), first);
-    assert_eq!((text(&a), a.ui.tab.as_str(), prompt(&a).as_deref()), ("First".into(), "Insert", Some("paragraph")));
+    assert_eq!((text(&a), a.ui.tab.as_str(), prompt(&a).as_deref(), a.ui.ribbon_collapsed), ("First".into(), "Insert", Some("paragraph"), true));
     rig.focus(child);
     rig.frames(&mut a, 2);
-    assert_eq!((text(&a), a.ui.tab.as_str(), prompt(&a).as_deref()), ("Second".into(), crate::DEFAULT_TAB, None));
+    assert_eq!(
+        (text(&a), a.ui.tab.as_str(), prompt(&a).as_deref(), a.ui.ribbon_collapsed),
+        ("Second".into(), crate::DEFAULT_TAB, None, true),
+        "each window keeps its own ribbon state"
+    );
 }
 
 /// Each window has its own key, and the root window's stays `main` when it adopts another entry.
