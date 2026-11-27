@@ -45,12 +45,23 @@ pub(super) fn pl_text_at(c: &Cluster) -> bool {
     c.dot
 }
 
-pub(super) fn resolve_tab(pl: &mut ParaLayout, pending: &mut Option<(usize, TabStop, f32)>, xs: &mut [f32], c0: usize, x: f32, xo: &mut f32) {
+/// `to_dot` is the width of the text after a decimal tab up to its first '.', if it has one.
+pub(super) fn resolve_tab(
+    pl: &mut ParaLayout,
+    pending: &mut Option<(usize, TabStop, f32)>,
+    xs: &mut [f32],
+    c0: usize,
+    x: f32,
+    xo: &mut f32,
+    to_dot: Option<f32>,
+) {
     // Finish a centre/right/decimal tab: its text (possibly empty) ends at `x`.
     let Some((tj, stop, tx)) = pending.take() else { return };
     let seg = x - tx - pl.clusters.get(tj).map(|c| c.adv).unwrap_or(0.0);
     let want = match stop.align {
-        TabAlign::Right | TabAlign::Decimal => stop.pos - tx - seg,
+        TabAlign::Right => stop.pos - tx - seg,
+        // The '.' goes at the stop; text without one ends there, as after a right tab.
+        TabAlign::Decimal => stop.pos - tx - to_dot.unwrap_or(seg),
         TabAlign::Center => stop.pos - tx - seg / 2.0,
         _ => return,
     }

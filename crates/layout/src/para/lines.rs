@@ -363,8 +363,8 @@ impl<'e> Breaker<'e> {
     /// Returns how it ends.
     fn close_line(&mut self, pl: &mut ParaLayout, mut sc: Scan) -> LineEnd {
         if sc.end == LineEnd::Para || sc.end == LineEnd::Wrap {
-            let xc = sc.x;
-            resolve_tab(pl, &mut sc.pending_tab, &mut sc.xs, sc.c0, xc, &mut sc.x);
+            let (xc, to_dot) = (sc.x, sc.pending_to_dot(pl));
+            resolve_tab(pl, &mut sc.pending_tab, &mut sc.xs, sc.c0, xc, &mut sc.x, to_dot);
         }
         if sc.j >= self.n && sc.end != LineEnd::Wrap && !matches!(sc.end, LineEnd::LineBreak | LineEnd::PageBreak | LineEnd::ColumnBreak) {
             sc.end = LineEnd::Para;
@@ -816,7 +816,8 @@ impl Scan {
         let Some(c) = pl.clusters.get(self.j).cloned() else { return true };
         match c.kind {
             ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak => {
-                resolve_tab(pl, &mut self.pending_tab, &mut self.xs, self.c0, self.x, &mut self.x);
+                let to_dot = self.pending_to_dot(pl);
+                resolve_tab(pl, &mut self.pending_tab, &mut self.xs, self.c0, self.x, &mut self.x, to_dot);
                 self.xs.push(self.x);
                 self.end = match c.kind {
                     ClKind::LineBreak => LineEnd::LineBreak,
@@ -835,7 +836,8 @@ impl Scan {
     fn tab(&mut self, bk: &mut Breaker, pl: &mut ParaLayout) -> bool {
         let j = self.j;
         self.has_tab = true;
-        resolve_tab(pl, &mut self.pending_tab, &mut self.xs, self.c0, self.x, &mut self.x);
+        let to_dot = self.pending_to_dot(pl);
+        resolve_tab(pl, &mut self.pending_tab, &mut self.xs, self.c0, self.x, &mut self.x, to_dot);
         let rp = &bk.rp;
         let ptab = pl.ptabs.iter().find(|t| t.0 == j).map(|&(_, a, b, l)| ptab_stop(a, b, l, bk.width, (rp.indent_left, rp.indent_right)));
         let stop = ptab.unwrap_or_else(|| next_tab(self.x, &rp.tabs, bk.default_tab, bk.hanging_at, bk.tab_origin));
@@ -968,6 +970,16 @@ impl Scan {
             }
         }
         d.found.then_some(d.width)
+    }
+
+    /// For a pending decimal tab, the width of the text after it up to its first '.' among the
+    /// clusters before `j`.
+    fn pending_to_dot(&mut self, pl: &ParaLayout) -> Option<f32> {
+        let (tj, stop, _) = self.pending_tab?;
+        if stop.align != TabAlign::Decimal || self.j <= tj + 1 {
+            return None;
+        }
+        self.width_to_decimal(pl, tj, self.j - 1)
     }
 
     /// Text after a decimal/centre/right tab shifts as it grows.

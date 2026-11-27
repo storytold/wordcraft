@@ -1699,6 +1699,26 @@ fn right_tab_aligns_text_end() {
     assert!((end - 472.0).abs() < 1.0, "{end}");
 }
 
+/// Numbers after a decimal tab line up on their '.', not on their last digit (#7290); a number
+/// without a '.' ends at the stop, as after a right tab.
+#[test]
+fn decimal_tab_aligns_the_decimal_points() {
+    use wordcraft_doc::props::{TabAlign, TabStop};
+    crate::test_fonts();
+    let mut d = Document::from_text("a\t12.3\nb\t4.5678\nc\t42");
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(2, 4), &|p| {
+        p.tabs = Some(vec![TabStop { pos: 200.0, align: TabAlign::Decimal, leader: Default::default() }])
+    })
+    .unwrap();
+    let l = lay(&d);
+    let x = |p: usize, off: usize| l.caret(&Pos::body(p, off)).map(|c| c.x).unwrap_or(f32::NAN);
+    let (stop, short, long) = (x(0, 0) + 200.0, x(0, 4), x(1, 3));
+    assert!((short - long).abs() < 0.5, "the '.'s line up: {short} and {long}");
+    assert!((short - stop).abs() < 0.5, "the '.' is at the stop {stop}: {short}");
+    assert!(x(0, 6) > stop && x(1, 8) > x(0, 6), "the decimals run past the stop");
+    assert!((x(2, 4) - stop).abs() < 0.5, "a whole number ends at the stop: {}", x(2, 4));
+}
+
 /// Native Word moves every ordinary-tab group with centered or right paragraph alignment.
 #[test]
 fn ordinary_tabs_move_as_line() {
