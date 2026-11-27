@@ -45,6 +45,16 @@ fn remove(path: Option<&Path>) {
 /// `port` in `settings`; a file left by a run that did not exit cleanly is replaced. Without a
 /// settings folder a fresh token is generated and reported by the log.
 pub fn start(options: &ControlOptions, port: u16, host: WindowHost, settings: Option<&Path>) -> Option<(Receiver<ControlRequest>, Control)> {
+    start_with(options, port, host, settings, serve)
+}
+
+fn start_with(
+    options: &ControlOptions,
+    port: u16,
+    host: WindowHost,
+    settings: Option<&Path>,
+    serve: impl FnOnce(TcpListener, String, WindowHost) -> std::io::Result<(Receiver<ControlRequest>, Listening)>,
+) -> Option<(Receiver<ControlRequest>, Control)> {
     let listener = match TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => l,
         Err(e) => {
@@ -285,5 +295,61 @@ mod tests {
         }
         assert!(rx.try_recv().is_err(), "refused auth attempts must not reach the UI");
         control.shut_down();
+    }
+
+    struct TempDir(std::path::PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            Self(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_stale_key_file_is_replaced() {
+        let dir = TempDir::new("wordcraft-control-stale");
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let p = wordcraft_control_key::key_path(&dir.0, 0);
+        std::fs::write(&p, "old").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        let options = ControlOptions::default();
+        let (_rx, control) = start(&options, 0, host(), Some(&dir.0)).unwrap();
+        let token = std::fs::read_to_string(&p).unwrap();
+        assert_ne!(token.trim(), "old");
+        assert_eq!(token.trim().len(), 64);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        assert!(ControlClient::connect(control.listening.addr, token.trim()).is_ok());
+        control.shut_down();
+        assert!(!p.exists());
+    }
+
+    #[test]
+    fn an_accept_thread_spawn_failure_aborts_start_and_removes_the_key() {
+        let dir = TempDir::new("wordcraft-control-spawn-fail");
+        let path = wordcraft_control_key::key_path(&dir.0, 0);
+        let options = ControlOptions::default();
+        let result = start_with(&options, 0, host(), Some(&dir.0), |_listener, _token, _host| {
+            assert!(path.exists(), "startup wrote the token file before spawning");
+            Err(std::io::Error::other("injected accept thread spawn failure"))
+        });
+        assert!(result.is_none(), "a server without its accept thread must not report success");
+        assert!(!path.exists(), "failed startup must remove its published key");
     }
 }
