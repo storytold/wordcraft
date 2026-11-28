@@ -21,6 +21,10 @@ use serde_json::Value;
 
 use super::{Ui, WordApp, json};
 use crate::colors::{Remember, Target};
+use crate::theme::Tokens;
+use craft::ui::primitives::TextureCache;
+use egui::{Color32, Rect, Sense, Stroke, StrokeKind, pos2};
+use wordcraft_doc::numbering::{Counters, LevelSuffix};
 
 /// A ribbon group titled `title`, with the Dialog Launcher `launcher` when it has one.
 fn ribbon_group(key: &'static str, title: &str, icon: &'static str, launcher: Option<&str>) -> RibbonGroup<'static> {
@@ -67,13 +71,102 @@ const BULLETS: [&str; 7] = ["•", "○", "▪", "◆", "➢", "✓", "–"];
 fn bullet_list_items(ui: &mut Ui, app: &mut WordApp) {
     Divider::horizontal().show(ui);
     let in_list = app.session.doc.para_at(&app.session.sel.focus).and_then(|p| p.props.numbering).is_some_and(|n| n.num != 0);
-    Menu::submenu_row_enabled(ui, tl!("Change List Level").to_string(), in_list, |ui, _| {
-        for level in 0..9u8 {
-            let label = format!("{} {}", tl!("Level"), level + 1);
-            MenuItem::command(CommandRef::with_params("para.listLevel", json!({"level": level}))).label(label).show(ui);
-        }
+    Menu::submenu_row_enabled(ui, tl!("Change List Level").to_string(), in_list, |ui, cx| {
+        list_level_tiles(ui, app);
+        let _ = cx;
     });
     MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "defineBullet"}))).label(tl!("Define New Bullet…").to_string()).show(ui);
+}
+
+/// Change List Level ›: a tile per level the caret's list defines, its bullet or number at its
+/// aligned-at position and a grey line from its text indent, each level further in; the
+/// caret's level is marked. A click runs `para.listLevel`. A level the list doesn't define has no
+/// tile: a paragraph moved there would lose its label.
+pub(super) fn list_level_tiles(ui: &mut Ui, app: &mut WordApp) {
+    let t = Tokens::get(ui.ctx());
+    let doc = &app.session.doc;
+    // The paragraph's own list, the one `para.listLevel` changes.
+    let Some(n) = doc.para_at(&app.session.sel.focus).and_then(|p| p.props.numbering).filter(|n| n.num != 0) else { return };
+    // (label and its formatting, alignment, aligned-at and text positions in points) per level.
+    let levels: Vec<_> = (0..9u8)
+        .filter_map(|k| {
+            let def = doc.numbering.level(n.num, k)?.clone();
+            // Every level above at its start value, as the Define dialogs' previews show it.
+            let label = Counters::default().next_label(&doc.numbering, n.num, k).map(|(s, _)| s).filter(|s| !s.trim().is_empty());
+            let at = (def.indent - def.hanging).max(0.0);
+            // The label fits its tile whatever size the level gives it.
+            let chr = wordcraft_doc::props::CharProps { size: None, ..def.chr.clone() };
+            Some((k, label, chr, def.align, at, def.indent.max(0.0), def.suffix))
+        })
+        .collect();
+    let enabled = app.session.why_disabled("para.listLevel").is_none();
+    let (w, h) = (200.0, 28.0);
+    // Scaled so the deepest level still has room for its line.
+    let deepest = levels.iter().map(|l| l.4).fold(0.0f32, f32::max);
+    let scale = if deepest > 0.0 { ((w - 64.0) / deepest).min(0.6) } else { 0.6 };
+    let page = Color32::WHITE;
+    ui.spacing_mut().item_spacing.y = 1.0;
+    let ppp = ui.ctx().pixels_per_point();
+    for (k, label, chr, align, at, text_at, suffix) in levels {
+        let name = format!("{} {}", tl!("Level"), k + 1);
+        let (outer, resp) = ui.allocate_exact_size(vec2(w, h), if enabled { Sense::click() } else { Sense::hover() });
+        let on = k == n.level;
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, on, &name));
+        if on {
+            ui.painter().rect(outer, 3.0, t.checked, Stroke::new(1.0, t.accent), StrokeKind::Inside);
+        } else if resp.hovered() && enabled {
+            ui.painter().rect_filled(outer, 3.0, t.hover);
+        }
+        let tile = outer.shrink(3.0);
+        ui.painter().rect(tile, 1.0, page, Stroke::new(1.0, t.border_strong), StrokeKind::Inside);
+        let left = tile.left() + 6.0;
+        let x_of = |v: f32| left + (v * scale).clamp(0.0, tile.width() - 40.0);
+        let y = tile.center().y;
+        let x = x_of(at);
+        // A level with no label still starts its text at its own indent.
+        let mut text_x = x_of(text_at);
+        if let Some(label) = label {
+            let r = label_rect(&label, align, x, tile);
+            let gw = r.width().max(1.0);
+            let gh = r.height().max(1.0);
+            let sized = wordcraft_doc::props::CharProps { size: Some(gh * 0.7), ..chr.clone() };
+            let key = format!("list-level-glyph:{label}:{sized:?}:{gw}:{gh}:{ppp}");
+            let tex = TextureCache::texture(ui.ctx(), key, || {
+                crate::previews::glyph_image(&label, &sized, (gw, gh, ppp), false)
+                    .unwrap_or_else(|| egui::ColorImage::new([1, 1], vec![Color32::TRANSPARENT]))
+            });
+            let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+            ui.painter().image(tex, r, uv, Color32::WHITE);
+            text_x = match suffix {
+                LevelSuffix::Tab => x_of(text_at).max(r.right() + 2.0),
+                LevelSuffix::Space => r.right() + 3.0,
+                LevelSuffix::Nothing => r.right(),
+            };
+        }
+        let bar = Rect::from_min_max(pos2(text_x, y - 2.0), pos2(tile.right() - 6.0, y + 2.0));
+        if bar.width() > 0.0 {
+            ui.painter().rect_filled(bar, 1.0, Color32::from_gray(if on { 150 } else { 205 }));
+        }
+        if resp.clicked() {
+            let _ = app.run("para.listLevel", json!({"level": k}));
+            ui.close();
+        }
+    }
+}
+
+/// Where a level tile draws its label, aligned at `x`. Bullets are one character; a number gets
+/// room for its digits and punctuation, a legal list's deep levels too ("1.1.1.1.1."), moved in
+/// from the tile's right edge so all of it shows.
+pub(super) fn label_rect(label: &str, align: wordcraft_doc::props::Align, x: f32, tile: Rect) -> Rect {
+    let glyph = 18.0;
+    let (min, max) = (tile.left() + 1.0, tile.right() - 6.0);
+    let gw = (label.chars().count() as f32 * 7.5).max(glyph).min(max - min);
+    let gx = match align {
+        wordcraft_doc::props::Align::Center => x - gw / 2.0,
+        wordcraft_doc::props::Align::Right => x - gw,
+        _ => x,
+    };
+    Rect::from_min_size(pos2(gx.min(max - gw).max(min), tile.center().y - glyph / 2.0), vec2(gw, glyph))
 }
 
 /// The Bullets drop-down: the Bullet Library as tiles, None, and the list-level rows.
