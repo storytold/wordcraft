@@ -48,6 +48,7 @@ pub const CT_TEMPLATE_MAIN: &str = "application/vnd.openxmlformats-officedocumen
 pub const CT_MACRO_MAIN: &str = "application/vnd.ms-word.document.macroEnabled.main+xml";
 pub const CT_MACRO_TEMPLATE_MAIN: &str = "application/vnd.ms-word.template.macroEnabled.main+xml";
 pub const CT_CHART: &str = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
+pub const CT_THEME: &str = "application/vnd.openxmlformats-officedocument.theme+xml";
 pub const CT_PEOPLE: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.people+xml";
 pub const CT_WEB_SETTINGS: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.webSettings+xml";
 

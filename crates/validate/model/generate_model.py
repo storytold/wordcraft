@@ -220,35 +220,25 @@ def group_refs(xsd_dir):
 def check_unflattened_group(ctx, types, refs):
     """Accept a group context that no type in the tables flattens, or fail.
 
-    The extractor flattens a group into a type only when the group sits inside
-    the type's ``sequence``/``choice``. Two shapes leave a group with no slot
-    in any type: the group is never referenced by a complex type (DML
-    ``EG_Media``, ``EG_TextGeometry``), or the group is the type's whole
-    content model as a bare top-level particle, which the extractor records
-    as an ``empty`` type (``w:CT_RubyContent`` over ``EG_RubyContent``,
-    ``a:CT_EffectContainer`` over ``EG_Effect``). In both shapes the context
-    names no parent type that the tables hold a slot for, so it contributes
-    no parents. Anything else (a referencing type with children, or an
-    unknown type) is a real inconsistency and fails.
+    Every in-scope complex type that references a group — whether nested in a
+    compositor or as the type's bare top-level content particle — is expanded
+    by the extractor, so it must carry the group's slots. The only valid
+    unflattened group is one referenced by no in-scope complex type (DML
+    ``EG_Media``, ``EG_TextGeometry``). Any named complex-type owner (even one
+    with an empty row) or unknown reference site is an inconsistency and fails.
 
-    Returns the sorted qualified keys of the empty types whose content is the
-    group (the tables do not carry their content).
+    Returns an empty list for an accepted unreferenced group.
     """
     bare = group_bare(ctx)
     flattened = sorted(t for t, row in types.items() for c in row["children"] if c.get("via_group") == bare)
     check(not flattened, f"group context {ctx}: group is flattened into {flattened} but not for this element")
-    opaque = []
     for owner in refs.get(bare, []):
         check(owner != "(none)", f"group context {ctx}: referenced outside any complex type or group")
         if owner == "(group)":
             # Referenced from another group: that group's own contexts carry it.
             continue
-        row = types.get(owner)
-        check(row is not None, f"group context {ctx}: referencing type {owner} has no row in the tables")
-        check(row.get("model_kind") == "empty" and row["children"] == [],
-              f"group context {ctx}: referencing type {owner} is not an empty row, yet holds no slot from the group")
-        opaque.append(owner)
-    return sorted(set(opaque))
+        raise GenError(f"group context {ctx}: referenced by complex type {owner}, which holds no slot from the group")
+    return []
 
 
 def expand_contexts(elements, types, refs):
@@ -257,15 +247,17 @@ def expand_contexts(elements, types, refs):
     A context that is a type key stays as it is. A group context expands to
     every type whose flattened child list has a slot for this element that
     came from that group (`via_group`). An empty expansion is accepted only
-    when no type flattens the group at all and every type referencing it in
-    the XSD is an empty row (see `check_unflattened_group`); otherwise it
-    fails. A global declaration expands to every type with a slot for this
-    element that no other variant of the element claims. A (parent type,
-    element) pair claimed by two variants is ambiguous: it is removed from
-    every variant, so the consumer falls back to union membership there.
+    when no type flattens the group at all and no in-scope complex type
+    references it in the XSD (see `check_unflattened_group`); when hits are
+    present, every direct named complex-type owner in `refs` must supply a
+    matching slot; otherwise it fails. A global declaration expands to every
+    type with a slot for this element that no other variant of the element
+    claims. A (parent type, element) pair claimed by two variants is ambiguous:
+    it is removed from every variant, so the consumer falls back to union
+    membership there.
 
     Returns ({element: {variant: sorted parent types}}, sorted ambiguous pairs,
-    {unflattened group context: sorted empty types whose content it is}).
+    {unflattened group context: []}).
     """
     # (element name) -> list of (type key, via_group) for every slot
     slots = {}
@@ -293,6 +285,14 @@ def expand_contexts(elements, types, refs):
                     hits = {t for t, via in slots.get(ename, []) if via == bare}
                     if not hits:
                         unflattened[ctx] = check_unflattened_group(ctx, types, refs)
+                    else:
+                        direct_owners = {o for o in refs.get(bare, []) if o != "(group)"}
+                        check("(none)" not in direct_owners, f"group context {ctx}: referenced outside any complex type or group")
+                        missing_owners = sorted(direct_owners - hits)
+                        check(
+                            not missing_owners,
+                            f"group context {ctx}: element {ename} is missing from referencing type(s) {missing_owners}",
+                        )
                     got |= hits
             claimed[variant] = got
         explicit = set().union(*claimed.values()) if claimed else set()
@@ -551,9 +551,8 @@ def generate(model_dir, xsd_dir):
         f"{multi} with more than one type variant; {len(ambiguous)} ambiguous (parent type, element)",
         f"//! pairs left to fallback selection; {len(numfmt)} `ST_NumberFormat` values.",
         "//!",
-        "//! Group contexts that no type flattens contribute no parent types. Where such a group is a",
-        "//! type's whole content, the extractor records that type as empty: these tables do not carry",
-        "//! its content, so a consumer must not read its empty child list as \"no children allowed\".",
+        "//! Group contexts that no type flattens contribute no parent types (each is",
+        "//! referenced by no in-scope complex type):",
     ]
     for ctx, opaque in unflattened.items():
         detail = ", ".join(f"`{k}`" for k in opaque) if opaque else "referenced by no in-scope complex type"

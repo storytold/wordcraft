@@ -9,23 +9,20 @@
 //! The chain from the ECMA-376 schema archives to this file is documented in
 //! `crates/validate/model/README.md`. Inputs (SHA-256):
 //!
-//! - `content_model_v2.json`: `f36a42e324bae4cf4d6ce03ebbfb53e2e5729d76ae5f4929332a272d02545978`
-//! - `content_model_dml_v2.json`: `9a3e58c9bc70d3b2fa9718a02666b51d2f4822e66ff61e212cdea63e3e569549`
-//! - `content_model_v2_transitional.json`: `92c433577c914785908f42553718cc41b4f12161125596383ab6836ac3c54fbf`
-//! - `content_model_dml_v2_transitional.json`: `81290399fb8f89aa287d275172b7214378449a54fd3783e42a8f899958dae127`
+//! - `content_model_v2.json`: `72b60bbd5204d213d7ba80a71836a5b4944643eb9f139e2b5aa273425b7ed6f3`
+//! - `content_model_dml_v2.json`: `04ed5e7b8a794de38395521d76900c53dbf84c4b28f4fc2d1bdc67439cc1be80`
+//! - `content_model_v2_transitional.json`: `7a564d9940abf151bab97bc615ecca14814faa7a424bc4a9a77b0c67dc08076e`
+//! - `content_model_dml_v2_transitional.json`: `84a91ddd00c2b7aa956f035c1ac7102c11dae2a9dc1c5f7c6ee1bbb62b89d29b`
 //! - `wml.xsd (Strict)`: `44fc2233c5df2cfbe0b3b50e7024bd8412ec99dfe7176313ef58845fdec5498d`
 //!
 //! Counts: 747 Strict types (380 WML + 367 DML); 20 Transitional overrides (19 WML + 1 DML);
 //! 1335 elements (794 WML + 541 DML), 61 with more than one type variant; 0 ambiguous (parent type, element)
 //! pairs left to fallback selection; 63 `ST_NumberFormat` values.
 //!
-//! Group contexts that no type flattens contribute no parent types. Where such a group is a
-//! type's whole content, the extractor records that type as empty: these tables do not carry
-//! its content, so a consumer must not read its empty child list as "no children allowed".
-//! - `a:EG_Effect`: `a:CT_EffectContainer`
+//! Group contexts that no type flattens contribute no parent types (each is
+//! referenced by no in-scope complex type):
 //! - `a:EG_Media`: referenced by no in-scope complex type
 //! - `a:EG_TextGeometry`: referenced by no in-scope complex type
-//! - `w:EG_RubyContent`: `w:CT_RubyContent`
 
 use Compositor::{All, Choice, Sequence};
 
@@ -371,7 +368,38 @@ pub(crate) static TYPES: &[TypeModel] = &[
         ch("a:schemeClr", 2, Some(2), Choice, Some("choice1"), 4),
         ch("a:prstClr", 2, Some(2), Choice, Some("choice1"), 5),
     ]),
-    ty("a:CT_EffectContainer", &[]),
+    ty("a:CT_EffectContainer", &[
+        ch("a:cont", 0, None, Choice, Some("choice1"), 0),
+        ch("a:effect", 0, None, Choice, Some("choice1"), 1),
+        ch("a:alphaBiLevel", 0, None, Choice, Some("choice1"), 2),
+        ch("a:alphaCeiling", 0, None, Choice, Some("choice1"), 3),
+        ch("a:alphaFloor", 0, None, Choice, Some("choice1"), 4),
+        ch("a:alphaInv", 0, None, Choice, Some("choice1"), 5),
+        ch("a:alphaMod", 0, None, Choice, Some("choice1"), 6),
+        ch("a:alphaModFix", 0, None, Choice, Some("choice1"), 7),
+        ch("a:alphaOutset", 0, None, Choice, Some("choice1"), 8),
+        ch("a:alphaRepl", 0, None, Choice, Some("choice1"), 9),
+        ch("a:biLevel", 0, None, Choice, Some("choice1"), 10),
+        ch("a:blend", 0, None, Choice, Some("choice1"), 11),
+        ch("a:blur", 0, None, Choice, Some("choice1"), 12),
+        ch("a:clrChange", 0, None, Choice, Some("choice1"), 13),
+        ch("a:clrRepl", 0, None, Choice, Some("choice1"), 14),
+        ch("a:duotone", 0, None, Choice, Some("choice1"), 15),
+        ch("a:fill", 0, None, Choice, Some("choice1"), 16),
+        ch("a:fillOverlay", 0, None, Choice, Some("choice1"), 17),
+        ch("a:glow", 0, None, Choice, Some("choice1"), 18),
+        ch("a:grayscl", 0, None, Choice, Some("choice1"), 19),
+        ch("a:hsl", 0, None, Choice, Some("choice1"), 20),
+        ch("a:innerShdw", 0, None, Choice, Some("choice1"), 21),
+        ch("a:lum", 0, None, Choice, Some("choice1"), 22),
+        ch("a:outerShdw", 0, None, Choice, Some("choice1"), 23),
+        ch("a:prstShdw", 0, None, Choice, Some("choice1"), 24),
+        ch("a:reflection", 0, None, Choice, Some("choice1"), 25),
+        ch("a:relOff", 0, None, Choice, Some("choice1"), 26),
+        ch("a:softEdge", 0, None, Choice, Some("choice1"), 27),
+        ch("a:tint", 0, None, Choice, Some("choice1"), 28),
+        ch("a:xfrm", 0, None, Choice, Some("choice1"), 29),
+    ]),
     ty("a:CT_EffectList", &[
         ch("a:blur", 0, Some(1), Sequence, None, 0),
         ch("a:fillOverlay", 0, Some(1), Sequence, None, 1),
@@ -1226,7 +1254,14 @@ pub(crate) static TYPES: &[TypeModel] = &[
         ch("a:tab", 0, Some(32), Sequence, None, 0),
     ]),
     ty("a:CT_TextUnderlineFillFollowText", &[]),
-    ty("a:CT_TextUnderlineFillGroupWrapper", &[]),
+    ty("a:CT_TextUnderlineFillGroupWrapper", &[
+        ch("a:noFill", 1, Some(1), Choice, Some("choice1"), 0),
+        ch("a:solidFill", 1, Some(1), Choice, Some("choice1"), 1),
+        ch("a:gradFill", 1, Some(1), Choice, Some("choice1"), 2),
+        ch("a:blipFill", 1, Some(1), Choice, Some("choice1"), 3),
+        ch("a:pattFill", 1, Some(1), Choice, Some("choice1"), 4),
+        ch("a:grpFill", 1, Some(1), Choice, Some("choice1"), 5),
+    ]),
     ty("a:CT_TextUnderlineLineFollowText", &[]),
     ty("a:CT_ThemeableLineStyle", &[
         ch("a:ln", 1, Some(1), Choice, Some("choice1"), 0),
@@ -2556,7 +2591,42 @@ pub(crate) static TYPES: &[TypeModel] = &[
         ch("w:drawing", 0, Some(1), Sequence, None, 0),
     ]),
     ty("w:CT_Base64Binary", &[]),
-    ty("w:CT_BdoContentRun", &[]),
+    ty("w:CT_BdoContentRun", &[
+        ch("w:customXml", 0, None, Choice, Some("choice2"), 0),
+        ch("w:smartTag", 0, None, Choice, Some("choice2"), 1),
+        ch("w:sdt", 0, None, Choice, Some("choice2"), 2),
+        ch("w:dir", 0, None, Choice, Some("choice2"), 3),
+        ch("w:bdo", 0, None, Choice, Some("choice2"), 4),
+        ch("w:r", 0, None, Choice, Some("choice2"), 5),
+        ch("w:proofErr", 0, None, Choice, Some("choice3"), 6),
+        ch("w:permStart", 0, None, Choice, Some("choice3"), 7),
+        ch("w:permEnd", 0, None, Choice, Some("choice3"), 8),
+        ch("w:bookmarkStart", 0, None, Choice, Some("choice4"), 9),
+        ch("w:bookmarkEnd", 0, None, Choice, Some("choice4"), 10),
+        ch("w:moveFromRangeStart", 0, None, Choice, Some("choice4"), 11),
+        ch("w:moveFromRangeEnd", 0, None, Choice, Some("choice4"), 12),
+        ch("w:moveToRangeStart", 0, None, Choice, Some("choice4"), 13),
+        ch("w:moveToRangeEnd", 0, None, Choice, Some("choice4"), 14),
+        ch("w:commentRangeStart", 0, None, Choice, Some("choice4"), 15),
+        ch("w:commentRangeEnd", 0, None, Choice, Some("choice4"), 16),
+        ch("w:customXmlInsRangeStart", 0, None, Choice, Some("choice4"), 17),
+        ch("w:customXmlInsRangeEnd", 0, None, Choice, Some("choice4"), 18),
+        ch("w:customXmlDelRangeStart", 0, None, Choice, Some("choice4"), 19),
+        ch("w:customXmlDelRangeEnd", 0, None, Choice, Some("choice4"), 20),
+        ch("w:customXmlMoveFromRangeStart", 0, None, Choice, Some("choice4"), 21),
+        ch("w:customXmlMoveFromRangeEnd", 0, None, Choice, Some("choice4"), 22),
+        ch("w:customXmlMoveToRangeStart", 0, None, Choice, Some("choice4"), 23),
+        ch("w:customXmlMoveToRangeEnd", 0, None, Choice, Some("choice4"), 24),
+        ch("w:ins", 0, None, Choice, Some("choice3"), 25),
+        ch("w:del", 0, None, Choice, Some("choice3"), 26),
+        ch("w:moveFrom", 0, None, Choice, Some("choice3"), 27),
+        ch("w:moveTo", 0, None, Choice, Some("choice3"), 28),
+        ch("m:oMathPara", 0, None, Choice, Some("choice5"), 29),
+        ch("m:oMath", 0, None, Choice, Some("choice5"), 30),
+        ch("w:fldSimple", 0, None, Choice, Some("choice1"), 31),
+        ch("w:hyperlink", 0, None, Choice, Some("choice1"), 32),
+        ch("w:subDoc", 0, None, Choice, Some("choice1"), 33),
+    ]),
     ty("w:CT_Body", &[
         ch("w:customXml", 0, None, Choice, Some("choice3"), 0),
         ch("w:sdt", 0, None, Choice, Some("choice3"), 1),
@@ -2796,7 +2866,42 @@ pub(crate) static TYPES: &[TypeModel] = &[
     ty("w:CT_DataBinding", &[]),
     ty("w:CT_DecimalNumber", &[]),
     ty("w:CT_DecimalNumberOrPrecent", &[]),
-    ty("w:CT_DirContentRun", &[]),
+    ty("w:CT_DirContentRun", &[
+        ch("w:customXml", 0, None, Choice, Some("choice2"), 0),
+        ch("w:smartTag", 0, None, Choice, Some("choice2"), 1),
+        ch("w:sdt", 0, None, Choice, Some("choice2"), 2),
+        ch("w:dir", 0, None, Choice, Some("choice2"), 3),
+        ch("w:bdo", 0, None, Choice, Some("choice2"), 4),
+        ch("w:r", 0, None, Choice, Some("choice2"), 5),
+        ch("w:proofErr", 0, None, Choice, Some("choice3"), 6),
+        ch("w:permStart", 0, None, Choice, Some("choice3"), 7),
+        ch("w:permEnd", 0, None, Choice, Some("choice3"), 8),
+        ch("w:bookmarkStart", 0, None, Choice, Some("choice4"), 9),
+        ch("w:bookmarkEnd", 0, None, Choice, Some("choice4"), 10),
+        ch("w:moveFromRangeStart", 0, None, Choice, Some("choice4"), 11),
+        ch("w:moveFromRangeEnd", 0, None, Choice, Some("choice4"), 12),
+        ch("w:moveToRangeStart", 0, None, Choice, Some("choice4"), 13),
+        ch("w:moveToRangeEnd", 0, None, Choice, Some("choice4"), 14),
+        ch("w:commentRangeStart", 0, None, Choice, Some("choice4"), 15),
+        ch("w:commentRangeEnd", 0, None, Choice, Some("choice4"), 16),
+        ch("w:customXmlInsRangeStart", 0, None, Choice, Some("choice4"), 17),
+        ch("w:customXmlInsRangeEnd", 0, None, Choice, Some("choice4"), 18),
+        ch("w:customXmlDelRangeStart", 0, None, Choice, Some("choice4"), 19),
+        ch("w:customXmlDelRangeEnd", 0, None, Choice, Some("choice4"), 20),
+        ch("w:customXmlMoveFromRangeStart", 0, None, Choice, Some("choice4"), 21),
+        ch("w:customXmlMoveFromRangeEnd", 0, None, Choice, Some("choice4"), 22),
+        ch("w:customXmlMoveToRangeStart", 0, None, Choice, Some("choice4"), 23),
+        ch("w:customXmlMoveToRangeEnd", 0, None, Choice, Some("choice4"), 24),
+        ch("w:ins", 0, None, Choice, Some("choice3"), 25),
+        ch("w:del", 0, None, Choice, Some("choice3"), 26),
+        ch("w:moveFrom", 0, None, Choice, Some("choice3"), 27),
+        ch("w:moveTo", 0, None, Choice, Some("choice3"), 28),
+        ch("m:oMathPara", 0, None, Choice, Some("choice5"), 29),
+        ch("m:oMath", 0, None, Choice, Some("choice5"), 30),
+        ch("w:fldSimple", 0, None, Choice, Some("choice1"), 31),
+        ch("w:hyperlink", 0, None, Choice, Some("choice1"), 32),
+        ch("w:subDoc", 0, None, Choice, Some("choice1"), 33),
+    ]),
     ty("w:CT_Div", &[
         ch("w:blockQuote", 0, Some(1), Sequence, None, 0),
         ch("w:bodyDiv", 0, Some(1), Sequence, None, 1),
@@ -2913,9 +3018,9 @@ pub(crate) static TYPES: &[TypeModel] = &[
         ch("w:exitMacro", 0, None, Choice, Some("choice1"), 6),
         ch("w:helpText", 0, None, Choice, Some("choice1"), 7),
         ch("w:statusText", 0, None, Choice, Some("choice1"), 8),
-        ch("w:checkBox", 1, None, Choice, Some("choice2"), 9),
-        ch("w:ddList", 1, None, Choice, Some("choice2"), 10),
-        ch("w:textInput", 1, None, Choice, Some("choice2"), 11),
+        ch("w:checkBox", 1, None, Choice, Some("choice1"), 9),
+        ch("w:ddList", 1, None, Choice, Some("choice1"), 10),
+        ch("w:textInput", 1, None, Choice, Some("choice1"), 11),
     ]),
     ty("w:CT_FFHelpText", &[]),
     ty("w:CT_FFName", &[]),
@@ -3036,7 +3141,38 @@ pub(crate) static TYPES: &[TypeModel] = &[
         ch("w:docParts", 0, Some(1), Sequence, None, 1),
     ]),
     ty("w:CT_Guid", &[]),
-    ty("w:CT_HdrFtr", &[]),
+    ty("w:CT_HdrFtr", &[
+        ch("w:customXml", 0, None, Choice, Some("choice3"), 0),
+        ch("w:sdt", 0, None, Choice, Some("choice3"), 1),
+        ch("w:p", 0, None, Choice, Some("choice3"), 2),
+        ch("w:tbl", 0, None, Choice, Some("choice3"), 3),
+        ch("w:proofErr", 0, None, Choice, Some("choice4"), 4),
+        ch("w:permStart", 0, None, Choice, Some("choice4"), 5),
+        ch("w:permEnd", 0, None, Choice, Some("choice4"), 6),
+        ch("w:bookmarkStart", 0, None, Choice, Some("choice5"), 7),
+        ch("w:bookmarkEnd", 0, None, Choice, Some("choice5"), 8),
+        ch("w:moveFromRangeStart", 0, None, Choice, Some("choice5"), 9),
+        ch("w:moveFromRangeEnd", 0, None, Choice, Some("choice5"), 10),
+        ch("w:moveToRangeStart", 0, None, Choice, Some("choice5"), 11),
+        ch("w:moveToRangeEnd", 0, None, Choice, Some("choice5"), 12),
+        ch("w:commentRangeStart", 0, None, Choice, Some("choice5"), 13),
+        ch("w:commentRangeEnd", 0, None, Choice, Some("choice5"), 14),
+        ch("w:customXmlInsRangeStart", 0, None, Choice, Some("choice5"), 15),
+        ch("w:customXmlInsRangeEnd", 0, None, Choice, Some("choice5"), 16),
+        ch("w:customXmlDelRangeStart", 0, None, Choice, Some("choice5"), 17),
+        ch("w:customXmlDelRangeEnd", 0, None, Choice, Some("choice5"), 18),
+        ch("w:customXmlMoveFromRangeStart", 0, None, Choice, Some("choice5"), 19),
+        ch("w:customXmlMoveFromRangeEnd", 0, None, Choice, Some("choice5"), 20),
+        ch("w:customXmlMoveToRangeStart", 0, None, Choice, Some("choice5"), 21),
+        ch("w:customXmlMoveToRangeEnd", 0, None, Choice, Some("choice5"), 22),
+        ch("w:ins", 0, None, Choice, Some("choice4"), 23),
+        ch("w:del", 0, None, Choice, Some("choice4"), 24),
+        ch("w:moveFrom", 0, None, Choice, Some("choice4"), 25),
+        ch("w:moveTo", 0, None, Choice, Some("choice4"), 26),
+        ch("m:oMathPara", 0, None, Choice, Some("choice6"), 27),
+        ch("m:oMath", 0, None, Choice, Some("choice6"), 28),
+        ch("w:altChunk", 0, None, Choice, Some("choice1"), 29),
+    ]),
     ty("w:CT_HdrFtrRef", &[]),
     ty("w:CT_Headers", &[
         ch("w:header", 0, None, Sequence, None, 0),
@@ -3044,7 +3180,42 @@ pub(crate) static TYPES: &[TypeModel] = &[
     ty("w:CT_Height", &[]),
     ty("w:CT_Highlight", &[]),
     ty("w:CT_HpsMeasure", &[]),
-    ty("w:CT_Hyperlink", &[]),
+    ty("w:CT_Hyperlink", &[
+        ch("w:customXml", 0, None, Choice, Some("choice2"), 0),
+        ch("w:smartTag", 0, None, Choice, Some("choice2"), 1),
+        ch("w:sdt", 0, None, Choice, Some("choice2"), 2),
+        ch("w:dir", 0, None, Choice, Some("choice2"), 3),
+        ch("w:bdo", 0, None, Choice, Some("choice2"), 4),
+        ch("w:r", 0, None, Choice, Some("choice2"), 5),
+        ch("w:proofErr", 0, None, Choice, Some("choice3"), 6),
+        ch("w:permStart", 0, None, Choice, Some("choice3"), 7),
+        ch("w:permEnd", 0, None, Choice, Some("choice3"), 8),
+        ch("w:bookmarkStart", 0, None, Choice, Some("choice4"), 9),
+        ch("w:bookmarkEnd", 0, None, Choice, Some("choice4"), 10),
+        ch("w:moveFromRangeStart", 0, None, Choice, Some("choice4"), 11),
+        ch("w:moveFromRangeEnd", 0, None, Choice, Some("choice4"), 12),
+        ch("w:moveToRangeStart", 0, None, Choice, Some("choice4"), 13),
+        ch("w:moveToRangeEnd", 0, None, Choice, Some("choice4"), 14),
+        ch("w:commentRangeStart", 0, None, Choice, Some("choice4"), 15),
+        ch("w:commentRangeEnd", 0, None, Choice, Some("choice4"), 16),
+        ch("w:customXmlInsRangeStart", 0, None, Choice, Some("choice4"), 17),
+        ch("w:customXmlInsRangeEnd", 0, None, Choice, Some("choice4"), 18),
+        ch("w:customXmlDelRangeStart", 0, None, Choice, Some("choice4"), 19),
+        ch("w:customXmlDelRangeEnd", 0, None, Choice, Some("choice4"), 20),
+        ch("w:customXmlMoveFromRangeStart", 0, None, Choice, Some("choice4"), 21),
+        ch("w:customXmlMoveFromRangeEnd", 0, None, Choice, Some("choice4"), 22),
+        ch("w:customXmlMoveToRangeStart", 0, None, Choice, Some("choice4"), 23),
+        ch("w:customXmlMoveToRangeEnd", 0, None, Choice, Some("choice4"), 24),
+        ch("w:ins", 0, None, Choice, Some("choice3"), 25),
+        ch("w:del", 0, None, Choice, Some("choice3"), 26),
+        ch("w:moveFrom", 0, None, Choice, Some("choice3"), 27),
+        ch("w:moveTo", 0, None, Choice, Some("choice3"), 28),
+        ch("m:oMathPara", 0, None, Choice, Some("choice5"), 29),
+        ch("m:oMath", 0, None, Choice, Some("choice5"), 30),
+        ch("w:fldSimple", 0, None, Choice, Some("choice1"), 31),
+        ch("w:hyperlink", 0, None, Choice, Some("choice1"), 32),
+        ch("w:subDoc", 0, None, Choice, Some("choice1"), 33),
+    ]),
     ty("w:CT_Ind", &[]),
     ty("w:CT_Jc", &[]),
     ty("w:CT_JcTable", &[]),
@@ -3609,7 +3780,34 @@ pub(crate) static TYPES: &[TypeModel] = &[
         ch("w:rubyBase", 1, Some(1), Sequence, None, 2),
     ]),
     ty("w:CT_RubyAlign", &[]),
-    ty("w:CT_RubyContent", &[]),
+    ty("w:CT_RubyContent", &[
+        ch("w:r", 0, None, Choice, Some("choice1"), 0),
+        ch("w:proofErr", 0, None, Choice, Some("choice2"), 1),
+        ch("w:permStart", 0, None, Choice, Some("choice2"), 2),
+        ch("w:permEnd", 0, None, Choice, Some("choice2"), 3),
+        ch("w:bookmarkStart", 0, None, Choice, Some("choice3"), 4),
+        ch("w:bookmarkEnd", 0, None, Choice, Some("choice3"), 5),
+        ch("w:moveFromRangeStart", 0, None, Choice, Some("choice3"), 6),
+        ch("w:moveFromRangeEnd", 0, None, Choice, Some("choice3"), 7),
+        ch("w:moveToRangeStart", 0, None, Choice, Some("choice3"), 8),
+        ch("w:moveToRangeEnd", 0, None, Choice, Some("choice3"), 9),
+        ch("w:commentRangeStart", 0, None, Choice, Some("choice3"), 10),
+        ch("w:commentRangeEnd", 0, None, Choice, Some("choice3"), 11),
+        ch("w:customXmlInsRangeStart", 0, None, Choice, Some("choice3"), 12),
+        ch("w:customXmlInsRangeEnd", 0, None, Choice, Some("choice3"), 13),
+        ch("w:customXmlDelRangeStart", 0, None, Choice, Some("choice3"), 14),
+        ch("w:customXmlDelRangeEnd", 0, None, Choice, Some("choice3"), 15),
+        ch("w:customXmlMoveFromRangeStart", 0, None, Choice, Some("choice3"), 16),
+        ch("w:customXmlMoveFromRangeEnd", 0, None, Choice, Some("choice3"), 17),
+        ch("w:customXmlMoveToRangeStart", 0, None, Choice, Some("choice3"), 18),
+        ch("w:customXmlMoveToRangeEnd", 0, None, Choice, Some("choice3"), 19),
+        ch("w:ins", 0, None, Choice, Some("choice2"), 20),
+        ch("w:del", 0, None, Choice, Some("choice2"), 21),
+        ch("w:moveFrom", 0, None, Choice, Some("choice2"), 22),
+        ch("w:moveTo", 0, None, Choice, Some("choice2"), 23),
+        ch("m:oMathPara", 0, None, Choice, Some("choice4"), 24),
+        ch("m:oMath", 0, None, Choice, Some("choice4"), 25),
+    ]),
     ty("w:CT_RubyPr", &[
         ch("w:rubyAlign", 1, Some(1), Sequence, None, 0),
         ch("w:hps", 1, Some(1), Sequence, None, 1),
@@ -3685,10 +3883,133 @@ pub(crate) static TYPES: &[TypeModel] = &[
     ty("w:CT_SdtComboBox", &[
         ch("w:listItem", 0, None, Sequence, None, 0),
     ]),
-    ty("w:CT_SdtContentBlock", &[]),
-    ty("w:CT_SdtContentCell", &[]),
-    ty("w:CT_SdtContentRow", &[]),
-    ty("w:CT_SdtContentRun", &[]),
+    ty("w:CT_SdtContentBlock", &[
+        ch("w:customXml", 0, None, Choice, Some("choice1"), 0),
+        ch("w:sdt", 0, None, Choice, Some("choice1"), 1),
+        ch("w:p", 0, None, Choice, Some("choice1"), 2),
+        ch("w:tbl", 0, None, Choice, Some("choice1"), 3),
+        ch("w:proofErr", 0, None, Choice, Some("choice2"), 4),
+        ch("w:permStart", 0, None, Choice, Some("choice2"), 5),
+        ch("w:permEnd", 0, None, Choice, Some("choice2"), 6),
+        ch("w:bookmarkStart", 0, None, Choice, Some("choice3"), 7),
+        ch("w:bookmarkEnd", 0, None, Choice, Some("choice3"), 8),
+        ch("w:moveFromRangeStart", 0, None, Choice, Some("choice3"), 9),
+        ch("w:moveFromRangeEnd", 0, None, Choice, Some("choice3"), 10),
+        ch("w:moveToRangeStart", 0, None, Choice, Some("choice3"), 11),
+        ch("w:moveToRangeEnd", 0, None, Choice, Some("choice3"), 12),
+        ch("w:commentRangeStart", 0, None, Choice, Some("choice3"), 13),
+        ch("w:commentRangeEnd", 0, None, Choice, Some("choice3"), 14),
+        ch("w:customXmlInsRangeStart", 0, None, Choice, Some("choice3"), 15),
+        ch("w:customXmlInsRangeEnd", 0, None, Choice, Some("choice3"), 16),
+        ch("w:customXmlDelRangeStart", 0, None, Choice, Some("choice3"), 17),
+        ch("w:customXmlDelRangeEnd", 0, None, Choice, Some("choice3"), 18),
+        ch("w:customXmlMoveFromRangeStart", 0, None, Choice, Some("choice3"), 19),
+        ch("w:customXmlMoveFromRangeEnd", 0, None, Choice, Some("choice3"), 20),
+        ch("w:customXmlMoveToRangeStart", 0, None, Choice, Some("choice3"), 21),
+        ch("w:customXmlMoveToRangeEnd", 0, None, Choice, Some("choice3"), 22),
+        ch("w:ins", 0, None, Choice, Some("choice2"), 23),
+        ch("w:del", 0, None, Choice, Some("choice2"), 24),
+        ch("w:moveFrom", 0, None, Choice, Some("choice2"), 25),
+        ch("w:moveTo", 0, None, Choice, Some("choice2"), 26),
+        ch("m:oMathPara", 0, None, Choice, Some("choice4"), 27),
+        ch("m:oMath", 0, None, Choice, Some("choice4"), 28),
+    ]),
+    ty("w:CT_SdtContentCell", &[
+        ch("w:tc", 0, None, Choice, Some("choice1"), 0),
+        ch("w:customXml", 0, None, Choice, Some("choice1"), 1),
+        ch("w:sdt", 0, None, Choice, Some("choice1"), 2),
+        ch("w:proofErr", 0, None, Choice, Some("choice2"), 3),
+        ch("w:permStart", 0, None, Choice, Some("choice2"), 4),
+        ch("w:permEnd", 0, None, Choice, Some("choice2"), 5),
+        ch("w:bookmarkStart", 0, None, Choice, Some("choice3"), 6),
+        ch("w:bookmarkEnd", 0, None, Choice, Some("choice3"), 7),
+        ch("w:moveFromRangeStart", 0, None, Choice, Some("choice3"), 8),
+        ch("w:moveFromRangeEnd", 0, None, Choice, Some("choice3"), 9),
+        ch("w:moveToRangeStart", 0, None, Choice, Some("choice3"), 10),
+        ch("w:moveToRangeEnd", 0, None, Choice, Some("choice3"), 11),
+        ch("w:commentRangeStart", 0, None, Choice, Some("choice3"), 12),
+        ch("w:commentRangeEnd", 0, None, Choice, Some("choice3"), 13),
+        ch("w:customXmlInsRangeStart", 0, None, Choice, Some("choice3"), 14),
+        ch("w:customXmlInsRangeEnd", 0, None, Choice, Some("choice3"), 15),
+        ch("w:customXmlDelRangeStart", 0, None, Choice, Some("choice3"), 16),
+        ch("w:customXmlDelRangeEnd", 0, None, Choice, Some("choice3"), 17),
+        ch("w:customXmlMoveFromRangeStart", 0, None, Choice, Some("choice3"), 18),
+        ch("w:customXmlMoveFromRangeEnd", 0, None, Choice, Some("choice3"), 19),
+        ch("w:customXmlMoveToRangeStart", 0, None, Choice, Some("choice3"), 20),
+        ch("w:customXmlMoveToRangeEnd", 0, None, Choice, Some("choice3"), 21),
+        ch("w:ins", 0, None, Choice, Some("choice2"), 22),
+        ch("w:del", 0, None, Choice, Some("choice2"), 23),
+        ch("w:moveFrom", 0, None, Choice, Some("choice2"), 24),
+        ch("w:moveTo", 0, None, Choice, Some("choice2"), 25),
+        ch("m:oMathPara", 0, None, Choice, Some("choice4"), 26),
+        ch("m:oMath", 0, None, Choice, Some("choice4"), 27),
+    ]),
+    ty("w:CT_SdtContentRow", &[
+        ch("w:tr", 0, None, Choice, Some("choice1"), 0),
+        ch("w:customXml", 0, None, Choice, Some("choice1"), 1),
+        ch("w:sdt", 0, None, Choice, Some("choice1"), 2),
+        ch("w:proofErr", 0, None, Choice, Some("choice2"), 3),
+        ch("w:permStart", 0, None, Choice, Some("choice2"), 4),
+        ch("w:permEnd", 0, None, Choice, Some("choice2"), 5),
+        ch("w:bookmarkStart", 0, None, Choice, Some("choice3"), 6),
+        ch("w:bookmarkEnd", 0, None, Choice, Some("choice3"), 7),
+        ch("w:moveFromRangeStart", 0, None, Choice, Some("choice3"), 8),
+        ch("w:moveFromRangeEnd", 0, None, Choice, Some("choice3"), 9),
+        ch("w:moveToRangeStart", 0, None, Choice, Some("choice3"), 10),
+        ch("w:moveToRangeEnd", 0, None, Choice, Some("choice3"), 11),
+        ch("w:commentRangeStart", 0, None, Choice, Some("choice3"), 12),
+        ch("w:commentRangeEnd", 0, None, Choice, Some("choice3"), 13),
+        ch("w:customXmlInsRangeStart", 0, None, Choice, Some("choice3"), 14),
+        ch("w:customXmlInsRangeEnd", 0, None, Choice, Some("choice3"), 15),
+        ch("w:customXmlDelRangeStart", 0, None, Choice, Some("choice3"), 16),
+        ch("w:customXmlDelRangeEnd", 0, None, Choice, Some("choice3"), 17),
+        ch("w:customXmlMoveFromRangeStart", 0, None, Choice, Some("choice3"), 18),
+        ch("w:customXmlMoveFromRangeEnd", 0, None, Choice, Some("choice3"), 19),
+        ch("w:customXmlMoveToRangeStart", 0, None, Choice, Some("choice3"), 20),
+        ch("w:customXmlMoveToRangeEnd", 0, None, Choice, Some("choice3"), 21),
+        ch("w:ins", 0, None, Choice, Some("choice2"), 22),
+        ch("w:del", 0, None, Choice, Some("choice2"), 23),
+        ch("w:moveFrom", 0, None, Choice, Some("choice2"), 24),
+        ch("w:moveTo", 0, None, Choice, Some("choice2"), 25),
+        ch("m:oMathPara", 0, None, Choice, Some("choice4"), 26),
+        ch("m:oMath", 0, None, Choice, Some("choice4"), 27),
+    ]),
+    ty("w:CT_SdtContentRun", &[
+        ch("w:customXml", 0, None, Choice, Some("choice2"), 0),
+        ch("w:smartTag", 0, None, Choice, Some("choice2"), 1),
+        ch("w:sdt", 0, None, Choice, Some("choice2"), 2),
+        ch("w:dir", 0, None, Choice, Some("choice2"), 3),
+        ch("w:bdo", 0, None, Choice, Some("choice2"), 4),
+        ch("w:r", 0, None, Choice, Some("choice2"), 5),
+        ch("w:proofErr", 0, None, Choice, Some("choice3"), 6),
+        ch("w:permStart", 0, None, Choice, Some("choice3"), 7),
+        ch("w:permEnd", 0, None, Choice, Some("choice3"), 8),
+        ch("w:bookmarkStart", 0, None, Choice, Some("choice4"), 9),
+        ch("w:bookmarkEnd", 0, None, Choice, Some("choice4"), 10),
+        ch("w:moveFromRangeStart", 0, None, Choice, Some("choice4"), 11),
+        ch("w:moveFromRangeEnd", 0, None, Choice, Some("choice4"), 12),
+        ch("w:moveToRangeStart", 0, None, Choice, Some("choice4"), 13),
+        ch("w:moveToRangeEnd", 0, None, Choice, Some("choice4"), 14),
+        ch("w:commentRangeStart", 0, None, Choice, Some("choice4"), 15),
+        ch("w:commentRangeEnd", 0, None, Choice, Some("choice4"), 16),
+        ch("w:customXmlInsRangeStart", 0, None, Choice, Some("choice4"), 17),
+        ch("w:customXmlInsRangeEnd", 0, None, Choice, Some("choice4"), 18),
+        ch("w:customXmlDelRangeStart", 0, None, Choice, Some("choice4"), 19),
+        ch("w:customXmlDelRangeEnd", 0, None, Choice, Some("choice4"), 20),
+        ch("w:customXmlMoveFromRangeStart", 0, None, Choice, Some("choice4"), 21),
+        ch("w:customXmlMoveFromRangeEnd", 0, None, Choice, Some("choice4"), 22),
+        ch("w:customXmlMoveToRangeStart", 0, None, Choice, Some("choice4"), 23),
+        ch("w:customXmlMoveToRangeEnd", 0, None, Choice, Some("choice4"), 24),
+        ch("w:ins", 0, None, Choice, Some("choice3"), 25),
+        ch("w:del", 0, None, Choice, Some("choice3"), 26),
+        ch("w:moveFrom", 0, None, Choice, Some("choice3"), 27),
+        ch("w:moveTo", 0, None, Choice, Some("choice3"), 28),
+        ch("m:oMathPara", 0, None, Choice, Some("choice5"), 29),
+        ch("m:oMath", 0, None, Choice, Some("choice5"), 30),
+        ch("w:fldSimple", 0, None, Choice, Some("choice1"), 31),
+        ch("w:hyperlink", 0, None, Choice, Some("choice1"), 32),
+        ch("w:subDoc", 0, None, Choice, Some("choice1"), 33),
+    ]),
     ty("w:CT_SdtDate", &[
         ch("w:dateFormat", 0, Some(1), Sequence, None, 0),
         ch("w:lid", 0, Some(1), Sequence, None, 1),
@@ -4380,7 +4701,38 @@ pub(crate) static TYPES: &[TypeModel] = &[
         ch("wp:txbxContent", 1, Some(1), Sequence, None, 0),
         ch("wp:extLst", 0, Some(1), Sequence, None, 1),
     ]),
-    ty("wp:CT_TxbxContent", &[]),
+    ty("wp:CT_TxbxContent", &[
+        ch("w:customXml", 0, None, Choice, Some("choice3"), 0),
+        ch("w:sdt", 0, None, Choice, Some("choice3"), 1),
+        ch("w:p", 0, None, Choice, Some("choice3"), 2),
+        ch("w:tbl", 0, None, Choice, Some("choice3"), 3),
+        ch("w:proofErr", 0, None, Choice, Some("choice4"), 4),
+        ch("w:permStart", 0, None, Choice, Some("choice4"), 5),
+        ch("w:permEnd", 0, None, Choice, Some("choice4"), 6),
+        ch("w:bookmarkStart", 0, None, Choice, Some("choice5"), 7),
+        ch("w:bookmarkEnd", 0, None, Choice, Some("choice5"), 8),
+        ch("w:moveFromRangeStart", 0, None, Choice, Some("choice5"), 9),
+        ch("w:moveFromRangeEnd", 0, None, Choice, Some("choice5"), 10),
+        ch("w:moveToRangeStart", 0, None, Choice, Some("choice5"), 11),
+        ch("w:moveToRangeEnd", 0, None, Choice, Some("choice5"), 12),
+        ch("w:commentRangeStart", 0, None, Choice, Some("choice5"), 13),
+        ch("w:commentRangeEnd", 0, None, Choice, Some("choice5"), 14),
+        ch("w:customXmlInsRangeStart", 0, None, Choice, Some("choice5"), 15),
+        ch("w:customXmlInsRangeEnd", 0, None, Choice, Some("choice5"), 16),
+        ch("w:customXmlDelRangeStart", 0, None, Choice, Some("choice5"), 17),
+        ch("w:customXmlDelRangeEnd", 0, None, Choice, Some("choice5"), 18),
+        ch("w:customXmlMoveFromRangeStart", 0, None, Choice, Some("choice5"), 19),
+        ch("w:customXmlMoveFromRangeEnd", 0, None, Choice, Some("choice5"), 20),
+        ch("w:customXmlMoveToRangeStart", 0, None, Choice, Some("choice5"), 21),
+        ch("w:customXmlMoveToRangeEnd", 0, None, Choice, Some("choice5"), 22),
+        ch("w:ins", 0, None, Choice, Some("choice4"), 23),
+        ch("w:del", 0, None, Choice, Some("choice4"), 24),
+        ch("w:moveFrom", 0, None, Choice, Some("choice4"), 25),
+        ch("w:moveTo", 0, None, Choice, Some("choice4"), 26),
+        ch("m:oMathPara", 0, None, Choice, Some("choice6"), 27),
+        ch("m:oMath", 0, None, Choice, Some("choice6"), 28),
+        ch("w:altChunk", 0, None, Choice, Some("choice1"), 29),
+    ]),
     ty("wp:CT_WordprocessingCanvas", &[
         ch("wp:bg", 0, Some(1), Sequence, None, 0),
         ch("wp:whole", 0, Some(1), Sequence, None, 1),
@@ -4916,32 +5268,32 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("a:CT_PositiveFixedPercentage", &["a:CT_HslColor", "a:CT_PresetColor", "a:CT_SRgbColor", "a:CT_ScRgbColor", "a:CT_SchemeColor", "a:CT_SystemColor"]),
     ]),
     el("a:alphaBiLevel", "a:CT_AlphaBiLevelEffect", &[
-        va("a:CT_AlphaBiLevelEffect", &["a:CT_Blip"]),
+        va("a:CT_AlphaBiLevelEffect", &["a:CT_Blip", "a:CT_EffectContainer"]),
     ]),
     el("a:alphaCeiling", "a:CT_AlphaCeilingEffect", &[
-        va("a:CT_AlphaCeilingEffect", &["a:CT_Blip"]),
+        va("a:CT_AlphaCeilingEffect", &["a:CT_Blip", "a:CT_EffectContainer"]),
     ]),
     el("a:alphaFloor", "a:CT_AlphaFloorEffect", &[
-        va("a:CT_AlphaFloorEffect", &["a:CT_Blip"]),
+        va("a:CT_AlphaFloorEffect", &["a:CT_Blip", "a:CT_EffectContainer"]),
     ]),
     el("a:alphaInv", "a:CT_AlphaInverseEffect", &[
-        va("a:CT_AlphaInverseEffect", &["a:CT_Blip"]),
+        va("a:CT_AlphaInverseEffect", &["a:CT_Blip", "a:CT_EffectContainer"]),
     ]),
     el("a:alphaMod", "a:CT_AlphaModulateEffect", &[
-        va("a:CT_AlphaModulateEffect", &["a:CT_Blip"]),
+        va("a:CT_AlphaModulateEffect", &["a:CT_Blip", "a:CT_EffectContainer"]),
         va("a:CT_PositivePercentage", &["a:CT_HslColor", "a:CT_PresetColor", "a:CT_SRgbColor", "a:CT_ScRgbColor", "a:CT_SchemeColor", "a:CT_SystemColor"]),
     ]),
     el("a:alphaModFix", "a:CT_AlphaModulateFixedEffect", &[
-        va("a:CT_AlphaModulateFixedEffect", &["a:CT_Blip"]),
+        va("a:CT_AlphaModulateFixedEffect", &["a:CT_Blip", "a:CT_EffectContainer"]),
     ]),
     el("a:alphaOff", "a:CT_FixedPercentage", &[
         va("a:CT_FixedPercentage", &["a:CT_HslColor", "a:CT_PresetColor", "a:CT_SRgbColor", "a:CT_ScRgbColor", "a:CT_SchemeColor", "a:CT_SystemColor"]),
     ]),
     el("a:alphaOutset", "a:CT_AlphaOutsetEffect", &[
-        va("a:CT_AlphaOutsetEffect", &[]),
+        va("a:CT_AlphaOutsetEffect", &["a:CT_EffectContainer"]),
     ]),
     el("a:alphaRepl", "a:CT_AlphaReplaceEffect", &[
-        va("a:CT_AlphaReplaceEffect", &["a:CT_Blip"]),
+        va("a:CT_AlphaReplaceEffect", &["a:CT_Blip", "a:CT_EffectContainer"]),
     ]),
     el("a:anchor", "a:CT_Point3D", &[
         va("a:CT_Point3D", &["a:CT_Backdrop"]),
@@ -4990,7 +5342,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("a:CT_BackgroundFillStyleList", &["a:CT_StyleMatrix"]),
     ]),
     el("a:biLevel", "a:CT_BiLevelEffect", &[
-        va("a:CT_BiLevelEffect", &["a:CT_Blip"]),
+        va("a:CT_BiLevelEffect", &["a:CT_Blip", "a:CT_EffectContainer"]),
     ]),
     el("a:bldChart", "a:CT_AnimationChartBuildProperties", &[
         va("a:CT_AnimationChartBuildProperties", &["a:CT_AnimationGraphicalObjectBuildProperties"]),
@@ -4999,13 +5351,13 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("a:CT_AnimationDgmBuildProperties", &["a:CT_AnimationGraphicalObjectBuildProperties"]),
     ]),
     el("a:blend", "a:CT_BlendEffect", &[
-        va("a:CT_BlendEffect", &[]),
+        va("a:CT_BlendEffect", &["a:CT_EffectContainer"]),
     ]),
     el("a:blip", "a:CT_Blip", &[
         va("a:CT_Blip", &["a:CT_BlipFillProperties", "a:CT_TextBlipBullet"]),
     ]),
     el("a:blipFill", "a:CT_BlipFillProperties", &[
-        va("a:CT_BlipFillProperties", &["a:CT_BackgroundFillStyleList", "a:CT_BackgroundFormatting", "a:CT_FillEffect", "a:CT_FillOverlayEffect", "a:CT_FillProperties", "a:CT_FillStyleList", "a:CT_GroupShapeProperties", "a:CT_GvmlPicture", "a:CT_ShapeProperties", "a:CT_TableCellProperties", "a:CT_TableProperties", "a:CT_TextCharacterProperties"]),
+        va("a:CT_BlipFillProperties", &["a:CT_BackgroundFillStyleList", "a:CT_BackgroundFormatting", "a:CT_FillEffect", "a:CT_FillOverlayEffect", "a:CT_FillProperties", "a:CT_FillStyleList", "a:CT_GroupShapeProperties", "a:CT_GvmlPicture", "a:CT_ShapeProperties", "a:CT_TableCellProperties", "a:CT_TableProperties", "a:CT_TextCharacterProperties", "a:CT_TextUnderlineFillGroupWrapper"]),
     ]),
     el("a:blue", "a:CT_Percentage", &[
         va("a:CT_Percentage", &["a:CT_HslColor", "a:CT_PresetColor", "a:CT_SRgbColor", "a:CT_ScRgbColor", "a:CT_SchemeColor", "a:CT_SystemColor"]),
@@ -5017,7 +5369,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("a:CT_Percentage", &["a:CT_HslColor", "a:CT_PresetColor", "a:CT_SRgbColor", "a:CT_ScRgbColor", "a:CT_SchemeColor", "a:CT_SystemColor"]),
     ]),
     el("a:blur", "a:CT_BlurEffect", &[
-        va("a:CT_BlurEffect", &["a:CT_Blip", "a:CT_EffectList"]),
+        va("a:CT_BlurEffect", &["a:CT_Blip", "a:CT_EffectContainer", "a:CT_EffectList"]),
     ]),
     el("a:bodyPr", "a:CT_TextBodyProperties", &[
         va("a:CT_TextBodyProperties", &["a:CT_DefaultShapeDefinition", "a:CT_TextBody"]),
@@ -5098,7 +5450,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("a:CT_Path2DClose", &["a:CT_Path2D"]),
     ]),
     el("a:clrChange", "a:CT_ColorChangeEffect", &[
-        va("a:CT_ColorChangeEffect", &["a:CT_Blip"]),
+        va("a:CT_ColorChangeEffect", &["a:CT_Blip", "a:CT_EffectContainer"]),
     ]),
     el("a:clrFrom", "a:CT_Color", &[
         va("a:CT_Color", &["a:CT_ColorChangeEffect"]),
@@ -5107,7 +5459,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("a:CT_ColorMapping", &["a:CT_ClipboardStyleSheet", "a:CT_ColorSchemeAndMapping"]),
     ]),
     el("a:clrRepl", "a:CT_ColorReplaceEffect", &[
-        va("a:CT_ColorReplaceEffect", &["a:CT_Blip"]),
+        va("a:CT_ColorReplaceEffect", &["a:CT_Blip", "a:CT_EffectContainer"]),
     ]),
     el("a:clrScheme", "a:CT_ColorScheme", &[
         va("a:CT_ColorScheme", &["a:CT_BaseStyles", "a:CT_BaseStylesOverride", "a:CT_ColorSchemeAndMapping"]),
@@ -5119,7 +5471,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("a:CT_ComplementTransform", &["a:CT_HslColor", "a:CT_PresetColor", "a:CT_SRgbColor", "a:CT_ScRgbColor", "a:CT_SchemeColor", "a:CT_SystemColor"]),
     ]),
     el("a:cont", "a:CT_EffectContainer", &[
-        va("a:CT_EffectContainer", &["a:CT_AlphaModulateEffect", "a:CT_BlendEffect"]),
+        va("a:CT_EffectContainer", &["a:CT_AlphaModulateEffect", "a:CT_BlendEffect", "a:CT_EffectContainer"]),
     ]),
     el("a:contourClr", "a:CT_Color", &[
         va("a:CT_Color", &["a:CT_Shape3D"]),
@@ -5176,14 +5528,14 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("a:CT_DashStop", &["a:CT_DashStopList"]),
     ]),
     el("a:duotone", "a:CT_DuotoneEffect", &[
-        va("a:CT_DuotoneEffect", &["a:CT_Blip"]),
+        va("a:CT_DuotoneEffect", &["a:CT_Blip", "a:CT_EffectContainer"]),
     ]),
     el("a:ea", "a:CT_TextFont", &[
         va("a:CT_TextFont", &["a:CT_FontCollection", "a:CT_TextCharacterProperties"]),
     ]),
     el("a:effect", "a:CT_EffectReference", &[
         va("a:CT_EffectProperties", &["a:CT_TableBackgroundStyle"]),
-        va("a:CT_EffectReference", &[]),
+        va("a:CT_EffectReference", &["a:CT_EffectContainer"]),
     ]),
     el("a:effectDag", "a:CT_EffectContainer", &[
         va("a:CT_EffectContainer", &["a:CT_BackgroundFormatting", "a:CT_EffectProperties", "a:CT_EffectStyleItem", "a:CT_GroupShapeProperties", "a:CT_ShapeProperties", "a:CT_TableProperties", "a:CT_TextCharacterProperties", "a:CT_WholeE2oFormatting"]),
@@ -5229,11 +5581,11 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("a:CT_Color", &["a:CT_PatternFillProperties"]),
     ]),
     el("a:fill", "a:CT_FillEffect", &[
-        va("a:CT_FillEffect", &[]),
+        va("a:CT_FillEffect", &["a:CT_EffectContainer"]),
         va("a:CT_FillProperties", &["a:CT_TableBackgroundStyle", "a:CT_TableStyleCellStyle"]),
     ]),
     el("a:fillOverlay", "a:CT_FillOverlayEffect", &[
-        va("a:CT_FillOverlayEffect", &["a:CT_Blip", "a:CT_EffectList"]),
+        va("a:CT_FillOverlayEffect", &["a:CT_Blip", "a:CT_EffectContainer", "a:CT_EffectList"]),
     ]),
     el("a:fillRect", "a:CT_RelativeRect", &[
         va("a:CT_RelativeRect", &["a:CT_StretchInfoProperties"]),
@@ -5285,10 +5637,10 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("a:CT_GeomGuideList", &["a:CT_CustomGeometry2D"]),
     ]),
     el("a:glow", "a:CT_GlowEffect", &[
-        va("a:CT_GlowEffect", &["a:CT_EffectList"]),
+        va("a:CT_GlowEffect", &["a:CT_EffectContainer", "a:CT_EffectList"]),
     ]),
     el("a:gradFill", "a:CT_GradientFillProperties", &[
-        va("a:CT_GradientFillProperties", &["a:CT_BackgroundFillStyleList", "a:CT_BackgroundFormatting", "a:CT_FillEffect", "a:CT_FillOverlayEffect", "a:CT_FillProperties", "a:CT_FillStyleList", "a:CT_GroupShapeProperties", "a:CT_LineProperties", "a:CT_ShapeProperties", "a:CT_TableCellProperties", "a:CT_TableProperties", "a:CT_TextCharacterProperties"]),
+        va("a:CT_GradientFillProperties", &["a:CT_BackgroundFillStyleList", "a:CT_BackgroundFormatting", "a:CT_FillEffect", "a:CT_FillOverlayEffect", "a:CT_FillProperties", "a:CT_FillStyleList", "a:CT_GroupShapeProperties", "a:CT_LineProperties", "a:CT_ShapeProperties", "a:CT_TableCellProperties", "a:CT_TableProperties", "a:CT_TextCharacterProperties", "a:CT_TextUnderlineFillGroupWrapper"]),
     ]),
     el("a:graphic", "a:CT_GraphicalObject", &[
         va("a:CT_GraphicalObject", &["a:CT_GvmlGraphicalObjectFrame", "wp:CT_Anchor", "wp:CT_GraphicFrame", "wp:CT_Inline"]),
@@ -5306,7 +5658,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("a:CT_GrayscaleTransform", &["a:CT_HslColor", "a:CT_PresetColor", "a:CT_SRgbColor", "a:CT_ScRgbColor", "a:CT_SchemeColor", "a:CT_SystemColor"]),
     ]),
     el("a:grayscl", "a:CT_GrayscaleEffect", &[
-        va("a:CT_GrayscaleEffect", &["a:CT_Blip"]),
+        va("a:CT_GrayscaleEffect", &["a:CT_Blip", "a:CT_EffectContainer"]),
     ]),
     el("a:green", "a:CT_Percentage", &[
         va("a:CT_Percentage", &["a:CT_HslColor", "a:CT_PresetColor", "a:CT_SRgbColor", "a:CT_ScRgbColor", "a:CT_SchemeColor", "a:CT_SystemColor"]),
@@ -5321,7 +5673,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("a:CT_TableCol", &["a:CT_TableGrid"]),
     ]),
     el("a:grpFill", "a:CT_GroupFillProperties", &[
-        va("a:CT_GroupFillProperties", &["a:CT_BackgroundFillStyleList", "a:CT_BackgroundFormatting", "a:CT_FillEffect", "a:CT_FillOverlayEffect", "a:CT_FillProperties", "a:CT_FillStyleList", "a:CT_GroupShapeProperties", "a:CT_ShapeProperties", "a:CT_TableCellProperties", "a:CT_TableProperties", "a:CT_TextCharacterProperties"]),
+        va("a:CT_GroupFillProperties", &["a:CT_BackgroundFillStyleList", "a:CT_BackgroundFormatting", "a:CT_FillEffect", "a:CT_FillOverlayEffect", "a:CT_FillProperties", "a:CT_FillStyleList", "a:CT_GroupShapeProperties", "a:CT_ShapeProperties", "a:CT_TableCellProperties", "a:CT_TableProperties", "a:CT_TextCharacterProperties", "a:CT_TextUnderlineFillGroupWrapper"]),
     ]),
     el("a:grpSp", "a:CT_GvmlGroupShape", &[
         va("a:CT_GvmlGroupShape", &["a:CT_GvmlGroupShape"]),
@@ -5363,7 +5715,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("a:CT_Hyperlink", &["a:CT_TextCharacterProperties"]),
     ]),
     el("a:hsl", "a:CT_HSLEffect", &[
-        va("a:CT_HSLEffect", &["a:CT_Blip"]),
+        va("a:CT_HSLEffect", &["a:CT_Blip", "a:CT_EffectContainer"]),
     ]),
     el("a:hslClr", "a:CT_HslColor", &[
         va("a:CT_HslColor", &["a:CT_AlphaInverseEffect", "a:CT_Color", "a:CT_ColorMRU", "a:CT_ColorReplaceEffect", "a:CT_CustomColor", "a:CT_DuotoneEffect", "a:CT_FontReference", "a:CT_GlowEffect", "a:CT_GradientStop", "a:CT_InnerShadowEffect", "a:CT_OuterShadowEffect", "a:CT_PresetShadowEffect", "a:CT_SolidColorFillProperties", "a:CT_StyleMatrixReference", "a:CT_TableStyleTextStyle"]),
@@ -5378,7 +5730,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("a:CT_Angle", &["a:CT_HslColor", "a:CT_PresetColor", "a:CT_SRgbColor", "a:CT_ScRgbColor", "a:CT_SchemeColor", "a:CT_SystemColor"]),
     ]),
     el("a:innerShdw", "a:CT_InnerShadowEffect", &[
-        va("a:CT_InnerShadowEffect", &["a:CT_EffectList"]),
+        va("a:CT_InnerShadowEffect", &["a:CT_EffectContainer", "a:CT_EffectList"]),
     ]),
     el("a:insideH", "a:CT_ThemeableLineStyle", &[
         va("a:CT_ThemeableLineStyle", &["a:CT_TableCellBorderStyle"]),
@@ -5456,7 +5808,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("a:CT_Color", &["a:CT_ColorScheme"]),
     ]),
     el("a:lum", "a:CT_LuminanceEffect", &[
-        va("a:CT_LuminanceEffect", &["a:CT_Blip"]),
+        va("a:CT_LuminanceEffect", &["a:CT_Blip", "a:CT_EffectContainer"]),
         va("a:CT_Percentage", &["a:CT_HslColor", "a:CT_PresetColor", "a:CT_SRgbColor", "a:CT_ScRgbColor", "a:CT_SchemeColor", "a:CT_SystemColor"]),
     ]),
     el("a:lumMod", "a:CT_Percentage", &[
@@ -5514,7 +5866,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("a:CT_TextNoAutofit", &["a:CT_TextBodyProperties"]),
     ]),
     el("a:noFill", "a:CT_NoFillProperties", &[
-        va("a:CT_NoFillProperties", &["a:CT_BackgroundFillStyleList", "a:CT_BackgroundFormatting", "a:CT_FillEffect", "a:CT_FillOverlayEffect", "a:CT_FillProperties", "a:CT_FillStyleList", "a:CT_GroupShapeProperties", "a:CT_LineProperties", "a:CT_ShapeProperties", "a:CT_TableCellProperties", "a:CT_TableProperties", "a:CT_TextCharacterProperties"]),
+        va("a:CT_NoFillProperties", &["a:CT_BackgroundFillStyleList", "a:CT_BackgroundFormatting", "a:CT_FillEffect", "a:CT_FillOverlayEffect", "a:CT_FillProperties", "a:CT_FillStyleList", "a:CT_GroupShapeProperties", "a:CT_LineProperties", "a:CT_ShapeProperties", "a:CT_TableCellProperties", "a:CT_TableProperties", "a:CT_TextCharacterProperties", "a:CT_TextUnderlineFillGroupWrapper"]),
     ]),
     el("a:norm", "a:CT_Vector3D", &[
         va("a:CT_Vector3D", &["a:CT_Backdrop"]),
@@ -5547,7 +5899,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("a:CT_Point2D", &["a:CT_GroupTransform2D", "a:CT_Transform2D"]),
     ]),
     el("a:outerShdw", "a:CT_OuterShadowEffect", &[
-        va("a:CT_OuterShadowEffect", &["a:CT_EffectList"]),
+        va("a:CT_OuterShadowEffect", &["a:CT_EffectContainer", "a:CT_EffectList"]),
     ]),
     el("a:overrideClrMapping", "a:CT_ColorMapping", &[
         va("a:CT_ColorMapping", &["a:CT_ColorMappingOverride"]),
@@ -5566,7 +5918,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("a:CT_Path2DList", &["a:CT_CustomGeometry2D"]),
     ]),
     el("a:pattFill", "a:CT_PatternFillProperties", &[
-        va("a:CT_PatternFillProperties", &["a:CT_BackgroundFillStyleList", "a:CT_BackgroundFormatting", "a:CT_FillEffect", "a:CT_FillOverlayEffect", "a:CT_FillProperties", "a:CT_FillStyleList", "a:CT_GroupShapeProperties", "a:CT_LineProperties", "a:CT_ShapeProperties", "a:CT_TableCellProperties", "a:CT_TableProperties", "a:CT_TextCharacterProperties"]),
+        va("a:CT_PatternFillProperties", &["a:CT_BackgroundFillStyleList", "a:CT_BackgroundFormatting", "a:CT_FillEffect", "a:CT_FillOverlayEffect", "a:CT_FillProperties", "a:CT_FillStyleList", "a:CT_GroupShapeProperties", "a:CT_LineProperties", "a:CT_ShapeProperties", "a:CT_TableCellProperties", "a:CT_TableProperties", "a:CT_TextCharacterProperties", "a:CT_TextUnderlineFillGroupWrapper"]),
     ]),
     el("a:pic", "a:CT_GvmlPicture", &[
         va("a:CT_GvmlPicture", &["a:CT_GvmlGroupShape"]),
@@ -5587,7 +5939,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("a:CT_PresetGeometry2D", &["a:CT_ShapeProperties"]),
     ]),
     el("a:prstShdw", "a:CT_PresetShadowEffect", &[
-        va("a:CT_PresetShadowEffect", &["a:CT_EffectList"]),
+        va("a:CT_PresetShadowEffect", &["a:CT_EffectContainer", "a:CT_EffectList"]),
     ]),
     el("a:prstTxWarp", "a:CT_PresetTextShape", &[
         va("a:CT_PresetTextShape", &["a:CT_TextBodyProperties"]),
@@ -5620,10 +5972,10 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("a:CT_Percentage", &["a:CT_HslColor", "a:CT_PresetColor", "a:CT_SRgbColor", "a:CT_ScRgbColor", "a:CT_SchemeColor", "a:CT_SystemColor"]),
     ]),
     el("a:reflection", "a:CT_ReflectionEffect", &[
-        va("a:CT_ReflectionEffect", &["a:CT_EffectList"]),
+        va("a:CT_ReflectionEffect", &["a:CT_EffectContainer", "a:CT_EffectList"]),
     ]),
     el("a:relOff", "a:CT_RelativeOffsetEffect", &[
-        va("a:CT_RelativeOffsetEffect", &[]),
+        va("a:CT_RelativeOffsetEffect", &["a:CT_EffectContainer"]),
     ]),
     el("a:right", "a:CT_ThemeableLineStyle", &[
         va("a:CT_ThemeableLineStyle", &["a:CT_TableCellBorderStyle"]),
@@ -5665,10 +6017,10 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("a:CT_EmbeddedWAVAudioFile", &["a:CT_Hyperlink"]),
     ]),
     el("a:softEdge", "a:CT_SoftEdgesEffect", &[
-        va("a:CT_SoftEdgesEffect", &["a:CT_EffectList"]),
+        va("a:CT_SoftEdgesEffect", &["a:CT_EffectContainer", "a:CT_EffectList"]),
     ]),
     el("a:solidFill", "a:CT_SolidColorFillProperties", &[
-        va("a:CT_SolidColorFillProperties", &["a:CT_BackgroundFillStyleList", "a:CT_BackgroundFormatting", "a:CT_FillEffect", "a:CT_FillOverlayEffect", "a:CT_FillProperties", "a:CT_FillStyleList", "a:CT_GroupShapeProperties", "a:CT_LineProperties", "a:CT_ShapeProperties", "a:CT_TableCellProperties", "a:CT_TableProperties", "a:CT_TextCharacterProperties"]),
+        va("a:CT_SolidColorFillProperties", &["a:CT_BackgroundFillStyleList", "a:CT_BackgroundFormatting", "a:CT_FillEffect", "a:CT_FillOverlayEffect", "a:CT_FillProperties", "a:CT_FillStyleList", "a:CT_GroupShapeProperties", "a:CT_LineProperties", "a:CT_ShapeProperties", "a:CT_TableCellProperties", "a:CT_TableProperties", "a:CT_TextCharacterProperties", "a:CT_TextUnderlineFillGroupWrapper"]),
     ]),
     el("a:sp", "a:CT_GvmlShape", &[
         va("a:CT_GvmlShape", &["a:CT_GvmlGroupShape"]),
@@ -5804,7 +6156,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
     ]),
     el("a:tint", "a:CT_TintEffect", &[
         va("a:CT_PositiveFixedPercentage", &["a:CT_HslColor", "a:CT_PresetColor", "a:CT_SRgbColor", "a:CT_ScRgbColor", "a:CT_SchemeColor", "a:CT_SystemColor"]),
-        va("a:CT_TintEffect", &["a:CT_Blip"]),
+        va("a:CT_TintEffect", &["a:CT_Blip", "a:CT_EffectContainer"]),
     ]),
     el("a:tl2br", "a:CT_ThemeableLineStyle", &[
         va("a:CT_ThemeableLineStyle", &["a:CT_TableCellBorderStyle"]),
@@ -5857,7 +6209,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
     el("a:xfrm", "a:CT_Transform2D", &[
         va("a:CT_GroupTransform2D", &["a:CT_GroupShapeProperties"]),
         va("a:CT_Transform2D", &["a:CT_GvmlGraphicalObjectFrame", "a:CT_GvmlTextShape", "a:CT_ShapeProperties"]),
-        va("a:CT_TransformEffect", &[]),
+        va("a:CT_TransformEffect", &["a:CT_EffectContainer"]),
     ]),
     el("b:AbbreviatedCaseNumber", "s:ST_String", &[
         va("s:ST_String", &["b:CT_SourceType"]),
@@ -6987,10 +7339,10 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("m:CT_OMathArg", &["m:CT_F"]),
     ]),
     el("m:oMath", "m:CT_OMath", &[
-        va("m:CT_OMath", &["m:CT_OMath", "m:CT_OMathArg", "m:CT_OMathPara", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("m:CT_OMath", &["m:CT_OMath", "m:CT_OMathArg", "m:CT_OMathPara", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("m:oMathPara", "m:CT_OMathPara", &[
-        va("m:CT_OMathPara", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("m:CT_OMathPara", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("m:oMathParaPr", "m:CT_OMathParaPr", &[
         va("m:CT_OMathParaPr", &["m:CT_OMathPara"]),
@@ -7188,7 +7540,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("w:CT_OnOff", &["w:CT_WebSettings"]),
     ]),
     el("w:altChunk", "w:CT_AltChunk", &[
-        va("w:CT_AltChunk", &["w:CT_Body", "w:CT_Comment", "w:CT_FtnEdn", "w:CT_Tc"]),
+        va("w:CT_AltChunk", &["w:CT_Body", "w:CT_Comment", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("w:altChunkPr", "w:CT_AltChunkPr", &[
         va("w:CT_AltChunkPr", &["w:CT_AltChunk"]),
@@ -7257,7 +7609,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("w:CT_String", &["w:CT_Style"]),
     ]),
     el("w:bdo", "w:CT_BdoContentRun", &[
-        va("w:CT_BdoContentRun", &["w:CT_CustomXmlRun", "w:CT_P", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun"]),
+        va("w:CT_BdoContentRun", &["w:CT_BdoContentRun", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_Hyperlink", "w:CT_P", "w:CT_RunTrackChange", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun"]),
     ]),
     el("w:bdr", "w:CT_Border", &[
         va("w:CT_Border", &["w:CT_ParaRPr", "w:CT_ParaRPrOriginal", "w:CT_RPr", "w:CT_RPrOriginal"]),
@@ -7299,10 +7651,10 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("w:CT_OnOff", &["w:CT_Settings"]),
     ]),
     el("w:bookmarkEnd", "w:CT_MarkupRange", &[
-        va("w:CT_MarkupRange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("w:CT_MarkupRange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("w:bookmarkStart", "w:CT_Bookmark", &[
-        va("w:CT_Bookmark", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("w:CT_Bookmark", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("w:bordersDoNotSurroundFooter", "w:CT_OnOff", &[
         va("w:CT_OnOff", &["w:CT_Settings"]),
@@ -7397,10 +7749,10 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("w:CT_Comment", &["w:CT_Comments"]),
     ]),
     el("w:commentRangeEnd", "w:CT_MarkupRange", &[
-        va("w:CT_MarkupRange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("w:CT_MarkupRange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("w:commentRangeStart", "w:CT_MarkupRange", &[
-        va("w:CT_MarkupRange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("w:CT_MarkupRange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("w:commentReference", "w:CT_Markup", &[
         va("w:CT_Markup", &["m:CT_R", "w:CT_R"]),
@@ -7439,34 +7791,34 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("w:CT_OnOff", &["w:CT_ParaRPr", "w:CT_ParaRPrOriginal", "w:CT_RPr", "w:CT_RPrOriginal"]),
     ]),
     el("w:customXml", "w:CT_CustomXmlRun", &[
-        va("w:CT_CustomXmlBlock", &["w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_FtnEdn", "w:CT_Tc"]),
-        va("w:CT_CustomXmlCell", &["w:CT_CustomXmlCell", "w:CT_Row"]),
-        va("w:CT_CustomXmlRow", &["w:CT_CustomXmlRow", "w:CT_Tbl"]),
-        va("w:CT_CustomXmlRun", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_CustomXmlRun", "w:CT_P", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun"]),
+        va("w:CT_CustomXmlBlock", &["w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_SdtContentBlock", "w:CT_Tc", "wp:CT_TxbxContent"]),
+        va("w:CT_CustomXmlCell", &["w:CT_CustomXmlCell", "w:CT_Row", "w:CT_SdtContentCell"]),
+        va("w:CT_CustomXmlRow", &["w:CT_CustomXmlRow", "w:CT_SdtContentRow", "w:CT_Tbl"]),
+        va("w:CT_CustomXmlRun", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_Hyperlink", "w:CT_P", "w:CT_RunTrackChange", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun"]),
     ]),
     el("w:customXmlDelRangeEnd", "w:CT_Markup", &[
-        va("w:CT_Markup", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("w:CT_Markup", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("w:customXmlDelRangeStart", "w:CT_TrackChange", &[
-        va("w:CT_TrackChange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("w:CT_TrackChange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("w:customXmlInsRangeEnd", "w:CT_Markup", &[
-        va("w:CT_Markup", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("w:CT_Markup", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("w:customXmlInsRangeStart", "w:CT_TrackChange", &[
-        va("w:CT_TrackChange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("w:CT_TrackChange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("w:customXmlMoveFromRangeEnd", "w:CT_Markup", &[
-        va("w:CT_Markup", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("w:CT_Markup", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("w:customXmlMoveFromRangeStart", "w:CT_TrackChange", &[
-        va("w:CT_TrackChange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("w:CT_TrackChange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("w:customXmlMoveToRangeEnd", "w:CT_Markup", &[
-        va("w:CT_Markup", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("w:CT_Markup", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("w:customXmlMoveToRangeStart", "w:CT_TrackChange", &[
-        va("w:CT_TrackChange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("w:CT_TrackChange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("w:customXmlPr", "w:CT_CustomXmlPr", &[
         va("w:CT_CustomXmlPr", &["w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun"]),
@@ -7512,7 +7864,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
     el("w:del", "w:CT_TrackChange", &[
         va("w:CT_MathCtrlDel", &["m:CT_CtrlPr"]),
         va("w:CT_RPrChange", &["w:CT_MathCtrlIns"]),
-        va("w:CT_RunTrackChange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("w:CT_RunTrackChange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
         va("w:CT_TrackChange", &["w:CT_ParaRPr", "w:CT_ParaRPrOriginal", "w:CT_TrPr"]),
     ]),
     el("w:delInstrText", "w:CT_Text", &[
@@ -7528,7 +7880,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("w:CT_MailMergeDest", &["w:CT_MailMerge"]),
     ]),
     el("w:dir", "w:CT_DirContentRun", &[
-        va("w:CT_DirContentRun", &["w:CT_CustomXmlRun", "w:CT_P", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun"]),
+        va("w:CT_DirContentRun", &["w:CT_BdoContentRun", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_Hyperlink", "w:CT_P", "w:CT_RunTrackChange", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun"]),
     ]),
     el("w:dirty", "w:CT_OnOff", &[
         va("w:CT_OnOff", &["w:CT_RubyPr"]),
@@ -7775,7 +8127,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("w:CT_FldChar", &["m:CT_R", "w:CT_R"]),
     ]),
     el("w:fldSimple", "w:CT_SimpleField", &[
-        va("w:CT_SimpleField", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_CustomXmlRun", "w:CT_P", "w:CT_SimpleField", "w:CT_SmartTagRun"]),
+        va("w:CT_SimpleField", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_Hyperlink", "w:CT_P", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun"]),
     ]),
     el("w:font", "w:CT_Font", &[
         va("w:CT_Font", &["w:CT_FontsList"]),
@@ -7903,7 +8255,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("w:CT_HpsMeasure", &["w:CT_RubyPr"]),
     ]),
     el("w:hyperlink", "w:CT_Hyperlink", &[
-        va("w:CT_Hyperlink", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_CustomXmlRun", "w:CT_P", "w:CT_SimpleField", "w:CT_SmartTagRun"]),
+        va("w:CT_Hyperlink", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_Hyperlink", "w:CT_P", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun"]),
     ]),
     el("w:hyphenationZone", "w:CT_TwipsMeasure", &[
         va("w:CT_TwipsMeasure", &["w:CT_Settings"]),
@@ -7931,7 +8283,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
     ]),
     el("w:ins", "w:CT_TrackChange", &[
         va("w:CT_MathCtrlIns", &["m:CT_CtrlPr"]),
-        va("w:CT_RunTrackChange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("w:CT_RunTrackChange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
         va("w:CT_TrackChange", &["w:CT_NumPr", "w:CT_ParaRPr", "w:CT_ParaRPrOriginal", "w:CT_TrPr"]),
     ]),
     el("w:insideH", "w:CT_Border", &[
@@ -8087,24 +8439,24 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("w:CT_Empty", &["m:CT_R", "w:CT_R"]),
     ]),
     el("w:moveFrom", "w:CT_TrackChange", &[
-        va("w:CT_RunTrackChange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("w:CT_RunTrackChange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
         va("w:CT_TrackChange", &["w:CT_ParaRPr", "w:CT_ParaRPrOriginal"]),
     ]),
     el("w:moveFromRangeEnd", "w:CT_MarkupRange", &[
-        va("w:CT_MarkupRange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("w:CT_MarkupRange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("w:moveFromRangeStart", "w:CT_MoveBookmark", &[
-        va("w:CT_MoveBookmark", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("w:CT_MoveBookmark", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("w:moveTo", "w:CT_TrackChange", &[
-        va("w:CT_RunTrackChange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("w:CT_RunTrackChange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
         va("w:CT_TrackChange", &["w:CT_ParaRPr", "w:CT_ParaRPrOriginal"]),
     ]),
     el("w:moveToRangeEnd", "w:CT_MarkupRange", &[
-        va("w:CT_MarkupRange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("w:CT_MarkupRange", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("w:moveToRangeStart", "w:CT_MoveBookmark", &[
-        va("w:CT_MoveBookmark", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("w:CT_MoveBookmark", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("w:movie", "w:CT_Rel", &[
         va("w:CT_Rel", &["w:CT_Object"]),
@@ -8211,7 +8563,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("w:CT_OnOff", &["w:CT_PPrBase"]),
     ]),
     el("w:p", "w:CT_P", &[
-        va("w:CT_P", &["w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_FtnEdn", "w:CT_Tc"]),
+        va("w:CT_P", &["w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_SdtContentBlock", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("w:pBdr", "w:CT_PBdr", &[
         va("w:CT_PBdr", &["w:CT_PPrBase"]),
@@ -8240,10 +8592,10 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("w:CT_PaperSource", &["w:CT_SectPr", "w:CT_SectPrBase"]),
     ]),
     el("w:permEnd", "w:CT_Perm", &[
-        va("w:CT_Perm", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("w:CT_Perm", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("w:permStart", "w:CT_PermStart", &[
-        va("w:CT_PermStart", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("w:CT_PermStart", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("w:personal", "w:CT_OnOff", &[
         va("w:CT_OnOff", &["w:CT_Style"]),
@@ -8305,7 +8657,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("w:CT_Rel", &["w:CT_SectPr", "w:CT_SectPrBase"]),
     ]),
     el("w:proofErr", "w:CT_ProofErr", &[
-        va("w:CT_ProofErr", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_FtnEdn", "w:CT_P", "w:CT_Row", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc"]),
+        va("w:CT_ProofErr", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_CustomXmlCell", "w:CT_CustomXmlRow", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_Hyperlink", "w:CT_P", "w:CT_Row", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentBlock", "w:CT_SdtContentCell", "w:CT_SdtContentRow", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun", "w:CT_Tbl", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("w:proofState", "w:CT_Proof", &[
         va("w:CT_Proof", &["w:CT_Settings"]),
@@ -8320,7 +8672,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("w:CT_String", &["w:CT_MailMerge"]),
     ]),
     el("w:r", "w:CT_R", &[
-        va("w:CT_R", &["w:CT_CustomXmlRun", "w:CT_P", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun"]),
+        va("w:CT_R", &["w:CT_BdoContentRun", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_Hyperlink", "w:CT_P", "w:CT_RubyContent", "w:CT_RunTrackChange", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun"]),
     ]),
     el("w:rFonts", "w:CT_Fonts", &[
         va("w:CT_Fonts", &["w:CT_ParaRPr", "w:CT_ParaRPrOriginal", "w:CT_RPr", "w:CT_RPrOriginal"]),
@@ -8425,10 +8777,10 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("w:CT_FrameScrollbar", &["w:CT_Frame"]),
     ]),
     el("w:sdt", "w:CT_SdtRun", &[
-        va("w:CT_SdtBlock", &["w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_FtnEdn", "w:CT_Tc"]),
-        va("w:CT_SdtCell", &["w:CT_CustomXmlCell", "w:CT_Row"]),
-        va("w:CT_SdtRow", &["w:CT_CustomXmlRow", "w:CT_Tbl"]),
-        va("w:CT_SdtRun", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_CustomXmlRun", "w:CT_P", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun"]),
+        va("w:CT_SdtBlock", &["w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_SdtContentBlock", "w:CT_Tc", "wp:CT_TxbxContent"]),
+        va("w:CT_SdtCell", &["w:CT_CustomXmlCell", "w:CT_Row", "w:CT_SdtContentCell"]),
+        va("w:CT_SdtRow", &["w:CT_CustomXmlRow", "w:CT_SdtContentRow", "w:CT_Tbl"]),
+        va("w:CT_SdtRun", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_Hyperlink", "w:CT_P", "w:CT_RunTrackChange", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun"]),
     ]),
     el("w:sdtContent", "w:CT_SdtContentBlock", &[
         va("w:CT_SdtContentBlock", &["w:CT_SdtBlock"]),
@@ -8486,7 +8838,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("w:CT_OnOff", &["w:CT_ParaRPr", "w:CT_ParaRPrOriginal", "w:CT_RPr", "w:CT_RPrOriginal"]),
     ]),
     el("w:smartTag", "w:CT_SmartTagRun", &[
-        va("w:CT_SmartTagRun", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_CustomXmlRun", "w:CT_P", "w:CT_RunTrackChange", "w:CT_SimpleField", "w:CT_SmartTagRun"]),
+        va("w:CT_SmartTagRun", &["m:CT_OMath", "m:CT_OMathArg", "w:CT_BdoContentRun", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_Hyperlink", "w:CT_P", "w:CT_RunTrackChange", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun"]),
     ]),
     el("w:smartTagPr", "w:CT_SmartTagPr", &[
         va("w:CT_SmartTagPr", &["w:CT_SmartTagRun"]),
@@ -8559,7 +8911,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("w:CT_Styles", &[]),
     ]),
     el("w:subDoc", "w:CT_Rel", &[
-        va("w:CT_Rel", &["w:CT_CustomXmlRun", "w:CT_P", "w:CT_SimpleField", "w:CT_SmartTagRun"]),
+        va("w:CT_Rel", &["w:CT_BdoContentRun", "w:CT_CustomXmlRun", "w:CT_DirContentRun", "w:CT_Hyperlink", "w:CT_P", "w:CT_SdtContentRun", "w:CT_SimpleField", "w:CT_SmartTagRun"]),
     ]),
     el("w:suff", "w:CT_LevelSuffix", &[
         va("w:CT_LevelSuffix", &["w:CT_Lvl"]),
@@ -8609,7 +8961,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("w:CT_TargetScreenSz", &["w:CT_WebSettings"]),
     ]),
     el("w:tbl", "w:CT_Tbl", &[
-        va("w:CT_Tbl", &["w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_FtnEdn", "w:CT_Tc"]),
+        va("w:CT_Tbl", &["w:CT_Body", "w:CT_Comment", "w:CT_CustomXmlBlock", "w:CT_FtnEdn", "w:CT_HdrFtr", "w:CT_SdtContentBlock", "w:CT_Tc", "wp:CT_TxbxContent"]),
     ]),
     el("w:tblBorders", "w:CT_TblBorders", &[
         va("w:CT_TblBorders", &["w:CT_TblPrBase", "w:CT_TblPrExBase"]),
@@ -8681,7 +9033,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("w:CT_TblPPr", &["w:CT_TblPrBase"]),
     ]),
     el("w:tc", "w:CT_Tc", &[
-        va("w:CT_Tc", &["w:CT_CustomXmlCell", "w:CT_Row"]),
+        va("w:CT_Tc", &["w:CT_CustomXmlCell", "w:CT_Row", "w:CT_SdtContentCell"]),
     ]),
     el("w:tcBorders", "w:CT_TcBorders", &[
         va("w:CT_TcBorders", &["w:CT_TcPrBase"]),
@@ -8744,7 +9096,7 @@ pub(crate) static ELEMENTS: &[ElementModel] = &[
         va("w:CT_OnOff", &["w:CT_PPrBase"]),
     ]),
     el("w:tr", "w:CT_Row", &[
-        va("w:CT_Row", &["w:CT_CustomXmlRow", "w:CT_Tbl"]),
+        va("w:CT_Row", &["w:CT_CustomXmlRow", "w:CT_SdtContentRow", "w:CT_Tbl"]),
     ]),
     el("w:tr2bl", "w:CT_Border", &[
         va("w:CT_Border", &["w:CT_TcBorders"]),

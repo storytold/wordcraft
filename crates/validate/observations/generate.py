@@ -281,7 +281,9 @@ def unit_audit(name, func, header, body, semantic_json, fields, enum_variants,
     if name != 'observed.rs' and re.search(r'\.\s*(?:observed_value|observed_status)\b',code):
         errors.append(f'{name}::{func}: bypasses private observation representation')
     if 'PackageRegistryContext' in header+code or re.search(r'(?:\.|::)\s*contexts\b',code):
-        if (name,func) not in {('lib.rs','report_unreferenced_comments'),('lib.rs','check_custom_xml'),('ownership.rs','contexts')}:
+        if (name,func) not in {('lib.rs','report_unreferenced_comments'),('lib.rs','check_custom_xml'),('ownership.rs','contexts')} and not (
+            name == 'grammar.rs' and func == 'variant_has_parent' and 'PackageRegistryContext' not in header+code and header.strip() == 'fn variant_has_parent (v : & Variant , key : & str) -> bool'
+        ):
             errors.append(f'{name}::{func}: undeclared package-registry exception')
     if re.search(r'\.\s*difference\s*\(', code):
         errors.append(f'{name}::{func}: raw absence difference bypasses CompleteSet')
@@ -320,12 +322,15 @@ def unit_audit(name, func, header, body, semantic_json, fields, enum_variants,
         ('ownership.rs', 'parts', 'owners'),
         # Traversal state of the TIFF directory graph, not an observed definition set.
         ('tiff_admission.rs', 'chain_path', 'self.followed'),
+        # Static generated ECMA-376 content-model slices, not observed definition sets.
+        ('grammar.rs', 'variant_has_parent', 'v.contexts'),
+        ('grammar.rs', 'judge_num_fmt', 'NUM_FMT_VALUES'),
     }
     for access in re.finditer(MEMBERSHIP, code):
         receiver=re.sub(r'\s+', '', access.group(1))
         if (name,func,receiver) not in structural_membership and not (decl and receiver in semantic.get('positive_membership', [])):
             errors.append(f'{name}::{func}: raw membership {receiver} bypasses CompleteSet or undeclared structural scope')
-    if not bounded_uses and not decl and not re.search(r'\bacc\s*\.\s*(?:add|add_graded|ran)\s*\(', code):
+    if not bounded_uses and not decl and not re.search(r'\bacc\s*\.\s*(?:add|add_graded|add_proven|add_grammar|ran)\s*\(', code):
         return record()
     if not decl:
         errors.append(f'{name}::{func}: bounded consumption has no observation contract: {uses}')
@@ -591,6 +596,16 @@ fn unregistered_read(pkg: &Package) -> usize { (|package_pattern!(items): &Packa
     mutations['R18 opaque function cannot collapse package Resolution'] = ('lib.rs', lambda s: re.sub(r'if match package::canonical_entry\(pkg, target\) \{.*?\n            \} \{', 'if opaque_verdict(package::canonical_entry(pkg, target)) {', s, count=1, flags=re.S)+'\nfn opaque_verdict<T>(_value: T) -> bool { true }')
     # The new-accessor mutation must introduce a different access kind to test exact declaration matching.
     mutations['new undeclared accessor']=('lib.rs', lambda s:s.replace('acc.ran("CUSTOMXML-SCHEMA");','acc.ran("CUSTOMXML-SCHEMA"); let _ = new_collection.retain_budget(n, cap);',1))
+    # Grammar and proven accumulator emitters must never escape the rule-ID audit when their contract is removed or omitted.
+    mutations['grammar emitter declaration removal']=('grammar.rs', lambda s: re.sub(
+        r'(fn judge_order\([^{]*\{\s*)observation_contract!\s*\{[^}]*\}',
+        r'\1',
+        s,
+        count=1,
+        flags=re.S,
+    ))
+    mutations['undeclared grammar emitter helper']=('grammar.rs', lambda s: s+'\nfn invented_grammar_emit(acc: &mut Acc) { acc.add_grammar("GRAMMAR-ORDER", None, String::new()); }\n')
+    mutations['undeclared proven emitter helper']=('lib.rs', lambda s: s+'\nfn invented_proven_emit(acc: &mut Acc) { acc.add_proven("REL-TYPED", None, String::new()); }\n')
     return mutations
 
 
@@ -751,6 +766,7 @@ MUTATION_INVENTORY = (
     'exception leakage',
     'external module without supplied source',
     'glob import could hide standard macro shadow',
+    'grammar emitter declaration removal',
     'immediately invoked destructured closure',
     'impl callback initializer',
     'let-bound destructured closure',
@@ -781,6 +797,8 @@ MUTATION_INVENTORY = (
     'type-level constant body',
     'undeclared array consumer',
     'undeclared consumer',
+    'undeclared grammar emitter helper',
+    'undeclared proven emitter helper',
     'undeclared representation consumer',
     'unsupported async body',
     'unsupported attribute macro',
@@ -846,8 +864,8 @@ def inventory_digest():
 def checked_mutations():
     mutations = mutation_cases()
     inventory_check(mutations, MUTATION_INVENTORY, 'mutation')
-    if len(MUTATION_INVENTORY) != 140 or inventory_digest() != 'cb823adedb87fc9ba64516406abdf954635f7579ed2e695ae42599fcbd7f51d7':
-        raise ValueError('pinned round-18 mutation inventory changed')
+    if len(MUTATION_INVENTORY) != 143 or inventory_digest() != '0d9ba230327a7c89d6c0e0741c9e3044c8af8d42eb5b6303dfead8f8e2b9bcb0':
+        raise ValueError('pinned mutation inventory changed')
     return mutations
 
 

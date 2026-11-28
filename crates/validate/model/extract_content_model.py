@@ -226,7 +226,7 @@ class Schema:
     # namespace, a prefixed name/ref resolves through that file's xmlns
     # map, and a group reference switches the context to the group's
     # defining file for its own children.
-    def expand_particle(self, node, file_ctx, outer=(1, 1), choice_id=None, counter=None, depth=0):
+    def expand_particle(self, node, file_ctx, outer=(1, 1), choice_id=None, counter=None, depth=0, parent_is_choice=False):
         if counter is None:
             counter = [0]
         items = []
@@ -271,28 +271,37 @@ class Schema:
             return items
         if kind in ("sequence", "choice", "all"):
             cid = choice_id
-            if kind == "choice":
+            if kind == "choice" and not (parent_is_choice and choice_id is not None):
+                # A choice directly inside a choice contributes its
+                # branches to the enclosing choice (XSD: the nested
+                # choice is one alternative of the outer one), so it
+                # reuses the enclosing group id instead of minting a
+                # separate, seemingly independent group.
                 counter[0] += 1
                 cid = f"choice{counter[0]}"
             for child in node:
-                for it in self.expand_particle(child, file_ctx, occ, cid, counter, depth + 1):
+                for it in self.expand_particle(child, file_ctx, occ, cid, counter, depth + 1, parent_is_choice=(kind == "choice")):
                     if it["compositor"] is None:
                         it["compositor"] = kind
                     items.append(it)
             return items
         return items
 
-    def expand_compositor_children(self, node, file_ctx):
+    def expand_compositor_children(self, node, file_ctx, counter=None):
         """Expand the compositor children of a complexType-like node."""
+        if counter is None:
+            counter = [0]
         items, kind = [], "empty"
         for child in node:
-            if local(child.tag) in ("sequence", "choice", "all"):
-                items = self.expand_particle(child, file_ctx)
+            if local(child.tag) in ("sequence", "choice", "all", "group"):
+                items = self.expand_particle(child, file_ctx, counter=counter)
                 kind = local(child.tag)
         return items, kind
 
-    def type_model(self, type_qname, seen=frozenset()):
+    def type_model(self, type_qname, seen=frozenset(), counter=None):
         """(items, kind) for a QUALIFIED complex type; extensions merge base first."""
+        if counter is None:
+            counter = [0]
         if type_qname in seen:
             return [], "recursive"
         entry = self.types.get(type_qname)
@@ -304,22 +313,28 @@ class Schema:
         items, kind = [], "empty"
         for child in node:
             ck = local(child.tag)
-            if ck in ("sequence", "choice", "all"):
-                items, kind = self.expand_particle(child, file_ctx), ck
+            if ck in ("sequence", "choice", "all", "group"):
+                # A bare group reference as the whole content model
+                # (e.g. CT_SdtContentBlock, CT_RubyContent,
+                # CT_EffectContainer) expands through the group, like
+                # a group nested in a compositor; without this the
+                # type was recorded empty and every real child of such
+                # an element looked disallowed.
+                items, kind = self.expand_particle(child, file_ctx, counter=counter), ck
             elif ck == "complexContent":
                 for cc in child:
                     if local(cc.tag) == "extension":
                         base_raw = cc.get("base") or ""
                         if base_raw:
                             base = self.qualify(base_raw, file_ctx)
-                            b_items, _ = self.type_model(base, seen | {type_qname})
+                            b_items, _ = self.type_model(base, seen | {type_qname}, counter=counter)
                             items.extend(b_items)
-                        sub_items, sub_kind = self.expand_compositor_children(cc, file_ctx)
+                        sub_items, sub_kind = self.expand_compositor_children(cc, file_ctx, counter=counter)
                         items.extend(sub_items)
                         if sub_items:
                             kind = sub_kind
                     elif local(cc.tag) == "restriction":
-                        sub_items, sub_kind = self.expand_compositor_children(cc, file_ctx)
+                        sub_items, sub_kind = self.expand_compositor_children(cc, file_ctx, counter=counter)
                         items, kind = sub_items, sub_kind
             elif ck == "simpleContent":
                 return [], "simple-content"
