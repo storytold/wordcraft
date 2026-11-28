@@ -31,10 +31,12 @@ Evidence: `crates/engine/src/tests/typing.rs::delete_previous_sentence_respects_
 (نیم‌فاصله), at the caret or over the selection, as typing does. Its key is Ctrl+Shift+2
 (Cmd+Shift+2 on macOS), the chord Persian typists use for it; it is a WordCraft key, not
 compared with Word's defaults. The key can be reassigned in Customize Keyboard. The half-space
-stays inside its word for Select Word and Ctrl+arrow movement (`is_word_char`).
+stays inside its word for Select Word and Ctrl+arrow movement (`is_word_char`). The Symbol dialog's Special
+Characters tab lists it as Zero Width Non-Joiner, with its key, and inserts it through the command.
 
 Evidence: `crates/engine/src/tests/typing.rs::zwnj_types_the_persian_half_space_inside_a_word` and
-the `Mod+Shift+2 types a half-space` row of `crates/ui-egui/src/tests.rs::default_chords_fire_their_commands`.
+the `Mod+Shift+2 types a half-space` row of `crates/ui-egui/src/tests.rs::default_chords_fire_their_commands`,
+and `crates/ui-egui/src/dialogs/dialogs_insert/tests.rs::special_characters_list_the_half_space_with_its_command`.
 
 ## Finding smart-quoted text (#5388)
 
@@ -633,7 +635,7 @@ DOCX and Undo/Redo (Leaf #152). No new Word or native UI comparison was run.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-27 | trivial | Ctrl/Cmd+Shift+2 (`text.zwnj`) types the Persian half-space U+200C; a WordCraft key, not compared with Word (#3447) |
+| 2026-11-27 | trivial | Ctrl/Cmd+Shift+2 (`text.zwnj`) types the Persian half-space U+200C, also listed on Insert › Symbol › Special Characters; a WordCraft key, not compared with Word (#3447) |
 | 2026-11-17 | trivial | Backspace, then type: the carried formatting is dropped by a paste (whose text never takes it), Find, Go To or a click elsewhere (also one back to the same place), not only by the caret keys; an empty paste or a refused command keeps it; it follows typing and comes back with Undo; with Track Changes on it carries too, as in Word for Windows, and the typed text is a tracked insertion (#6518) |
 | 2026-11-15 | trivial | Enter in a paragraph with a drop cap: the new paragraph gets no drop cap (#6788); synthetic coverage, offset 0 unchanged and not compared with Word |
 | 2026-11-15 | trivial | Paste Formatting row: Ctrl/Cmd+Shift+V pastes the picked-up formatting, else text only; Ctrl/Cmd+Shift+C no longer arms the Format Painter (#1537, #4943); the chord's V release never pastes again (Shift up first); web text paste relies on the browser sending its paired Paste event, and the formatting paste drops that event only within about a second |
