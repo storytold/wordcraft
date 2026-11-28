@@ -604,7 +604,18 @@ fn unregistered_read(pkg: &Package) -> usize { (|package_pattern!(items): &Packa
     mutations['R18 opaque function cannot collapse package Resolution'] = ('lib.rs', lambda s: re.sub(r'if match package::canonical_entry\(pkg, target\) \{.*?\n            \} \{', 'if opaque_verdict(package::canonical_entry(pkg, target)) {', s, count=1, flags=re.S)+'\nfn opaque_verdict<T>(_value: T) -> bool { true }')
     # The new-accessor mutation must introduce a different access kind to test exact declaration matching.
     mutations['new undeclared accessor']=('lib.rs', lambda s:s.replace('acc.ran("CUSTOMXML-SCHEMA");','acc.ran("CUSTOMXML-SCHEMA"); let _ = new_collection.retain_budget(n, cap);',1))
-    return mutations
+    return declare_rejections(mutations)
+
+
+def declare_rejections(mutations):
+    # Every fixture must name the diagnostic it is rejected for. Inline third
+    # elements win; the rest come from mutation-reasons.json. A fixture with
+    # neither stays undeclared, and reject_mutation refuses to run it.
+    table=json.loads((Path(__file__).parent/'mutation-reasons.json').read_text())
+    stale=sorted(set(table)-mutations.keys())
+    if stale: raise ValueError('mutation-reasons.json names unknown fixtures: '+', '.join(stale))
+    return {label: case if len(case) > 2 or label not in table else (*case, table[label])
+            for label, case in mutations.items()}
 
 
 def positive_cases(sources):
@@ -866,7 +877,9 @@ def checked_mutations():
 
 def reject_mutation(sources, label, case):
     name, mutation, *declared = case
-    expected = declared[0] if declared else None
+    if not declared or not declared[0]:
+        raise ValueError('mutation fixture declares no expected diagnostic: '+label)
+    expected = declared[0]
     changed=dict(sources); changed[name]=mutation(changed[name])
     if changed[name] == sources[name]:
         raise ValueError('mutation did not change source: '+label)
@@ -876,7 +889,7 @@ def reject_mutation(sources, label, case):
         message = str(error).splitlines()[0] if str(error) else ''
         if not message.strip():
             raise ValueError('mutation has no rejection message: '+label)
-        if expected is not None and expected not in message:
+        if expected not in message:
             raise ValueError('mutation rejected for the wrong reason: '+label+': expected '+repr(expected)+', got '+repr(message))
         return dict(label=label, message=message)
     raise ValueError('audit accepted mutation: '+label)
@@ -1012,9 +1025,23 @@ def self_test(sources, rows, jobs=1, timings=False):
     except ValueError: print('rejected: generated register drift (exact byte comparison)')
     else: raise ValueError('audit accepted generated drift')
 
+    reject_mutation_contract(sources, mutations)
     assert declarations(sources)==rows, 'mutation audit contaminated the original sources'
     if timings:
         print(f'inventory: {len(mutations)} mutations; sha256={inventory_digest()}; {len(controls)} positive controls', file=sys.stderr)
+
+
+def reject_mutation_contract(sources, mutations):
+    # The harness itself must refuse an undeclared fixture and a wrong expectation.
+    label='R18 raw slice alias'
+    name, mutation, expected = mutations[label]
+    for case, reason in (((name, mutation), 'declares no expected diagnostic'),
+                         ((name, mutation, 'no such diagnostic'), 'wrong reason')):
+        try: reject_mutation(sources, label, case)
+        except ValueError as error:
+            if reason not in str(error): raise ValueError('harness failed for the wrong reason: '+str(error))
+        else: raise ValueError('harness accepted a fixture with '+reason)
+    print('rejected: undeclared and wrong-expectation R18 fixtures (harness error)')
 
 
 def shard_value(value):
