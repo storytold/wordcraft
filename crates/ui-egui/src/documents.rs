@@ -237,10 +237,15 @@ pub fn is_word_template(path: &str) -> bool {
 /// The name an open document goes by in the window: the engine's title, with an untitled
 /// document's `Document2` in the interface language.
 pub fn display_title(d: &DocInfo) -> String {
-    if d.path.is_none() {
-        return untitled_title(&d.title).unwrap_or_else(|| d.title.clone());
+    // NUL cannot go into an X11 window title (C string); a title of only NUL reads as untitled (#3634).
+    let title: String = d.title.chars().filter(|&c| c != '\0').collect();
+    if title.is_empty() && !d.title.is_empty() {
+        return tl!("Document1").into();
     }
-    d.title.clone()
+    if d.path.is_none() {
+        return untitled_title(&title).unwrap_or(title);
+    }
+    title
 }
 
 /// `Document2` (the engine's English name for an untitled document) in the interface language,
@@ -433,5 +438,29 @@ mod tests {
         assert_eq!(titles(&a), ["Document1"]);
         a.run("file.new", json!({})).unwrap();
         assert_eq!(titles(&a), ["Document1", "Document2"]);
+    }
+
+    /// #7672: a template opened from File › Home after Ctrl+W takes typing without a click on the page. The tile's
+    /// press moves egui focus at the end of its pass, so a focus request made in that pass was lost.
+    #[test]
+    fn a_template_opened_from_home_after_closing_takes_typing() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(app());
+        crate::test_harness::frames(&mut h, 3);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::W);
+        crate::test_harness::frames(&mut h, 4);
+        h.state_mut().run("ui.backstage", json!({"page": "home"})).unwrap();
+        crate::test_harness::frames(&mut h, 4);
+        let at = h.get_by_label("Studio handbook (sample)").rect().center();
+        let button =
+            |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        h.input_mut().events.extend([egui::Event::PointerMoved(at), button(true)]);
+        crate::test_harness::frames(&mut h, 1);
+        h.event(button(false));
+        crate::test_harness::frames(&mut h, 6);
+        assert!(!h.state().ui.backstage, "the tile opened the template");
+        h.event(egui::Event::Text("QQ".into()));
+        crate::test_harness::frames(&mut h, 3);
+        assert!(text(h.state()).contains("QQ"), "the typing reached the page");
     }
 }

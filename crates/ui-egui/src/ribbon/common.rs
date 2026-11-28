@@ -3,12 +3,13 @@ use std::ops::RangeInclusive;
 use craft::keymap::CommandRef;
 use craft::menu::ribbon::{RibbonGroup, RibbonRow};
 use craft::ui::buttons::{Arrangement, Button};
-use craft::ui::contract::{Bind, BodyCx, Gap, Props as _, Show as _, ShowContainer as _, Trigger};
+use craft::ui::contract::{Bind, BodyCx, Gap, Props as _, Show as _, ShowContainer as _, TooltipSpec, Trigger};
 use craft::ui::controls::disclosure::DisclosureGlyph;
 use craft::ui::display::Divider;
 use craft::ui::layout_components::{Row, Stack};
+use craft::ui::list::ThumbAspect;
 use craft::ui::menu::{Menu, MenuItem, MenuOutput};
-use craft::ui::primitives::IconSpec;
+use craft::ui::primitives::{FacePaint, IconSpec};
 use craft::ui::runtime::env::Label;
 use craft::ui::text::NumberField;
 
@@ -18,11 +19,6 @@ use super::{Ui, WordApp, json};
 use crate::icons;
 use crate::undo_marks::apply_edits;
 
-/// Whether the command a menu is about can run now; a menu about no command is always open.
-pub(super) fn about_enabled(ctx: &egui::Context, about: &str) -> bool {
-    about.is_empty() || craft::ui::runtime::commands::resolve(ctx, CommandRef::new(about)).enabled
-}
-
 /// The arrow after the label of a ribbon menu button: the small filled triangle of the old ribbon.
 pub(crate) static MENU_ARROW: DisclosureGlyph = DisclosureGlyph::new(1.0);
 
@@ -30,13 +26,20 @@ pub(crate) static MENU_ARROW: DisclosureGlyph = DisclosureGlyph::new(1.0);
 /// `face` is the caller's button; `about` is that command's id, `None` for a menu about no command.
 pub(crate) fn menu_button(
     ui: &mut Ui,
-    face: Button<'_>,
+    mut face: Button<'_>,
     name: impl Into<Label>,
     about: Option<&str>,
     body: impl FnMut(&mut Ui, &mut BodyCx<'_>),
 ) -> MenuOutput {
-    let enabled = about_enabled(ui.ctx(), about.unwrap_or(""));
+    let resolved = about.filter(|id| !id.is_empty()).map(|id| craft::ui::runtime::commands::resolve(ui.ctx(), CommandRef::new(id)));
+    let enabled = resolved.as_ref().is_none_or(|cmd| cmd.enabled);
+    if !enabled && let Some(hint) = resolved.as_ref().and_then(|cmd| cmd.hint.clone()) {
+        face = face.tooltip(TooltipSpec::new(hint.clone()).disabled_text(hint));
+    }
     let opener = face.trailing_icon(IconSpec::glyph(&MENU_ARROW)).enabled(enabled).show(ui);
+    if !ui.is_sizing_pass() {
+        crate::keytips::note_menu_button(ui.ctx(), opener.response.id, about.filter(|id| !id.is_empty()));
+    }
     Menu::new(name).opened_by(&opener.response, Trigger::Click).show(ui, body).output
 }
 
@@ -131,10 +134,13 @@ pub(crate) fn weight_menu(ui: &mut Ui, _app: &mut WordApp, id: &str, current: Op
         MenuItem::command(CommandRef::with_params(id, params(w)))
             .label(label)
             .check(checked)
-            .sample(move |cx, rect| {
-                let y = rect.center().y;
-                cx.painter.line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)], egui::Stroke::new(w.max(pixel), cx.ink()));
-            })
+            .sample(
+                ThumbAspect::new(3, 1),
+                FacePaint::new(u64::from(w.to_bits()), move |cx, rect| {
+                    let y = rect.center().y;
+                    cx.painter.line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)], egui::Stroke::new(w.max(pixel), cx.ink()));
+                }),
+            )
             .show(ui);
     }
 }

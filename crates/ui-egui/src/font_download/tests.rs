@@ -207,6 +207,37 @@ fn fonts_of_one_download_are_listed_together() {
     assert_eq!((g[1].fonts.as_slice(), g[1].url), (["Cascadia Code"].as_slice(), "https://c"));
 }
 
+/// As many downloads as the box lists, in a short window and a very short one: what is above
+/// the row with Close scrolls, so the opt-out and Close stay on screen and the box in the window.
+#[test]
+fn many_downloads_in_a_short_window_leave_the_opt_out_and_close_on_screen() {
+    for height in [600.0, 400.0] {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Lanterns")), crate::Services::default());
+        let fonts: Vec<Row> = (0..LISTED)
+            .map(|i| Row {
+                font: format!("Harbour Face {i}"),
+                shown_as: vec!["Carlito".into()],
+                download: format!("Harbour Face {i}"),
+                publisher: "Lantern Works".into(),
+                url: format!("https://example.org/{i}"),
+                restricted: false,
+            })
+            .collect();
+        open_with(&mut a, None, FontBox::new(fonts, false), DialogHooks { prepare: None, settle });
+        let h = harness_sized(a, egui::vec2(1000.0, height));
+        // The steps are still there, to scroll to.
+        assert!(h.query_by_label("Add Font…").is_some());
+        for label in ["Don't show this again", "Close"] {
+            // Close is also the window's close box: every match is on screen.
+            let rects: Vec<egui::Rect> = h.query_all_by_label(label).map(|n| n.rect()).collect();
+            assert!(!rects.is_empty(), "no {label}");
+            for r in rects {
+                assert!(r.min.y >= 0.0 && r.max.y <= height, "{label} is at {r:?}, outside the {height} pt window");
+            }
+        }
+    }
+}
+
 /// A font whose publisher limits its use says so on its card, and has a card of its own.
 #[test]
 fn a_font_with_a_limited_licence_says_so() {
@@ -232,4 +263,61 @@ fn only_so_many_documents_are_remembered() {
     }
     assert_eq!(a.font_notice_seen.len(), REMEMBERED);
     assert_eq!(a.font_notice_seen.last(), Some(&(REMEMBERED as u64 + 49)));
+}
+
+/// Each missing font's names, substitute and Download button sit in one compact row, not one under another, and a
+/// narrow window keeps them inside the box.
+#[test]
+fn each_download_is_one_row() {
+    let row = |font: &str, shown: &str, url: &str| Row {
+        font: font.into(),
+        shown_as: vec![shown.into()],
+        download: font.into(),
+        publisher: "Microsoft".into(),
+        url: url.into(),
+        restricted: false,
+    };
+    for width in [1440.0, 520.0] {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let fonts = vec![row("Aptos", "Carlito", "https://a"), row("Cascadia Code", "Liberation Mono", "https://c")];
+        open_with(&mut a, None, FontBox::new(fonts, false), DialogHooks { prepare: None, settle });
+        let h = harness_sized(a, egui::vec2(width, 900.0));
+        let buttons: Vec<_> = h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Download").collect();
+        assert_eq!(buttons.len(), 2);
+        for (button, shown) in buttons.iter().zip(["Shown as Carlito · Microsoft", "Shown as Liberation Mono · Microsoft"]) {
+            let shown = h.get_by_label(shown).rect();
+            let button = button.rect();
+            // The button is beside the text block, level with it, not under it.
+            assert!(button.min.x >= shown.max.x, "{width}: {button:?} {shown:?}");
+            assert!(button.center().y < shown.max.y, "{width}: button under the text: {button:?} {shown:?}");
+            assert!(button.max.x <= width, "{width}: clipped {button:?}");
+        }
+    }
+}
+
+/// One very long unbroken family name is cut inside its card and leaves the Download button inside the card too.
+#[test]
+fn a_long_unbroken_name_stays_inside_its_card() {
+    let long = format!("Aptos {}", "W".repeat(200));
+    let row = Row {
+        font: long.clone(),
+        shown_as: vec!["Carlito".into()],
+        download: "Aptos".into(),
+        publisher: "Microsoft".into(),
+        url: "https://a".into(),
+        restricted: false,
+    };
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    open_with(&mut a, None, FontBox::new(vec![row], false), DialogHooks { prepare: None, settle });
+    let h = harness_sized(a, egui::vec2(700.0, 900.0));
+    let button = h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Download").next().expect("button").rect();
+    let name = h.get_by_label(&long).rect();
+    let shown = h.get_by_label("Shown as Carlito · Microsoft").rect();
+    // The card has no node of its own; the dialog it fills is the tightest box to hold both to.
+    let dialog = h.query_all(egui_kittest::kittest::By::new().role(egui::accesskit::Role::Dialog)).next().expect("the dialog").rect();
+    assert!(name.max.x <= button.min.x, "name runs under the button: {name:?} {button:?}");
+    assert!(dialog.contains_rect(name) && dialog.contains_rect(button), "outside the dialog: {name:?} {button:?} {dialog:?}");
+    // The card's padding stands between the button and the dialog's edge.
+    assert!(button.max.x < dialog.max.x, "button reaches the dialog's edge: {button:?} {dialog:?}");
+    assert!(name.min.x >= shown.min.x - 1.0 && name.width() > 0.0, "{name:?} {shown:?}");
 }

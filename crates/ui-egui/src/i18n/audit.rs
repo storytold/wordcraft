@@ -28,12 +28,41 @@ fn unmarked(text: &str) -> String {
     out
 }
 
+/// When the audit began: the Date and Time preview drawn at any moment since is clock data, not
+/// interface text, whatever second the audit compares it in (#7463).
+static CLOCK_START: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
+/// Seconds of clock `clock_text` catches up in one check after the clock jumps forward.
+const CLOCK_CATCH_UP: u64 = 60;
+
 thread_local! {
+    // Every date/time the preview list could show since `CLOCK_START`, up to the second last
+    // looked at: (next second to add, strings).
+    static CLOCK_TEXTS: std::cell::RefCell<(u64, std::collections::HashSet<String>)> = std::cell::RefCell::new(Default::default());
     // Input time, advanced every frame so tooltips and animations move on.
     static TIME: Cell<f64> = const { Cell::new(0.0) };
     // Process-wide names (font families, the custom dictionary) seen at any point of the run:
     // tests running alongside add and remove them, so one may be drawn and gone by the check.
     static GLOBAL_NAMES: std::cell::RefCell<std::collections::HashSet<String>> = std::cell::RefCell::new(Default::default());
+}
+
+/// Whether `text` is something the Date and Time preview list showed at any second since the audit began.
+fn clock_text(text: &str) -> bool {
+    let start = *CLOCK_START.get_or_init(wordcraft_engine::cmd::now_unix);
+    let now = wordcraft_engine::cmd::now_unix();
+    CLOCK_TEXTS.with_borrow_mut(|(next, set)| {
+        if *next == 0 {
+            *next = start;
+        }
+        // A clock stepped back still adds the current second; one stepped far forward catches up
+        // a minute at most, the longest a preview waits to be checked.
+        let from = (*next).min(now).max(now.saturating_sub(CLOCK_CATCH_UP));
+        for unix in from..=now {
+            set.extend(crate::dialogs_insert::date_time_previews_at(unix));
+        }
+        *next = now + 1;
+        set.contains(text)
+    })
 }
 
 /// Remember the process-wide names drawn this frame could have come from.
@@ -124,16 +153,26 @@ fn pseudo_app(ctx: &egui::Context) -> WordApp {
 }
 
 fn fresh_app(ctx: &egui::Context) -> WordApp {
+    CLOCK_START.get_or_init(wordcraft_engine::cmd::now_unix);
     ctx.all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), Default::default());
     // Read Aloud holds each sentence instead of starting the system's speech engine: no sound on
     // machines that have one, and no worker thread failing at its own pace on machines that don't.
     app.session.read_aloud.backend = wordcraft_engine::speech::Backend::Hold;
+    // Help › Check for Updates answers "up to date" instead of asking GitHub, whose rate limit
+    // would otherwise put the updater's error text on screen.
+    #[cfg(not(target_arch = "wasm32"))]
+    app.stub_update_check();
     // Fonts install over the first frames.
     for _ in 0..2 {
         frame(ctx, &mut app);
     }
     app
+}
+
+/// A link: one `http(s)://` word.
+fn is_url(text: &str) -> bool {
+    (text.starts_with("https://") || text.starts_with("http://")) && !text.contains(char::is_whitespace)
 }
 
 /// Words (two or more ASCII letters in a row) drawn outside translation marks.
@@ -284,7 +323,8 @@ impl<'a> Exempt<'a> {
             || matches!(plain, "WordCraft" | "WordCraft User" | "Discord" | "https://" | "auto" | "I. II. III." | "i. ii. iii." | "I, II, III, …" | "i, ii, iii, …")
             || plain == "CONFIDENTIAL" // the watermark dialog's text: document content, kept as typed
             || plain == "Figure 1" // the caption dialog's sample: the label goes into the document as is
-            || crate::dialogs_insert::date_time_preview_matches(plain)
+            || clock_text(plain) // the Date and Time preview: formatted from the clock
+            || is_url(plain) // a link is data, not wording
     }
 }
 
@@ -298,6 +338,41 @@ fn math_placeholders_are_exact_math_input_only() {
     assert!(set.contains("\\sum_(i=1)^n"), "the Equation button picture");
     assert!(set.contains("\\complement"), "a symbol tile's fallback");
     assert!(!set.contains("Translate"), "ordinary interface wording is not exempt");
+}
+
+/// Runtime data is exempt (links, the clock's dates and times), wording is not (#7463), and
+/// Check for Updates never reaches the network.
+#[test]
+fn runtime_data_is_exempt_and_wording_is_not() {
+    let ctx = crate::test_harness::context();
+    let mut app = fresh_app(&ctx);
+    let none = std::collections::HashSet::new();
+    let exempt = Exempt::new(&app, &none);
+    let now = wordcraft_engine::cmd::now_unix();
+    let offset = wordcraft_engine::cmd::local_offset_secs(now);
+    for picture in ["M/d/yyyy h:mm:ss am/pm", "h:mm:ss am/pm", "dddd, MMMM d, yyyy"] {
+        let drawn = wordcraft_engine::cmd::insert::format_date_at_in(picture, None, now, offset);
+        assert!(exempt.allows(&app, &drawn), "{drawn:?} is the clock");
+    }
+    assert!(exempt.allows(&app, "https://github.com/storytold/wordcraft/releases"));
+    assert!(!exempt.allows(&app, "Download the newest release"), "an unwrapped sentence is reported");
+    assert!(!exempt.allows(&app, "See https://example.com now"), "a sentence with a link is not a link");
+    assert!(!exempt.allows(&app, "11/22/1999 5:28:50 PM"), "a time before the audit began is not the preview");
+    // A stubbed check finds no update and puts no updater error on screen.
+    app.run("help.checkForUpdates", json!({})).expect("Check for Updates runs");
+    let calls = app.updates_rt.stub_calls.clone();
+    // The check runs on a worker thread: draw at least 30 frames, then until it has run (a loaded
+    // runner can be slow to start the thread, so the cap is wall-clock time, not a frame count).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    for n in 0.. {
+        let drawn = frame(&ctx, &mut app);
+        assert!(drawn.iter().all(|t| !t.contains("request limit")), "{drawn:?}");
+        if n >= 30 && (calls.load(std::sync::atomic::Ordering::SeqCst) > 0 || std::time::Instant::now() > deadline) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1, "the check went through the stub, not GitHub");
 }
 
 /// Fails on interface text drawn without going through the catalog, listed per UI state, and

@@ -1,4 +1,4 @@
-use craft::behavior::{EditEvent, IconId};
+use craft::behavior::{EditEvent, IconId, Selection};
 use craft::review::ThreadId;
 use craft::review::ui::CommentsPanelState;
 use craft::ui::buttons::Button;
@@ -192,7 +192,7 @@ fn reply_id(document: u64, id: u32) -> egui::Id {
 /// keeps the field open with its text.
 fn reply_field(app: &mut WordApp, ui: &mut Ui, document: u64, id: u32) -> bool {
     let thread = thread_of(app, id);
-    let selected = app.canvas.comments.selected.as_ref().is_some_and(|t| t.0 == thread.0);
+    let selected = app.canvas.comments.selected.lead.as_ref().is_some_and(|t| t.0 == thread.0);
     let shown = if selected { app.canvas.comments.reply.clone() } else { String::new() };
     let editable = crate::app::command_board::command_enabled(app, "review.reply");
     let field = reply_id(document, id);
@@ -208,12 +208,12 @@ fn reply_field(app: &mut WordApp, ui: &mut Ui, document: u64, id: u32) -> bool {
         match event {
             EditEvent::Update { value, .. } => {
                 let d = drafts(app);
-                d.selected = Some(thread);
+                d.selected = Selection::single(thread);
                 d.reply = value.clone();
             }
             EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } => {
                 let d = drafts(app);
-                d.selected = Some(thread);
+                d.selected = Selection::single(thread);
                 d.reply = after.clone();
                 done = commit_reply(app, id).is_ok();
             }
@@ -235,7 +235,7 @@ fn reply_field(app: &mut WordApp, ui: &mut Ui, document: u64, id: u32) -> bool {
 pub(crate) fn commit_reply(app: &mut WordApp, id: u32) -> Result<(), String> {
     let thread = thread_of(app, id);
     let d = drafts(app);
-    if !d.selected.as_ref().is_some_and(|t| t.0 == thread.0) {
+    if !d.selected.lead.as_ref().is_some_and(|t| t.0 == thread.0) {
         return Ok(());
     }
     let text = d.reply.clone();
@@ -266,7 +266,7 @@ pub(crate) fn flush_comment_drafts(app: &mut WordApp) -> Result<(), String> {
             first = r;
         }
     }
-    let selected = drafts(app).selected.as_ref().and_then(|t| u32::try_from(t.0).ok());
+    let selected = drafts(app).selected.lead.as_ref().and_then(|t| u32::try_from(t.0).ok());
     if let Some(id) = selected {
         let r = commit_reply(app, id);
         if first.is_ok() {

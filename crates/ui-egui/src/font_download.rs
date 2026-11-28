@@ -14,12 +14,14 @@ use craft::behavior::IconId;
 use craft::theme::Variant;
 use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, clicked};
+use craft::ui::contract::{Bind, Pad, Props as _, Show as _, ShowContainer as _, clicked};
 use craft::ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
-use craft::ui::display::{Badge, Icon, Shade, Text};
-use craft::ui::layout_components::Row as Line;
+use craft::ui::display::{Badge, Elide, Icon, Shade, Text};
+use craft::ui::layout::RowAlign;
+use craft::ui::layout_components::{Row as Line, Stack};
 use craft::ui::primitives::IconSpec;
-use craft::ui::sections::{DialogRole, FooterButton, GroupBox};
+use craft::ui::sections::{DialogRole, FooterButton};
+use craft::ui::style::{SurfaceKind, TypeRole};
 use egui::Ui;
 use serde::Serialize;
 
@@ -272,15 +274,22 @@ impl StackDialog for FontBox {
                 .shade(Shade::Faint)
                 .show(ui);
                 for (at, g) in groups(fonts).into_iter().enumerate() {
-                    // The names are the document's own words, not interface text.
-                    GroupBox::new(g.fonts.join(", "), None).id_salt(("download", at)).show(ui, |ui, _| {
-                        let shown_as =
-                            crate::i18n::fmt(tl!("Shown as {fonts} · {publisher}"), &[("fonts", &g.shown_as.join(", ")), ("publisher", g.publisher)]);
-                        Text::new(shown_as).shade(Shade::Faint).show(ui);
-                        if g.restricted {
-                            Text::new(tl!("Its licence limits who may use it: read the terms first.")).shade(Shade::Faint).show(ui);
-                        }
-                        Line::new().show(ui, |ui, _| {
+                    // One row per download, as before the craft port: the names, what they are shown as and the licence
+                    // note stacked at the start edge, the button at the end. The names are the document's own words.
+                    Stack::new().surface(SurfaceKind::Frame).pad(Pad::Regular).fill_width().id_salt(("download_group", at)).show(ui, |ui, _| {
+                        Line::new().fill_width().align(RowAlign::SpaceBetween).id_salt(("download", at)).show(ui, |ui, _| {
+                            Stack::new().show(ui, |ui, _| {
+                                // One line cut at the end, whole in a tooltip: one unbroken name must not push the button out.
+                                Text::new(g.fonts.join(", ")).role(TypeRole::BodyStrong).elide(Elide::End).show(ui);
+                                let shown_as = crate::i18n::fmt(
+                                    tl!("Shown as {fonts} · {publisher}"),
+                                    &[("fonts", &g.shown_as.join(", ")), ("publisher", g.publisher)],
+                                );
+                                Text::new(shown_as).shade(Shade::Faint).show(ui);
+                                if g.restricted {
+                                    Text::new(tl!("Its licence limits who may use it: read the terms first.")).shade(Shade::Faint).show(ui);
+                                }
+                            });
                             if clicked(&Button::new(tl!("Download")).variant(Variant::PRIMARY).id_salt(("download_button", at)).show(ui)) {
                                 asks.push(Ask::Download(g.url.to_string()));
                             }

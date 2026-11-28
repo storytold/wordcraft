@@ -1,6 +1,5 @@
 //! Language-aware proofing task pane, laid out from black-box observation of Word on Windows.
 
-use craft::behavior::IconId;
 use craft::behavior::{DisplayOrder, ItemSource};
 use craft::theme::variant::Tone;
 use craft::ui::buttons::{Button, IconButton};
@@ -10,7 +9,6 @@ use craft::ui::layout_components::{Row, Stack};
 use craft::ui::list::{List, ListRow};
 use craft::ui::menu::Menu;
 use craft::ui::notices::Notice;
-use craft::ui::primitives::IconSpec;
 use craft::ui::style::{Span, TypeRole};
 use craft::ui::text::TextField;
 use egui::Ui;
@@ -184,7 +182,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, form: &mut SpellingForm) {
     Row::new().show(ui, |ui, _| {
         Text::styled(spans.clone()).show(ui);
         // PLAN: assumed IconSpec::svg("readAloud") from WORDCRAFT_ICONS (rb.A7, ribbon-w13); the icon is registered by name
-        if IconButton::new(IconSpec::svg(IconId::new("readAloud"))).label(tl!("Read Aloud")).show(ui).clicked() {
+        if IconButton::new(crate::icons::spec("readAloud")).label(tl!("Read Aloud")).show(ui).clicked() {
             ask = Some(Ask::ReadAloud);
         }
     });

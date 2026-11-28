@@ -1,7 +1,8 @@
-use super::ctx::{Ctx, page_anchored};
+use super::ctx::{Ctx, Joining, page_anchored};
 use super::floats::{
     ObjFrame, ObjectPlacement, WrapArea, align_in, float_rect, floating, left_out_objects, place_objects, rel_exclusions, wrap_area,
 };
+use super::flow::again;
 use super::page::PageFrame;
 use super::placed::Placed;
 use super::table_flow::below;
@@ -188,6 +189,30 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
     true
 }
 
+/// Whether `story` is a header in a document of Word 2010's layout or older (compatibility mode
+/// below 15), whose text keeps its place beside the header's own floating objects (#6805).
+fn is_legacy_header(ctx: &Ctx, story: StoryRef) -> bool {
+    ctx.doc.settings.compat_mode < wordcraft_doc::COMPAT_MODE_CURRENT
+        && matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::Header))
+}
+
+/// Where a top and bottom object at `r` starts and ends for such a header.
+/// The distance below it counts (Word: 14.4 pt more for 14.4 pt); the one above neither moves it
+/// nor makes the header taller.
+fn legacy_reach_of(float: &wordcraft_doc::para::Float, r: Rect) -> Option<(f32, f32)> {
+    let below = if float.dist_bottom.is_finite() { float.dist_bottom.clamp(0.0, 1584.0) } else { 0.0 };
+    let bounds = float.spin().bounds(r);
+    (float.wrap == Wrap::TopAndBottom).then_some((bounds.y, bounds.bottom() + below))
+}
+
+/// The bottom of the lowest top and bottom object (`reach`) that starts above `text_bottom`, the
+/// end of the header's text with the space after its last paragraph (Word counts an object
+/// starting in it). Word also counts one starting a little further down (about 25 pt below one
+/// line of text), not modelled here. Zero when there is none.
+fn legacy_header_reach(text_bottom: f32, reach: &[(f32, f32)]) -> f32 {
+    reach.iter().filter(|(top, _)| *top < text_bottom).map(|(_, bottom)| *bottom).fold(0.0, f32::max)
+}
+
 /// Lay out a block list into a free-standing box of `width` (no page breaks): table cells,
 /// headers, footers, notes, text boxes. Returns items relative to (0, 0) and the height. `frame`
 /// says where the box sits on its page, for floating objects positioned relative to the page or
@@ -217,6 +242,14 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     // bottom edge (#3108). Behind-text and in-front-of-text objects don't: a page-anchored logo or
     // watermark behind a cell's text must not stretch its row (see `align_h` in table.rs).
     let mut float_objects_bottom = 0.0f32;
+    // A header in a document of Word 2010's layout or older (compatibility mode below 15): its
+    // text keeps its place beside its own objects, which wrap nothing, and only a top and bottom
+    // object reaching down from the text makes the header taller (#6805). Not in a table cell.
+    let legacy_header = !in_cell && is_legacy_header(ctx, story);
+    // Contour wraps were measured in mode 14; earlier modes keep using their existing rule.
+    let legacy_header_contours = legacy_header && ctx.doc.settings.compat_mode == 14;
+    // Top and bottom objects of such a header: where each starts and ends.
+    let mut legacy_reach: Vec<(f32, f32)> = Vec::new();
     let mut table_areas = Vec::new();
     let mut page_table_wraps = Vec::new();
     let mut y = 0.0f32;
@@ -230,12 +263,19 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     let frames = !matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox));
     // The bottom of the last paragraph's lines.
     let mut prev_end = 0.0f32;
+    // Where the last paragraph, whose mark is hidden, ended: the next one goes on from there.
+    let mut joint: Option<Joint> = None;
+    let outer_joined = ctx.joined;
     for (i, b) in blocks.iter().enumerate() {
         last_top = y;
         let mut path = prefix.to_vec();
         path.push(i as u32);
         match &**b {
             Block::Para(p) => {
+                // A paragraph after one whose mark is hidden goes on from that one's last line
+                // (Word, #3986; see `Joint`); one that shows nothing passes the place on.
+                let (mark_hidden, shows_nothing, taken) = Joint::arrive(ctx, &mut joint, (i, p), (width, frames), table);
+                let p = taken.as_ref().map_or(p, |t| &t.para);
                 let label = ctx.next_label(p);
                 let listed = label.is_some();
                 let mut pl = ctx.para_labelled(p, width, table, &[], label.clone());
@@ -274,8 +314,10 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 });
                 // Paragraph-relative floats start above the effective space before, as in the
                 // body path. Keep text and wrap exclusions relative to the text's actual top.
-                let para_top = y;
+                // A paragraph going on from a shared line has its origin at that line's top.
+                let para_top = taken.as_ref().map_or(y, |t| t.joint.top);
                 y += if i == 0 { before } else { before.max(0.0) };
+                TakenUp::start(taken.as_ref(), &mut y, &mut excl);
                 // Floating objects anchored here: place them, then wrap the text around them.
                 // One left out of the layout (hidden, or deleted in the final text) takes no room.
                 let mut floats = HashMap::new();
@@ -307,18 +349,26 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     {
                         r.x = keep_in_cell(r.x, r.w, left, right);
                     }
-                    let outline = ctx.wrap_outline(o);
-                    excl.extend(wrap_area(r, float, outline.as_deref().map(Vec::as_slice)));
+                    if (legacy_header && matches!(float.wrap, Wrap::TopAndBottom | Wrap::Square))
+                        || (legacy_header_contours && matches!(float.wrap, Wrap::Tight | Wrap::Through))
+                    {
+                        // These objects do not reflow the legacy header's own text in Word.
+                        legacy_reach.extend(legacy_reach_of(float, r));
+                    } else {
+                        let outline = ctx.wrap_outline(o);
+                        excl.extend(wrap_area(r, float, outline.as_deref().map(Vec::as_slice)));
+                    }
                     floats.insert(oi, r);
                 }
                 let rel = rel_exclusions(&excl, 0.0, y);
                 if !rel.is_empty() {
                     pl = ctx.para_labelled(p, width, table, &rel, label);
                 }
+                TakenUp::clear(taken.as_ref(), &mut excl);
                 // Bordered paragraphs: room for their borders, those of a group joined in one box.
                 let cell = table.map(|t| &t.para);
                 let (above, below) = (joined(ctx.doc, blocks, i, i.checked_sub(1), cell), joined(ctx.doc, blocks, i, Some(i + 1), cell));
-                let mut edges = Edges::own(&pl, 0, pl.lines.len());
+                let mut edges = Edges::own(&pl, 0, pl.lines.len()).sharing(&pl);
                 if above {
                     edges.top = 0.0;
                 }
@@ -331,6 +381,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     edges.up = (y + lead - prev_end).max(0.0);
                 }
                 prev_end = push_para(&mut items, (story, &path), &pl, (0, pl.lines.len()), (0.0, y + lead), width, edges);
+                joint = Joint::after(&pl, (0, pl.lines.len()), i, (0.0, y + lead), edges.bottom).filter(|_| mark_hidden && !shows_nothing).or(joint);
                 // Pictures, shapes and text boxes: drawn, their areas and text boxes' text.
                 if !p.objects.is_empty() {
                     let at = ObjFrame {
@@ -373,7 +424,9 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 let last = i + 1 == blocks.len();
                 let normal = || pl.rp.style == "Normal" || ctx.doc.styles.get(&pl.rp.style).is_none();
                 let after = if last && (pl.rp.after_auto || (in_cell && ctxl && normal())) { 0.0 } else { pl.rp.space_after };
-                y += edges.top + pl.height + edges.bottom + after;
+                y += edges.top + pl.height + edges.bottom;
+                // One going on from the line of the paragraph before ends below that line (#3986).
+                y = TakenUp::end(taken.as_ref(), ctx, (y, after), outer_joined);
                 prev_after = after;
                 prev_after_auto = pl.rp.after_auto;
                 prev_listed = listed;
@@ -403,8 +456,10 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
             }
         }
     }
+    y = y.max(legacy_header_reach(y, &legacy_reach));
     let floats_bottom = float_tables.iter().map(|r| r.bottom()).fold(float_objects_bottom, f32::max);
     ctx.hide_deleted = outer_hide;
+    ctx.joined = outer_joined;
     BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
 }
 
@@ -660,6 +715,162 @@ impl Edges {
             joined: [false; 2],
         }
     }
+
+    /// A paragraph going on from the line of the one before, whose mark is hidden (#3986), takes
+    /// no room for its borders on that line, nor below it when that line is all it has: the
+    /// shared line shows the first paragraph's shading and borders (Word).
+    pub(crate) fn sharing(mut self, pl: &ParaLayout) -> Edges {
+        if pl.shares_line() {
+            self.top = 0.0;
+            if pl.lines.len() <= 1 {
+                self.bottom = 0.0;
+            }
+        }
+        self
+    }
+}
+
+/// Where a paragraph whose mark is hidden ends (#3986). Word shows it on one line with the next
+/// paragraph: that one's text goes on from where this one's ends, beside it on its last line.
+/// Paragraphs that show nothing (an empty one with a hidden mark, say) pass the place on.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Joint {
+    /// The block that goes on from here.
+    pub(crate) next: usize,
+    /// The page (the count of pages) and column of the last line (body text only).
+    pub(crate) page: usize,
+    pub(crate) col: usize,
+    /// The last line's top, height and baseline (from its top), the left edge of its column and
+    /// the x its text ends at.
+    pub(crate) top: f32,
+    pub(crate) height: f32,
+    baseline: f32,
+    left: f32,
+    end: f32,
+    /// The room under the line for the paragraph's bottom border: what follows the shared line
+    /// starts below it.
+    room: f32,
+}
+
+impl Joint {
+    /// After lines `l0..l1` of paragraph layout `pl`, block `block`, the first of them at `y` in
+    /// a column whose left edge is at `x`, with `room` under them for its bottom border.
+    pub(crate) fn after(pl: &ParaLayout, (l0, l1): (usize, usize), block: usize, (x, y): (f32, f32), room: f32) -> Option<Joint> {
+        let li = l1.checked_sub(1)?;
+        let (first, last) = (pl.lines.get(l0)?, pl.lines.get(li)?);
+        // Right-to-left text runs the other way: its lines aren't joined.
+        if pl.rp.bidi || !last.vis.is_empty() {
+            return None;
+        }
+        let end = pl.x_of(li, pl.text_len)?;
+        let (top, height, baseline) = (y + last.top - first.top, last.height, last.baseline - last.top);
+        Some(Joint { next: block + 1, page: 0, col: 0, top, height, baseline, left: x, end: x + end, room })
+    }
+
+    /// Paragraph `p`, block `i`, arriving at `joint`: whether its mark is hidden, whether it shows
+    /// nothing, and how it goes on from the place the one before left (if that one's mark was hidden).
+    fn arrive(
+        ctx: &mut Ctx,
+        joint: &mut Option<Joint>,
+        (i, p): (usize, &Paragraph),
+        (width, frames): (f32, bool),
+        table: Option<&para::CellText>,
+    ) -> (bool, bool, Option<TakenUp>) {
+        let chr = table.map(|t| &t.chr);
+        let mark_hidden = ctx.mark_hidden(p, chr);
+        let shows_nothing = mark_hidden && ctx.text_hidden(p, chr);
+        let came = joint.take().filter(|j| j.next == i);
+        *joint = came.filter(|_| shows_nothing).map(|j| Joint { next: i + 1, ..j });
+        let taken = came.filter(|_| !shows_nothing).and_then(|j| j.take_up(ctx, p, (width, frames), table));
+        (mark_hidden, shows_nothing, taken)
+    }
+
+    /// The bottom of the shared line, with the room for the first paragraph's bottom border.
+    pub(crate) fn bottom(&self) -> f32 {
+        self.top + self.height + self.room
+    }
+
+    /// How the next paragraph `q`, laid out `width` wide, goes on from here: how far below the
+    /// shared line's top it starts (its first line's text sits on this paragraph's baseline, not
+    /// above it), and the areas it keeps clear of: its first line, this paragraph's text, down to
+    /// the bottom of that line only; its later lines, the rest of the shared line (a heading's,
+    /// taller than the text going on from it), with the room for its bottom border (Word).
+    pub(crate) fn fit(&self, ctx: &mut Ctx, q: &Paragraph, width: f32, table: Option<&para::CellText>) -> (f32, Vec<WrapArea>) {
+        let eq = ctx.eq_count;
+        let probe = again(ctx, eq, |ctx| ctx.para_labelled(q, width, table, &[], None));
+        let (gap, height) = probe.lines.first().map_or((0.0, self.height), |l| ((self.baseline - (l.baseline - l.top)).max(0.0), l.height));
+        let rect = Rect::new(self.left, self.top, (self.end - self.left).max(0.0), (gap + height - 0.01).max(0.01));
+        let mut areas = vec![(rect, false, None, WrapText::Right, false)];
+        // Just below the first row as the line breaker tests it: the breaker tests every row at
+        // its estimate (`row_est`), not at the line's height, so the first row never meets this
+        // area and every later row, starting lower, does and moves below it. The probe's own first
+        // line can be taller than the real one (a large word that wraps off the narrower shared
+        // line), so its height can't be used here.
+        let below = self.top + gap + probe.row_est + 0.01;
+        if self.bottom() > below {
+            areas.push((Rect::new(self.left, below, width.max(0.01), self.bottom() - below), true, None, WrapText::BothSides, false));
+        }
+        (gap, areas)
+    }
+
+    /// The areas [`Joint::fit`] gave taken out of `excl` again, the paragraph laid out.
+    pub(crate) fn unfit(areas: &[WrapArea], excl: &mut Vec<WrapArea>) {
+        for area in areas {
+            if let Some(k) = excl.iter().position(|a| a.0 == area.0 && a.1 == area.1 && a.2.is_none() && a.3 == area.3) {
+                excl.remove(k);
+            }
+        }
+    }
+
+    /// Paragraph `p` of a box `width` wide going on from here, unless a page break comes before
+    /// it, it runs right to left or it is a text frame (`frames`: placed apart, sharing no line):
+    /// without its space before, as [`Joint::fit`] lays it out.
+    fn take_up(self, ctx: &mut Ctx, p: &Paragraph, (width, frames): (f32, bool), table: Option<&para::CellText>) -> Option<TakenUp> {
+        let own = ctx.doc.styles.resolve_para_in(&p.props, table.map(|t| &t.para));
+        if own.page_break_before || own.bidi || (frames && own.frame.is_some()) {
+            return None;
+        }
+        let mut para = p.clone();
+        para.props.space_before = Some(0.0);
+        para.props.space_before_auto = Some(false);
+        ctx.joined = Some(Joining::new(para.rev, 0.0));
+        let (gap, areas) = self.fit(ctx, &para, width, table);
+        Some(TakenUp { joint: self, para, gap, areas })
+    }
+}
+
+/// A paragraph of a box going on from a [`Joint`]: the paragraph without its space before, how
+/// far below the shared line's top it starts and the areas its lines keep clear of.
+struct TakenUp {
+    joint: Joint,
+    para: Paragraph,
+    gap: f32,
+    areas: Vec<WrapArea>,
+}
+
+impl TakenUp {
+    /// Where it starts: `y` below the shared line's top, its lines keeping clear of that line.
+    fn start(taken: Option<&TakenUp>, y: &mut f32, excl: &mut Vec<WrapArea>) {
+        let Some(t) = taken else { return };
+        *y = t.joint.top + t.gap;
+        excl.extend(t.areas.iter().cloned());
+    }
+
+    /// Its lines laid out: the areas they kept clear of come out of `excl`.
+    fn clear(taken: Option<&TakenUp>, excl: &mut Vec<WrapArea>) {
+        if let Some(t) = taken {
+            Joint::unfit(&t.areas, excl);
+        }
+    }
+
+    /// Where what follows a paragraph ending at `y`, with `after` its space after, starts: below
+    /// the shared line at least, with the first paragraph's bottom border. With the copy laid
+    /// out, the paragraph's own layouts are its own again (`outer`).
+    fn end(taken: Option<&TakenUp>, ctx: &mut Ctx, (y, after): (f32, f32), outer: Option<Joining>) -> f32 {
+        let Some(t) = taken else { return y + after };
+        ctx.joined = outer;
+        y.max(t.joint.bottom()) + after
+    }
 }
 
 /// Paragraph lines plus their shading and borders; returns the bottom of the lines. The
@@ -677,12 +888,21 @@ pub(crate) fn push_para(
         return y;
     };
     let h = last.top + last.height - first.top;
+    let lines = Placed::Lines { story, path: Path(path.to_vec()), para: pl.clone(), l0, l1, x, y, turn: TextDirection::Horizontal };
+    // The line a paragraph shares with the one before, whose mark is hidden, shows that one's
+    // shading and borders: this one's start on its own next line, without a top border (Word, #3986).
+    let shared = l0 == 0 && pl.shares_line();
+    let Some(own) = pl.lines.get(if shared { 1 } else { l0 }).filter(|_| !shared || l1 > 1) else {
+        items.push(lines);
+        return y + h;
+    };
+    let (y_own, e) = if shared { (y + own.top - first.top, Edges { top: 0.0, up: 0.0, ..e }) } else { (y, e) };
     // Indents are logical: a right-to-left paragraph's start indent (and hanging indent) is on the right.
     let start = pl.rp.indent_left.min(pl.rp.indent_left + pl.rp.indent_first);
     let (li, ri) = if pl.rp.bidi { (pl.rp.indent_right, start) } else { (start, pl.rp.indent_right) };
     let left = x + li;
     let right = x + width - ri;
-    let (top, bottom) = (y - e.top - e.up, y + h + e.bottom);
+    let (top, bottom) = (y_own - e.top - e.up, y + h + e.bottom);
     // The outer edges of the side borders.
     let sides = pl.rp.borders.unwrap_or_default();
     let (lx, rx) = (left - border_room(sides.left), right + border_room(sides.right));
@@ -691,7 +911,7 @@ pub(crate) fn push_para(
         let (sl, sr) = (lx.min(left - pad), rx.max(right + pad));
         items.push(Placed::Fill { rect: Rect::new(sl, top, sr - sl, bottom - top), color: c });
     }
-    items.push(Placed::Lines { story, path: Path(path.to_vec()), para: pl.clone(), l0, l1, x, y, turn: TextDirection::Horizontal });
+    items.push(lines);
     if let Some(b) = &pl.rp.borders {
         // All four lines lie beyond their distance from the text (`lx`, `rx`: the side lines'
         // outer edges); `box_rules` runs the top and bottom over the side lines to those edges.
@@ -699,9 +919,10 @@ pub(crate) fn push_para(
         let (cl, cr) = (lx + half(b.left), rx - half(b.right));
         let tb = b.top.filter(|t| e.top > 0.0 && t.is_visible());
         let bb = b.bottom.filter(|t| e.bottom > 0.0 && t.is_visible());
-        let ty = tb.map_or(top, |t| y - t.space - t.width / 2.0);
+        let ty = tb.map_or(top, |t| y_own - t.space - t.width / 2.0);
         let by = bb.map_or(bottom, |t| y + h + t.space + t.width / 2.0);
-        box_rules(items, (cl, ty, cr, by), [tb, bb, b.left, b.right], e.joined);
+        // Open at the top where it goes on over the shared line.
+        box_rules(items, (cl, ty, cr, by), [tb, bb, b.left, b.right], [e.joined[0] || shared, e.joined[1]]);
     }
     y + h
 }

@@ -158,4 +158,145 @@ mod tests {
         let missing = missing_glyphs(&stack, &FontRef::proportional(), samples, false);
         assert!(missing.is_empty(), "symbols without a glyph: {missing:#?}");
     }
+
+    /// An installed Arabic font is asked for only when Arabic text needs one (and no embedded
+    /// Arabic face covers it): neither installing the UI font stack for English/CJK/Arabic nor
+    /// triggering CJK on-demand fallback ever asks for an Arabic system font, and Arabic on-demand
+    /// fallback never asks for a CJK system font.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_installed_arabic_font_is_asked_for_by_arabic_alone() {
+        use std::path::PathBuf;
+        use std::sync::Mutex;
+
+        use craft::host::Wake;
+        use craft::i18n::Han;
+        use craft::ui::fonts::{FontCandidates, on_demand_registered};
+
+        struct RecordingCandidates {
+            scripts: Mutex<Vec<String>>,
+        }
+
+        impl RecordingCandidates {
+            fn new() -> Arc<Self> {
+                Arc::new(Self { scripts: Mutex::new(Vec::new()) })
+            }
+
+            fn scripts(&self) -> Vec<String> {
+                self.scripts.lock().map(|guard| guard.clone()).unwrap_or_default()
+            }
+        }
+
+        impl FontCandidates for RecordingCandidates {
+            fn files(&self, script: &str, han: Option<Han>) -> Vec<PathBuf> {
+                if let Ok(mut scripts) = self.scripts.lock() {
+                    scripts.push(script.to_owned());
+                }
+                SystemCandidates.files(script, han)
+            }
+
+            fn covers(&self, data: &[u8], c: char) -> Option<u32> {
+                SystemCandidates.covers(data, c)
+            }
+
+            fn pending(&self) -> bool {
+                SystemCandidates.pending()
+            }
+
+            fn wake_when_ready(&self, wake: Wake) {
+                SystemCandidates.wake_when_ready(wake);
+            }
+        }
+
+        let paint = |ctx: &egui::Context, text: &str| {
+            for _ in 0..6 {
+                ctx.run_ui(egui::RawInput::default(), |ui| {
+                    ui.label(text);
+                })
+                .drop_without_applying_deltas();
+            }
+        };
+        let is_cjk_script = |script: &str| matches!(script, "Hani" | "Hira" | "Kana" | "Hang" | "Bopo");
+
+        let en = Lang::EN;
+        let ja = crate::i18n::fixture_lang("ja", "\tHome\tホーム\n");
+        let ar = crate::i18n::fixture_lang("ar", "\tHome\tالرئيسية\n");
+
+        // Installing the production `ui_fonts` stack and painting Latin text never requests or
+        // loads an installed Arabic or CJK system font up front.
+        for lang in [en, ja, ar] {
+            let ctx = egui::Context::default();
+            let spy = RecordingCandidates::new();
+            ui_fonts(lang).on_demand(Arc::clone(&spy) as Arc<dyn FontCandidates>).install(&ctx);
+            assert!(on_demand_registered(&ctx).is_empty(), "{}: installing ui_fonts reads no system font eagerly", lang.code());
+            assert!(spy.scripts().is_empty(), "{}: installing ui_fonts requests no system font candidates", lang.code());
+            paint(&ctx, "Hello");
+            assert!(on_demand_registered(&ctx).is_empty(), "{}: Latin UI text reads no system font", lang.code());
+            assert!(spy.scripts().is_empty(), "{}: Latin UI text requests no system font candidates", lang.code());
+        }
+
+        let embedded_arabic: Vec<String> = CRAFT_FONTS.iter().filter(|f| f.has_script("Arab")).map(EmbeddedFace::name).collect();
+        let ar_ctx = egui::Context::default();
+        let ar_stack = ui_fonts(ar).install(&ar_ctx);
+        let en_stack = ui_fonts(en).stack();
+        let ja_stack = ui_fonts(ja).stack();
+        if !embedded_arabic.is_empty() {
+            assert!(
+                ar_stack.chain(&FontRef::proportional()).first().is_some_and(|name| embedded_arabic.contains(name)),
+                "Arabic UI leads with its embedded Arabic face"
+            );
+            assert!(
+                !en_stack.chain(&FontRef::proportional()).first().is_some_and(|name| embedded_arabic.contains(name)),
+                "English UI does not lead with an Arabic face"
+            );
+            assert!(
+                !ja_stack.chain(&FontRef::proportional()).first().is_some_and(|name| embedded_arabic.contains(name)),
+                "CJK UI does not lead with an Arabic face"
+            );
+            paint(&ar_ctx, "مرحبا");
+            assert!(ar_ctx.fonts_mut(|f| f.has_glyph(&egui::FontId::proportional(14.0), 'ع')), "embedded Arabic face draws Arabic text");
+            assert!(on_demand_registered(&ar_ctx).is_empty(), "no installed Arabic system font is read when an embedded Arabic face covers Arabic");
+        } else {
+            paint(&ar_ctx, "مرحبا");
+            let registered = on_demand_registered(&ar_ctx);
+            let arabic_candidates = SystemCandidates.files("Arab", None);
+            assert!(!registered.is_empty() || cfg!(not(any(target_os = "macos", windows))), "macOS and Windows ship an installed Arabic font");
+            if !registered.is_empty() {
+                assert_eq!(registered.len(), 1, "Arabic text registers one installed Arabic face");
+                assert!(arabic_candidates.contains(&registered[0].1), "registered face {:?} came from Arabic system candidates", registered[0].1);
+                assert!(ar_ctx.fonts_mut(|f| f.has_glyph(&egui::FontId::proportional(14.0), 'ع')), "installed Arabic system font draws Arabic text");
+            }
+        }
+
+        // CJK on-demand lookup through `ui_fonts` never asks for an Arabic system font (U+3400 is
+        // CJK Extension A, outside embedded catalog subsets, so it exercises CJK on-demand lookup
+        // even in builds with `CRAFT_FONTS_DIR`).
+        let cjk_spy = RecordingCandidates::new();
+        let cjk_ctx = egui::Context::default();
+        ui_fonts(ja).on_demand(Arc::clone(&cjk_spy) as Arc<dyn FontCandidates>).install(&cjk_ctx);
+        paint(&cjk_ctx, "日本語 㐀");
+        let cjk_scripts = cjk_spy.scripts();
+        assert!(!cjk_scripts.iter().any(|s| s == "Arab"), "CJK fallback never asks for an Arabic font: {cjk_scripts:?}");
+        if !cjk_ctx.fonts_mut(|f| f.has_glyph(&egui::FontId::proportional(14.0), '\u{3400}')) || !on_demand_registered(&cjk_ctx).is_empty() {
+            assert!(cjk_scripts.iter().any(|s| is_cjk_script(s)), "uncovered CJK text asks for CJK candidates: {cjk_scripts:?}");
+        }
+
+        // Arabic on-demand lookup when no embedded Arabic face is present asks for Arabic alone
+        // and never triggers a CJK system-font lookup.
+        let ar_spy = RecordingCandidates::new();
+        let ar_no_embed_ctx = egui::Context::default();
+        if embedded_arabic.is_empty() {
+            ui_fonts(ar).on_demand(Arc::clone(&ar_spy) as Arc<dyn FontCandidates>).install(&ar_no_embed_ctx);
+        } else {
+            UiFonts::new(&I18nScripts)
+                .languages(&["en", "ja", "ar"])
+                .ui_language(ar.code())
+                .on_demand(Arc::clone(&ar_spy) as Arc<dyn FontCandidates>)
+                .install(&ar_no_embed_ctx);
+        }
+        paint(&ar_no_embed_ctx, "مرحبا");
+        let ar_scripts = ar_spy.scripts();
+        assert!(ar_scripts.iter().any(|s| s == "Arab"), "Arabic text without an embedded Arabic face asks for Arab: {ar_scripts:?}");
+        assert!(!ar_scripts.iter().any(|s| is_cjk_script(s)), "Arabic fallback never asks for a CJK font: {ar_scripts:?}");
+    }
 }

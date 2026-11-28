@@ -1,5 +1,5 @@
 use craft::host::{PickId, Picked};
-use craft::platform::open::{DropTarget, DroppedFile, Intake};
+use craft::platform::open::{DroppedFile, Intake};
 use craft::quit::{CloseAnswer, CloseGuard, CloseScope, GuardStep};
 use craft::ui::dialog::{DialogId, DialogResult, UnsavedChangesDialog};
 use craft::ui::shell::embed::CloseDecision;
@@ -181,6 +181,7 @@ impl WordApp {
     /// Close prompt `id` from outside and drop the answer that leaves behind.
     pub(crate) fn close_prompt(&mut self, id: DialogId) {
         if let Some(ctx) = self.ctx.clone() {
+            crate::dialogs::chrome::forget_nudge(&ctx, id);
             self.dialog_host.cancel_by_id(&ctx, id);
         }
         let _ = self.dialog_host.take_by_id::<UnsavedChangesDialog>(id);
@@ -191,6 +192,9 @@ impl WordApp {
     pub(crate) fn pump_close_prompt(&mut self) {
         let Some(id) = self.closing.as_ref().and_then(|c| c.prompt) else { return };
         let Some(result) = self.dialog_host.take_by_id::<UnsavedChangesDialog>(id) else { return };
+        if let Some(ctx) = self.ctx.as_ref() {
+            crate::dialogs::chrome::forget_nudge(ctx, id);
+        }
         if let Some(closing) = self.closing.as_mut() {
             closing.prompt = None;
         }
@@ -329,7 +333,7 @@ impl WordApp {
             // A save that never reached its destination leaves no stamp of it, when the document is as
             // the save left it (an edit since keeps its own marks and stays unsaved).
             let mut undone = false;
-            if !matches!(picked, Picked::Paths(_) | Picked::Downloaded(_))
+            if !matches!(picked, Picked::Paths(_) | Picked::Saved { .. } | Picked::Downloaded(_))
                 && save.document == current
                 && save.rev == self.session.rev()
                 && let Some(undo) = save.undo_stamp.take()
@@ -338,7 +342,7 @@ impl WordApp {
                 undone = true;
             }
             // A download the browser accepted is a finished save too: the page holds no file of it.
-            if matches!(picked, Picked::Paths(_) | Picked::Downloaded(_)) {
+            if matches!(picked, Picked::Paths(_) | Picked::Saved { .. } | Picked::Downloaded(_)) {
                 log::info!("saved {} through the save picker", save.name);
                 // The page now holds the document as that file (a hosted Save As or first Save, S-L159):
                 // the next Save goes back to it. A download names nothing the app could reopen.
@@ -381,12 +385,14 @@ impl WordApp {
             }
             let result = match picked {
                 // Only when nothing changed since and no later save of it is still unconfirmed.
-                Picked::Paths(_) | Picked::Downloaded(_) if !self.session.dirty && self.session.rev() == save.rev && !self.save_unconfirmed() => {
+                Picked::Paths(_) | Picked::Saved { .. } | Picked::Downloaded(_)
+                    if !self.session.dirty && self.session.rev() == save.rev && !self.save_unconfirmed() =>
+                {
                     let step = self.with_guard(|g| g.saved());
                     self.drive_guard(step, None)
                 }
                 // Edited while the picker was open (those edits may not be written yet): ask again.
-                Picked::Paths(_) | Picked::Downloaded(_) => {
+                Picked::Paths(_) | Picked::Saved { .. } | Picked::Downloaded(_) => {
                     let step = self.with_guard(|g| g.retry_after_failure());
                     self.drive_guard(step, None)
                 }
@@ -632,8 +638,8 @@ impl WordApp {
         let Some(intake) = self.services.intake.as_ref() else { return };
         for item in intake.take() {
             match item {
-                Intake::Dropped { files, target } => self.open_dropped(&files, target),
-                Intake::Open(paths) => {
+                Intake::Dropped { files } => self.open_dropped(&files),
+                Intake::Open(paths) | Intake::OpenFor { paths, .. } => {
                     for p in paths {
                         // A path that is not Unicode cannot be passed on as text: skipped.
                         if let Some(path) = p.to_str()
@@ -649,6 +655,14 @@ impl WordApp {
                 Intake::Quit => {
                     self.quit();
                 }
+                // An OS open request that arrived as bytes, with no path.
+                Intake::Bytes { name, bytes } => {
+                    let data = wordcraft_engine::cmd::insert::base64_encode(bytes.as_ref());
+                    if let Err(e) = self.run("file.open", json!({"path": name, "data": data})) {
+                        self.report_open_failure(&name, &e);
+                    }
+                    self.ui.backstage = false;
+                }
             }
         }
     }
@@ -656,7 +670,7 @@ impl WordApp {
     /// Route files dropped on the window, in drop order: the one place the drop rules live. A drop
     /// behind a modal dialog does nothing, since it would insert a picture or open a document
     /// under it. Every drop target routes by file kind, so `_target` does not change the routing.
-    pub(crate) fn open_dropped(&mut self, files: &[DroppedFile], _target: DropTarget) {
+    pub(crate) fn open_dropped(&mut self, files: &[DroppedFile]) {
         if self.modal_open() {
             return;
         }

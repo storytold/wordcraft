@@ -8,7 +8,7 @@ use craft::behavior::{Input, Metrics};
 use craft::pages::ui::{PageBody, PlacedPage};
 use craft::ui::canvas::ToolPass;
 use craft::ui::contract::{Access, Common, Component, Cx, MeasureCx, NoValue, Outcome, PaintUi, Props as _, Role, Show as _};
-use craft::ui::fonts::{FaceBytes, MAX_INTERFACE_FACE_BYTES};
+use craft::ui::fonts::FaceBytes;
 use craft::ui::primitives::{FaceRun, PaintShape, StrokeWidth, TextRun};
 use craft::ui::runtime::env::Label;
 use craft::ui::style::{ComponentStyle, DataColor, StyleColor, StyleCx};
@@ -293,14 +293,10 @@ pub(crate) fn face_key(face: wordcraft_fonts::FaceRef) -> String {
     format!("wordcraft-face:{}", face.id())
 }
 
-/// The bytes, index and variation setting of `face`, read the first time it is drawn. A file larger than the framework
-/// draws over the interface fonts is not copied: the composition stays in the interface font (a document's CJK
-/// fallback can be 19 MB).
+/// The bytes, index and variation setting of `face`, read the first time it is drawn. The framework's document-face
+/// registry keeps the faces within its byte budget.
 fn face_bytes(face: wordcraft_fonts::FaceRef) -> Option<FaceBytes> {
     let data = face.data();
-    if data.len() > MAX_INTERFACE_FACE_BYTES {
-        return None;
-    }
     Some(FaceBytes::new(std::sync::Arc::from(data), face.index()).coords(face.coords.iter().copied()))
 }
 

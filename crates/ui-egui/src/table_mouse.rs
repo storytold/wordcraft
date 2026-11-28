@@ -229,7 +229,7 @@ impl<'a> TableMouse<'a> {
     /// A press went down at `start.origin` on part `index` of `page` with `mods` held: a selection area selects, an
     /// insert button inserts, a handle waits.
     fn press(&mut self, cx: &mut Cx<'_, Self>, start: PressStart, mods: Mods, page: usize, index: u64) {
-        let Some(placed) = self.pages.iter().find(|placed| placed.page == page).copied() else { return };
+        let Some(placed) = self.pages.iter().find(|placed| placed.page == page).cloned() else { return };
         let (x, y) = page_point(&placed, start.origin);
         let reach = reach_on(self.pages, page);
         let story = self.app.session.sel.focus.story;

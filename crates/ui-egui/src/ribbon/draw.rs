@@ -8,7 +8,7 @@ use craft::ui::buttons::{Arrangement, Button, SplitButton, SplitMenu, ToggleButt
 use craft::ui::contract::{Gap, Props as _, Show as _, ShowContainer as _};
 use craft::ui::layout_components::Stack;
 use craft::ui::menu::{Menu, MenuItem};
-use craft::ui::primitives::{IconMark, IconSpec};
+use craft::ui::primitives::IconMark;
 use craft::ui::style::DataColor;
 use wordcraft_doc::freeform::InkTool;
 
@@ -33,7 +33,7 @@ pub(super) fn draw(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         ] {
             ToggleButton::command(CommandRef::with_params(id, json!({})))
                 .label(crate::tl!(label))
-                .icon(crate::icons::id(key))
+                .icon(crate::icons::spec(key))
                 .arrangement(Arrangement::Stacked)
                 .selected(on)
                 .show(ui);
@@ -75,7 +75,7 @@ pub(super) fn draw(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     })),
                 )
                 .label(crate::tl!("Color"))
-                .icon(IconSpec::from(IconId::new("fontcolor")).with_mark(IconMark::bar(DataColor::new(ink))))
+                .icon(crate::icons::spec("fontcolor").with_mark(IconMark::bar(DataColor::new(ink))))
                 .show(ui);
                 menu_button(
                     ui,
@@ -111,7 +111,7 @@ pub(super) fn draw(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .show(ui);
         Button::command(CommandRef::with_params("draw.inkToMath", json!({})))
             .label(crate::tl!("Ink to\nMath"))
-            .icon(IconId::new("inkToMath"))
+            .icon(crate::icons::spec("inkToMath"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
     });
@@ -169,7 +169,7 @@ fn gallery_pen(ui: &mut egui::Ui, i: usize, pen: wordcraft_engine::cmd::draw::Cu
     let tip = format!("{kind}: {size}, #{}", pen.color.hex());
     let response = ToggleButton::command(CommandRef::with_params(pen_command(pen.kind), json!({"color": pen.color.hex(), "width": pen.width})))
         .label(kind)
-        .icon(IconSpec::from(crate::icons::id(glyph)).with_mark(IconMark::weighted_bar(DataColor::new(color), bar)))
+        .icon(crate::icons::spec(glyph).with_mark(IconMark::weighted_bar(DataColor::new(color), bar)))
         .arrangement(Arrangement::Stacked)
         .tooltip(tip)
         .selected(active)

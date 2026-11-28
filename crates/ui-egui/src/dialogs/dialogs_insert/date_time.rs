@@ -35,14 +35,16 @@ const PT_DATE_FORMATS: &[&str] = &[
     "HH:mm:ss",
 ];
 
-/// The date preview list consists of document values (not interface strings).
-/// The i18n audit recognizes these dynamic values instead of treating month names as UI labels.
+/// What the Date and Time preview list shows at the instant `unix`: document values, not
+/// interface strings. The i18n audit recognizes these instead of treating month names, dates and
+/// times as labels.
 #[cfg(test)]
-pub(crate) fn date_time_preview_matches(value: &str) -> bool {
-    PT_DATE_FORMATS.iter().chain(DATE_FORMATS.iter()).any(|picture| {
-        wordcraft_engine::cmd::insert::format_date_in(picture, Some("pt-BR")) == value
-            || wordcraft_engine::cmd::insert::format_date_in(picture, Some("en-US")) == value
-    })
+pub(crate) fn date_time_previews_at(unix: u64) -> impl Iterator<Item = String> {
+    let offset = wordcraft_engine::cmd::local_offset_secs(unix);
+    PT_DATE_FORMATS
+        .iter()
+        .chain(DATE_FORMATS.iter())
+        .flat_map(move |picture| ["pt-BR", "en-US"].map(|lang| wordcraft_engine::cmd::insert::format_date_at_in(picture, Some(lang), unix, offset)))
 }
 
 /// State of the Word-like Insert > Date & Time dialog.

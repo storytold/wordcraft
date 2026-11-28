@@ -30,7 +30,33 @@ pub(crate) fn apply_edits<T: Value>(app: &mut WordApp, events: EditEvents<T>, ap
     // PLAN: assumed `WordApp.edits: GestureHost<WordApp>` reachable as `app.edits` (app-hub, H-1)
     let mut host = std::mem::take(&mut app.edits);
     for event in events {
-        host.handle(app, event, &apply);
+        match event {
+            craft::behavior::EditEvent::Begin { id, .. } => {
+                app.edits_gesture = Some((id, false));
+            }
+            craft::behavior::EditEvent::Update { .. } => {}
+            _ => {
+                app.edits_gesture = None;
+            }
+        }
+        let is_update = matches!(event, craft::behavior::EditEvent::Update { .. });
+        let event_id = event.id();
+        host.handle(app, event, |app, val| {
+            if is_update
+                && let Some((active_id, applied)) = app.edits_gesture
+                && Some(active_id) == event_id
+                && applied
+            {
+                app.session.join_next_undo();
+            }
+            apply(app, val);
+            if is_update
+                && let Some((active_id, _)) = app.edits_gesture
+                && Some(active_id) == event_id
+            {
+                app.edits_gesture = Some((active_id, true));
+            }
+        });
     }
     app.edits = host;
 }
