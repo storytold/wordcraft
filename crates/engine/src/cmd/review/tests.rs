@@ -311,7 +311,7 @@ fn comment_range_at_caret_needs_the_caret_inside_the_range() {
     assert_eq!(super::comment_range_at_caret(&s), Some(id), "inside the commented text");
     s.run("select.text", &json!({"text": "three"})).unwrap();
     assert_eq!(super::comment_range_at_caret(&s), None, "elsewhere in the paragraph");
-    assert_eq!(super::comment_at_caret(&s), Some(id), "the older lookup still falls back to the paragraph's comment");
+    assert_eq!(super::comments::comment_at_caret(&s), Some(id), "the older lookup still falls back to the paragraph's comment");
 }
 
 fn glyph_text(d: &[Draw]) -> String {
@@ -780,6 +780,71 @@ fn deleting_a_comment_deletes_replies_to_replies() {
     assert_eq!(s.doc.comments.keys().map(|k| u64::from(*k)).collect::<Vec<_>>(), vec![root, reply, nested]);
     assert_eq!(parts(&s), before);
     assert_eq!(anchors(&s).len(), 2);
+}
+
+/// Resolving from the root, the caret or a nested reply changes the whole discussion in one
+/// undo step. Reopening is also thread-wide, and unrelated discussions stay untouched.
+#[test]
+fn resolving_a_comment_changes_its_whole_thread() {
+    let mut s = Session::new(Document::from_text("first second"));
+    s.run("select.text", &json!({"text": "first"})).unwrap();
+    let root = s.run("review.newComment", &json!({"text": "root"})).unwrap()["id"].as_u64().unwrap();
+    let reply = s.run("review.reply", &json!({"id": root, "text": "reply"})).unwrap()["id"].as_u64().unwrap();
+    let nested = s.run("review.reply", &json!({"id": reply, "text": "nested"})).unwrap()["id"].as_u64().unwrap();
+    s.run("review.reply", &json!({"id": root, "text": "sibling"})).unwrap();
+    s.run("select.text", &json!({"text": "second"})).unwrap();
+    let other = s.run("review.newComment", &json!({"text": "other"})).unwrap()["id"].as_u64().unwrap() as u32;
+    s.run("select.text", &json!({"text": "first"})).unwrap();
+    let before = s.doc.comments.clone();
+    let body = s.doc.body.clone();
+    let parts = s.doc.parts.clone();
+    let depth = s.undo_depth();
+    let mut resolved = before.clone();
+    for (id, c) in &mut resolved {
+        c.resolved = *id != other;
+    }
+
+    for params in [json!({"id": root, "value": true}), json!({}), json!({"id": nested})] {
+        s.run("review.resolveComment", &params).unwrap();
+        assert_eq!(s.doc.comments, resolved, "{params}: all replies resolve, not the other discussion");
+        assert_eq!(s.undo_depth(), depth + 1, "one undo step for the whole thread");
+        s.run("review.resolveComment", &json!({"id": reply, "value": true})).unwrap();
+        assert_eq!(s.undo_depth(), depth + 1, "resolving an already resolved thread adds no step");
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc.comments, before, "one undo restores every comment");
+        s.run("edit.redo", &json!({})).unwrap();
+        assert_eq!(s.doc.comments, resolved);
+        s.run("review.resolveComment", &json!({"id": nested})).unwrap();
+        assert_eq!(s.doc.comments, before, "toggling a reply reopens the whole thread");
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc.comments, resolved);
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc.comments, before);
+    }
+    assert_eq!(s.doc.body, body, "resolution leaves the body and anchors alone");
+    assert_eq!(s.doc.parts, parts, "resolution leaves the comments' text alone");
+}
+
+/// Imported comments can have mixed resolved flags, missing parents or a parent cycle. A
+/// thread operation reconciles the connected comments without following a missing parent.
+#[test]
+fn resolving_a_comment_handles_mixed_state_and_broken_parent_links() {
+    use wordcraft_doc::Comment;
+    for parent in [None, Some(99), Some(2)] {
+        let mut doc = Document::new();
+        doc.comments.insert(0, Comment { resolved: true, parent, ..Default::default() });
+        doc.comments.insert(1, Comment { parent: Some(0), ..Default::default() });
+        doc.comments.insert(2, Comment { parent: Some(1), ..Default::default() });
+        doc.comments.insert(3, Comment { parent: Some(99), ..Default::default() });
+        let mut s = Session::new(doc);
+        s.run("review.resolveComment", &json!({"id": 2})).unwrap();
+        assert!(
+            s.doc.comments.iter().all(|(id, c)| c.resolved == (*id != 3)),
+            "a reply's Resolve action must not reopen its resolved parent: {parent:?}"
+        );
+        s.run("review.resolveComment", &json!({"id": 1, "value": false})).unwrap();
+        assert!(s.doc.comments.values().all(|c| !c.resolved), "{parent:?}");
+    }
 }
 
 /// A parent cycle (possible in a hostile file) doesn't hang Delete; both comments go.

@@ -186,6 +186,29 @@ fn thread_of(s: &Session, id: u32) -> Vec<u32> {
     ids
 }
 
+/// Resolve or reopen the whole discussion, even when the target is a reply. A toggle uses
+/// the target's state, matching its Resolve/Reopen button even in a mixed-state file.
+pub(super) fn resolve_comment(s: &mut Session, v: &Value) -> CmdResult {
+    validate_comment_id(v)?;
+    let id = p::u64(v, "id").map(|x| x as u32).or_else(|| comment_at_caret(s)).ok_or_else(|| CmdError::Params("`id` required".into()))?;
+    let c = s.doc.comments.get(&id).ok_or_else(|| CmdError::Params("no such comment".into()))?;
+    let resolved = p::bool(v, "value").unwrap_or(!c.resolved);
+    let mut root = id;
+    let mut seen = BTreeSet::new();
+    while seen.insert(root) {
+        match s.doc.comments.get(&root).and_then(|c| c.parent).filter(|p| s.doc.comments.contains_key(p)) {
+            Some(parent) => root = parent,
+            None => break,
+        }
+    }
+    for id in thread_of(s, root) {
+        if let Some(c) = s.doc.comments.get_mut(&id) {
+            c.resolved = resolved;
+        }
+    }
+    sel_result(s)
+}
+
 pub(super) fn delete_comment(s: &mut Session, v: &Value) -> CmdResult {
     validate_comment_id(v)?;
     let ids: Vec<u32> = if p::bool(v, "all").unwrap_or(false) {

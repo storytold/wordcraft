@@ -18,10 +18,8 @@ pub use changes::{
     DELETION_TEXT_CHARS, DeletionBalloon, deletion_balloons, format_changes, has_deletions, has_format_changes, move_changes, tracking_json,
 };
 use changes::{list_changes, nav_change, resolve_all_then, resolve_sel_then, tracking_options};
-use comments::{
-    comment_at_caret, comments_change, delete_comment, edit_comment, list_comments, nav_comment, new_comment, reply, validate_comment_id,
-};
 pub use comments::{comment_list, comment_range_at_caret};
+use comments::{comments_change, delete_comment, edit_comment, list_comments, nav_comment, new_comment, reply, resolve_comment};
 use proofing::{all_issues, issue_at, next_issue, suggestions, thesaurus, word_count};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -34,14 +32,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"id": non-negative 32-bit JSON integer, "text": string}"#)
             .when(comments_change),
         CommandSpec::new("review.deleteComment", "Delete", "Review › Comments", delete_comment).params(r#"{"id"?: non-negative 32-bit JSON integer (omit to use the caret), "all"?: bool}"#),
-        CommandSpec::new("review.resolveComment", "Resolve", "Review › Comments", |s, v| {
-            validate_comment_id(v)?;
-            let id = p::u64(v, "id").map(|x| x as u32).or_else(|| comment_at_caret(s)).ok_or_else(|| CmdError::Params("`id` required".into()))?;
-            let c = s.doc.comments.get_mut(&id).ok_or_else(|| CmdError::Params("no such comment".into()))?;
-            c.resolved = p::bool(v, "value").unwrap_or(!c.resolved);
-            sel_result(s)
-        })
-        .params(r#"{"id"?: non-negative 32-bit JSON integer (omit to use the caret), "value"?: bool (omit to toggle)}"#),
+        CommandSpec::new("review.resolveComment", "Resolve", "Review › Comments", resolve_comment)
+            .params(r#"{"id"?: non-negative 32-bit JSON integer (a comment or reply; omit to use the caret), "value"?: bool (omit to toggle the whole thread)}"#),
         CommandSpec::new("review.nextComment", "Next", "Review › Comments", |s, _| nav_comment(s, 1)).pure(),
         CommandSpec::new("review.previousComment", "Previous", "Review › Comments", |s, _| nav_comment(s, -1)).pure(),
         CommandSpec::new("review.comments", "Show Comments", "Review › Comments", list_comments).pure(),
