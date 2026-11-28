@@ -23,6 +23,21 @@ pub(super) struct UnitDrag {
     last: Pos,
 }
 
+/// A Ctrl/⌘+press with text already selected: dragging adds the text from `anchor` to the
+/// pointer, a click without dragging adds the sentence at `anchor`, a double-click the word
+/// (Word, #1031).
+pub(super) struct AddDrag {
+    anchor: Pos,
+    /// The last position the pointer hit.
+    last: Pos,
+    /// Clicks in a row that made it (1, or 2 when the press added the word).
+    clicks: u8,
+    /// The drag has added a piece (each move then swaps it for the longer or shorter one).
+    added: bool,
+    /// The pointer has moved off the press: this is a drag, not a click.
+    moved: bool,
+}
+
 /// After a whole-document selection from a press (not a line, so it can't grow): holds the press
 /// so its release isn't a caret click.
 pub(crate) fn hold_document_selection(app: &mut WordApp, clicks: u8) {
@@ -129,6 +144,22 @@ impl<'a> PageTextTool<'a> {
                     json!({"from": {"page": from.0, "x": from.1, "y": from.2}, "to": {"page": page, "x": x, "y": y}, "story": story}),
                 );
             }
+        } else if let Some(d) = app.canvas.add_drag.as_mut() {
+            // Straight to the session, as the app's `run` would scroll on every frame. The word a
+            // double-click added stays as it is.
+            if d.clicks == 1
+                && let Some(pos) = layout.hit(page, x, y, story)
+                && pos != d.last
+            {
+                d.last = pos.clone();
+                d.moved = true;
+                let params = json!({"anchor": d.anchor, "focus": pos, "replaceLast": d.added});
+                if let Ok(r) = app.session.run("select.add", &params) {
+                    d.added = r.get("added").and_then(serde_json::Value::as_bool) == Some(true);
+                }
+                app.session.page_hint = page;
+                app.canvas.glide.restart(craft::platform::clock::monotonic_ms());
+            }
         } else if let Some(d) = app.canvas.unit_drag.as_mut() {
             // Lines grow line by line wherever the pointer is across; the whole document can't grow.
             let target = match d.unit {
@@ -227,6 +258,7 @@ impl CanvasTool for PageTextTool<'_> {
                 self.app.canvas.dragging = false;
                 self.app.canvas.column_drag = None;
                 self.app.canvas.unit_drag = None;
+                self.app.canvas.add_drag = None;
                 return;
             }
         }
@@ -240,6 +272,15 @@ impl CanvasTool for PageTextTool<'_> {
         self.app.canvas.dragging = false;
         self.app.canvas.column_drag = None;
         self.app.canvas.unit_drag = None;
+        if let Some(d) = self.app.canvas.add_drag.take()
+            && d.clicks == 1
+            && !d.moved
+        {
+            let pj = serde_json::to_value(&d.anchor).unwrap_or_default();
+            if let Ok(r) = self.app.run("select.add", json!({"pos": pj})) {
+                self.app.canvas.last_add = r.get("added").and_then(serde_json::Value::as_bool) == Some(true);
+            }
+        }
         apply_format_painter(self.app);
     }
 
@@ -257,6 +298,7 @@ impl CanvasTool for PageTextTool<'_> {
         self.app.canvas.dragging = false;
         self.app.canvas.column_drag = None;
         self.app.canvas.unit_drag = None;
+        self.app.canvas.add_drag = None;
     }
 
     fn paint(&self, draw: &Draw<'_>, _cx: &ToolContext<'_>) {
@@ -349,6 +391,8 @@ fn handle_primary_press(
 ) -> bool {
     let PagePointer { layout, page, x, y, story, clicks, .. } = *pointer;
     app.canvas.unit_drag = None;
+    app.canvas.add_drag = None;
+    let last_add = std::mem::take(&mut app.canvas.last_add);
     if clicks <= 1 {
         app.canvas.hf_press_switched = false;
     }
@@ -450,6 +494,20 @@ fn handle_primary_press(
         app.canvas.dragging = true;
         return true;
     }
+    // Ctrl/⌘ with text already selected keeps it and adds to it, as in Word (#1031): a drag
+    // the text it passes over, a click the sentence (on release, so a drag doesn't flash it),
+    // a double-click the word in place of the sentence its first click added.
+    let selected = !app.session.sel.is_collapsed() || app.session.column_segments().is_some();
+    if mods.command && !mods.shift && !hf_switch && selected && (clicks == 1 || (clicks == 2 && last_add)) {
+        app.canvas.column_drag = None;
+        if clicks == 2 {
+            let _ = app.run("select.add", json!({"pos": pj, "unit": "word", "replaceLast": true}));
+        }
+        app.canvas.add_drag = Some(AddDrag { anchor: pos.clone(), last: pos, clicks, added: false, moved: false });
+        app.session.page_hint = page;
+        app.canvas.dragging = true;
+        return true;
+    }
     app.canvas.column_drag = None;
     let _ = app.run("caret.set", json!({"pos": pj, "extend": mods.shift}));
     // Double-click selects a word, triple-click a paragraph, Ctrl/⌘+click a sentence; holding
@@ -493,6 +551,12 @@ fn pointer_story(app: &WordApp, layout: &DocLayout, page: usize, x: f32, y: f32,
 fn handle_completed_click(app: &mut WordApp, pointer: &PagePointer<'_>) -> bool {
     let PagePointer { layout, page, x, y, story, clicks, .. } = *pointer;
     let released_clicks = if clicks >= 2 { clicks } else { 0 };
+    // A Ctrl/⌘+double-click already added its word to the selection.
+    if released_clicks > 0 && app.canvas.add_drag.as_ref().is_some_and(|d| d.clicks == released_clicks) {
+        app.canvas.add_drag = None;
+        app.canvas.dragging = false;
+        return true;
+    }
     if released_clicks > 0 && app.canvas.unit_drag.as_ref().is_some_and(|d| d.clicks == released_clicks) {
         app.canvas.unit_drag = None;
         app.canvas.dragging = false;

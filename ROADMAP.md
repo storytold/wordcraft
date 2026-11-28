@@ -1232,6 +1232,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-10-19 | trivial | Progress log: personal templates in File › New, Save as Word Template (#2852) |
 | 2026-10-18 | trivial | Explicit New/Open is not interrupted by startup recovery discovery; older copies stay available and Recover follows the interface theme. |
 | 2026-10-18 | trivial | Progress log: German text hyphenates by the German patterns |
+| 2026-10-18 | trivial | Progress log: multiple selection with Ctrl+drag (#1031) |
 | 2026-10-18 | trivial | Progress log: long navigation headings wrap within the pane instead of ending in an ellipsis (#3015) |
 | 2026-10-18 | trivial | Font list starts at its first row after clearing a no-match query; recent heading remains visible (#2068) |
 | 2026-10-18 | trivial | A word after a slash wraps whole, like Word (#2963) |

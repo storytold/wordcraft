@@ -418,6 +418,83 @@ fn the_page_in_view_follows_the_caret_while_it_is_on_screen() {
     assert_eq!(viewed_page(caret(2, 90.0), scrolled(330.0), &layout, 100.0), 3, "a caret just above the window is not in view");
 }
 
+/// #1031: with text selected, Ctrl/⌘+drag adds the text dragged over (the first piece stays),
+/// Ctrl/⌘+click adds the sentence and Ctrl/⌘+double-click the word; Bold takes every piece.
+/// Without a selection, Ctrl/⌘+click still selects just the sentence.
+#[test]
+fn ctrl_drag_adds_to_the_selection() {
+    use egui::{Event, Modifiers, PointerButton};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Alpha beta gamma delta. Second one here.\rThird para"})).unwrap();
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.app_frame();
+    }
+    let screen = |h: &mut H, pos: Pos| {
+        let c = h.state_mut().session.layout().caret(&pos).expect("caret");
+        page_to_screen(h.state_mut(), c.page, c.x + 1.0, c.top + c.height / 2.0).expect("on screen")
+    };
+    let gesture = |h: &mut H, from: Pos2, to: Pos2, clicks: usize, mods: Modifiers| {
+        h.event(Event::ModifiersChanged(mods));
+        h.event(Event::PointerMoved(from));
+        for i in 0..clicks {
+            h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: mods });
+            h.app_frame();
+            if i + 1 < clicks {
+                h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: false, modifiers: mods });
+                h.app_frame();
+            }
+        }
+        if from != to {
+            for k in 1..=4 {
+                h.event(Event::PointerMoved(from + (to - from) * (k as f32 / 4.0)));
+                h.app_frame();
+            }
+        }
+        h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: mods });
+        for _ in 0..3 {
+            h.app_frame();
+        }
+        h.event(Event::ModifiersChanged(Modifiers::NONE));
+        // Let the double-click time pass.
+        for _ in 0..40 {
+            h.app_frame();
+        }
+    };
+    let pieces = |h: &H| h.state().session.selected_text();
+    // A plain drag over "Alpha", then Ctrl+drag over "gamma".
+    let (from, to) = (screen(&mut h, Pos::body(0, 0)), screen(&mut h, Pos::body(0, 5)));
+    gesture(&mut h, from, to, 1, Modifiers::NONE);
+    assert_eq!(pieces(&h), "Alpha");
+    let (from, to) = (screen(&mut h, Pos::body(0, 11)), screen(&mut h, Pos::body(0, 16)));
+    gesture(&mut h, from, to, 1, Modifiers::COMMAND);
+    assert_eq!(pieces(&h), "Alpha\ngamma", "the first piece stays");
+    // Ctrl+click in the third paragraph adds its sentence; Ctrl+double-click in "here" adds the word instead of its sentence.
+    let at = screen(&mut h, Pos::body(1, 2));
+    gesture(&mut h, at, at, 1, Modifiers::COMMAND);
+    assert_eq!(pieces(&h), "Alpha\ngamma\nThird para");
+    let at = screen(&mut h, Pos::body(0, 36));
+    gesture(&mut h, at, at, 2, Modifiers::COMMAND);
+    assert_eq!(pieces(&h), "Alpha\ngamma\nhere\nThird para", "the word, not \"Second one here.\"");
+    h.state_mut().run("format.bold", json!({})).unwrap();
+    let bold = |h: &H, b: usize, off: usize| h.state().session.doc.para_at(&Pos::body(b, off)).is_some_and(|p| p.props_at(off).bold == Some(true));
+    assert!(bold(&h, 0, 1) && bold(&h, 0, 12) && bold(&h, 0, 36) && bold(&h, 1, 1));
+    assert!(!bold(&h, 0, 7) && !bold(&h, 0, 26), "only the pieces");
+    // With nothing selected, Ctrl+click selects just the sentence, as before.
+    h.state_mut().run("select.collapse", json!({})).unwrap();
+    let at = screen(&mut h, Pos::body(0, 26));
+    gesture(&mut h, at, at, 1, Modifiers::COMMAND);
+    assert_eq!(pieces(&h), "Second one here.");
+}
+
 /// #856: the left margin beside body text is Word's selection bar. A click selects the line,
 /// a double-click the paragraph, a triple-click (or Ctrl/⌘+click) the document; dragging
 /// selects whole lines and Shift+click extends by lines.

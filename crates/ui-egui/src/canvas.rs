@@ -55,7 +55,7 @@ pub(crate) use cursor::caret_color_on;
 pub(crate) use cursor::caret_contrast;
 pub use cursor::{caret_screen, pos_from_screen};
 pub use geometry::{markup_width, sync_fit_zoom};
-use input::UnitDrag;
+use input::{AddDrag, UnitDrag};
 pub(crate) use input::{hold_document_selection, release_document_selection};
 pub(crate) use links::follow_link;
 #[cfg(test)]
@@ -174,6 +174,11 @@ pub struct CanvasState {
     /// A drag after a double-click, triple-click or Ctrl/⌘+click: the unit it extends by, the
     /// unit first selected, and the last position the pointer hit.
     unit_drag: Option<UnitDrag>,
+    /// A Ctrl/⌘+press with text already selected (#1031): what it adds to the selection.
+    add_drag: Option<AddDrag>,
+    /// The last press was a Ctrl/⌘+click that added a sentence to the selection, so a
+    /// Ctrl/⌘+double-click there adds just the word instead.
+    last_add: bool,
     pub last_highlight: String,
     pub last_font_color: String,
     pub last_shading: String,
@@ -417,6 +422,8 @@ impl Default for CanvasState {
             column_drag: None,
             hf_press_switched: false,
             unit_drag: None,
+            add_drag: None,
+            last_add: false,
             last_highlight: "yellow".into(),
             last_font_color: "C00000".into(),
             last_shading: "FFF2CC".into(),

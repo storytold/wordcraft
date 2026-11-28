@@ -26,6 +26,7 @@ pub mod lists;
 pub mod mailings;
 pub mod md_source;
 pub mod moves;
+pub mod multi;
 pub mod objects;
 pub mod options;
 pub mod outline;
@@ -66,6 +67,7 @@ pub fn registry() -> Registry {
     v.extend(text::specs());
     v.extend(caret::specs());
     v.extend(column::specs());
+    v.extend(multi::specs());
     v.extend(edit::specs());
     v.extend(paste::specs());
     v.extend(format::specs());
