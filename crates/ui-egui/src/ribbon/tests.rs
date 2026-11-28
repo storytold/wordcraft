@@ -767,6 +767,129 @@ fn table_shading_label_is_painted_beside_its_arrow() {
     crate::i18n::apply_language(crate::i18n::Lang::EN);
 }
 
+/// The Font Color arrow's name: "Font Color options", in the interface language (#3172).
+fn font_color_options() -> String {
+    crate::i18n::fmt(tl!("{name} options"), &[("name", tl!("Font Color"))])
+}
+
+/// The rectangle of the first node named `name` (a text's value is its name) whose role `keep` accepts.
+fn rect_named(h: &Harness, name: &str, keep: impl Fn(egui::accesskit::Role) -> bool) -> egui::Rect {
+    let named = By::new().predicate(move |n| n.label().as_deref() == Some(name) || n.value().as_deref() == Some(name));
+    h.query_all(named).find(|n| keep(n.accesskit_node().role())).unwrap_or_else(|| panic!("nothing named {name:?}")).rect()
+}
+
+/// The name of the focused swatch.
+fn focused_swatch(h: &Harness) -> Option<String> {
+    use egui::accesskit::Role;
+    h.query_all(By::new().role(Role::ListBoxOption)).find(|n| n.accesskit_node().is_focused()).and_then(|n| n.accesskit_node().label())
+}
+
+/// #7938: the Font Color drop-down shows its swatches in sections under visible captions, in order: Automatic,
+/// Theme Colors, Standard Colors, Recent Colors, then More Colors….
+#[test]
+fn the_font_color_drop_down_shows_its_sections_under_captions_in_order() {
+    use egui::accesskit::Role;
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.ui.recent_colors = vec!["7A3EC8".into()];
+    let mut h = tab_harness(app, "Home");
+    click_button(&mut h, &font_color_options());
+    let mut above = rect_named(&h, "Automatic", |role| role == Role::MenuItem).bottom();
+    for name in ["Theme Colors", "Standard Colors", "Recent Colors"] {
+        let caption = rect_named(&h, name, |role| role != Role::ListBox);
+        let swatches = rect_named(&h, name, |role| role == Role::ListBox);
+        assert!(caption.top() >= above - 0.5, "{name}'s caption comes after the section above it");
+        assert!(swatches.top() >= caption.bottom() - 0.5, "{name}'s swatches lie under its caption");
+        above = swatches.bottom();
+    }
+    assert!(rect_named(&h, "More Colors…", |role| role == Role::MenuItem).top() >= above - 0.5, "More Colors… comes last");
+}
+
+/// #7938: the theme colours lie in ten columns, each a theme colour over its tints and shades as v0.19.1 drew them:
+/// three rows lighter by 80, 60 and 40 per cent of the way to white, then two darker by 25 and 50 per cent. The
+/// columns are light 1, dark 1, light 2, dark 2 and the six accents; the hyperlink colours are not among them.
+#[test]
+fn theme_colours_lie_in_ten_columns_over_their_tints_and_shades() {
+    use egui::accesskit::Role;
+    use wordcraft_doc::Rgb;
+    // A made-up theme in the document's order: dark 1, light 1, dark 2, light 2, six accents, two hyperlink colours.
+    let theme = [
+        Rgb(0x10, 0x20, 0x30),
+        Rgb(0xF0, 0xE8, 0xE0),
+        Rgb(0x20, 0x30, 0x40),
+        Rgb(0xE0, 0xD8, 0xD0),
+        Rgb(0x33, 0x66, 0xCC),
+        Rgb(0xCC, 0x66, 0x33),
+        Rgb(0x33, 0x99, 0x66),
+        Rgb(0x99, 0x66, 0x33),
+        Rgb(0x66, 0x33, 0x99),
+        Rgb(0x33, 0x66, 0x99),
+        Rgb(0x00, 0x00, 0xEE),
+        Rgb(0x55, 0x1A, 0x8B),
+    ];
+    let mut doc = wordcraft_doc::Document::new();
+    doc.settings.theme_colors = theme.to_vec();
+    let mut h = tab_harness(WordApp::new(Session::new(doc), crate::Services::default()), "Home");
+    click_button(&mut h, &font_color_options());
+    let shift = |v: u8, row: usize| {
+        let v = u32::from(v);
+        let shifted = match row {
+            0 => v,
+            1 => v + (255 - v) * 80 / 100,
+            2 => v + (255 - v) * 60 / 100,
+            3 => v + (255 - v) * 40 / 100,
+            4 => v * 75 / 100,
+            _ => v * 50 / 100,
+        };
+        u8::try_from(shifted).expect("a channel")
+    };
+    let expected: Vec<String> = (0..6)
+        .flat_map(|row| {
+            [1, 0, 3, 2, 4, 5, 6, 7, 8, 9].into_iter().map(move |i: usize| {
+                let c = theme[i];
+                format!("#{}", Rgb(shift(c.0, row), shift(c.1, row), shift(c.2, row)).hex())
+            })
+        })
+        .collect();
+    let table = h.get_by_role_and_label(Role::ListBox, "Theme Colors");
+    let cells: Vec<(String, egui::Rect)> =
+        table.query_all(By::new().role(Role::ListBoxOption)).map(|n| (n.accesskit_node().label().unwrap_or_default(), n.rect())).collect();
+    let names: Vec<&str> = cells.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, expected, "six rows of ten: the theme colours, then their tints and shades");
+    for (at, (name, cell)) in cells.iter().enumerate() {
+        let (row_start, column_top) = (cells[at / 10 * 10].1, cells[at % 10].1);
+        assert!((cell.top() - row_start.top()).abs() < 0.5, "{name} lies in row {}", at / 10);
+        assert!((cell.left() - column_top.left()).abs() < 0.5, "{name} lies in column {}", at % 10);
+    }
+    assert!(cells[1].1.left() > cells[0].1.right() && cells[10].1.top() > cells[0].1.bottom(), "the swatches lie apart");
+}
+
+/// #7938: the keys move through the drop-down's sections: Down walks a theme colour's column through its tints and
+/// shades, Tab moves on to Standard Colors, and Space there applies the standard colour.
+#[test]
+fn keys_walk_a_theme_column_then_tab_on_to_standard_colors() {
+    use egui::accesskit::Role;
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("document.setText", json!({"text": "Colours by keyboard"})).unwrap();
+    app.run("select.all", json!({})).unwrap();
+    let mut h = tab_harness(app, "Home");
+    click_button(&mut h, &font_color_options());
+    h.get_by_role_and_label(Role::ListBox, "Theme Colors").query_all(By::new().role(Role::ListBoxOption)).next().expect("a theme colour").focus();
+    crate::test_harness::frames(&mut h, 2);
+    assert_eq!(focused_swatch(&h).as_deref(), Some("#FFFFFF"), "the first column is light 1");
+    for _ in 0..5 {
+        h.key_press(egui::Key::ArrowDown);
+        crate::test_harness::frames(&mut h, 2);
+    }
+    assert_eq!(focused_swatch(&h).as_deref(), Some("#7F7F7F"), "five Downs reach light 1's darkest shade");
+    h.key_press(egui::Key::Tab);
+    crate::test_harness::frames(&mut h, 2);
+    assert_eq!(focused_swatch(&h).as_deref(), Some("#C00000"), "Tab moves on to Standard Colors, at its first swatch");
+    h.key_press(egui::Key::Space);
+    crate::test_harness::frames(&mut h, 3);
+    let colour = wordcraft_engine::cmd::format::state(&h.state().session).get("color").cloned();
+    assert_eq!(colour, Some(json!("C00000")), "Space applies the standard colour");
+}
+
 fn first_cell_shading(app: &WordApp) -> Option<wordcraft_doc::Rgb> {
     app.session.doc.body.iter().find_map(|b| b.as_table()).unwrap().rows[0].cells[0].props.shading
 }
