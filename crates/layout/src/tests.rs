@@ -17799,3 +17799,33 @@ fn header_text_covers_the_whole_band_of_centred_and_right_lines() {
         assert!(hit(x + left - 60.0), "{align:?}: beyond 40pt left of the band the picture is hit");
     }
 }
+
+#[test]
+fn many_list_definitions_keep_the_list_numbering_in_order() {
+    use wordcraft_doc::numbering::{AbstractNum, Level, Num};
+    use wordcraft_doc::props::NumRef;
+
+    let mut doc = Document::from_text(&(0..512).map(|i| format!("Item {i}")).collect::<Vec<_>>().join("\n"));
+    let numbering = Arc::make_mut(&mut doc.numbering);
+    numbering.abstracts = (0..12_000).map(|id| AbstractNum { id, levels: vec![Level::default()], ..Default::default() }).collect();
+    numbering.nums = (1..=12_000).map(|id| Num { id, abstract_id: id - 1, ..Default::default() }).collect();
+    for block in &mut doc.body {
+        let Block::Para(p) = Arc::make_mut(block) else { panic!("paragraph fixture") };
+        p.props.numbering = Some(NumRef { num: 12_000, level: 0 });
+        p.props.space_before = Some(0.0);
+        p.props.space_after = Some(0.0);
+    }
+    let layout = lay(&doc);
+    let labels: Vec<_> = layout
+        .pages
+        .iter()
+        .flat_map(|page| &page.items)
+        .filter_map(|item| match item {
+            Placed::Lines { story: StoryRef::Body, para, .. } => para.label.as_ref().map(|label| label.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(labels.len(), 512);
+    assert_eq!(labels.first().copied(), Some("1."));
+    assert_eq!(labels.last().copied(), Some("512."));
+}

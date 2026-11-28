@@ -109,6 +109,55 @@ pub struct Numbering {
     pub nums: Vec<Num>,
 }
 
+/// Borrowed definition lookups for a walk over immutable numbering. The first occurrence of
+/// each id wins, as in the linear methods; the public vectors and saved data are unchanged.
+pub struct NumberingIndex<'a> {
+    nums: HashMap<u32, &'a Num>,
+    abstracts: HashMap<u32, &'a AbstractNum>,
+}
+
+impl<'a> NumberingIndex<'a> {
+    pub fn new(numbering: &'a Numbering) -> Self {
+        let mut nums = HashMap::new();
+        let mut abstracts = HashMap::new();
+        for n in &numbering.nums {
+            nums.entry(n.id).or_insert(n);
+        }
+        for a in &numbering.abstracts {
+            abstracts.entry(a.id).or_insert(a);
+        }
+        Self { nums, abstracts }
+    }
+
+    pub fn num(&self, id: u32) -> Option<&'a Num> {
+        self.nums.get(&id).copied()
+    }
+
+    pub fn abstract_of(&self, num: u32) -> Option<&'a AbstractNum> {
+        self.abstract_for(self.num(num)?)
+    }
+
+    fn abstract_for(&self, num: &Num) -> Option<&'a AbstractNum> {
+        self.abstracts.get(&num.abstract_id).copied()
+    }
+
+    pub fn level(&self, num: u32, level: u8) -> Option<&'a Level> {
+        let n = self.num(num)?;
+        n.level(self.abstract_for(n), level)
+    }
+
+    /// Whether a paragraph has a defined label, without advancing the counters.
+    pub fn shows_label(&self, num: u32, level: u8) -> bool {
+        self.num(num).is_some_and(|n| self.abstract_for(n).is_some_and(|a| n.level(Some(a), level.min(8)).is_some()))
+    }
+}
+
+impl Num {
+    fn level<'a>(&'a self, abstract_num: Option<&'a AbstractNum>, level: u8) -> Option<&'a Level> {
+        self.level_overrides.iter().find(|(i, _)| *i == level).map(|(_, l)| l).or_else(|| abstract_num?.levels.get(level as usize))
+    }
+}
+
 /// Built-in list kinds for the Bullets / Numbering / Multilevel galleries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -321,10 +370,28 @@ impl Counters {
     /// Advance the counter for `num`/`level` and return the label (`"1."`, `"a)"`, `"•"`).
     pub fn next_label(&mut self, numbering: &Numbering, num: u32, level: u8) -> Option<(String, Level)> {
         let n = numbering.num(num)?;
+        let abs = numbering.abstracts.iter().find(|a| a.id == n.abstract_id)?;
+        self.next_label_from(n, abs, level)
+    }
+
+    /// Like [`Self::next_label`], using one walk's borrowed definition index.
+    pub fn next_label_indexed(&mut self, numbering: &NumberingIndex<'_>, num: u32, level: u8) -> Option<(String, Level)> {
+        let n = numbering.num(num)?;
+        let abs = numbering.abstract_for(n)?;
+        self.next_label_from(n, abs, level)
+    }
+
+    /// Like [`Self::values`], using one walk's borrowed definition index.
+    pub fn values_indexed(&self, numbering: &NumberingIndex<'_>, num: u32) -> Option<[u32; 9]> {
         let abs = numbering.abstract_of(num)?;
+        Some(self.state.get(&abs.id).copied().unwrap_or([0; 9]))
+    }
+
+    fn next_label_from(&mut self, n: &Num, abs: &AbstractNum, level: u8) -> Option<(String, Level)> {
+        let num = n.id;
         let lv = (level as usize).min(8);
         // This list's own definition of a level wins over its abstract list's.
-        let level_def = |k: usize| numbering.level(num, k as u8);
+        let level_def = |k: usize| n.level(Some(abs), k as u8);
         // A "none" level (Word's numFmt none) still counts and restarts the levels below it; only
         // its number reads as nothing, so its literal text ("RESPONSE:") shows (#4985).
         let def = level_def(lv)?.clone();
@@ -378,7 +445,7 @@ impl Counters {
         let vals = *st;
         let started = *fl;
         let numeric = def.format != NumFormat::Bullet;
-        let label = if numeric { render_label(numbering, num, &def, &vals, &started) } else { def.text.clone() };
+        let label = if numeric { render_label(level_def, &def, &vals, &started) } else { def.text.clone() };
         // A "none" level shows its literal text, but has no number of its own for a reference to
         // show (#4985): it is kept as one that shows none.
         let counted = if def.format == NumFormat::None {
@@ -400,18 +467,19 @@ impl Counters {
     /// the last paragraph at that level showed (`"14."` while walking clause 14's sub-clauses).
     /// `None` for a bullet or "none" level, or a level the list doesn't define.
     pub fn current_label(&self, numbering: &Numbering, num: u32, level: u8) -> Option<String> {
-        let abs = numbering.abstract_of(num)?;
+        let n = numbering.num(num)?;
+        let abs = numbering.abstracts.iter().find(|a| a.id == n.abstract_id)?;
         if let Some(last) = self.labels.get(&(abs.id, level.min(8))) {
             return last.label.clone();
         }
         // A deeper item can count a level implicitly without rendering a paragraph there.
-        let def = numbering.level(num, level.min(8))?;
+        let def = n.level(Some(abs), level.min(8))?;
         if matches!(def.format, NumFormat::None | NumFormat::Bullet) {
             return None;
         }
         let vals = self.state.get(&abs.id).copied().unwrap_or([0; 9]);
         let started = self.flags.get(&abs.id).copied().unwrap_or_default();
-        Some(render_label(numbering, num, def, &vals, &started))
+        Some(render_label(|k| n.level(Some(abs), k as u8), def, &vals, &started))
     }
 
     /// Levels shown by the last rendered label, or the current definition for an implicit level.
@@ -444,8 +512,7 @@ pub fn template_levels(text: &str) -> Vec<usize> {
 }
 
 /// Render a list label without advancing counters, retaining the existing hostile-input caps.
-fn render_label(numbering: &Numbering, num: u32, def: &Level, vals: &[u32; 9], started: &[LevelFlags; 9]) -> String {
-    let level_def = |k: usize| numbering.level(num, k as u8);
+fn render_label<'a>(level_def: impl Fn(usize) -> Option<&'a Level>, def: &Level, vals: &[u32; 9], started: &[LevelFlags; 9]) -> String {
     let mut label = String::new();
     // Word's level text is short; .docx and the lists command already cap it at 64.
     let mut chars = def.text.chars().take(MAX_LEVEL_TEXT).peekable();
@@ -457,10 +524,11 @@ fn render_label(numbering: &Numbering, num: u32, def: &Level, vals: &[u32; 9], s
             let k = (d as usize).saturating_sub(1).min(8);
             let val = vals.get(k).copied().unwrap_or(0);
             let counted = started.get(k).is_some_and(|f| f.started);
-            let val = if counted { val } else { level_def(k).map(|l| l.start).unwrap_or(1) };
+            let level = level_def(k);
+            let val = if counted { val } else { level.map_or(1, |l| l.start) };
             // Legal numbering (w:isLgl) shows every level in Arabic digits, whatever its own
             // format (二 of a Chinese outline becomes 2 in "2.1"); a "none" level stays empty.
-            let fmt = match level_def(k).map(|l| l.format).unwrap_or(NumFormat::Decimal) {
+            let fmt = match level.map_or(NumFormat::Decimal, |l| l.format) {
                 f @ (NumFormat::DecimalZero | NumFormat::None) => f,
                 _ if def.legal => NumFormat::Decimal,
                 f => f,
@@ -772,5 +840,73 @@ mod tests {
         assert_eq!(n.level(r, 0), Some(&own));
         let mut c = Counters::default();
         assert_eq!(c.next_label(&n, r, 0).unwrap().0, "Part V");
+    }
+
+    #[test]
+    fn definition_index_keeps_first_ids_overrides_and_missing_definitions() {
+        let override_level = Level { start: 0, text: "own %1".into(), ..Default::default() };
+        let n = Numbering {
+            abstracts: vec![
+                AbstractNum { id: 7, levels: levels_for(ListKind::Numbered), ..Default::default() },
+                AbstractNum { id: 7, levels: levels_for(ListKind::Bullet), ..Default::default() },
+                AbstractNum { id: 8, levels: Vec::new(), ..Default::default() },
+            ],
+            nums: vec![
+                Num { id: 0, abstract_id: 7, ..Default::default() },
+                Num { id: 1, abstract_id: 7, ..Default::default() },
+                Num { id: 1, abstract_id: 8, ..Default::default() },
+                Num { id: 2, abstract_id: 99, level_overrides: vec![(0, override_level.clone())], ..Default::default() },
+                Num { id: 3, abstract_id: 8, level_overrides: vec![(0, override_level), (0, Level::default())], ..Default::default() },
+            ],
+        };
+        let index = NumberingIndex::new(&n);
+        for id in [0, 1, 2, 3, 7, 99, u32::MAX] {
+            assert_eq!(index.num(id), n.num(id));
+            assert_eq!(index.abstract_of(id), n.abstract_of(id));
+            for level in [0, 1, 2, 8, 9, u8::MAX] {
+                assert_eq!(index.level(id, level), n.level(id, level));
+                assert_eq!(index.shows_label(id, level), n.shows_label(id, level));
+            }
+        }
+        assert_eq!(index.level(3, 0).unwrap().start, 0);
+        assert!(index.level(2, 0).is_some(), "a local override exists even without its abstract");
+        assert!(!index.shows_label(2, 0), "counting still requires the abstract list");
+    }
+
+    #[test]
+    fn indexed_counters_preserve_shared_state_starts_and_restarts() {
+        let mut n = Numbering::default();
+        let a = n.add_list(ListKind::Legal);
+        let b = n.restart(a).unwrap();
+        let bullet = n.add_list(ListKind::Bullet);
+        let none = n.add_list(ListKind::Numbered);
+        n.abstracts[0].levels[0].start = 0;
+        n.abstracts[0].levels[1].restart_after = Some(1);
+        n.abstracts[0].levels[2].restart = false;
+        n.abstracts[0].levels[3].format = NumFormat::DecimalZero;
+        n.nums[0].start_overrides = vec![(1, 5), (1, 99)];
+        n.nums[1].start_overrides = vec![(0, 9), (2, 0)];
+        n.nums[1].level_overrides = vec![
+            (2, Level { format: NumFormat::UpperRoman, text: "%1.%2.%3.".into(), legal: true, ..Default::default() }),
+            (2, Level { format: NumFormat::None, ..Default::default() }),
+        ];
+        let literal = &mut n.abstracts.last_mut().unwrap().levels[0];
+        literal.format = NumFormat::None;
+        literal.text = "RESPONSE: %1".into();
+        literal.legal = true;
+        let index = NumberingIndex::new(&n);
+        let (mut linear, mut indexed) = (Counters::default(), Counters::default());
+        let sequence = [(a, 2), (a, 0), (a, 1), (a, 2), (a, 1), (b, 2), (b, 0), (a, 2), (a, 3), (bullet, 0), (none, 0), (a, 255), (999, 0)];
+        for (num, level) in sequence.into_iter().cycle().take(120) {
+            assert_eq!(indexed.next_label_indexed(&index, num, level), linear.next_label(&n, num, level), "{num}/{level}");
+            for id in [a, b, bullet, none, 999] {
+                assert_eq!(indexed.values_indexed(&index, id), linear.values(&n, id));
+            }
+        }
+        assert!(index.shows_label(none, 0));
+        assert_eq!(indexed.next_label_indexed(&index, none, 0).unwrap().0, "RESPONSE: ");
+        assert_eq!(indexed.next_label_indexed(&index, none, 0), linear.next_label(&n, none, 0));
+        assert_eq!(indexed.current_label(&n, none, 0), None);
+        assert_eq!(indexed.current_label(&n, a, 0), linear.current_label(&n, a, 0));
     }
 }
