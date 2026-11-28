@@ -124,6 +124,8 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 ## Revision history
 
 | Date | Change | Summary |
+| 2026-10-16 | trivial | File › Save As exposes Save as Template and File › New can browse and create from a `.dotx`; spacing defaults survive the round trip (#1913) |
+| 2026-10-15 | trivial | Design › Paragraph Spacing presets update built-in paragraph styles, so existing styled paragraphs follow the preset (#1913) |
 |---|---|---|
 | 2026-11-17 | trivial | Format Shape pane adds Line section (No line, Solid line with color, width, dash type, and cap type) and Layout & Properties section (size, rotation, and text box direction and vertical alignment), routes active canvas text-box edits to the member while leaving grouped text boxes disabled, rejects unknown outline `dash`/`cap` values, and applies Line and Layout edits across multi-shape selections (#5896) |
 | 2026-11-15 | trivial | Paste: a copied table pasted with the caret in a table cell inserts its rows above (caret in the first column, same width) or overwrites the cells from the caret's, adding rows and columns, as Word's Paste does; `edit.pasteNestedTable` (Paste as Nested Table) nests it (#6739). Pasted cells take the destination's cell formatting (Word keeps the source's: not done). Left as before: copies with merged cells, pictures or ragged rows, merged destinations, a one-column destination, Track Changes, PasteAppendTable. Paste into selected cells overwrites from the top-left for plain grids, even when the copied table is wider than the selection (#6742). |

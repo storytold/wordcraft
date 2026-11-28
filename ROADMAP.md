@@ -592,6 +592,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-15 | Rulers: the numbers thin out as the page shrinks on screen (every 1, 2, 4… units, at least 30 px apart, the small ticks at least 4 px apart), give way to the indent, tab and column markers, and the margins get ticks only; both rulers span the caret's page at its own scale in One Page and Multiple Pages and follow the caret to another page (#1878) |
 | 2026-10-15 | Spelling as you type no longer flags the word being typed; the squiggle comes when the word ends or the caret leaves it, as in Word (#1552) |
 | 2026-10-15 | Text Highlight Color: No Color becomes the Highlight button's choice, as in Word, so the next click on the button removes highlighting instead of applying the colour picked before; the ribbon and the mini toolbar share one menu (#2105) |
+| 2026-10-15 | trivial | Progress log: Design › Paragraph Spacing presets update built-in paragraph styles, so existing styled paragraphs follow the preset (#1913) |
 | 2026-10-14 | Insert › Date & Time and DATE, TIME and other date fields show the computer's local date, time and weekday, daylight saving included, as Word does (#1707); they showed UTC, so a user in New Zealand at noon on 31 October got 30 October 23:00. Timestamps saved in files (revisions, comments, document properties) stay UTC. Backstage's greeting follows the local hour too |
 | 2026-10-14 | DOCX row table border exceptions render and survive saving. Explicit cell borders win; a row exception does not change other rows. |
 | 2026-10-14 | Tab stops edited on the ruler: the corner selector picks Left/Center/Right/Decimal/Bar, a click sets a stop (Alt skips the snap), dragging moves it with a guide line and position tooltip, dragging off the ruler clears it; markers draw per kind and mirror for RTL; one `para.tabs` call and one undo step per gesture |
@@ -954,6 +955,7 @@ Quoted field escapes are interpreted like Word, and body `PAGE` fields use their
 Section page-numbering settings preserve `w:chapStyle` values across the full unsigned-byte range.
 MATH glyphs that reference the same construction now share its immutable variants and assembly data (#3630). Glyph mappings, values and the existing partial-record fallback stay unchanged. Repeated glyph IDs keep their last valid reference without retaining superseded constructions. Distinct overlapping constructions and assembly-only sharing remain separate.
 
+- 2026-10-15: Design › Paragraph Spacing presets update built-in paragraph styles, so existing styled paragraphs follow the preset; custom paragraph styles keep their own spacing (#1913). Readiness unchanged.
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
 
 ## Revision history

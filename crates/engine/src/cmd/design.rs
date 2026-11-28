@@ -3,7 +3,7 @@
 use serde_json::{Value, json};
 use std::sync::Arc;
 use wordcraft_doc::props::{Border, BorderStyle, Borders, CharProps, LineSpacing, Rgb, TextColor};
-use wordcraft_doc::{Watermark, styles};
+use wordcraft_doc::{StyleKind, Watermark, styles};
 
 use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
@@ -209,9 +209,16 @@ fn para_spacing(s: &mut Session, v: &Value) -> CmdResult {
         "double" => (0.0, 8.0, 2.0),
         _ => (0.0, 8.0, 1.15),
     };
-    Arc::make_mut(&mut s.doc.styles).default_para.space_before = Some(before);
-    Arc::make_mut(&mut s.doc.styles).default_para.space_after = Some(after);
-    Arc::make_mut(&mut s.doc.styles).default_para.line_spacing = Some(LineSpacing::Multiple(line));
+    let st = Arc::make_mut(&mut s.doc.styles);
+    let apply = |p: &mut wordcraft_doc::props::ParaProps| {
+        p.space_before = Some(before);
+        p.space_after = Some(after);
+        p.line_spacing = Some(LineSpacing::Multiple(line));
+    };
+    apply(&mut st.default_para);
+    for style in st.styles.iter_mut().filter(|style| style.builtin && style.kind == StyleKind::Paragraph) {
+        apply(&mut style.para);
+    }
     sel_result(s)
 }
 
@@ -294,4 +301,35 @@ fn page_borders(s: &mut Session, v: &Value) -> CmdResult {
         s.doc.section_mut(block).page_borders = borders;
     }
     sel_result(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use wordcraft_doc::{Document, Style};
+
+    #[test]
+    fn paragraph_spacing_preset_updates_builtin_styles_and_keeps_custom_styles() {
+        let mut s = Session::new(Document::new());
+        Arc::make_mut(&mut s.doc.styles).styles.push(Style {
+            id: "CustomSpacing".into(),
+            name: "Custom Spacing".into(),
+            kind: StyleKind::Paragraph,
+            builtin: false,
+            para: wordcraft_doc::props::ParaProps { space_after: Some(24.0), ..Default::default() },
+            ..Default::default()
+        });
+
+        s.run("design.paragraphSpacing", &json!({"value": "double"})).unwrap();
+
+        let normal = s.doc.styles.get("Normal").unwrap();
+        assert_eq!(normal.para.line_spacing, Some(LineSpacing::Multiple(2.0)));
+        let heading = s.doc.styles.get("Heading1").unwrap();
+        assert_eq!((heading.para.space_before, heading.para.space_after), (Some(0.0), Some(8.0)));
+        assert_eq!(heading.para.line_spacing, Some(LineSpacing::Multiple(2.0)));
+        let custom = s.doc.styles.get("CustomSpacing").unwrap();
+        assert_eq!(custom.para.space_after, Some(24.0));
+        assert_eq!(custom.para.line_spacing, None);
+    }
 }
