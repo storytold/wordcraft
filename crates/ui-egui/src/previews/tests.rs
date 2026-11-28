@@ -53,3 +53,23 @@ fn font_sample_shows_small_caps_and_the_script_mark() {
     assert_ne!(draw(&plain, None, false), draw(&plain, sup, false), "the mark is drawn");
     assert_ne!(draw(&plain, None, false), draw(&plain, None, true), "Switch Modes transforms the preview");
 }
+
+/// #7975: a symbol in the Equation tab's strip reads in its tile, not as a speck. The real tile is 24 x 52 pt and the
+/// picture is fitted into it, so the ink as shown spans a third of the tile's width; wide arrows and operators keep
+/// their whole ink inside the picture (no clipping).
+#[test]
+fn symbol_thumbnails_read_in_the_strips_real_tiles() {
+    let tile = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(24.0, 52.0));
+    for c in ['=', '+', '\u{221E}', '\u{00B1}', '\u{27F9}', '\u{27FA}', '\u{27F7}', '\u{2230}'] {
+        let source = crate::equation_tab::symbol_source(c, Color32::WHITE);
+        let size = source.size_for(&cell_request(tile, 1.0));
+        let img = math_image(&source.nodes, source.display, source.pt, size.x, size.y, 1.0).expect("renders");
+        let [w, h] = img.size;
+        let inked: Vec<(usize, usize)> = (0..w * h).filter(|i| img.pixels[*i].a() > 64).map(|i| (i % w, i / w)).collect();
+        let (lo, hi) = (inked.iter().map(|p| p.0).min().unwrap_or(0), inked.iter().map(|p| p.0).max().unwrap_or(0));
+        let fit = (tile.width() / w as f32).min(tile.height() / h as f32);
+        let shown = (hi - lo + 1) as f32 * fit;
+        assert!(shown * 3.0 >= tile.width(), "{c} is a speck: {shown} pt wide in a {} pt tile", tile.width());
+        assert!(lo > 0 && hi + 1 < w, "{c} touches the picture's edge ({lo}..{hi} of {w})");
+    }
+}

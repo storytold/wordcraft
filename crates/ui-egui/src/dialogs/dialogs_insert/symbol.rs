@@ -38,6 +38,7 @@ pub struct RecentSymbol {
 }
 
 /// Characters per row of the Symbols map (Word's grid is 16 wide).
+// lean: the cap assumes this many columns; read the laid-out count if the map becomes resizable.
 const GRID_COLUMNS: usize = 16;
 /// Rows of the Symbols map shown before it scrolls.
 const GRID_ROWS: usize = 8;
