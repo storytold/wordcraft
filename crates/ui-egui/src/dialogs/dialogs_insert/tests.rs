@@ -160,6 +160,21 @@ fn symbol_dialog_shows_the_map_in_rows() {
     h.get_by_label("from Unicode (hex)");
 }
 
+/// #7973: Insert Diagram offers every layout in its grid, not the first row of three.
+#[test]
+fn insert_diagram_dialog_shows_every_layout() {
+    use egui::accesskit::Role;
+    let mut h = testing::harness(app());
+    crate::dialogs::open(h.state_mut(), "insertSmartArt", &json!({})).expect("the dialog opens");
+    // The tiles' heights settle over a few passes.
+    h.run_steps(10);
+    let grid = h.get_by_role_and_label(Role::ListBox, "Layouts").rect();
+    for layout in wordcraft_doc::smart_art::SmartArtLayout::ALL {
+        let shown = h.query_all_by_label(layout.label()).any(|n| grid.contains(n.rect().center()));
+        assert!(shown, "{} is shown in the grid", layout.label());
+    }
+}
+
 /// The Field dialog builds the field code from its options.
 #[test]
 fn field_dialog_builds_the_instruction() {
