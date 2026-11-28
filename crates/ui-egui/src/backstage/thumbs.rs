@@ -1,10 +1,17 @@
 //! The template thumbnails of the File page: the first page of each built-in template, drawn in a
 //! throwaway session so the user's document is never touched.
 
-use craft::ui::primitives::{ContentPainterCx, Priority, Revision, ThumbPaint, ThumbRender, ThumbRequest, ThumbSource, ThumbnailOptions, Thumbnails};
+use craft::ui::primitives::{
+    ContentPainterCx, Priority, Revision, ThumbFit, ThumbPaint, ThumbRender, ThumbRequest, ThumbSource, ThumbnailOptions, Thumbnails,
+};
 use craft::ui::shell::ThumbKey;
-use craft::ui::style::{Corners, SurfaceKind};
+use craft::ui::style::{Corners, DataColor, SurfaceKind};
 use serde_json::json;
+
+/// The shape of a document page in `region`, wide to high (Letter 17:22 or A4 70:99).
+pub(crate) fn page_aspect(region: &wordcraft_geom::Region) -> (u16, u16) {
+    if region.uses_letter() { (17, 22) } else { (70, 99) }
+}
 
 /// The salt every reader of the File page's thumbnails asks the store with, so New, Home and the
 /// recent rows share one loader and one set of pictures.
@@ -20,7 +27,8 @@ pub(crate) fn store(ctx: &egui::Context) -> Thumbnails<ThumbKey> {
 pub(crate) fn paint(cx: &ContentPainterCx, rect: egui::Rect, store: &Thumbnails<ThumbKey>, source: &dyn ThumbSource<ThumbKey>, key: &ThumbKey) {
     let request = ThumbRequest::for_cell(rect.width().max(rect.height()), cx.pixels_per_point());
     let state = store.state(cx.painter.ctx(), source, key, &request, Priority::VISIBLE);
-    if !store.paint(cx, rect, &state, &ThumbPaint::default()) {
+    let paint = ThumbPaint::default().fit(ThumbFit::Cover).checker(false).paper(DataColor::new(egui::Color32::WHITE));
+    if !store.paint(cx, rect, &state, &paint) {
         cx.surface(rect, SurfaceKind::Sunken, Corners::None);
     }
 }

@@ -287,7 +287,7 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, layout: &DocLayout, body: &Pa
             );
         }
     }
-    if out.apply || out.discard {
+    if out.apply.is_some() || out.discard {
         leave(app);
     }
 }

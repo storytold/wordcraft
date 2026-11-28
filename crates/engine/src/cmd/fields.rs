@@ -398,6 +398,28 @@ mod tests {
         assert!(!page_text(&mut s).contains("{ AUTHOR }"));
     }
 
+    /// #980: F11 is full screen, as people expect of a desktop app; the field walk keeps Word's
+    /// other keys, Alt+F1 and Alt+Shift+F1 (and Shift+F11).
+    #[test]
+    fn f11_is_full_screen_and_alt_f1_walks_fields() {
+        let s = Session::new(wordcraft_doc::Document::new());
+        let keymap = crate::keymap::registry_keymap(&s.registry, s.keymap());
+        let chord = |c: &str| craft_keymap::Chord::parse(c).unwrap();
+        let key = |k: &str| keymap.holder(&chord(k)).map(|c| c.id);
+        assert_eq!(key("F11").as_deref(), Some("view.fullScreen"));
+        assert_eq!(key("Alt+F1").as_deref(), Some("fields.next"));
+        assert_eq!(key("Alt+Shift+F1").as_deref(), Some("fields.previous"));
+        assert_eq!(key("Shift+F11").as_deref(), Some("fields.previous"));
+        assert_eq!(key("Mod+F11").as_deref(), Some("fields.lock"));
+        let shortcut = s.registry.get("view.fullScreen").map(|c| c.shortcut);
+        if cfg!(target_os = "macos") {
+            assert_eq!(shortcut, Some("Mod+Ctrl+F / F11"));
+            assert_eq!(key("Mod+Ctrl+F").as_deref(), Some("view.fullScreen"));
+        } else {
+            assert_eq!(shortcut, Some("F11"));
+        }
+    }
+
     /// Editing a code changes the instruction and the result; lock keeps a result through updates;
     /// unlink turns the field into its text in one undo step; Alt+F1/Shift+F11 walk the fields.
     #[test]

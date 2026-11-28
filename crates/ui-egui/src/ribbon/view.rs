@@ -86,7 +86,7 @@ pub(super) fn view(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .show(ui);
         Button::command(CommandRef::new("view.zoom100"))
             .label(tl!("100%").to_string())
-            .icon(IconId::new("zoom100"))
+            .icon(crate::icons::spec("zoom100"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
         // Step the zoom up and down by 10% (issue #67), from whatever the page shows now.
@@ -191,10 +191,10 @@ pub(super) fn view(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .arrangement(Arrangement::Stacked)
             .show(ui);
     });
-    row.group(RibbonGroup::new("view.templates", tl!("Templates").to_string(), IconId::new("documentTemplate").into()), |ui| {
+    row.group(RibbonGroup::new("view.templates", tl!("Templates").to_string(), crate::icons::spec("documentTemplate")), |ui| {
         Button::command(CommandRef::new("tools.templates"))
             .label(tl!("Templates").to_string())
-            .icon(IconId::new("documentTemplate"))
+            .icon(crate::icons::spec("documentTemplate"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
     });

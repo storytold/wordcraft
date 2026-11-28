@@ -233,6 +233,7 @@ pub fn measure_table_columns(doc: &wordcraft_doc::Document, t: &Table) -> Vec<(f
                 grid: crate::para::Grid::default(),
                 fit_objects: false,
                 fitted: &[],
+                joined: false,
             };
             let (mut min, mut max) = (EMPTY_TEXT, EMPTY_TEXT);
             if cell.props.vmerge != VMerge::Continue && !cell.props.text_direction.is_turned() {
@@ -926,6 +927,18 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     let own_depth = row.items.iter().filter_map(|it| if let Placed::Cell { table, .. } = it { Some(table.0.len()) } else { None }).min();
     // The first line of each paragraph that moves on (`l1` when all of them stay), by cell and
     // item.
+    // The top of a cell's text on this page decides which paragraph starts the cell's part of the
+    // page. Only text in the flow counts: a floating picture or shape anchored in the cell can sit
+    // above it without the text being any less the first.
+    let content_top = |it: &Placed| -> Option<f32> {
+        if background(it) {
+            return None;
+        }
+        if let Some((_, _, _, y)) = text_lines(it) {
+            return Some(y);
+        }
+        it.turned_bounds().map(|r| r.y)
+    };
     let splits: Vec<Vec<usize>> = cells
         .iter()
         .zip(&ends)
@@ -933,13 +946,18 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
             // Where the cell's text ends: the paragraph ending lowest is the cell's last.
             let lowest =
                 items.iter().filter_map(|it| text_lines(it).and_then(|(p, l0, l1, y)| crate::item_bottom(y, p, l0, l1))).fold(f32::MIN, f32::max);
+            // The top of what the cell holds on this page: a paragraph there starts the cell's
+            // part of the page, so a row that doesn't start below other content has nowhere to
+            // move it to (see `line_split`).
+            let cell_top = items.iter().filter_map(&content_top).fold(f32::MAX, f32::min);
             items
                 .iter()
                 .map(|it| {
                     let Some((para, l0, l1, y)) = text_lines(it) else { return 0 };
                     // The cell's last paragraph ends with the cell's content (its space after).
                     let last = l1 == para.lines.len() && crate::item_bottom(y, para, l0, l1).is_some_and(|b| b >= lowest - 0.01);
-                    line_split(para, (l0, l1), y, limit, end.filter(|_| last))
+                    let first = !whole_cells && y <= cell_top + 0.01;
+                    line_split(para, (l0, l1), y, limit, end.filter(|_| last), first)
                 })
                 .collect()
         })
@@ -1262,7 +1280,16 @@ fn text_lines(it: &Placed) -> Option<(&ParaLayout, usize, usize, f32)> {
 /// above `limit`: the last line of a cell's last paragraph needs room down to the cell's content
 /// `end`, its space after. Widow control keeps two lines on either side of the break, or moves
 /// the paragraph on whole.
-fn line_split(para: &ParaLayout, (l0, l1): (usize, usize), y: f32, limit: f32, end: Option<f32>) -> usize {
+///
+/// `first`: the paragraph is the topmost content of its cell on a page the row doesn't start
+/// below other content on (the row continues from the page before, or starts the page). Moving
+/// it whole would gain nothing, and Word then splits it where the lines fall (measured with
+/// synthetic documents, Word for Windows 16.0, compatibility mode 15): a lone first line stays,
+/// and a three-line paragraph with room for two splits two and one, not leaving the first line
+/// alone (a continuation's lone line stays too). A paragraph of four lines or more still takes
+/// one more line along with its widow.
+/// Without this, nothing was kept and the row ran off the bottom of the page (#6823).
+fn line_split(para: &ParaLayout, (l0, l1): (usize, usize), y: f32, limit: f32, end: Option<f32>, first: bool) -> usize {
     let n = para.lines.len();
     let mut k = l0;
     while k < l1 {
@@ -1276,12 +1303,16 @@ fn line_split(para: &ParaLayout, (l0, l1): (usize, usize), y: f32, limit: f32, e
     // The body's rule differs: there a widow takes a line along only when three or more lines are
     // on the page (`place_para_in_flow`).
     if para.rp.widow_control && k > l0 && k < l1 {
-        // A widow: take one more line along.
+        // A widow: take one more line along, unless that leaves nothing of a paragraph that
+        // starts the page on it, or its first line alone.
         if n - k == 1 {
-            k -= 1;
+            let taken = k - 1;
+            if !(first && (taken <= l0 || (l0 == 0 && taken == 1))) {
+                k = taken;
+            }
         }
         // An orphan (the first line alone): the paragraph moves on whole.
-        if l0 == 0 && k == 1 {
+        if l0 == 0 && k == 1 && !first {
             k = 0;
         }
     }

@@ -1,0 +1,1677 @@
+{
+  "base": "8dc309afe132bb09e90e7b19faf99cbfaf82db81",
+  "lookup_sites_all_rust_targets": [
+    {
+      "file": "crates/validate/src/lib.rs",
+      "sites": [
+        {
+          "line": 822,
+          "text": "        let Some(entry) = entry_by_name(pkg, name) else { continue };"
+        },
+        {
+          "line": 905,
+          "text": "    if package::content_unavailable(pkg, \"[Content_Types].xml\") {"
+        },
+        {
+          "line": 1868,
+          "text": "            if let Some(name) = package::canonical_entry(pkg, target) {"
+        },
+        {
+          "line": 1924,
+          "text": "            if !pkg.entries_truncated && package::canonical_entry(pkg, target).is_none() {"
+        },
+        {
+          "line": 2034,
+          "text": "                if !package::content_unavailable(pkg, \"[Content_Types].xml\") {"
+        },
+        {
+          "line": 2097,
+          "text": "    if package::content_unavailable(pkg, \"[Content_Types].xml\") {"
+        },
+        {
+          "line": 2214,
+          "text": "    let entry_present = entry_by_name(pkg, &owner).is_some();"
+        },
+        {
+          "line": 2304,
+          "text": "            let part = canonical_entry(pkg, target).unwrap_or_else(|| target.clone());"
+        },
+        {
+          "line": 2693,
+          "text": "    Resolution::discovered(target.and_then(|name| entry_by_name(pkg, name)), !discovery_unavailable(pkg, Some(owner)))"
+        },
+        {
+          "line": 2756,
+          "text": "        None => package::content_unavailable(pkg, \"[Content_Types].xml\") || pkg.content_types.incomplete,"
+        },
+        {
+          "line": 2780,
+          "text": "        && !package::content_unavailable(pkg, \"[Content_Types].xml\")"
+        },
+        {
+          "line": 3228,
+          "text": "    let entry = entry_by_name(pkg, name)?;"
+        },
+        {
+          "line": 3298,
+          "text": "    let Some(entry) = entry_by_name(pkg, styles_name) else { return };"
+        },
+        {
+          "line": 3650,
+          "text": "            if custom_xml_owners.contains(&i) || package::content_unavailable(pkg, \"[Content_Types].xml\") {"
+        },
+        {
+          "line": 5854,
+          "text": "        assert!(entry_by_name(&pkg, \"word/vendor.dat\").unwrap().decode_error.is_none());"
+        }
+      ]
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "sites": [
+        {
+          "line": 990,
+          "text": "pub(crate) fn canonical_entry(pkg: &Package, name: &str) -> Option<String> {"
+        },
+        {
+          "line": 1022,
+          "text": "pub(crate) fn content_unavailable(pkg: &Package, name: &str) -> bool {"
+        },
+        {
+          "line": 1023,
+          "text": "    entry_by_name(pkg, name).is_some_and(|e| e.content_unavailable)"
+        },
+        {
+          "line": 1161,
+          "text": "    ((pkg.entries_truncated || pkg.identity_incomplete) && entry_by_name(pkg, &name).is_none())"
+        },
+        {
+          "line": 1162,
+          "text": "        || content_unavailable(pkg, &name)"
+        },
+        {
+          "line": 1205,
+          "text": "        && !content_unavailable(pkg, \"_rels/.rels\")"
+        }
+      ]
+    }
+  ],
+  "derives_and_fields": [
+    {
+      "file": "lib.rs",
+      "line": 87,
+      "type": "Limits",
+      "derives": [
+        "Debug",
+        "Clone",
+        "Copy"
+      ],
+      "definition": "#[derive(Debug, Clone, Copy)]\npub(crate) struct Limits {\n    /// Largest input accepted by [`validate_bytes`] (512 MiB).\n    pub input_bytes: usize,\n    /// Most zip entries examined (20 000).\n    pub entries: usize,\n    /// Largest single decompressed part examined (256 MiB).\n    pub part_bytes: u64,\n    /// Largest total of all decompressed parts (512 MiB).\n    pub total_bytes: u64,\n    /// Deepest XML element nesting examined (512).\n    pub depth: usize,\n    /// Most XML events examined per part (2 000 000).\n    pub events: usize,\n    /// Most collected facts per category (200 000).\n    pub facts: usize,\n    /// Most coverage notes recorded (10 000).\n    pub notes: usize,\n    /// Most findings recorded per rule (5 000).\n    pub findings_per_rule: usize,\n}\n"
+    },
+    {
+      "file": "lib.rs",
+      "line": 127,
+      "type": "Verdict",
+      "derives": [
+        "Debug",
+        "Clone",
+        "Copy",
+        "PartialEq",
+        "Eq",
+        "Serialize"
+      ],
+      "definition": "#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]\npub enum Verdict {\n    /// No Corrupt or Error finding, and every required input was examined.\n    Pass,\n    /// At least one Corrupt or Error finding.\n    Fail,\n    /// A required input could not be examined at all.\n    Incomplete,\n}\n"
+    },
+    {
+      "file": "lib.rs",
+      "line": 139,
+      "type": "Severity",
+      "derives": [
+        "Debug",
+        "Clone",
+        "Copy",
+        "PartialEq",
+        "Eq",
+        "Serialize"
+      ],
+      "definition": "#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]\npub enum Severity {\n    /// Structurally unusable as a document (for example, not a ZIP or missing its manifest).\n    Corrupt,\n    /// Consumer refusal, repair, or loss of referenced content, as calibrated for this rule.\n    Error,\n    /// A tolerated defect or degradation worth reporting, including some specification violations.\n    Warning,\n}\n"
+    },
+    {
+      "file": "lib.rs",
+      "line": 150,
+      "type": "Evidence",
+      "derives": [
+        "Debug",
+        "Clone",
+        "Copy",
+        "PartialEq",
+        "Eq",
+        "Serialize"
+      ],
+      "definition": "#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]\npub enum Evidence {\n    /// Structurally certain at the XML/package level; does not establish a consumer reaction.\n    ByConstruction,\n    /// Documented by OOXML or Microsoft's format/implementation specifications.\n    MsDocumented,\n    /// Consumer reaction observed on a defective fixture in a named Word oracle, with fixture,\n    /// date, and consumer/open-path details recorded in corpus/EVIDENCE.md. One consumer's reaction\n    /// does not establish another's.\n    Observed,\n    /// Concluded from the package contents.\n    Inferred,\n}\n"
+    },
+    {
+      "file": "lib.rs",
+      "line": 165,
+      "type": "Finding",
+      "derives": [
+        "Debug",
+        "Clone",
+        "PartialEq",
+        "Eq",
+        "Serialize"
+      ],
+      "definition": "#[derive(Debug, Clone, PartialEq, Eq, Serialize)]\npub struct Finding {\n    /// Stable rule id, e.g. `\"REL-DANGLING\"`.\n    pub rule: &'static str,\n    pub severity: Severity,\n    pub evidence: Evidence,\n    /// The package part the finding belongs to, if any.\n    pub part: Option<String>,\n    /// Human-readable, naming the concrete id or value involved.\n    pub message: String,\n}\n"
+    },
+    {
+      "file": "lib.rs",
+      "line": 178,
+      "type": "Report",
+      "derives": [
+        "Debug",
+        "Clone",
+        "PartialEq",
+        "Eq",
+        "Serialize"
+      ],
+      "definition": "#[derive(Debug, Clone, PartialEq, Eq, Serialize)]\npub struct Report {\n    pub verdict: Verdict,\n    /// Deterministic order: by part, then rule id, then message.\n    pub findings: Vec<Finding>,\n    /// Things skipped within a completed run.\n    pub coverage_notes: Vec<String>,\n    /// Every rule id that executed, in the documented order.\n    pub checks_run: Vec<&'static str>,\n}\n"
+    },
+    {
+      "file": "lib.rs",
+      "line": 191,
+      "type": "RuleSpec",
+      "derives": [
+        "Debug",
+        "Clone",
+        "Copy"
+      ],
+      "definition": "#[derive(Debug, Clone, Copy)]\npub(crate) struct RuleSpec {\n    pub id: &'static str,\n    pub severity: Severity,\n    pub evidence: Evidence,\n}\n"
+    },
+    {
+      "file": "lib.rs",
+      "line": 556,
+      "type": "Acc",
+      "derives": [
+        "Default"
+      ],
+      "definition": "#[derive(Default)]\npub(crate) struct Acc {\n    findings: Vec<Finding>,\n    coverage: Vec<String>,\n    checks: Vec<&'static str>,\n    incomplete: bool,\n    limits: Limits,\n    rule_counts: HashMap<&'static str, usize>,\n    /// An entry was found whose identity could not be recovered. It could be any part, so no\n    /// absence conclusion is established while this is set (see [`contracts_generated::PACKAGE_ABSENCE_RULES`]).\n    unknown_unreadable: bool,\n}\n"
+    },
+    {
+      "file": "lib.rs",
+      "line": 1002,
+      "type": "Compat",
+      "derives": [
+        "Clone",
+        "Copy",
+        "PartialEq",
+        "Eq"
+      ],
+      "definition": "#[derive(Clone, Copy, PartialEq, Eq)]\nenum Compat {\n    Off,\n    On,\n    Unknown,\n}\n"
+    },
+    {
+      "file": "observed.rs",
+      "line": 7,
+      "type": "Completeness",
+      "derives": [
+        "Clone",
+        "Copy",
+        "Debug",
+        "PartialEq",
+        "Eq"
+      ],
+      "definition": "#[derive(Clone, Copy, Debug, PartialEq, Eq)]\npub(crate) enum Completeness {\n    Complete,\n    Incomplete(Reason),\n}\n"
+    },
+    {
+      "file": "observed.rs",
+      "line": 14,
+      "type": "Observed",
+      "derives": [
+        "Clone",
+        "Debug"
+      ],
+      "definition": "#[derive(Clone, Debug)]\npub(crate) struct Observed<T> {\n    observed_value: T,\n    observed_status: Completeness,\n}\n"
+    },
+    {
+      "file": "observed.rs",
+      "line": 89,
+      "type": "CompleteSet",
+      "derives": [
+        "Clone",
+        "Debug"
+      ],
+      "definition": "#[derive(Clone, Debug)]\npub(crate) struct CompleteSet<K>(HashSet<K>);"
+    },
+    {
+      "file": "ownership.rs",
+      "line": 6,
+      "type": "PartId",
+      "derives": [
+        "Clone",
+        "Debug",
+        "PartialEq",
+        "Eq",
+        "PartialOrd",
+        "Ord",
+        "Hash"
+      ],
+      "definition": "#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]\npub(crate) struct PartId(String);"
+    },
+    {
+      "file": "ownership.rs",
+      "line": 20,
+      "type": "OwnerId",
+      "derives": [
+        "Clone",
+        "Copy",
+        "Debug",
+        "PartialEq",
+        "Eq",
+        "PartialOrd",
+        "Ord",
+        "Hash"
+      ],
+      "definition": "#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]\npub(crate) struct OwnerId(pub(crate) usize);"
+    },
+    {
+      "file": "ownership.rs",
+      "line": 24,
+      "type": "OwnerContext",
+      "derives": [
+        "Clone",
+        "Debug",
+        "PartialEq",
+        "Eq"
+      ],
+      "definition": "#[derive(Clone, Debug, PartialEq, Eq)]\npub(crate) enum OwnerContext {\n    Main(String),\n    Glossary(String),\n    Fallback,\n}\n"
+    },
+    {
+      "file": "ownership.rs",
+      "line": 41,
+      "type": "Membership",
+      "derives": [
+        "Debug"
+      ],
+      "definition": "#[derive(Debug)]\npub(crate) enum Membership {\n    Owned(Vec<OwnerId>),\n    Unowned,\n    Unknown,\n}\n"
+    },
+    {
+      "file": "ownership.rs",
+      "line": 86,
+      "type": "PartGraph",
+      "derives": [
+        "Debug"
+      ],
+      "definition": "#[derive(Debug)]\npub(crate) struct PartGraph {\n    memberships: BTreeMap<PartId, Membership>,\n    budget_exhausted: bool,\n    memberships_complete: bool,\n}\n"
+    },
+    {
+      "file": "package.rs",
+      "line": 91,
+      "type": "ContentTypes",
+      "derives": [
+        "Default"
+      ],
+      "definition": "#[derive(Default)]\npub(crate) struct ContentTypes {\n    overrides: HashMap<String, String>,\n    /// Later declarations were not examined; absence and Default fallbacks are unestablished.\n    pub incomplete: bool,\n    defaults: HashMap<String, String>,\n    /// Extensions with more than one Default entry (lowercased).\n    pub dup_defaults: BTreeSet<String>,\n    /// Part names with more than one Override entry (lowercased, leading `/` stripped).\n    pub dup_overrides: BTreeSet<String>,\n}\n"
+    },
+    {
+      "file": "resolution.rs",
+      "line": 7,
+      "type": "Resolution",
+      "derives": [
+        "Clone",
+        "Copy",
+        "Debug",
+        "PartialEq",
+        "Eq"
+      ],
+      "definition": "#[derive(Clone, Copy, Debug, PartialEq, Eq)]\npub(crate) enum Resolution<T> {\n    /// The uniquely observed candidate.\n    One(T),\n    /// Complete discovery found no candidate.\n    Absent,\n    /// Distinct candidates compete.\n    Ambiguous(Reason),\n    /// Discovery could not establish a candidate set.\n    Unknown(Reason),\n}\n"
+    },
+    {
+      "file": "scan.rs",
+      "line": 17,
+      "type": "NumericKey",
+      "derives": [
+        "Clone",
+        "Debug",
+        "PartialEq",
+        "Eq",
+        "PartialOrd",
+        "Ord",
+        "Hash"
+      ],
+      "definition": "#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]\nenum NumericKey {\n    Valid(String),\n    Invalid(String),\n}\n"
+    },
+    {
+      "file": "scan.rs",
+      "line": 26,
+      "type": "$name",
+      "derives": [
+        "Clone",
+        "Debug"
+      ],
+      "definition": "#[derive(Clone, Debug)]\n        pub(crate) struct $name {\n            key: NumericKey,\n            raw: String,\n        }\n"
+    },
+    {
+      "file": "scan.rs",
+      "line": 122,
+      "type": "$name",
+      "derives": [
+        "Clone",
+        "Debug",
+        "PartialEq",
+        "Eq",
+        "PartialOrd",
+        "Ord",
+        "Hash"
+      ],
+      "definition": "#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]\n        pub(crate) struct $name(String);"
+    },
+    {
+      "file": "scan.rs",
+      "line": 162,
+      "type": "PartRole",
+      "derives": [
+        "Clone",
+        "Copy",
+        "Default",
+        "Debug",
+        "PartialEq",
+        "Eq"
+      ],
+      "definition": "#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]\npub(crate) enum PartRole {\n    #[default]\n    Unknown,\n    Main,\n    Glossary,\n    Story,\n    Comments,\n    Footnotes,\n    Endnotes,\n    Settings,\n    Conflicting(u8),\n}\n"
+    },
+    {
+      "file": "scan.rs",
+      "line": 228,
+      "type": "StoryFacts",
+      "derives": [
+        "Clone",
+        "Default"
+      ],
+      "definition": "#[derive(Clone, Default)]\npub(crate) struct StoryFacts {\n    pub comment_defs: Observed<Vec<(DecimalId, String)>>,\n    pub comment_refs: Observed<Vec<(DecimalId, String)>>,\n    /// `w:commentRangeStart` occurrences across this part. A plain counter, not\n    /// a pooled fact: 32k ranges must not consume the pooled fact budget.\n    pub comment_range_starts: usize,\n    /// `w:bookmarkStart` occurrences in this part (compat-count counter).\n    pub bookmark_starts: usize,\n    /// `w:permStart` occurrences in this part (compat-count counter).\n    pub perm_starts: usize,\n    /// `w:moveFromRangeStart` + `w:moveToRangeStart` occurrences in this part\n    /// (compat-count counter).\n    pub move_range_starts: usize,\n    /// `w14:paraId` values on paragraphs in comments.xml (for `COMMENTEX-LINK`).\n    pub comment_para_ids: Observed<Vec<(HexId, String)>>,\n    pub docpr: Observed<Vec<(DecimalId, String)>>,\n    pub bookmarks: Observed<Vec<(DecimalId, String)>>,\n    pub revisions: Observed<Vec<(DecimalId, String)>>,\n    pub footnote_refs: Observed<Vec<(DecimalId, String)>>,\n    pub endnote_refs: Observed<Vec<(DecimalId, String)>>,\n    pub footnote_defs: Observed<Vec<(DecimalId, String)>>,\n    pub endnote_defs: Observed<Vec<(DecimalId, String)>>,\n    pub header_refs: Observed<Vec<(RelId, String)>>,\n    pub footer_refs: Observed<Vec<(RelId, String)>>,\n    pub style_refs: Observed<Vec<(StyleId, String)>>,\n    /// `w:numId/@w:val` values used by `w:numPr` in story parts (for `NUM-DANGLING`).\n    pub num_ids: Observed<Vec<(DecimalId, String)>>,\n}\n"
+    },
+    {
+      "file": "scan.rs",
+      "line": 260,
+      "type": "RefFact",
+      "derives": [
+        "Clone"
+      ],
+      "definition": "#[derive(Clone)]\npub(crate) struct RefFact {\n    pub attr: String,\n    pub value: RelId,\n    /// The reference is the image target of an image element (`a:blip`, `v:imagedata`).\n    pub image: bool,\n}\n"
+    },
+    {
+      "file": "scan.rs",
+      "line": 416,
+      "type": "Exhaustion",
+      "derives": [
+        "Clone",
+        "Copy"
+      ],
+      "definition": "#[derive(Clone, Copy)]\nenum Exhaustion {\n    Events,\n    Depth,\n}\n"
+    },
+    {
+      "file": "scan.rs",
+      "line": 570,
+      "type": "TcEnd",
+      "derives": [
+        "Clone",
+        "Copy",
+        "PartialEq",
+        "Eq"
+      ],
+      "definition": "#[derive(Clone, Copy, PartialEq, Eq)]\nenum TcEnd {\n    /// A paragraph satisfies the cell's terminal-block requirement.\n    Paragraph,\n    /// A nested table: the one non-paragraph ending calibration shows Word rejecting.\n    Other,\n}\n"
+    },
+    {
+      "file": "scan.rs",
+      "line": 630,
+      "type": "State",
+      "derives": [
+        "Default"
+      ],
+      "definition": "#[derive(Default)]\nstruct State {\n    /// This settings part carries `w:uiCompat97to2003` (the Word 97\u20132003\n    /// compatibility flag the count limits key on).\n    compat_97: bool,\n    /// Special note definitions in this part: (id, is_endnote, w:type).\n    special_notes: Vec<(DecimalId, bool, String)>,\n    /// Ids listed by `w:footnotePr` elements in this part.\n    note_listings_f: Vec<DecimalId>,\n    /// Ids listed by `w:endnotePr` elements in this part.\n    note_listings_e: Vec<DecimalId>,\n    /// A note definition or listing was dropped at the fact budget.\n    note_capped: bool,\n    declared: Vec<Vec<String>>,\n    frames: Vec<Frame>,\n    del_depth: i64,\n    wrapper_depth: i64,\n    fld_depth: i64,\n    fld_extra_end: usize,\n    move_from_start: BTreeSet<DecimalId>,\n    move_from_end: BTreeSet<DecimalId>,\n    move_to_start: BTreeSet<DecimalId>,\n    move_to_end: BTreeSet<DecimalId>,\n    move_from_names: BTreeSet<String>,\n    move_to_names: BTreeSet<String>,\n    move_start_ids: Vec<DecimalId>,\n    bookmark_starts: BTreeSet<DecimalId>,\n    bookmark_ends: BTreeSet<DecimalId>,\n    /// Comment range ids in the parts where Word honours ranges (main and\n    /// glossary stories, outside text boxes); paired at scan completion.\n    comment_range_start_ids: BTreeSet<DecimalId>,\n    comment_range_end_ids: BTreeSet<DecimalId>,\n    /// Canonical `w14:paraId` values seen in this part, with their\n    /// occurrence contexts (PARAID-DUP; judged at the prefix report \u2014\n    /// a repeat across one block's Choice and Fallback is excused,\n    /// every other repeat is a duplicate).\n    para_ids: BTreeMap<HexId, ParaOcc>,\n    /// The stack of enclosing `mc:AlternateContent` blocks: a sequence\n    /// number per block and the branch instance the scan is currently\n    /// inside it (0 = inside no branch element).\n    alt_stack: Vec<AltCtx>,\n    /// Sequence number source for `alt_stack` entries.\n    alt_seq: u32,\n    /// Instance number source for branch elements (`mc:Choice` /\n    /// `mc:Fallback`): every branch element gets its own number, so\n    /// two Choices of one block are distinct alternatives.\n    alt_branch_seq: u32,\n    /// Nonzero while inside an `mc:AlternateContent` subtree.\n    alt_depth: usize,\n    /// One coverage note per part that contains `mc:AlternateContent`.\n    alt_noted: bool,\n    /// The per-category fact budget, copied from [`crate::Limits`].\n    fact_cap: usize,\n    /// A fact budget was exhausted; no further facts are collected.\n    fact_capped: bool,\n    /// The reference budget was exhausted; no further `r:id`/`r:embed`/`r:link` values are kept.\n    refs_capped: bool,\n    facts: StoryFacts,\n}\n"
+    },
+    {
+      "file": "scan.rs",
+      "line": 691,
+      "type": "DecodeError",
+      "derives": [
+        "Debug",
+        "Clone",
+        "PartialEq",
+        "Eq"
+      ],
+      "definition": "#[derive(Debug, Clone, PartialEq, Eq)]\npub(crate) enum DecodeError {\n    /// The bytes are not valid text in the declared encoding (invalid UTF-8, an unpaired surrogate,\n    /// or a truncated trailing unit): the part is not well-formed XML.\n    Malformed(String),\n    /// The part declares an encoding this checker does not support; its checks are skipped.\n    Unsupported(String),\n    /// The part begins an XML declaration that does not terminate within the scan bound, so the\n    /// encoding cannot be decided (H6); the part's checks are skipped and the run is INCOMPLETE.\n    IncompleteDeclaration,\n}\n"
+    },
+    {
+      "file": "scan.rs",
+      "line": 1518,
+      "type": "ParaOcc",
+      "derives": [
+        "Default"
+      ],
+      "definition": "#[derive(Default)]\nstruct ParaOcc {\n    /// Retained representative paths, pairwise non-conflicting.\n    reps: Vec<ParaPath>,\n    /// A pair of occurrences that can coexist was seen: a duplicate.\n    conflict: bool,\n    /// More mutually excused occurrences arrived than are retained;\n    /// uniqueness is unprovable for this value.\n    overflow: bool,\n}\n"
+    },
+    {
+      "file": "scan.rs",
+      "line": 2614,
+      "type": "NumberingDefs",
+      "derives": [
+        "Default"
+      ],
+      "definition": "#[derive(Default)]\npub(crate) struct NumberingDefs {\n    pub num_ids: Vec<DecimalId>,\n    pub abstract_ids: Vec<DecimalId>,\n    /// Each `w:num`'s `numId` and the `w:abstractNumId` it references, if any.\n    pub num_to_abstract: Vec<(DecimalId, Option<DecimalId>)>,\n    /// The per-category budget was exhausted while parsing.\n    pub capped: bool,\n}\n"
+    },
+    {
+      "file": "scan.rs",
+      "line": 2904,
+      "type": "StyleDef",
+      "derives": [
+        "Default"
+      ],
+      "definition": "#[derive(Default)]\npub(crate) struct StyleDef {\n    /// The `w:style/@w:styleId` value, if present.\n    pub id: Option<StyleId>,\n    /// The first `w:name/@w:val` inside the style, if present.\n    pub name: Option<String>,\n    /// Whether a `w:name` child was seen at all: the FIRST name\n    /// element owns the primary-name slot even when it carries no\n    /// value, so a later sibling never replaces it.\n    pub name_seen: bool,\n    /// The `w:style/@w:type` value, if present.\n    pub style_type: Option<String>,\n}\n"
+    },
+    {
+      "file": "scan.rs",
+      "line": 3321,
+      "type": "CommentEx",
+      "derives": [
+        "Default"
+      ],
+      "definition": "#[derive(Default)]\npub(crate) struct CommentEx {\n    pub entries: Vec<(HexId, Option<HexId>)>,\n    /// The per-category budget was exhausted while parsing.\n    pub capped: bool,\n}\n"
+    },
+    {
+      "file": "model.rs",
+      "line": 33,
+      "type": "MaxOccurs",
+      "derives": [
+        "Debug",
+        "Clone",
+        "Copy",
+        "PartialEq",
+        "Eq"
+      ],
+      "definition": "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub(crate) enum MaxOccurs {\n    /// At most this many occurrences.\n    Limited(u16),\n    /// No upper bound (`maxOccurs=\"unbounded\"`).\n    Unbounded,\n}\n"
+    },
+    {
+      "file": "model.rs",
+      "line": 42,
+      "type": "Compositor",
+      "derives": [
+        "Debug",
+        "Clone",
+        "Copy",
+        "PartialEq",
+        "Eq"
+      ],
+      "definition": "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub(crate) enum Compositor {\n    /// `xsd:sequence`: slots in a fixed order.\n    Sequence,\n    /// `xsd:choice`: one of the slots sharing a `choice_group`.\n    Choice,\n    /// `xsd:all`: each slot at most once, any order.\n    All,\n}\n"
+    },
+    {
+      "file": "model.rs",
+      "line": 53,
+      "type": "ChildSpec",
+      "derives": [
+        "Debug",
+        "Clone",
+        "Copy",
+        "PartialEq",
+        "Eq"
+      ],
+      "definition": "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub(crate) struct ChildSpec {\n    /// Prefixed element name, e.g. `w:tblPr`; `<any>` for an `xsd:any` wildcard.\n    pub name: &'static str,\n    /// Minimum occurrences, with the enclosing particles' minOccurs multiplied in.\n    pub min: u16,\n    /// Maximum occurrences, with the enclosing particles' maxOccurs multiplied in.\n    pub max: MaxOccurs,\n    /// The compositor this slot sits in.\n    pub compositor: Compositor,\n    /// The choice group id shared by the members of one `xsd:choice`, if any.\n    pub choice_group: Option<&'static str>,\n    /// Index of this slot in the type's flattened child list.\n    pub position: u16,\n}\n"
+    },
+    {
+      "file": "model.rs",
+      "line": 70,
+      "type": "TypeModel",
+      "derives": [
+        "Debug",
+        "Clone",
+        "Copy",
+        "PartialEq",
+        "Eq"
+      ],
+      "definition": "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub(crate) struct TypeModel {\n    /// Namespace-qualified type key, e.g. `w:CT_Tc`, `a:CT_FontCollection`.\n    pub key: &'static str,\n    /// The type's child slots in flattened schema order.\n    pub children: &'static [ChildSpec],\n}\n"
+    },
+    {
+      "file": "model.rs",
+      "line": 79,
+      "type": "Variant",
+      "derives": [
+        "Debug",
+        "Clone",
+        "Copy",
+        "PartialEq",
+        "Eq"
+      ],
+      "definition": "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub(crate) struct Variant {\n    /// The type key of this declaration (may name a simple or out-of-scope type\n    /// that has no [`TypeModel`]; such an element is unmodelled).\n    pub type_key: &'static str,\n    /// Parent type keys this variant is selected under (group contexts expanded).\n    pub contexts: &'static [&'static str],\n}\n"
+    },
+    {
+      "file": "model.rs",
+      "line": 89,
+      "type": "ElementModel",
+      "derives": [
+        "Debug",
+        "Clone",
+        "Copy",
+        "PartialEq",
+        "Eq"
+      ],
+      "definition": "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub(crate) struct ElementModel {\n    /// Prefixed element name, e.g. `w:sectPr`.\n    pub name: &'static str,\n    /// The type key used in the most declaration contexts.\n    pub canonical: &'static str,\n    /// Every declared type, sorted by type key.\n    pub variants: &'static [Variant],\n}\n"
+    }
+  ],
+  "package_producer_and_loss_sites": [
+    {
+      "line": 86,
+      "text": "    pub content_unavailable: bool,"
+    },
+    {
+      "line": 231,
+      "text": "pub(crate) struct Package {"
+    },
+    {
+      "line": 249,
+      "text": "    pub entries_truncated: bool,"
+    },
+    {
+      "line": 251,
+      "text": "    pub identity_incomplete: bool,"
+    },
+    {
+      "line": 272,
+      "text": "    let entries_truncated = zip.len() > limits.entries;"
+    },
+    {
+      "line": 273,
+      "text": "    if entries_truncated {"
+    },
+    {
+      "line": 282,
+      "text": "    let mut unknown_unreadable = false;"
+    },
+    {
+      "line": 300,
+      "text": "                    Some(n) if n.ends_with('/') => entries.push(blank_entry(n, true)),"
+    },
+    {
+      "line": 304,
+      "text": "                    Some(n) => entries.push(blank_entry(n, false)),"
+    },
+    {
+      "line": 308,
+      "text": "                    // established (see `Acc::set_unknown_unreadable` and `ABSENCE_RULES`)."
+    },
+    {
+      "line": 309,
+      "text": "                    None => unknown_unreadable = true,"
+    },
+    {
+      "line": 316,
+      "text": "            entries.push(blank_entry(name, true));"
+    },
+    {
+      "line": 323,
+      "text": "            entries.push(blank_entry(name, false));"
+    },
+    {
+      "line": 329,
+      "text": "            entries.push(blank_entry(name, false));"
+    },
+    {
+      "line": 337,
+      "text": "                entries.push(blank_entry(name, false));"
+    },
+    {
+      "line": 341,
+      "text": "                entries.push(text_entry(name, buf));"
+    },
+    {
+      "line": 348,
+      "text": "                entries.push(blank_entry(name, false));"
+    },
+    {
+      "line": 353,
+      "text": "    if unknown_unreadable {"
+    },
+    {
+      "line": 354,
+      "text": "        acc.set_unknown_unreadable();"
+    },
+    {
+      "line": 364,
+      "text": "    if !content_types_present && !entries_truncated {"
+    },
+    {
+      "line": 367,
+      "text": "    let mut content_types = ContentTypes { incomplete: !content_types_present && entries_truncated, ..ContentTypes::default() };"
+    },
+    {
+      "line": 373,
+      "text": "        content_types.incomplete = true;"
+    },
+    {
+      "line": 378,
+      "text": "        content_types.incomplete = true;"
+    },
+    {
+      "line": 383,
+      "text": "    content_types.incomplete |= ct_at.and_then(|i| entries.get(i)).is_some_and(|e| e.content_unavailable);"
+    },
+    {
+      "line": 397,
+      "text": "    for e in entries.iter_mut().filter(|e| !e.is_dir) {"
+    },
+    {
+      "line": 420,
+      "text": "    let package_rels_unavailable = entries.iter().any(|e| !e.is_dir && e.name.eq_ignore_ascii_case(\"_rels/.rels\") && e.content_unavailable);"
+    },
+    {
+      "line": 421,
+      "text": "    let discovery_complete = !entries_truncated && !unknown_unreadable && !package_rels_unavailable && !package_rels.is_some_and(|rp| rp.incomplete);"
+    },
+    {
+      "line": 434,
+      "text": "        glossary_part(&entries, &content_types, &rels, main_name, !entries_truncated && !unknown_unreadable)"
+    },
+    {
+      "line": 443,
+      "text": "    Some(Package {"
+    },
+    {
+      "line": 453,
+      "text": "        entries_truncated,"
+    },
+    {
+      "line": 454,
+      "text": "        identity_incomplete: unknown_unreadable,"
+    },
+    {
+      "line": 517,
+      "text": "            && !entries.iter().any(|e| e.name.eq_ignore_ascii_case(\"[Content_Types].xml\") && e.content_unavailable)"
+    },
+    {
+      "line": 521,
+      "text": "                    && !entries.iter().any(|e| e.name.eq_ignore_ascii_case(&want) && e.content_unavailable)"
+    },
+    {
+      "line": 534,
+      "text": "    Entry { name, bytes: None, is_dir, decoded: None, decode_error: None, content_unavailable: !is_dir }"
+    },
+    {
+      "line": 557,
+      "text": "    let content_unavailable = decode_error.is_some();"
+    },
+    {
+      "line": 558,
+      "text": "    Entry { name, bytes: Some(bytes), is_dir: false, decoded, decode_error, content_unavailable }"
+    },
+    {
+      "line": 577,
+      "text": "    e.content_unavailable = decode_error.is_some();"
+    },
+    {
+      "line": 1022,
+      "text": "pub(crate) fn content_unavailable(pkg: &Package, name: &str) -> bool {"
+    },
+    {
+      "line": 1023,
+      "text": "    entry_by_name(pkg, name).is_some_and(|e| e.content_unavailable)"
+    },
+    {
+      "line": 1161,
+      "text": "    ((pkg.entries_truncated || pkg.identity_incomplete) && entry_by_name(pkg, &name).is_none())"
+    },
+    {
+      "line": 1162,
+      "text": "        || content_unavailable(pkg, &name)"
+    },
+    {
+      "line": 1203,
+      "text": "    let complete = !pkg.entries_truncated"
+    },
+    {
+      "line": 1204,
+      "text": "        && !pkg.identity_incomplete"
+    },
+    {
+      "line": 1205,
+      "text": "        && !content_unavailable(pkg, \"_rels/.rels\")"
+    },
+    {
+      "line": 1251,
+      "text": "    ct.incomplete |= capped || !complete;"
+    }
+  ],
+  "package_producer_source": "/// Load a zip into the package model. Returns `None` only when the input is not a readable zip\n/// (after a `PKG-NOT-ZIP` finding): every other problem becomes a finding or a coverage note.\npub(crate) fn load(bytes: &[u8], acc: &mut Acc) -> Option<Package> {\n    observation_contract! {\n        rules: \"PKG-NO-CONTENT-TYPES,PKG-NO-MAIN,PKG-NOT-ZIP\";\n        collections: \"field.bytes*1,field.entries*6,field.incomplete*5,field.rels*1,parser.parse_content_types*1,type.Vec*2\";\n        scope: \"source-local bounded extraction; no implicit document owner\";\n        loss: \"source unavailable or malformed; XML event/depth budget; category allocation cap\";\n        fallback: \"retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set\";\n        package_loss: \"PKG-NO-CONTENT-TYPES,PKG-NO-MAIN\";\n    }\n\n    acc.ran(\"PKG-NOT-ZIP\");\n    let Ok(mut zip) = zip::ZipArchive::new(Cursor::new(bytes)) else {\n        acc.add(\"PKG-NOT-ZIP\", None, \"the input is not a readable zip archive\".to_string());\n        return None;\n    };\n    let limits = acc.limits;\n    let entries_truncated = zip.len() > limits.entries;\n    if entries_truncated {\n        acc.note(format!(\"the archive declares {} entries; only the first {} were examined\", zip.len(), limits.entries));\n        acc.set_incomplete();\n    }\n    let limit = zip.len().min(limits.entries);\n    let mut entries = Vec::new();\n    let mut total: u64 = 0;\n    // Set when an entry that failed to open could not be named at all. Its identity is unknown, so\n    // nothing can be concluded about what is absent from the package while it is set.\n    let mut unknown_unreadable = false;\n    for i in 0..limit {\n        // The identity is read before opening: `by_index` holds a mutable borrow of the archive for\n        // the whole match, so the name must be cloned first. Both come from the same table, keyed by\n        // the same index, so the recovered name can never disagree with the entry that failed.\n        let name = zip.name_for_index(i).map(|n| n.trim_start_matches('/').to_string());\n        let mut f = match zip.by_index(i) {\n            Ok(f) => f,\n            Err(_) => {\n                let described = match &name {\n                    Some(n) => format!(\"entry {i} ({n})\"),\n                    None => format!(\"entry {i}\"),\n                };\n                acc.note(format!(\"{described} could not be read from the archive and was not checked\"));\n                acc.set_incomplete();\n                match name {\n                    // A directory entry: never register it as a part (the readable path skips\n                    // directories too, and the unreadable path must not invent one).\n                    Some(n) if n.ends_with('/') => entries.push(blank_entry(n, true)),\n                    // Register the part as present-but-unchecked. Its content is marked unavailable,\n                    // which is what makes every cross-part check that would conclude absence from it\n                    // skip; the marker, not the mere registration, is the mechanism.\n                    Some(n) => entries.push(blank_entry(n, false)),\n                    // `name_for_index` and `by_index` index the same table and the loop is bounded\n                    // by `zip.len()`, so this should be unreachable. If it happens, an entry of\n                    // unknown identity exists: it could be any part, so no absence conclusion is\n                    // established (see `Acc::set_unknown_unreadable` and `ABSENCE_RULES`).\n                    None => unknown_unreadable = true,\n                }\n                continue;\n            }\n        };\n        let name = f.name().trim_start_matches('/').to_string();\n        if f.is_dir() {\n            entries.push(blank_entry(name, true));\n            continue;\n        }\n        let size = f.size();\n        if size > limits.part_bytes {\n            acc.note(format!(\"part {name} is larger than the {}-byte per-part limit and was not checked\", limits.part_bytes));\n            acc.set_incomplete();\n            entries.push(blank_entry(name, false));\n            continue;\n        }\n        if total.saturating_add(size) > limits.total_bytes {\n            acc.note(format!(\"part {name} would take the package past the {}-byte total limit and was not checked\", limits.total_bytes));\n            acc.set_incomplete();\n            entries.push(blank_entry(name, false));\n            continue;\n        }\n        let mut buf = Vec::with_capacity(size.min(1 << 20) as usize);\n        match (&mut f).take(limits.part_bytes + 1).read_to_end(&mut buf) {\n            Ok(_) if buf.len() as u64 > limits.part_bytes => {\n                acc.note(format!(\"part {name} decompresses past the {}-byte per-part limit and was not checked\", limits.part_bytes));\n                acc.set_incomplete();\n                entries.push(blank_entry(name, false));\n            }\n            Ok(_) => {\n                total = total.saturating_add(buf.len() as u64);\n                entries.push(text_entry(name, buf));\n            }\n            Err(_) => {\n                // Any part whose content could not be read leaves the run INCOMPLETE: a check that\n                // depended on it could not run. (This subsumes the old main-part special case.)\n                acc.note(format!(\"part {name} could not be decompressed and was not checked\"));\n                acc.set_incomplete();\n                entries.push(blank_entry(name, false));\n            }\n        }\n    }\n\n    if unknown_unreadable {\n        acc.set_unknown_unreadable();\n    }\n    let cd = central_directory(bytes, acc.limits.entries);\n    check_duplicate_entries(cd.as_ref(), acc);\n    check_case_collisions(cd.as_ref(), &entries, acc);\n\n    let ct_at = entries.iter().position(|e| !e.is_dir && e.name.eq_ignore_ascii_case(\"[Content_Types].xml\"));\n    acc.ran(\"PKG-NO-CONTENT-TYPES\");\n    let content_types_present = ct_at.is_some();\n    // The archive suffix may hold the manifest; a prefix cannot establish its absence.\n    if !content_types_present && !entries_truncated {\n        acc.add(\"PKG-NO-CONTENT-TYPES\", None, \"the package has no [Content_Types].xml part, so part content types cannot be resolved\".to_string());\n    }\n    let mut content_types = ContentTypes { incomplete: !content_types_present && entries_truncated, ..ContentTypes::default() };\n    let mut ct_guard = ParseGuard::new(limits.events, limits.depth);\n    if let Some(e) = ct_at.and_then(|i| entries.get(i))\n        && let Some(text) = &e.decoded\n        && parse_content_types(text, &mut content_types, limits.entries, &mut ct_guard)\n    {\n        content_types.incomplete = true;\n        acc.note(format!(\"[Content_Types].xml declares more than {} entries; later ones were not recorded\", limits.entries));\n        acc.set_incomplete();\n    }\n    if ct_guard.exhausted() {\n        content_types.incomplete = true;\n        acc.note(format!(\"[Content_Types].xml exceeded the XML {} budget; later declarations were not recorded\", ct_guard.budget()));\n        acc.set_incomplete();\n    }\n\n    content_types.incomplete |= ct_at.and_then(|i| entries.get(i)).is_some_and(|e| e.content_unavailable);\n    if content_types.incomplete {\n        // Parser errors suppress manifest-dependent checks just as budget stops do.\n        acc.note(\"[Content_Types].xml declarations were not fully examined; dependent absence checks were skipped\".to_string());\n        acc.set_incomplete();\n    }\n\n    let rels = load_rels(&entries, acc);\n\n    // Classify XML parts once (J4) and decode every classified part, whichever its file name, so a\n    // supporting or story part with an unconventional name still has its checks run (H5). The\n    // classification is content type (+xml / text/xml / the rels type) OR a recognised relationship\n    // role.\n    let xml_parts = classified_xml_parts(&entries, &content_types, &rels);\n    for e in entries.iter_mut().filter(|e| !e.is_dir) {\n        if e.decoded.is_some() || e.decode_error.is_some() || e.bytes.is_none() {\n            continue;\n        }\n        if xml_parts.contains(&e.name.to_ascii_lowercase()) {\n            decode_entry(e);\n        }\n    }\n\n    acc.ran(\"PKG-NO-MAIN\");\n    let package_rels = rels.iter().find(|r| r.name.eq_ignore_ascii_case(\"_rels/.rels\"));\n    let main_ambiguous = competing_targets(package_rels, is_office_document_relationship);\n    if main_ambiguous {\n        acc.note(\n            \"ambiguous officeDocument selection for the package: distinct official targets compete; owner-dependent document checks were skipped\"\n                .to_string(),\n        );\n        acc.set_incomplete();\n    }\n    let main = package_rels\n        .and_then(|rp| rp.rels.iter().find(|r| !r.external && is_office_document_relationship(&r.kind)))\n        .and_then(|r| r.target_abs.as_deref())\n        .and_then(|t| canonical(&entries, t));\n    let package_rels_unavailable = entries.iter().any(|e| !e.is_dir && e.name.eq_ignore_ascii_case(\"_rels/.rels\") && e.content_unavailable);\n    let discovery_complete = !entries_truncated && !unknown_unreadable && !package_rels_unavailable && !package_rels.is_some_and(|rp| rp.incomplete);\n    let main =\n        if main_ambiguous { Resolution::Ambiguous(\"distinct official targets compete\") } else { Resolution::discovered(main, discovery_complete) };\n    if matches!(main, Resolution::Absent) {\n        acc.add(\"PKG-NO-MAIN\", None, no_main_message(package_rels));\n    }\n    let main_name = match &main {\n        Resolution::One(name) => Some(name.as_str()),\n        Resolution::Absent | Resolution::Ambiguous(_) | Resolution::Unknown(_) => None,\n    };\n    let glossary = if main_ambiguous {\n        Resolution::Unknown(\"package main is ambiguous\")\n    } else {\n        glossary_part(&entries, &content_types, &rels, main_name, !entries_truncated && !unknown_unreadable)\n    };\n    let glossary_ambiguous = matches!(glossary, Resolution::Ambiguous(_));\n    if let Resolution::Ambiguous(reason) = &glossary {\n        acc.note(format!(\"ambiguous glossaryDocument selection: {reason}; owner-dependent document checks were skipped\"));\n        acc.set_incomplete();\n    }\n    let roots_ambiguous = main_ambiguous || glossary_ambiguous;\n    let reachable = reachability(&rels, main_name);\n    Some(Package {\n        entries,\n        content_types,\n        content_types_present,\n        rels,\n        main,\n        glossary,\n        roots_ambiguous,\n        reachable,\n        xml_parts,\n        entries_truncated,\n        identity_incomplete: unknown_unreadable,\n    })\n}\n\n/// Whether official relationships for one singleton role name distinct internal target parts.",
+  "observed_accessors": [
+    {
+      "line": 20,
+      "text": "    fn default() -> Self {"
+    },
+    {
+      "line": 26,
+      "text": "    pub(crate) fn complete(value: T) -> Self {"
+    },
+    {
+      "line": 30,
+      "text": "    pub(crate) fn with_status(value: T, completeness: Completeness) -> Self {"
+    },
+    {
+      "line": 34,
+      "text": "    pub(crate) fn prefix(&self) -> &T {"
+    },
+    {
+      "line": 38,
+      "text": "    pub(crate) fn is_complete(&self) -> bool {"
+    },
+    {
+      "line": 42,
+      "text": "    pub(crate) fn invalidate(&mut self, reason: Reason) {"
+    },
+    {
+      "line": 46,
+      "text": "    pub(crate) fn project<U>(&self, map: impl FnOnce(&T) -> U) -> Observed<U> {"
+    },
+    {
+      "line": 52,
+      "text": "    pub(crate) fn push_bounded(&mut self, value: T, cap: usize) -> bool {"
+    },
+    {
+      "line": 62,
+      "text": "    pub(crate) fn retain_budget(&mut self, held: &mut usize, cap: usize) -> bool {"
+    },
+    {
+      "line": 73,
+      "text": "    pub(crate) fn append(&mut self, from: &Self)"
+    },
+    {
+      "line": 83,
+      "text": "    pub(crate) fn len(&self) -> usize {"
+    },
+    {
+      "line": 93,
+      "text": "    pub(crate) fn into_complete_set(self) -> Option<CompleteSet<K>> {"
+    },
+    {
+      "line": 99,
+      "text": "    pub(crate) fn missing(&self, key: &K) -> bool {"
+    }
+  ],
+  "count_references": [
+    {
+      "file": "log/astra-delta17-prompt.md",
+      "sites": [
+        {
+          "line": 33,
+          "text": "- Register: 195 rows (181 consumers + 1 macro-instantiation + 13 providers);"
+        },
+        {
+          "line": 36,
+          "text": "- Evidence: 77 source mutations + drift rejected; the six delta-16 probes"
+        },
+        {
+          "line": 64,
+          "text": "   181 contract rows preserved, register 195)."
+        }
+      ]
+    },
+    {
+      "file": "log/fredfix-round12-result.md",
+      "sites": [
+        {
+          "line": 99,
+          "text": " crates/validate/tests/entry_point_profiles.rs | 195 ++++++++++++++++++++++++++"
+        }
+      ]
+    },
+    {
+      "file": "log/fredfix-round17-result.md",
+      "sites": [
+        {
+          "line": 5,
+          "text": "**W6 now uses fail-closed syntax recognition.** The production source corpus passes, all **77 source mutations plus generated-output drift** are rejected, and the six delta-16 probes accepted by the base with byte-identical outputs are rejected. These are in-memory generator mutations, not compiled mutated Rust fixtures. The completed self-test transplanted onto the base fails at the first delta-16 destructuring assignment. See `fredfix-round17-base-discrimination.json`, `fredfix-round17-base-self-test.log`, and `fredfix-round17-completed-self-test.log`."
+        },
+        {
+          "line": 11,
+          "text": "The generated register now has **195 rows**: the previous 181 consumer rows, one additional numeric-ID macro-instantiation row, and 13 representation-provider rows. Its boundary wording lists the six audited production files, test/table/generated-file exclusions, macro grammar, and the uninspected build-script/compiler/procedural-macro expansions (including the existing serde Serialize derive). It explicitly disclaims Rust name resolution and general alias/dataflow proof. The generated Rust policy and all **22 validator Rust source/test files** are byte-unchanged, as are all ten synthetic corpus files. See `fredfix-round17-preservation.json` and `fredfix-round17-register-preservation.json`; all 181 original contract rows are preserved."
+        }
+      ]
+    },
+    {
+      "file": "log/fredfix-round18-amendment-1.md",
+      "sites": [
+        {
+          "line": 116,
+          "text": "195 rows / 77 mutations and where it lives. Probes 47\u201349 bind at the end."
+        }
+      ]
+    },
+    {
+      "file": "log/fredfix-round18-brief.md",
+      "sites": [
+        {
+          "line": 7,
+          "text": "rejected; register byte-exact 195 rows; 503/503). The findings are semantic"
+        }
+      ]
+    },
+    {
+      "file": "log/kimi-delta17-review.md",
+      "sites": [
+        {
+          "line": 5,
+          "text": "Round 17 does reject all four historical syntax-escape families and the requested closed-grammar seam probes. The clean register and test claims also reproduce. It does **not**, however, fail closed around absence judgments: a one-line removal of the `REL-DANGLING` truncation guard was accepted with the unchanged 195-row register and then produced exactly the false absence finding the observation contract is meant to prevent. Additional compiled mutations bypass raw-membership and `Observed` checks without adding a register row. The disclosed name-resolution/dataflow and derive boundaries are load-bearing, not merely theoretical."
+        },
+        {
+          "line": 33,
+          "text": "195 declared bounded consumers; register and access audit passed"
+        },
+        {
+          "line": 74,
+          "text": "Both commands `probe.py escape/raw-iterator-absence` and `probe.py escape/helper-mediated-package-absence` returned exit 0 with the same `195 declared bounded consumers` output, and `cargo check --offline` returned exit 0 for each complete mutated crate. I also replaced the body of the existing `canonical(&[Entry], \u2026)` helper with an equivalent `iter().any(...)` absence precheck (`escape/existing-canonical-iterator-absence`): the gate and full crate check both passed with no new row."
+        },
+        {
+          "line": 94,
+          "text": "195 declared bounded consumers; register and access audit passed"
+        },
+        {
+          "line": 131,
+          "text": "195 declared bounded consumers; register and access audit passed"
+        },
+        {
+          "line": 168,
+          "text": "77 source mutations rejected"
+        },
+        {
+          "line": 171,
+          "text": "195 declared bounded consumers; register and access audit passed"
+        },
+        {
+          "line": 193,
+          "text": "generated_rows: 195"
+        },
+        {
+          "line": 194,
+          "text": "markdown_rows: 195"
+        }
+      ]
+    },
+    {
+      "file": "log/kimi-r18-redteam.md",
+      "sites": [
+        {
+          "line": 174,
+          "text": "7. **Hard-coded register/test-count expectations and golden artifacts** outside the two generated outputs. Any fixture asserting 195 rows or 77 rejected mutations needs a class-authorized expectation update; the documents do not identify where these live."
+        },
+        {
+          "line": 528,
+          "text": "   **Expected:** exit 0; production corpus and non-consuming controls accepted; every still-negative historical/seam probe and every probe designated gate-negative above rejected (compile/type barriers run separately); the `seam/other-macro-path` expectation explicitly resolved per probe 24. Markdown and generated Rust are byte-current. Report row-count deltas by named new caller/derive contract rather than \u201cmore rows are expected\u201d; the previous 195-row count alone is not a sufficient assertion after this redesign. The 13 representation provider identities stay matched, with only justified R4 additions."
+        }
+      ]
+    },
+    {
+      "file": "log/redesign-lane-result.md",
+      "sites": [
+        {
+          "line": 31,
+          "text": "1. `crates/validate/src/glossary_descendant_tests.rs:77` \u2014 `selected_glossary_keeps_nested_glossary_header_in_both_zip_orders`. Existing: B and its header are both asserted to have A membership [1], including with incomplete discovery. Required change and individual justification: W4 makes B a separate glossary owner; B and its header belong to B. The direct A-to-header variant additionally gives that header an A context, not B itself."
+        }
+      ]
+    },
+    {
+      "file": "log/redesign-lane-result2.md",
+      "sites": [
+        {
+          "line": 28,
+          "text": "1. `selected_glossary_keeps_nested_glossary_header_in_both_zip_orders` (`glossary_descendant_tests.rs:77`): B and its header must belong to B, including incomplete discovery. A's direct header edge additionally gives the header A membership; it does not give B itself A membership. A traversal cannot absorb B's root."
+        }
+      ]
+    }
+  ],
+  "resolution_sites": [
+    {
+      "file": "crates/validate/src/glossary_descendant_tests.rs",
+      "line": 107,
+      "text": "                Resolution::One(name) => Some(name.as_str()),"
+    },
+    {
+      "file": "crates/validate/src/glossary_descendant_tests.rs",
+      "line": 108,
+      "text": "                Resolution::Absent | Resolution::Ambiguous(_) | Resolution::Unknown(_) => None,"
+    },
+    {
+      "file": "crates/validate/src/glossary_descendant_tests.rs",
+      "line": 133,
+      "text": "                    pkg.main = Resolution::Absent;"
+    },
+    {
+      "file": "crates/validate/src/glossary_descendant_tests.rs",
+      "line": 134,
+      "text": "                    pkg.glossary = Resolution::Absent;"
+    },
+    {
+      "file": "crates/validate/src/glossary_descendant_tests.rs",
+      "line": 205,
+      "text": "        pkg.glossary = Resolution::One(\"word/glossary/document.xml\".to_string());"
+    },
+    {
+      "file": "crates/validate/src/glossary_descendant_tests.rs",
+      "line": 206,
+      "text": "        assert!(!matches!(pkg.main, Resolution::One(_)));"
+    },
+    {
+      "file": "crates/validate/src/glossary_tests.rs",
+      "line": 98,
+      "text": "        assert!(!matches!(pkg.glossary, Resolution::One(_)));"
+    },
+    {
+      "file": "crates/validate/src/glossary_tests.rs",
+      "line": 144,
+      "text": "                    Resolution::One(name) => Some(name.as_str()),"
+    },
+    {
+      "file": "crates/validate/src/glossary_tests.rs",
+      "line": 145,
+      "text": "                    Resolution::Absent | Resolution::Ambiguous(_) | Resolution::Unknown(_) => None,"
+    },
+    {
+      "file": "crates/validate/src/glossary_tests.rs",
+      "line": 168,
+      "text": "        assert!(!matches!(pkg.main, Resolution::One(_)));"
+    },
+    {
+      "file": "crates/validate/src/glossary_tests.rs",
+      "line": 171,
+      "text": "                Resolution::One(name) => Some(name.as_str()),"
+    },
+    {
+      "file": "crates/validate/src/glossary_tests.rs",
+      "line": 172,
+      "text": "                Resolution::Absent | Resolution::Ambiguous(_) | Resolution::Unknown(_) => None,"
+    },
+    {
+      "file": "crates/validate/src/glossary_tests.rs",
+      "line": 197,
+      "text": "        assert!(!matches!(pkg.main, Resolution::One(_)));"
+    },
+    {
+      "file": "crates/validate/src/glossary_tests.rs",
+      "line": 198,
+      "text": "        assert!(!matches!(pkg.glossary, Resolution::One(_)));"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 47,
+      "text": "use resolution::Resolution;"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 769,
+      "text": "            Resolution::Ambiguous(_) => {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 777,
+      "text": "            Resolution::One(package::EntryPointProfile::Strict) => {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 784,
+      "text": "            Resolution::One(package::EntryPointProfile::Transitional) | Resolution::Absent | Resolution::Unknown(_) => {}"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 919,
+      "text": "    if let Resolution::One(main) = &pkg.main"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 980,
+      "text": "        Resolution::One(name) => Some(name.as_str()),"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 981,
+      "text": "        Resolution::Absent | Resolution::Ambiguous(_) | Resolution::Unknown(_) => None,"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 987,
+      "text": "        let message = if pkg.roots_ambiguous && !matches!(pkg.main, Resolution::One(_)) {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1538,
+      "text": "        Resolution::One(rel) => {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1541,
+      "text": "        Resolution::Absent | Resolution::Ambiguous(_) | Resolution::Unknown(_) => false,"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1570,
+      "text": "    ids.retain(|id| matches!(by_id.resolve(id.as_str()), Resolution::One(rel) if is_ink(rel)));"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1609,
+      "text": "                && matches!(selected[0], Resolution::One(_) | Resolution::Absent)"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1611,
+      "text": "                    Resolution::One(entry) => complete(Some(entry)),"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1612,
+      "text": "                    Resolution::Absent => true,"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1613,
+      "text": "                    Resolution::Ambiguous(_) | Resolution::Unknown(_) => false,"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1619,
+      "text": "                        && matches!(selected[1], Resolution::One(_) | Resolution::Absent)"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1621,
+      "text": "                            Resolution::One(entry) => complete(Some(entry)) && xml.category_complete(&entry.name, |f| &f.footnote_defs),"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1622,
+      "text": "                            Resolution::Absent => true,"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1623,
+      "text": "                            Resolution::Ambiguous(_) | Resolution::Unknown(_) => false,"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1626,
+      "text": "                        && matches!(selected[2], Resolution::One(_) | Resolution::Absent)"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1628,
+      "text": "                            Resolution::One(entry) => complete(Some(entry)) && xml.category_complete(&entry.name, |f| &f.endnote_defs),"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1629,
+      "text": "                            Resolution::Absent => true,"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1630,
+      "text": "                            Resolution::Ambiguous(_) | Resolution::Unknown(_) => false,"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1654,
+      "text": "                Resolution::One(entry) => Some(entry),"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1655,
+      "text": "                Resolution::Absent => None,"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1656,
+      "text": "                Resolution::Ambiguous(_) | Resolution::Unknown(_) => None,"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1659,
+      "text": "                forward_ok && matches!(selected[1], Resolution::One(_) | Resolution::Absent),"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1660,
+      "text": "                forward_ok && matches!(selected[2], Resolution::One(_) | Resolution::Absent),"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1801,
+      "text": "            let Resolution::One(rel) = by_id.resolve(id.as_str()) else { continue };"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1828,
+      "text": "        Resolution::One(name) => Some(name.as_str()),"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1829,
+      "text": "        Resolution::Absent | Resolution::Ambiguous(_) | Resolution::Unknown(_) => None,"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 1856,
+      "text": "    if let Resolution::One(main) = &pkg.main {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2019,
+      "text": "            let Resolution::One(rel) = by_id.resolve(r.value.as_str()) else { continue };"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2100,
+      "text": "    let Resolution::One(main) = &pkg.main else { return };"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2252,
+      "text": "        Resolution::One(name) => Some(name.as_str()),"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2253,
+      "text": "        Resolution::Absent | Resolution::Ambiguous(_) | Resolution::Unknown(_) => None,"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2495,
+      "text": "            Resolution::One(entry) => {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2502,
+      "text": "            Resolution::Absent => Observed::complete(HashSet::new()),"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2503,
+      "text": "            Resolution::Ambiguous(_) | Resolution::Unknown(_) => continue,"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2556,
+      "text": "            Resolution::Ambiguous(_) | Resolution::Unknown(_)"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2606,
+      "text": "    let Resolution::One(main) = &pkg.main else { return };"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2631,
+      "text": "                Resolution::Unknown(_) | Resolution::Ambiguous(_) => {}"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2632,
+      "text": "                Resolution::Absent => {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2635,
+      "text": "                Resolution::One(rel) if rel.role.kind() != Some(kind) => acc.add("
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2643,
+      "text": "                Resolution::One(rel) if rel.external || rel.target_abs.is_none() => acc.add("
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2648,
+      "text": "                Resolution::One(rel) => {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2667,
+      "text": "fn owner_rel_part<'a>(pkg: &'a Package, owner: &str, kind: &str) -> Resolution<&'a package::Entry> {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2679,
+      "text": "        return Resolution::discovered(None, !discovery_unavailable(pkg, Some(owner)));"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2688,
+      "text": "                return Resolution::Ambiguous(\"distinct official targets compete\");"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2693,
+      "text": "    Resolution::discovered(target.and_then(|name| entry_by_name(pkg, name)), !discovery_unavailable(pkg, Some(owner)))"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2697,
+      "text": "fn owner_rel_selection<'a>(pkg: &'a Package, owner: Option<&str>, kind: &str, ct: &str) -> Resolution<&'a package::Entry> {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2707,
+      "text": "fn supporting_part<'a>(pkg: &'a Package, owner: Option<&str>, kind: &str, ct: &str, acc: &mut Acc) -> Resolution<&'a package::Entry> {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2719,
+      "text": "        Resolution::One(_) | Resolution::Absent => None,"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2720,
+      "text": "        Resolution::Ambiguous(reason) => {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2723,
+      "text": "        Resolution::Unknown(reason) => {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2833,
+      "text": "        selection_ambiguous |= matches!(selection, Resolution::Ambiguous(_) | Resolution::Unknown(_));"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2835,
+      "text": "            Resolution::One(entry) => entry,"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2836,
+      "text": "            Resolution::Absent | Resolution::Ambiguous(_) | Resolution::Unknown(_) => {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2925,
+      "text": "        if let Resolution::One(entry) = supporting_part(pkg, owner.root(), \"styles\", package::STYLES_CONTENT_TYPE, acc) {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2928,
+      "text": "        if let Resolution::One(entry) = supporting_part(pkg, owner.root(), \"fontTable\", package::FONT_TABLE_CONTENT_TYPE, acc) {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2933,
+      "text": "        Resolution::One(entry) => {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2937,
+      "text": "        Resolution::Absent => true,"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2938,
+      "text": "        Resolution::Ambiguous(reason) => {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 2943,
+      "text": "        Resolution::Unknown(reason) => {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 3124,
+      "text": "fn find_by_type<'a>(pkg: &'a Package, ct: &str) -> Resolution<&'a package::Entry> {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 3137,
+      "text": "        return Resolution::Ambiguous(\"multiple content-type candidates compete\");"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 3139,
+      "text": "    Resolution::discovered(first, !discovery_unavailable(pkg, None))"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 3171,
+      "text": "            Resolution::One(e) => Some(e.name.clone()),"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 3172,
+      "text": "            Resolution::Absent | Resolution::Ambiguous(_) | Resolution::Unknown(_) => None,"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 3189,
+      "text": "                if matches!(selection, Resolution::Ambiguous(_) | Resolution::Unknown(_)) || discovery_unavailable(pkg, owner.root()) {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 3199,
+      "text": "        if let Resolution::One(entry) = supporting_part(pkg, owner.root(), \"styles\", package::STYLES_CONTENT_TYPE, acc)"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 3398,
+      "text": "        !matches!(owner_rel_selection(pkg, owner.root(), \"commentsExtended\", package::COMMENTS_EXTENDED_CONTENT_TYPE), Resolution::Absent)"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 3399,
+      "text": "            || !matches!(owner_rel_selection(pkg, owner.root(), \"commentsIds\", package::COMMENTS_IDS_CONTENT_TYPE), Resolution::Absent)"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 3415,
+      "text": "                    Resolution::One(entry) => entry.name.eq_ignore_ascii_case(part),"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 3416,
+      "text": "                    Resolution::Absent | Resolution::Ambiguous(_) | Resolution::Unknown(_) => false,"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 3422,
+      "text": "        let mut comments_complete = matches!(comments_source, Resolution::One(_) | Resolution::Absent)"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 3460,
+      "text": "            Resolution::One(entry) => read_comments_ext(entry, xml, cap, acc).map(|e| (entry.name.clone(), e)),"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 3461,
+      "text": "            Resolution::Absent | Resolution::Ambiguous(_) | Resolution::Unknown(_) => None,"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 3493,
+      "text": "            Resolution::One(entry) => read_comments_ids(entry, xml, cap, acc),"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 3494,
+      "text": "            Resolution::Absent | Resolution::Ambiguous(_) | Resolution::Unknown(_) => None,"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 3662,
+      "text": "        if matches!(selection, Resolution::Ambiguous(_) | Resolution::Unknown(_)) {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 3667,
+      "text": "            Resolution::One(entry) => entry,"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 3668,
+      "text": "            Resolution::Ambiguous(_) | Resolution::Unknown(_) => {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 3672,
+      "text": "            Resolution::Absent => {"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 5821,
+      "text": "        assert!(!matches!(pkg.glossary, Resolution::One(_)));"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 5838,
+      "text": "                Resolution::One(name) => Some(name.as_str()),"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "line": 5839,
+      "text": "                Resolution::Absent | Resolution::Ambiguous(_) | Resolution::Unknown(_) => None,"
+    },
+    {
+      "file": "crates/validate/src/ownership.rs",
+      "line": 2,
+      "text": "use crate::{Package, Resolution, package};"
+    },
+    {
+      "file": "crates/validate/src/ownership.rs",
+      "line": 60,
+      "text": "    if let Resolution::One(main) = &pkg.main {"
+    },
+    {
+      "file": "crates/validate/src/ownership.rs",
+      "line": 63,
+      "text": "    if let Resolution::One(glossary) = &pkg.glossary"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 12,
+      "text": "use crate::resolution::Resolution;"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 191,
+      "text": "    pub(crate) fn resolve(&self, id: &str) -> Resolution<&'a Rel> {"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 201,
+      "text": "        Resolution::discovered(self.first.get(id).copied(), self.complete)"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 218,
+      "text": "        matches!(self.resolve(rel.id.as_str()), Resolution::One(first) if std::ptr::eq(first, rel))"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 236,
+      "text": "    pub main: Resolution<String>,"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 238,
+      "text": "    pub glossary: Resolution<String>,"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 423,
+      "text": "        if main_ambiguous { Resolution::Ambiguous(\"distinct official targets compete\") } else { Resolution::discovered(main, discovery_complete) };"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 424,
+      "text": "    if matches!(main, Resolution::Absent) {"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 428,
+      "text": "        Resolution::One(name) => Some(name.as_str()),"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 429,
+      "text": "        Resolution::Absent | Resolution::Ambiguous(_) | Resolution::Unknown(_) => None,"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 432,
+      "text": "        Resolution::Unknown(\"package main is ambiguous\")"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 436,
+      "text": "    let glossary_ambiguous = matches!(glossary, Resolution::Ambiguous(_));"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 437,
+      "text": "    if let Resolution::Ambiguous(reason) = &glossary {"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 489,
+      "text": "fn glossary_part(entries: &[Entry], ct: &ContentTypes, rels: &[RelsPart], main: Option<&str>, entries_complete: bool) -> Resolution<String> {"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 503,
+      "text": "            return Resolution::Ambiguous(\"distinct official targets compete\");"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 510,
+      "text": "            return Resolution::One(name);"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 523,
+      "text": "        return Resolution::discovered(None, complete);"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 526,
+      "text": "        return Resolution::Ambiguous(\"multiple glossary-content-typed fallback candidates compete\");"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 528,
+      "text": "    Resolution::One(first.name.clone())"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 1193,
+      "text": "pub(crate) fn entry_point_profile(pkg: &Package) -> Resolution<EntryPointProfile> {"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 1208,
+      "text": "        return Resolution::discovered(None, complete);"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 1220,
+      "text": "        (true, true) => Resolution::Ambiguous(\"mixed Transitional/Strict entry points\"),"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 1221,
+      "text": "        (true, false) => Resolution::One(EntryPointProfile::Transitional),"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 1222,
+      "text": "        (false, true) => Resolution::One(EntryPointProfile::Strict),"
+    },
+    {
+      "file": "crates/validate/src/package.rs",
+      "line": 1223,
+      "text": "        (false, false) => Resolution::discovered(None, complete),"
+    },
+    {
+      "file": "crates/validate/src/resolution.rs",
+      "line": 8,
+      "text": "pub(crate) enum Resolution<T> {"
+    },
+    {
+      "file": "crates/validate/src/resolution.rs",
+      "line": 19,
+      "text": "impl<T> Resolution<T> {"
+    },
+    {
+      "file": "crates/validate/src/resolution_tests.rs",
+      "line": 1,
+      "text": "//! Resolution controls exercise discovery states independently of report gates."
+    },
+    {
+      "file": "crates/validate/src/resolution_tests.rs",
+      "line": 12,
+      "text": "    assert!(matches!(owner_rel_part(&pkg, \"word/document.xml\", \"styles\"), Resolution::Absent));"
+    },
+    {
+      "file": "crates/validate/src/resolution_tests.rs",
+      "line": 14,
+      "text": "    assert!(matches!(owner_rel_part(&pkg, \"word/document.xml\", \"styles\"), Resolution::Unknown(_)));"
+    },
+    {
+      "file": "crates/validate/src/resolution_tests.rs",
+      "line": 15,
+      "text": "    assert!(matches!(find_by_type(&pkg, CT_STYLES), Resolution::Unknown(_)));"
+    },
+    {
+      "file": "crates/validate/src/resolution_tests.rs",
+      "line": 18,
+      "text": "    assert!(matches!(owner_rel_part(&pkg, \"word/document.xml\", \"styles\"), Resolution::Unknown(_)));"
+    },
+    {
+      "file": "crates/validate/src/resolution_tests.rs",
+      "line": 19,
+      "text": "    assert!(matches!(find_by_type(&pkg, CT_STYLES), Resolution::Unknown(_)));"
+    },
+    {
+      "file": "crates/validate/src/resolution_tests.rs",
+      "line": 33,
+      "text": "        assert!(matches!(find_by_type(&pkg, CT_STYLES), Resolution::Ambiguous(_)));"
+    },
+    {
+      "file": "crates/validate/src/resolution_tests.rs",
+      "line": 42,
+      "text": "    assert!(matches!(pkg.main, Resolution::Unknown(_)));"
+    },
+    {
+      "file": "crates/validate/src/resolution_tests.rs",
+      "line": 43,
+      "text": "    assert!(matches!(package::entry_point_profile(&pkg), Resolution::Unknown(_)));"
+    }
+  ],
+  "count_script_references": [
+    {
+      "file": "log/fredfix-round17-write-result.py",
+      "line": 9,
+      "text": "'**W6 now uses fail-closed syntax recognition.** The production source corpus passes, all **77 source mutations plus generated-output drift** are rejected, and the six delta-16 probes accepted by the base with byte-identical outputs are rejected. These are in-memory generator mutations, not compiled mutated Rust fixtures. The completed self-test transplanted onto the base fails at the first delta-16 destructuring assignment. See `fredfix-round17-base-discrimination.json`, `fredfix-round17-base-self-test.log`, and `fredfix-round17-completed-self-test.log`.','',"
+    },
+    {
+      "file": "log/fredfix-round17-write-result.py",
+      "line": 12,
+      "text": "'The generated register now has **195 rows**: the previous 181 consumer rows, one additional numeric-ID macro-instantiation row, and 13 representation-provider rows. Its boundary wording lists the six audited production files, test/table/generated-file exclusions, macro grammar, and the uninspected build-script/compiler/procedural-macro expansions (including the existing serde Serialize derive). It explicitly disclaims Rust name resolution and general alias/dataflow proof. The generated Rust policy and all **22 validator Rust source/test files** are byte-unchanged, as are all ten synthetic corpus files. See `fredfix-round17-preservation.json` and `fredfix-round17-register-preservation.json`; all 181 original contract rows are preserved.','',"
+    },
+    {
+      "file": "log/redesign2-write-result.py",
+      "line": 39,
+      "text": "1. `selected_glossary_keeps_nested_glossary_header_in_both_zip_orders` (`glossary_descendant_tests.rs:77`): B and its header must belong to B, including incomplete discovery. A's direct header edge additionally gives the header A membership; it does not give B itself A membership. A traversal cannot absorb B's root."
+    }
+  ],
+  "package_test_mutation_sites": [
+    {
+      "file": "crates/validate/src/glossary_descendant_tests.rs",
+      "line": 87,
+      "text": "                pkg.entries_truncated = incomplete;"
+    },
+    {
+      "file": "crates/validate/src/glossary_tests.rs",
+      "line": 120,
+      "text": "                pkg.entries_truncated = incomplete;"
+    },
+    {
+      "file": "crates/validate/src/ownership.rs",
+      "line": 297,
+      "text": "        pkg.entries_truncated = true;"
+    },
+    {
+      "file": "crates/validate/src/resolution_tests.rs",
+      "line": 13,
+      "text": "    pkg.entries_truncated = true;"
+    },
+    {
+      "file": "crates/validate/src/resolution_tests.rs",
+      "line": 16,
+      "text": "    pkg.entries_truncated = false;"
+    },
+    {
+      "file": "crates/validate/src/resolution_tests.rs",
+      "line": 17,
+      "text": "    pkg.identity_incomplete = true;"
+    }
+  ]
+}

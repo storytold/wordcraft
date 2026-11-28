@@ -147,10 +147,14 @@ pub(crate) fn open(app: &mut WordApp, _name: &str, _params: &Value, parent: Opti
 
 #[cfg(test)]
 mod tests {
-    use craft::keymap::Binding;
+    use craft::keymap::{Binding, CommandRef};
+    use craft::ui::dialog::dialog_id;
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, NodeT, Queryable};
     use serde_json::json;
     use wordcraft_engine::Session;
 
+    use super::KEY;
     use crate::{Services, WordApp};
 
     fn app() -> WordApp {
@@ -180,5 +184,67 @@ mod tests {
         b.apply_prefs(serde_json::from_str(&saved).unwrap());
         assert_eq!(chords(&b, "format.bold"), Some(Vec::new()));
         assert_eq!(chords(&b, "format.italic"), Some(italic));
+    }
+
+    /// #1905: a command with no shortcuts shows `None` in the Current shortcuts list, whereas a
+    /// command with a built-in shortcut shows its binding instead of `None`.
+    #[test]
+    fn keys_list_without_shortcuts_says_none() {
+        let mut a = app();
+        super::open(&mut a, KEY, &json!({}), None).expect("dialog opens");
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| a);
+        h.run_steps(2);
+
+        let keymap = craft::ui::runtime::commands::keymap(&h.ctx).expect("command board installs a keymap");
+        let unbound_id = h
+            .state()
+            .session
+            .registry
+            .all()
+            .iter()
+            .find(|spec| {
+                let cmd = CommandRef::new(spec.id);
+                keymap.bindable(&cmd).is_some() && keymap.bindings(&cmd).is_empty()
+            })
+            .map(|spec| spec.id.to_string())
+            .expect("a bindable command with no built-in shortcut");
+        assert!(!keymap.bindings(&CommandRef::new("format.bold")).is_empty(), "format.bold has a built-in shortcut");
+
+        let dlg_id = dialog_id(KEY);
+        let ctx = h.ctx.clone();
+        let select = |h: &mut egui_kittest::Harness<'_, WordApp>, id: &str| {
+            h.state_mut().dialog_host.set_json_field(&ctx, dlg_id, "command", json!(id)).expect("command field accepts id");
+            h.run_steps(3);
+            let selected = h
+                .state()
+                .dialog_host
+                .open_dialogs()
+                .into_iter()
+                .find(|d| d.id == dlg_id)
+                .and_then(|d| d.fields)
+                .and_then(|fields| fields.get("command").and_then(|v| v.as_str()).map(str::to_owned));
+            assert_eq!(selected.as_deref(), Some(id), "dialog selected {id}");
+        };
+        let keys_list_labels = |h: &egui_kittest::Harness<'_, WordApp>| -> Vec<String> {
+            let list = h.get_by_role_and_label(Role::List, "Current shortcuts:");
+            let list_id = list.accesskit_node().id();
+            let rect = list.rect();
+            h.query_all(By::new())
+                .filter(|n| n.accesskit_node().id() != list_id && !n.accesskit_node().is_hidden() && n.accesskit_node().bounding_box().is_some())
+                .filter(|n| rect.contains_rect(n.rect()))
+                .filter_map(|n| n.accesskit_node().label())
+                .collect()
+        };
+
+        // Positive contrast: a bound command lists its shortcut and does not show the empty `None` placeholder.
+        select(&mut h, "format.bold");
+        let bound_labels = keys_list_labels(&h);
+        assert!(!bound_labels.is_empty(), "bound command lists its shortcut");
+        assert!(!bound_labels.iter().any(|t| t == "None"), "bound command keys list does not say None: {bound_labels:?}");
+
+        // Target behavior: an unbound command shows `None` inside the Current shortcuts list.
+        select(&mut h, &unbound_id);
+        let unbound_labels = keys_list_labels(&h);
+        assert!(unbound_labels.iter().any(|t| t == "None"), "empty keys list says None: {unbound_labels:?}");
     }
 }

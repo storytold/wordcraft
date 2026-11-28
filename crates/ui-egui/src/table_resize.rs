@@ -231,7 +231,7 @@ impl<'a> TableBorders<'a> {
 
     /// A press went down at `origin` on `target`, the border of part `index` on `page`: the drag starts there.
     fn press(&mut self, cx: &mut Cx<'_, Self>, origin: Pos2, page: usize, index: u64, mut target: ResizeTarget) {
-        let Some(placed) = self.pages.iter().find(|placed| placed.page == page).copied() else { return };
+        let Some(placed) = self.pages.iter().find(|placed| placed.page == page).cloned() else { return };
         let from = page_point(&placed, origin);
         target.limit_to_selection(&self.app.session, from.1);
         self.app.canvas.table_resize = Some(ResizeDrag { page, from, to: from, target, ruler: false });

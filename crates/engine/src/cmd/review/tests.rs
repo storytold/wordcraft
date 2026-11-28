@@ -1122,3 +1122,87 @@ mod spelling_navigation_tests {
         }
     }
 }
+
+/// #6086 review: A pre-existing table whose cell paragraphs and runs are all redlined (including an
+/// empty cell with a deleted/inserted paragraph mark) is not a structural table revision; Accept
+/// All / Reject All and whole-table selection resolution must preserve the table shell.
+#[test]
+fn preexisting_table_with_redlined_cell_content_preserves_table_shell() {
+    use std::sync::Arc;
+    use wordcraft_doc::{Block, CharProps, Paragraph, Path, Pos, Revision, RevisionKind, StoryRef, table::Table};
+
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let dir = std::env::temp_dir().join(format!("wc-review-preexisting-tbl-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _cleanup = Cleanup(dir.clone());
+
+    let make_redlined_table = |del: bool| -> Document {
+        let mut d = Document::new();
+        let kind = if del { RevisionKind::Delete } else { RevisionKind::Insert };
+        d.revisions.push(Revision::new(kind, "Alice", "2026-11-24T00:00:00Z"));
+        let rev = Some(0);
+        let mark_props = if del { CharProps { del: rev, ..Default::default() } } else { CharProps { ins: rev, ..Default::default() } };
+
+        let mut p0 = Paragraph::with_text("Cell text", mark_props.clone());
+        p0.mark = mark_props.clone();
+        let mut p1 = Paragraph::new();
+        p1.mark = mark_props;
+
+        let mut t = Table::new(1, 2, 240.0);
+        t.rows[0].cells[0].blocks = vec![Arc::new(Block::Para(p0))];
+        t.rows[0].cells[1].blocks = vec![Arc::new(Block::Para(p1))];
+        d.body = vec![Arc::new(Block::Table(t)), Arc::new(Block::Para(Paragraph::new()))];
+        d
+    };
+
+    let assert_shell_preserved = |doc: &Document, label: &str| {
+        let tables: Vec<&Table> = doc.body.iter().filter_map(|b| b.as_table()).collect();
+        assert_eq!(tables.len(), 1, "{label}: pre-existing table shell must remain");
+        assert_eq!(tables[0].rows.len(), 1, "{label}: row count must remain 1");
+        assert_eq!(tables[0].rows[0].cells.len(), 2, "{label}: cell count must remain 2");
+        assert_eq!(tables[0].rows[0].cells[0].blocks[0].as_para().unwrap().plain_text(), "", "{label}: cell 0 text cleared");
+        assert_eq!(tables[0].rows[0].cells[1].blocks[0].as_para().unwrap().plain_text(), "", "{label}: cell 1 stays empty");
+    };
+
+    for (del, all_cmd, sel_cmd, label) in [
+        (true, "review.acceptAll", "review.accept", "deleted cell content + Accept"),
+        (false, "review.rejectAll", "review.reject", "inserted cell content + Reject"),
+    ] {
+        let doc = make_redlined_table(del);
+
+        // Global Accept All / Reject All in memory.
+        let mut s_all = Session::new(doc.clone());
+        s_all.run(all_cmd, &json!({})).unwrap();
+        assert_shell_preserved(&s_all.doc, &format!("{label} (in-memory all)"));
+        assert!(s_all.run("review.changes", &json!({})).unwrap().as_array().unwrap().is_empty());
+
+        // Whole-body selection Accept / Reject.
+        let mut s_body = Session::new(doc.clone());
+        s_body.run("select.all", &json!({})).unwrap();
+        s_body.run(sel_cmd, &json!({})).unwrap();
+        assert_shell_preserved(&s_body.doc, &format!("{label} (whole-body sel)"));
+
+        // Whole-table selection Accept / Reject.
+        let mut s_tbl = Session::new(doc.clone());
+        s_tbl.sel = crate::Selection {
+            anchor: Pos { story: StoryRef::Body, path: Path(vec![0, 0, 0, 0]), off: 0 },
+            focus: Pos { story: StoryRef::Body, path: Path(vec![0, 0, 1, 0]), off: 0 },
+        };
+        s_tbl.run(sel_cmd, &json!({})).unwrap();
+        assert_shell_preserved(&s_tbl.doc, &format!("{label} (whole-table sel)"));
+
+        // DOCX save/open round-trip followed by Accept All / Reject All.
+        let path = dir.join(format!("preexisting-{del}.docx"));
+        crate::io::save_path(&path, &doc).unwrap();
+        let reopened = crate::io::open_path(&path).unwrap();
+        let mut s_rt = Session::new(reopened);
+        s_rt.run(all_cmd, &json!({})).unwrap();
+        assert_shell_preserved(&s_rt.doc, &format!("{label} (DOCX round-trip all)"));
+        assert!(s_rt.run("review.changes", &json!({})).unwrap().as_array().unwrap().is_empty());
+    }
+}

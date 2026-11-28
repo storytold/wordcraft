@@ -875,7 +875,9 @@ impl StackDialog for AddLanguage {
                         let endonym = shown(&pack.name, MAX_BAR_NAME);
                         let detail = if endonym == *name { pack.locale.clone() } else { format!("{endonym} · {}", pack.locale) };
                         let wants = &wants;
-                        let mut row = ListRow::new(format!("{name} · {detail}"));
+                        // The licence is the row's wrapped secondary text: `below` components share one line, and the error
+                        // notice (or the progress bar while installing) needs the row's width there.
+                        let mut row = ListRow::new(format!("{name} · {detail}")).lines(licence_hover(pack));
                         match progress(&pack.locale) {
                             Some((done, total)) => {
                                 let locale = pack.locale.clone();
@@ -897,7 +899,6 @@ impl StackDialog for AddLanguage {
                                 });
                             }
                         }
-                        row = row.below(Text::new(licence_hover(pack)).shade(Shade::Faint), |_| {});
                         if let Some(e) = error_in(errors, &pack.locale) {
                             row = row.below(Notice::new(Tone::Bad, e).id_salt(("row_error", at)), |_| {});
                         }
@@ -1632,6 +1633,19 @@ mod tests {
         assert!(a.packs_rt.errors.values().any(|e| e.contains("Only you")), "{:?}", a.packs_rt.errors);
         let tree = settled(&mut a, &ctx);
         assert!(labels(&tree).iter().any(|l| l.contains("Only you")), "the row says why: {:?}", labels(&tree));
+        // The reason has room to be read: it is at least as wide as Install and within the list's width (the row may sit
+        // partly below the list's visible edge).
+        let rect = |pick: &dyn Fn(&egui::accesskit::Node) -> bool| {
+            tree.nodes.iter().filter(|(_, n)| pick(n)).filter_map(|(_, n)| n.bounds()).collect::<Vec<_>>()
+        };
+        let list = rect(&|n| n.role() == egui::accesskit::Role::List && n.label() == Some("Languages"));
+        let button = rect(&|n| n.label().is_some_and(|l| l.starts_with("Install (")));
+        let why = rect(&|n| n.label().is_some_and(|l| l.contains("Only you")));
+        let (list, button) = (list.first().expect("the list"), button.first().expect("an Install button"));
+        assert!(
+            why.iter().any(|w| w.width() >= button.width() && w.x0 >= list.x0 && w.x1 <= list.x1 && w.y0 < list.y1),
+            "the reason is as wide as Install and within the list's width: {why:?}, Install {button:?}, list {list:?}"
+        );
         // The person's own click on the same row turns it on.
         let install = spot(&tree, "Install").expect("the row still offers Install");
         user_click(&mut a, &ctx, install);

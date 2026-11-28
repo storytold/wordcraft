@@ -1,6 +1,23 @@
 use super::*;
 use std::io::Read;
 
+/// The desktop app's Nightly bootstrap is never a CLI option, in either spelling.
+#[test]
+fn the_launcher_profile_bootstrap_is_refused_in_both_forms() {
+    for argv in [
+        &["--launch-profile", "nightly-v1", "--profile-root", "/nightly/profiles/wordcraft", "--version"][..],
+        &["--launch-profile=nightly-v1", "--profile-root=/nightly/profiles/wordcraft"][..],
+        &["--profile-root", "/nightly/profiles/wordcraft"][..],
+    ] {
+        let argv: Vec<std::ffi::OsString> = argv.iter().map(std::ffi::OsString::from).collect();
+        assert!(launcher_profile_flag(&argv), "{argv:?}");
+    }
+    for argv in [&["--version"][..], &["proof.check", "--launch-profiles"][..], &["--profile-roots"][..]] {
+        let argv: Vec<std::ffi::OsString> = argv.iter().map(std::ffi::OsString::from).collect();
+        assert!(!launcher_profile_flag(&argv), "{argv:?}");
+    }
+}
+
 fn args(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).into()).collect()
 }
@@ -126,11 +143,6 @@ fn author_flag_names_the_headless_session() {
     assert_eq!(s.author, "Claude (copyedit)");
     assert!(set_author(&mut s, "   ").is_err_and(|e| e.starts_with("--author:")));
     assert!(run(&args(&["run", "--author", "Claude", "--cmd", "review.trackChanges={\"value\":true}"])).is_ok());
-    // The app's user name is the person's own; a bridge flag must not rewrite it.
-    assert!(run(&args(&["mcp", "--connect", "127.0.0.1:9", "--author", "Claude"])).is_err_and(|e| e.to_string().contains("--author")));
-    // A malformed address fails at startup, not on every retried call.
-    assert!(run(&args(&["mcp", "--connect", "127.0.0.1:notaport"])).is_err_and(|e| e.to_string().contains("numeric port")));
-    assert!(run(&args(&["mcp", "--connect", "notaport"])).is_err_and(|e| e.to_string().contains("numeric port")));
     // The flag goes through the same protection check as the command.
     let mut s = Session::new(wordcraft_doc::Document::new());
     s.run("review.restrict", &json!({"mode": "readOnly"})).unwrap();
@@ -218,10 +230,12 @@ fn only_the_opened_file_may_be_other_than_unicode() {
     assert_eq!(ok(vec!["run".into(), "--print".into(), "--file".into(), latin1()]), Some(PathBuf::from(latin1())));
     assert_eq!(ok(vec!["info".into(), "in.docx".into()]), None);
     // Every command that opens a file reaches the open with it (no such file here), so
-    // `OPENS_FILE` and the commands' own arguments agree.
+    // `OPENS_FILE` and the commands' own arguments agree. `validate` takes exactly one path, so it
+    // is checked separately below, together with its exit-3 usage status.
     let missing = || OsString::from_vec(b"/definitely/not/caf\xe9.docx".to_vec());
     let mut opening: Vec<Vec<OsString>> = OPENS_FILE
         .iter()
+        .filter(|(cmd, _)| *cmd != "validate")
         .map(|(cmd, n)| [vec![(*cmd).into()], vec![OsString::from("refresh"); *n], vec![missing(), "out.png".into()]].concat())
         .collect();
     opening.push(vec!["run".into(), "--file".into(), missing()]);
@@ -229,6 +243,7 @@ fn only_the_opened_file_may_be_other_than_unicode() {
         let e = run(&raw).unwrap_err().to_string();
         assert!(e.contains("No such file"), "{raw:?}: {e}");
     }
+    assert!(matches!(run(&["validate".into(), missing()]), Err(Failure::Status(3))));
     for (raw, n) in [
         (vec!["zotero".into(), latin1(), "in.docx".into()], 2),
         (vec!["render".into(), "in.docx".into(), latin1()], 3),
@@ -240,11 +255,114 @@ fn only_the_opened_file_may_be_other_than_unicode() {
     }
 }
 
+/// An exclusively created scratch folder, removed on drop even when an assertion fails.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new(tag: &str) -> Self {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        loop {
+            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("wc-cli-{tag}-{}-{n}", std::process::id()));
+            // `create_dir` fails when the path exists, so a leftover or a planted folder is never reused. Any
+            // other failure (no temp folder, no permission) fails every name: report it instead of looping.
+            match std::fs::create_dir(&dir) {
+                Ok(()) => return Self(dir),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => panic!("scratch folder {}: {e}", dir.display()),
+            }
+        }
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Shared rule 18 (#7124): every agent entry point, a subcommand that serves a client's requests
+/// rather than running what the person typed and exiting, refuses to start without both
+/// automation roots. Each subcommand has a row, so a new one fails here until it is classified,
+/// and a new agent entry point fails until it refuses.
 #[test]
-fn automation_roots_are_an_error_with_connect() {
+fn every_agent_entry_point_refuses_to_start_without_both_roots() {
+    enum Kind {
+        Agent,
+        NotAgent(&'static str),
+    }
+    use Kind::{Agent, NotAgent};
+    let table = [
+        ("convert", NotAgent("converts the files named on its command line, then exits")),
+        ("info", NotAgent("reads the one file named on its command line, then exits")),
+        ("text", NotAgent("reads the one file named on its command line, then exits")),
+        ("inspect", NotAgent("reads the one file named on its command line, then exits")),
+        ("render", NotAgent("renders the file named on its command line, then exits")),
+        ("run", NotAgent("runs the commands and script named on its command line, then exits")),
+        ("commands", NotAgent("lists the commands; touches no file")),
+        ("parity", NotAgent("prints the feature catalog; touches no file")),
+        ("validate", NotAgent("validates the one file named on its command line, then exits")),
+        ("mcp", Agent),
+        ("zotero", NotAgent("runs one named Zotero command; Zotero's replies edit citations and name no file")),
+    ];
+    assert_eq!(table.iter().map(|(name, _)| *name).collect::<Vec<_>>(), SUBCOMMANDS);
+
+    let scratch = Scratch::new("entry");
+    let base = scratch.0.clone();
+    std::fs::create_dir_all(base.join("in")).unwrap();
+    std::fs::create_dir_all(base.join("out")).unwrap();
+    let read = format!("--automation-read-root={}", base.join("in").display());
+    let write = format!("--automation-write-root={}", base.join("out").display());
+    for (name, kind) in table {
+        if let NotAgent(why) = kind {
+            assert!(!why.is_empty(), "{name}: say why it is not an agent entry point");
+            continue;
+        }
+        for given in [vec![], vec![read.clone()], vec![write.clone()], vec!["--author".to_string(), "Claude".to_string()]] {
+            let line = [vec![name.to_string()], given].concat();
+            let e = run(&line).unwrap_err().to_string();
+            assert!(e.contains("--automation-read-root") && e.contains("--automation-write-root"), "{line:?}: {e}");
+        }
+    }
+}
+
+/// The desktop app doesn't confine its control channel to roots yet (#3695, #5819), so the bridge
+/// to it is refused, with roots or without, before anything connects.
+#[test]
+fn mcp_connect_is_refused_until_the_app_confines_its_control_channel() {
     let dir = std::env::temp_dir().to_string_lossy().into_owned();
-    let e = run(&args(&["mcp", "--connect", "127.0.0.1:9", "--automation-read-root", &dir])).unwrap_err().to_string();
-    assert!(e.contains("--automation-read-root") && e.contains("headless"), "{e}");
+    for line in [
+        args(&["mcp", "--connect", "127.0.0.1:9"]),
+        args(&["mcp", "--connect", "127.0.0.1:9", "--author", "Claude"]),
+        args(&["mcp", "--connect", "127.0.0.1:9", "--automation-read-root", &dir, "--automation-write-root", &dir]),
+    ] {
+        let e = run(&line).unwrap_err().to_string();
+        assert!(e.contains("--connect") && e.contains("#3695") && e.contains("#5819"), "{line:?}: {e}");
+    }
+}
+
+/// `mcp`'s headless session takes `--author` as the session's author, and refuses a blank one as `run` does.
+#[test]
+fn mcp_headless_session_takes_the_author_flag() {
+    let scratch = Scratch::new("mcp-author");
+    let roots = wordcraft_engine::file_access::AutomationRoots::new(Some(&scratch.0), Some(&scratch.0)).unwrap().unwrap();
+    assert_eq!(headless_mcp(roots.clone(), Some("Claude (copyedit)")).unwrap().session.author, "Claude (copyedit)");
+    assert!(headless_mcp(roots.clone(), Some("   ")).is_err_and(|e| e.starts_with("--author:")));
+    let unnamed = headless_mcp(roots, None).unwrap();
+    assert_eq!(unnamed.session.author, wordcraft_mcp::Headless::default().session.author, "no flag keeps the default author");
+}
+
+/// `--connect` is refused whether or not it has a value, written apart or as `--connect=…`, even with both roots valid.
+#[test]
+fn mcp_connect_is_refused_without_a_value_too() {
+    let scratch = Scratch::new("connect-bare");
+    let dir = scratch.0.to_string_lossy().into_owned();
+    let roots = ["--automation-read-root", &dir, "--automation-write-root", &dir];
+    for tail in [vec!["--connect"], vec!["--connect", "--author", "Claude"], vec!["--connect=127.0.0.1:9"], vec!["--connect="]] {
+        let line = args(&[&["mcp"][..], &roots, &tail].concat());
+        let e = run(&line).unwrap_err().to_string();
+        assert!(e.contains("--connect") && e.contains("#3695") && e.contains("#5819"), "{line:?}: {e}");
+    }
 }
 
 #[test]
@@ -586,6 +704,114 @@ fn script_parse_resolves_paths_against_the_base() {
     assert_eq!(s.commands.len(), 1);
 }
 
+/// Finding 3: a surplus operand is a usage error (exit 3) rejected in the operand check, before any
+/// file is validated, so a valid first path can no longer make `validate a.docx b.docx` print PASS.
+/// The two paths are DIFFERENT files and validating either one would return `Ok`; the code path
+/// returns `Status(3)` from the `paths.len() != 1` check before `validate_path` runs, so no file was
+/// validated to produce it. (A `Status(3)` on its own does not prove that — `validate` also returns
+/// it for an I/O error after a single valid operand reaches the validator — which is why the
+/// operand check, not the status, is what establishes the rejection happened first.)
+#[test]
+fn validate_rejects_missing_or_surplus_operands_without_validating() {
+    let dir = std::env::temp_dir().join(format!("wc-cli-validate-args-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let first = dir.join("first.docx");
+    let second = dir.join("second.docx");
+    run(&args(&["run", "--template", "sample", "--save", &first.to_string_lossy()])).unwrap();
+    run(&args(&["run", "--template", "sample", "--save", &second.to_string_lossy()])).unwrap();
+    let (first, second) = (first.to_string_lossy().into_owned(), second.to_string_lossy().into_owned());
+    assert_ne!(first, second, "the two operands must be different files");
+    assert_eq!(run(&args(&["validate", &first])), Ok(()), "one valid path reports PASS");
+    assert_eq!(
+        run(&args(&["validate", &first, &second])),
+        Err(Failure::Status(3)),
+        "two different paths are a usage error; validating either would return Ok, so it validated neither"
+    );
+    assert_eq!(run(&args(&["validate"])), Err(Failure::Status(3)), "no path is a usage error");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Finding 4: `validate` is in `OPENS_FILE`, so a file name that is not valid Unicode reaches the
+/// validator by its preserved path rather than being rejected as a bad argument.
+/// APFS refuses invalid UTF-8 file names, so macOS covers native path handling without creating one.
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn validate_accepts_a_file_name_that_is_not_unicode() {
+    use std::os::unix::ffi::OsStringExt;
+    let dir = std::env::temp_dir().join(format!("wc-cli-validate-nonutf8-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let doc = wordcraft_doc::Document::from_text("Bonjour");
+    let bytes = wordcraft_engine::io::save_bytes("x.docx", &doc).unwrap();
+    let mut name = dir.as_os_str().to_os_string().into_vec();
+    name.extend_from_slice(b"/caf\xe9.docx");
+    let path = PathBuf::from(OsString::from_vec(name));
+    std::fs::write(&path, bytes).unwrap();
+    let raw = vec![OsString::from("validate"), path.into_os_string()];
+    assert_eq!(run(&raw), Ok(()), "a non-Unicode path validates and reports PASS");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A real `.docx` archive with `extra` parts added: content types, package relationships, the main
+/// document and an empty main relationships part. Used to drive `validate_bytes` from real bytes so
+/// a document-controlled entry name is shown to reach the report the way production does.
+fn validate_fixture_zip(extra: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut w = craft_zip::Writer::new();
+    w.add(
+        "[Content_Types].xml",
+        br#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#,
+        craft_zip::Compression::Stored,
+    )
+    .unwrap();
+    w.add(
+        "_rels/.rels",
+        br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#,
+        craft_zip::Compression::Stored,
+    )
+    .unwrap();
+    w.add(
+        "word/document.xml",
+        br#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>"#,
+        craft_zip::Compression::Stored,
+    )
+    .unwrap();
+    for (name, bytes) in extra {
+        w.add(name, bytes, craft_zip::Compression::Stored).unwrap();
+    }
+    w.finish().unwrap()
+}
+
+/// Finding 5: document-controlled text (a ZIP entry name) is escaped in the human report, while the
+/// JSON form keeps serde's escaping. The input is a real archive whose entry name carries a control
+/// character, so the test shows the name actually reaches the escaped fields (part and message).
+#[test]
+fn human_report_escapes_document_controlled_text() {
+    let evil = "word/evil\u{1b}[2J.bin";
+    let printable = "word/café—naïve.bin";
+    let zip = validate_fixture_zip(&[(evil, b"x"), (printable, b"x")]);
+    let report = wordcraft_validate::validate_bytes(&zip);
+    // The undeclared part carries the raw control character in its part field and its message.
+    let finding = report
+        .findings
+        .iter()
+        .find(|f| f.rule == "CT-UNDECLARED" && f.part.as_deref() == Some(evil))
+        .unwrap_or_else(|| panic!("expected CT-UNDECLARED at the control-character name: {:#?}", report.findings));
+    assert!(finding.message.contains(evil), "the name reaches the message too: {:?}", finding.message);
+
+    let human = render_validate_report(&report);
+    assert!(!human.contains('\u{1b}'), "no raw escape survives the human report: {human:?}");
+    assert!(human.contains("\\u{1b}"), "{human:?}");
+    assert!(human.contains("[2J"), "the surrounding name text is kept as written: {human:?}");
+    // Printable Unicode in a name is left as written.
+    assert!(human.contains(printable), "printable Unicode must be untouched: {human:?}");
+
+    // JSON output is unchanged by the human escaping: serde still emits the control character as
+    // its own JSON escape.
+    let json = serde_json::to_string(&report).unwrap();
+    assert!(json.contains("\\u001b"), "{json}");
+}
+
 #[test]
 fn invisible_characters_are_escaped_and_json_lines_still_parse_back() {
     let hidden = "a\u{ad}b\u{200b}c\u{200d}d\u{2060}e\u{2064}f\u{feff}g\u{e0041}h\u{e007f}i\u{85}j\u{202e}k";
@@ -600,4 +826,19 @@ fn invisible_characters_are_escaped_and_json_lines_still_parse_back() {
     assert!(!line.chars().any(is_unsafe_char), "{line}");
     assert!(line.contains("\\ud800") || line.contains("\\udb40"), "{line}");
     assert_eq!(serde_json::from_str::<Value>(&line).unwrap(), value);
+}
+
+/// Native non-Unicode paths survive argument parsing and reach the validator's I/O error path.
+/// No file is created: APFS refuses invalid UTF-8 names. The original bytes, rather than their
+/// lossy display spelling, must be retained even when options precede the operand.
+#[cfg(unix)]
+#[test]
+fn validate_preserves_a_non_unicode_path_without_creating_a_file() {
+    use std::os::unix::ffi::OsStringExt;
+    let raw_path = OsString::from_vec(b"wordcraft-nonexistent-caf\xe9.docx".to_vec());
+    let raw = vec![OsString::from("validate"), OsString::from("--json"), raw_path.clone()];
+    let (_, parsed) = text_args(&raw).unwrap();
+    assert_eq!(parsed.as_deref(), Some(Path::new(&raw_path)));
+    assert!(parsed.as_deref().unwrap().to_str().is_none());
+    assert_eq!(run(&raw), Err(Failure::Status(3)), "native path reaches I/O handling");
 }

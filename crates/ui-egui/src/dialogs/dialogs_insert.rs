@@ -26,7 +26,7 @@ pub(crate) mod symbol;
 pub use columns::DropCapForm;
 pub use date_time::DateTimeForm;
 #[cfg(test)]
-pub(crate) use date_time::date_time_preview_matches;
+pub(crate) use date_time::date_time_previews_at;
 pub use field::{DATE_FORMATS, FIELD_CATEGORIES, FIELDS, FieldForm, FieldKind, NUMBER_FORMATS, STYLEREF_SWITCHES, field_kind};
 pub(crate) use symbol::SymbolDialog;
 pub use symbol::{RECENT_SYMBOLS, RecentSymbol, SPECIAL, SUBSETS, SymbolForm, remember_symbol, subset_of};
@@ -107,7 +107,7 @@ pub(super) fn list_index(ui: &mut Ui, label: &Label, rows: &[String], current: O
     let mut picked = Picked { selected: None, activated: None };
     for event in events {
         match event {
-            CollectionEvent::Selection(SelectionChange::Set(set)) => picked.selected = set.last().copied(),
+            CollectionEvent::Selection { change: SelectionChange::Set(set), .. } => picked.selected = set.last().copied(),
             CollectionEvent::Activate(row) => {
                 picked.selected = Some(row);
                 picked.activated = Some(row);

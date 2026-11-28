@@ -4,14 +4,34 @@
 
 use std::path::{Path, PathBuf};
 
+/// The folder the desktop app chose before any of its state was read: a Launcher-selected
+/// Nightly profile (`launch_profile`). Set once, at startup, before the first [`settings_dir`]
+/// call; tests and the CLI leave it unset.
+static CHOSEN: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Point [`settings_dir`] at `dir` for this process. Fails when a folder was already chosen.
+pub fn use_settings_dir(dir: PathBuf) -> Result<(), String> {
+    CHOSEN.set(dir).map_err(|_| "the settings folder was already selected".into())
+}
+
 /// The app's settings folder (preferences, logs, token files): macOS
 /// `~/Library/Application Support/WordCraft`, Windows `%APPDATA%\WordCraft`, otherwise
 /// `$XDG_CONFIG_HOME/wordcraft` or `~/.config/wordcraft`.
-/// `WORDCRAFT_PROFILE_DIR` overrides the entire folder for isolated runs.
+/// A folder chosen by the app through [`use_settings_dir`] wins: it is a launch decision, not
+/// an environment variable a child or a wrapper might have inherited. `WORDCRAFT_PROFILE_DIR`
+/// overrides the entire folder for isolated runs otherwise.
 pub fn settings_dir() -> Option<PathBuf> {
+    if let Some(path) = CHOSEN.get() {
+        return Some(path.clone());
+    }
     if let Some(path) = std::env::var_os("WORDCRAFT_PROFILE_DIR").filter(|p| !p.is_empty()) {
         return Some(PathBuf::from(path));
     }
+    platform_settings_dir()
+}
+
+/// The platform's own folder, when nothing chose one (see [`settings_dir`]).
+fn platform_settings_dir() -> Option<PathBuf> {
     if cfg!(target_os = "macos") {
         std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support/WordCraft"))
     } else if cfg!(windows) {
@@ -65,6 +85,18 @@ mod tests {
         assert_eq!(parse_instance_id("instance-id=..\n"), None);
         assert_eq!(parse_instance_id("instance-id=\n"), None);
         assert_eq!(parse_instance_id("app=ai.storyteller.wordcraft\n"), None);
+    }
+
+    #[test]
+    fn a_chosen_folder_wins_over_the_environment() {
+        // The chosen folder is process-wide and set once, so this test only reads the rule when
+        // nothing chose one (the crate's own tests and the CLI never do).
+        if CHOSEN.get().is_none() {
+            assert_eq!(settings_dir(), super::platform_settings_dir());
+            assert!(use_settings_dir(PathBuf::from("/chosen/profile")).is_ok());
+            assert_eq!(settings_dir().as_deref(), Some(std::path::Path::new("/chosen/profile")));
+            assert!(use_settings_dir(PathBuf::from("/other")).is_err(), "the folder is selected once");
+        }
     }
 
     #[test]

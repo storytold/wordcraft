@@ -55,6 +55,8 @@ pub mod md_source;
 pub mod mini_toolbar;
 pub mod objects;
 pub mod options;
+/// The window identity of the channel this build runs as (stable or Nightly).
+pub mod os_window;
 pub mod panes;
 pub mod paste_picture;
 pub mod prefs;
@@ -400,6 +402,11 @@ pub struct WordApp {
     /// The app-scope command states handed to the runtime, edited only when they change: the runtime resolves
     /// commands again only when their revision moves ([`WordApp::command_input`]).
     pub(crate) command_states: craft::ui::contract::Tracked<craft::ui::runtime::commands::CommandStates>,
+    /// Precomputed command metadata, translated hints, and last gate results for [`WordApp::command_input`],
+    /// avoiding per-frame allocations and catalog reparsing while idle.
+    pub(crate) command_states_cache: Option<app::command_board::CommandStatesCache>,
+    /// Cached keytip control lists and reserved shortcut letters per registry and active ribbon tab.
+    pub(crate) keytip_cache: Option<keytips::KeytipCache>,
     /// Frames drawn so far, counted to 2: the control channel's queued requests wait until the
     /// fonts are warm.
     pub(crate) fonts_frames: u8,
@@ -541,6 +548,8 @@ pub struct WordApp {
     pub(crate) dialog_answers: Vec<(craft::ui::dialog::DialogId, String, serde_json::Value)>,
     /// Field gestures as undo steps ([`undo_marks`]).
     pub(crate) edits: craft::ui::edit::GestureHost<WordApp>,
+    /// Active gesture id and whether an edit was applied for it ([`undo_marks`]).
+    pub(crate) edits_gesture: Option<(craft::behavior::GestureId, bool)>,
     /// The Equation tab's symbol set.
     pub(crate) equation_symbol_set: usize,
     /// The gradient variation memory of Format Shape.
@@ -571,6 +580,8 @@ pub(crate) fn rust_sources(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     files
 }
 
+#[cfg(test)]
+mod file_browser;
 #[cfg(test)]
 mod test_harness;
 #[cfg(test)]
