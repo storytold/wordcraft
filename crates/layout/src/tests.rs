@@ -4738,7 +4738,147 @@ fn a_lines_arrowheads_sit_at_its_ends() {
             _ => None,
         })
         .collect();
-    assert_eq!(tips, [(rect.x, rect.y), (rect.right(), rect.bottom())]);
+    let [(x0, y0), (x1, y1)] = tips[..] else { panic!("two arrowheads: {tips:?}") };
+    assert!((x1 - x0 - 60.0).abs() < 0.01 && (y1 - y0 - 40.0).abs() < 0.01, "tips at the frame's corners: {tips:?}");
+    // The line, drawn short of its arrowed ends (#6767), runs along the same diagonal.
+    assert!(rect.x > x0 && rect.y > y0 && rect.right() < x1 && rect.bottom() < y1, "{rect:?} between {tips:?}");
+    assert!(((rect.x - x0) / 60.0 - (rect.y - y0) / 40.0).abs() < 0.001, "{rect:?} on the diagonal from {tips:?}");
+    assert!(((x1 - rect.right()) / 60.0 - (y1 - rect.bottom()) / 40.0).abs() < 0.001, "{rect:?} on the diagonal to {tips:?}");
+}
+
+#[test]
+fn a_thick_lines_stroke_ends_inside_its_arrowheads() {
+    // #6767: the stroke stopped at each arrowhead's tip, so a thick line's body and cap stuck out
+    // of the narrow head. Each arrowed end now stops where the head is as wide as the stroke (and
+    // its cap's reach before that), for lines and every connector.
+    use wordcraft_doc::connector::{LineCap, ShapeExtra};
+    use wordcraft_doc::para::{Float, ShapeKind};
+    use wordcraft_doc::props::Rgb;
+
+    let width = 6.0;
+    let kinds = [ShapeKind::Line, ShapeKind::StraightConnector, ShapeKind::ElbowConnector, ShapeKind::CurvedConnector];
+    for kind in kinds {
+        for cap in [LineCap::Flat, LineCap::Square, LineCap::Round] {
+            let shape = InlineObject::Shape {
+                kind,
+                w: 120.0,
+                h: 60.0,
+                fill: None,
+                stroke: Some(Rgb::BLACK),
+                stroke_width: width,
+                float: Float::default(),
+                story: None,
+                freeform: None,
+                effects: Default::default(),
+                extra: ShapeExtra { arrow_start: true, arrow_end: true, cap, ..Default::default() },
+            };
+            let (ends, heads, draws) = line_ends_and_heads(shape);
+            assert_eq!((ends.len(), heads.len()), (2, 2), "{kind:?} {cap:?}: {draws:?}");
+            for (end, head) in ends.iter().zip(&heads) {
+                for corner in stroke_end_corners(*end, *head, width, cap) {
+                    assert!(in_triangle(corner, *head), "{kind:?} {cap:?}: stroke corner {corner:?} outside the head {head:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_short_lines_lone_arrowhead_takes_the_room_its_other_end_does_not_need() {
+    // #6767: an arrowed end moved at most half way along a straight line, even when the other end
+    // had no arrowhead and stayed put, so a short thick line's stroke still stuck out of its head.
+    use wordcraft_doc::connector::{LineCap, ShapeExtra};
+    use wordcraft_doc::para::{Float, ShapeKind};
+    use wordcraft_doc::props::Rgb;
+
+    let width = 6.0;
+    // Each is shorter than twice its inset (6 pt flat, 9 pt with the cap's reach) but no shorter
+    // than one inset, so the head can cover the stroke: 8 pt and 10 pt diagonals.
+    for (cap, (w, h)) in [(LineCap::Flat, (6.4, 4.8)), (LineCap::Square, (8.0, 6.0)), (LineCap::Round, (8.0, 6.0))] {
+        for kind in [ShapeKind::Line, ShapeKind::StraightConnector] {
+            for at_start in [true, false] {
+                let shape = InlineObject::Shape {
+                    kind,
+                    w,
+                    h,
+                    fill: None,
+                    stroke: Some(Rgb::BLACK),
+                    stroke_width: width,
+                    float: Float::default(),
+                    story: None,
+                    freeform: None,
+                    effects: Default::default(),
+                    extra: ShapeExtra { arrow_start: at_start, arrow_end: !at_start, cap, ..Default::default() },
+                };
+                let (ends, heads, draws) = line_ends_and_heads(shape);
+                let (&[start, end], &[head]) = (&ends[..], &heads[..]) else { panic!("{kind:?} {cap:?}: {draws:?}") };
+                let tip = head[0];
+                let (near, far) = if at_start { (start, end) } else { (end, start) };
+                // The end without an arrowhead stays where it was.
+                let other = if at_start { (tip.0 + w, tip.1 + h) } else { (tip.0 - w, tip.1 - h) };
+                assert!((far.0 - other.0).abs() < 0.01 && (far.1 - other.1).abs() < 0.01, "{kind:?} {cap:?}: {far:?} moved from {other:?}");
+                for corner in stroke_end_corners(near, head, width, cap) {
+                    assert!(in_triangle(corner, head), "{kind:?} {cap:?} start={at_start}: stroke corner {corner:?} outside the head {head:?}");
+                }
+            }
+        }
+    }
+}
+
+/// The ends of the stroked line or connector `shape` draws, from its start to its end, its
+/// arrowheads (each tip first), and all its draws.
+fn line_ends_and_heads(shape: InlineObject) -> (Vec<(f32, f32)>, Vec<[(f32, f32); 3]>, Vec<display::Draw>) {
+    use wordcraft_doc::graphic::PathSeg;
+    use wordcraft_doc::para::ShapeKind;
+
+    let mut doc = Document::from_text("Scan");
+    doc.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+    let draws = flat(display::page_display(&doc, &lay(&doc).pages[0], &Default::default()));
+    let mut ends = Vec::new();
+    let mut heads = Vec::new();
+    for d in &draws {
+        match d {
+            display::Draw::Shape { rect, kind: ShapeKind::Line, .. } => ends.extend([(rect.x, rect.y), (rect.right(), rect.bottom())]),
+            display::Draw::Path { fill: None, stroke: Some(_), segs, .. } => {
+                let point = |s: &PathSeg| match *s {
+                    PathSeg::Move(x, y) | PathSeg::Line(x, y) | PathSeg::Cubic(.., x, y) => Some((x, y)),
+                    PathSeg::Close => None,
+                };
+                ends.extend(segs.first().and_then(point));
+                ends.extend(segs.last().and_then(point));
+            }
+            display::Draw::Path { fill: Some(_), segs, .. } => {
+                if let [PathSeg::Move(tx, ty), PathSeg::Line(ax, ay), PathSeg::Line(bx, by), PathSeg::Close] = segs[..] {
+                    heads.push([(tx, ty), (ax, ay), (bx, by)]);
+                }
+            }
+            _ => {}
+        }
+    }
+    (ends, heads, draws)
+}
+
+/// The corners of a `width` stroke's `end` under arrowhead `head`, its `cap` included (a round
+/// cap lies inside them).
+fn stroke_end_corners(end: (f32, f32), head: [(f32, f32); 3], width: f32, cap: wordcraft_doc::connector::LineCap) -> [(f32, f32); 2] {
+    let [tip, a, b] = head;
+    let base = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+    let len = (tip.0 - base.0).hypot(tip.1 - base.1);
+    // The head's direction, and across it.
+    let (dx, dy) = ((tip.0 - base.0) / len, (tip.1 - base.1) / len);
+    let (nx, ny) = (-dy, dx);
+    let reach = if cap == wordcraft_doc::connector::LineCap::Flat { 0.0 } else { width / 2.0 };
+    [-1.0, 1.0].map(|side| (end.0 + dx * reach + nx * side * width / 2.0, end.1 + dy * reach + ny * side * width / 2.0))
+}
+
+/// Whether `p` lies inside (or within 0.01 pt of) triangle `t`.
+fn in_triangle(p: (f32, f32), t: [(f32, f32); 3]) -> bool {
+    let edge = |(ax, ay): (f32, f32), (bx, by): (f32, f32)| {
+        let len = (bx - ax).hypot(by - ay);
+        ((bx - ax) * (p.1 - ay) - (by - ay) * (p.0 - ax)) / len
+    };
+    let sides = [edge(t[0], t[1]), edge(t[1], t[2]), edge(t[2], t[0])];
+    sides.iter().all(|s| *s >= -0.01) || sides.iter().all(|s| *s <= 0.01)
 }
 
 #[test]
@@ -7383,6 +7523,425 @@ fn justified_spaces_shrink_a_quarter_at_most_and_by_the_word() {
         // Left-aligned text never shrinks.
         assert_eq!(first(&para(&text, Align::Left, full - width(0.1))), n, "'{word}' left-aligned");
     }
+}
+
+/// Measured in Word for Mac (compatibility mode 15, synthetic justified paragraphs that start
+/// with a label and a tab, or with words and then a left tab): a line with a tab shrinks its
+/// spaces too, but only those after its last tab. WordCraft never shrank a line with a tab, so a
+/// numbered paragraph's first line wrapped a word earlier than Word's (#4845, #5847).
+#[test]
+fn justified_line_with_a_tab_shrinks_only_the_spaces_after_it() {
+    use wordcraft_doc::props::{TabAlign, TabStop};
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let word = "nnnn";
+    let (lead, n) = ("n n n n n n n n n n n n", 12);
+    let tab_at = 200.0;
+    let para = |text: &str, right: f32| {
+        let mut d = Document::new();
+        d.settings.compat_mode = 15;
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        p.props = ParaProps {
+            align: Some(Align::Justify),
+            indent_right: Some(right),
+            tabs: Some(vec![TabStop { pos: tab_at, align: TabAlign::Left, leader: Default::default() }]),
+            ..Default::default()
+        };
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d
+    };
+    // Words after the tab on the first line.
+    let after_tab = |d: &Document| {
+        let l = lay(d);
+        let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+        let line = &pl.lines[0];
+        let text = &d.para(StoryRef::Body, &Path::top(0)).unwrap().text[line.start..line.stop];
+        text.split('\t').nth(1).unwrap_or("").split_whitespace().count()
+    };
+    let probe = para(&format!("{word} {word}"), 0.0);
+    let l = lay(&probe);
+    let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let w = pl.x_of(0, word.len()).unwrap() - pl.x_of(0, 0).unwrap();
+    let sw = pl.x_of(0, word.len() + 1).unwrap() - pl.x_of(0, word.len()).unwrap();
+    // Room from the n spaces after the tab alone; the eleven before it would allow more.
+    let room = (0.25 * n as f32 * sw).min(0.355 * (w + sw));
+    let all_room = (0.25 * (n + 11) as f32 * sw).min(0.355 * (w + sw));
+    assert!(all_room > room + 0.5, "the test needs the spaces before the tab to matter: {room} vs {all_room}");
+    let text = format!("{lead}\t{}", vec![word; 3 * n].join(" "));
+    let full = probe.last_section.text_width();
+    let width = |overrun: f32| tab_at + (n + 1) as f32 * w + n as f32 * sw - overrun;
+    for (overrun, words) in [(room - 0.1, n + 1), (room + 0.1, n)] {
+        let d = para(&text, full - width(overrun));
+        assert_eq!(after_tab(&d), words, "overrun {overrun:.2} of {room:.2} allowed");
+    }
+
+    // Verify rendered positions: spaces after the tab shrink in the allowed-overrun case,
+    // while positions before the tab remain unchanged.
+    let shrunk_doc = para(&text, full - width(room - 0.1));
+    let unconstrained_doc = para(&text, 0.0);
+    let l_shrunk = lay(&shrunk_doc);
+    let l_unconstrained = lay(&unconstrained_doc);
+    let pl_shrunk = l_shrunk.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let pl_unconstrained =
+        l_unconstrained.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+
+    // Characters in `lead` and the tab's start position must have identical positions.
+    for k in 0..=lead.len() {
+        assert_eq!(pl_shrunk.x_of(0, k), pl_unconstrained.x_of(0, k), "char {k} before tab must not move when spaces after tab shrink");
+    }
+    // Text after the tab starts at tab_at.
+    assert!((pl_shrunk.x_of(0, lead.len() + 1).unwrap() - tab_at).abs() < 0.01, "tab position");
+    // Text after the tab is shifted left compared to its natural (un-shrunk) positions:
+    // for each word k after the tab on line 0, natural position is tab_at + k * (w + sw).
+    let natural_x = |k: usize| tab_at + k as f32 * (w + sw);
+    for k in 1..=n {
+        let char_pos = lead.len() + 1 + k * (word.len() + 1);
+        let x = pl_shrunk.x_of(0, char_pos).expect("word position on shrunk line");
+        assert!(x < natural_x(k), "word {k} after tab at {x} must be shifted left from natural {}", natural_x(k));
+    }
+}
+
+/// #5847: a justified line with multiple tabs shrinks spaces only after its last tab.
+/// Spaces before the first tab and between tabs retain their natural width and positions,
+/// and only spaces after the last tab count toward space_room.
+#[test]
+fn justified_line_with_multiple_tabs_shrinks_only_spaces_after_last_tab() {
+    use wordcraft_doc::props::{TabAlign, TabStop};
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let word = "nnnn";
+    let (lead1, lead2, n) = ("n n n n n n", "n n n n n n", 12);
+    let tab1_at = 120.0;
+    let tab2_at = 240.0;
+    let para = |text: &str, right: f32| {
+        let mut d = Document::new();
+        d.settings.compat_mode = 15;
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        p.props = ParaProps {
+            align: Some(Align::Justify),
+            indent_right: Some(right),
+            tabs: Some(vec![
+                TabStop { pos: tab1_at, align: TabAlign::Left, leader: Default::default() },
+                TabStop { pos: tab2_at, align: TabAlign::Left, leader: Default::default() },
+            ]),
+            ..Default::default()
+        };
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d
+    };
+    // Words after the second tab on the first line.
+    let after_second_tab = |d: &Document| {
+        let l = lay(d);
+        let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+        let line = &pl.lines[0];
+        let text = &d.para(StoryRef::Body, &Path::top(0)).unwrap().text[line.start..line.stop];
+        text.split('\t').nth(2).unwrap_or("").split_whitespace().count()
+    };
+    let probe = para(&format!("{word} {word}"), 0.0);
+    let l = lay(&probe);
+    let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let w = pl.x_of(0, word.len()).unwrap() - pl.x_of(0, 0).unwrap();
+    let sw = pl.x_of(0, word.len() + 1).unwrap() - pl.x_of(0, word.len()).unwrap();
+    // Room from the n spaces after the second tab alone; spaces before tab 1 or between tabs would allow more.
+    let room = (0.25 * n as f32 * sw).min(0.355 * (w + sw));
+    let all_room = (0.25 * (n + 10) as f32 * sw).min(0.355 * (w + sw));
+    assert!(all_room > room + 0.5, "the test needs the spaces before the last tab to matter: {room} vs {all_room}");
+    let text = format!("{lead1}\t{lead2}\t{}", vec![word; 3 * n].join(" "));
+    let full = probe.last_section.text_width();
+    let width = |overrun: f32| tab2_at + (n + 1) as f32 * w + n as f32 * sw - overrun;
+    for (overrun, words) in [(room - 0.1, n + 1), (room + 0.1, n)] {
+        let d = para(&text, full - width(overrun));
+        assert_eq!(after_second_tab(&d), words, "overrun {overrun:.2} of {room:.2} allowed");
+    }
+
+    // Verify rendered positions: spaces after the last tab shrink in the allowed-overrun case,
+    // while positions before tab 1 and between tabs remain completely unchanged.
+    let shrunk_doc = para(&text, full - width(room - 0.1));
+    let unconstrained_doc = para(&text, 0.0);
+    let l_shrunk = lay(&shrunk_doc);
+    let l_unconstrained = lay(&unconstrained_doc);
+    let pl_shrunk = l_shrunk.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let pl_unconstrained =
+        l_unconstrained.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+
+    // Characters in `lead1`, tab 1, and `lead2` up to the second tab must have identical positions.
+    let pre_last_tab_len = lead1.len() + 1 + lead2.len();
+    for k in 0..=pre_last_tab_len {
+        assert_eq!(pl_shrunk.x_of(0, k), pl_unconstrained.x_of(0, k), "char {k} before last tab must not move when spaces after last tab shrink");
+    }
+    // Text after the second tab starts at tab2_at.
+    assert!((pl_shrunk.x_of(0, pre_last_tab_len + 1).unwrap() - tab2_at).abs() < 0.01, "second tab position");
+    // Text after the second tab is shifted left compared to its natural (un-shrunk) positions:
+    let natural_x = |k: usize| tab2_at + k as f32 * (w + sw);
+    for k in 1..=n {
+        let char_pos = pre_last_tab_len + 1 + k * (word.len() + 1);
+        let x = pl_shrunk.x_of(0, char_pos).expect("word position on shrunk line");
+        assert!(x < natural_x(k), "word {k} after last tab at {x} must be shifted left from natural {}", natural_x(k));
+    }
+}
+
+/// #5847: a tabbed line with no spaces after its last tab has zero shrink room.
+/// Space shrinking is a no-op, guarding against division by zero, negative room,
+/// or shifting pre-tab clusters when there are no spaces to shrink after the tab.
+#[test]
+fn justified_line_with_tab_and_no_spaces_after_it_does_not_shrink() {
+    use wordcraft_doc::props::{TabAlign, TabStop};
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let lead = "n n n n n n n n";
+    let word = "OverlongWordWithoutAnySpace";
+    let tab_at = 200.0;
+    let para = |text: &str, right: f32| {
+        let mut d = Document::new();
+        d.settings.compat_mode = 15;
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        p.props = ParaProps {
+            align: Some(Align::Justify),
+            indent_right: Some(right),
+            tabs: Some(vec![TabStop { pos: tab_at, align: TabAlign::Left, leader: Default::default() }]),
+            ..Default::default()
+        };
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d
+    };
+
+    let probe = para(word, 0.0);
+    let l = lay(&probe);
+    let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let word_w = pl.x_of(0, word.len()).unwrap() - pl.x_of(0, 0).unwrap();
+
+    let text = format!("{lead}\t{word}");
+    let full = probe.last_section.text_width();
+    // Constrain the line so that `word` overruns the right edge by 2.0 pt.
+    // Because there are no spaces after the tab, shrink room is 0 and the word
+    // must wrap to line 1 rather than shrinking onto line 0.
+    let tight_doc = para(&text, full - (tab_at + word_w - 2.0));
+    let l_tight = lay(&tight_doc);
+    let pl_tight = l_tight.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    assert_eq!(pl_tight.lines.len(), 2, "word with no spaces after tab must wrap when it overruns the line");
+
+    // When the word fits within the line, characters before the tab and the word after the tab
+    // remain at their exact natural positions (no pre-tab shift, no shrink).
+    let fit_doc = para(&text, full - (tab_at + word_w + 50.0));
+    let unconstrained_doc = para(&text, 0.0);
+    let l_fit = lay(&fit_doc);
+    let l_unconstrained = lay(&unconstrained_doc);
+    let pl_fit = l_fit.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let pl_unconstrained =
+        l_unconstrained.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+
+    for k in 0..=text.len() {
+        assert_eq!(
+            pl_fit.x_of(0, k),
+            pl_unconstrained.x_of(0, k),
+            "char {k} position must be unchanged when there are no spaces to shrink after the tab"
+        );
+    }
+}
+
+/// #5847: justified paragraphs starting with a tab shrink spaces on the first line in Word 2013+
+/// mode, fitting more text than legacy mode 14 just as non-tab lines do.
+#[test]
+fn justified_lines_with_tab_shrink_spaces_in_word_2013_mode() {
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let word = "nnnn";
+    let n = 12;
+    let tab_at = 36.0; // default 0.5" tab stop
+    let para = |text: &str, right: f32, mode: u32| {
+        let mut d = Document::new();
+        d.settings.compat_mode = mode;
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        p.props = ParaProps { align: Some(Align::Justify), indent_right: Some(right), ..Default::default() };
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d
+    };
+    let first = |d: &Document| {
+        let l = lay(d);
+        let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+        let line = &pl.lines[0];
+        let text = &d.para(StoryRef::Body, &Path::top(0)).unwrap().text[line.start..line.stop];
+        text.split('\t').nth(1).unwrap_or("").split_whitespace().count()
+    };
+    let probe = para(&format!("{word} {word}"), 0.0, 15);
+    let l = lay(&probe);
+    let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let w = pl.x_of(0, word.len()).unwrap() - pl.x_of(0, 0).unwrap();
+    let sw = pl.x_of(0, word.len() + 1).unwrap() - pl.x_of(0, word.len()).unwrap();
+    let room = (0.25 * n as f32 * sw).min(0.355 * (w + sw));
+    let text = format!("\t{}", vec![word; 3 * n].join(" "));
+    let full = probe.last_section.text_width();
+    let width = tab_at + (n + 1) as f32 * w + n as f32 * sw - (room - 0.1);
+
+    // Verify on the tabbed first line that mode 15 fits the extra word via space shrinking
+    // while legacy mode 14 does not shrink spaces, wrapping the extra word to the next line.
+    let modern_doc = para(&text, full - width, 15);
+    let legacy_doc = para(&text, full - width, 14);
+    assert_eq!(first(&modern_doc), n + 1, "mode 15 with leading tab fits extra word within allowable overrun");
+    assert_eq!(first(&legacy_doc), n, "mode 14 with leading tab does not shrink spaces and wraps extra word");
+
+    // Multi-line justified paragraph with leading tab also fits more lines overall in mode 15.
+    let text_full = format!("\t{}", "We tie the spend to a pipe and to the books, so it is in an ad hoc view of all of it. ".repeat(40));
+    let (modern, ends) = justified_lines(&text_full, 15, Align::Justify);
+    let (legacy, legacy_ends) = justified_lines(&text_full, 14, Align::Justify);
+    assert!(modern < legacy, "mode 15 with leading tab fits more per line: {modern} vs {legacy} lines");
+    for e in ends.iter().chain(&legacy_ends) {
+        assert!(*e <= 540.0 + 0.05, "line ends past the right margin: {e}");
+    }
+    for e in &ends[..ends.len() - 1] {
+        assert!((*e - 540.0).abs() < 0.05, "justified line ends at {e}");
+    }
+}
+
+/// #5847: leading tab on a justified line shrinks spaces after the tab when fitting words.
+#[test]
+fn justified_line_with_leading_tab_shrinks_spaces() {
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let word = "nnnn";
+    let n = 12;
+    let tab_at = 36.0; // default 0.5" tab stop
+    let para = |text: &str, right: f32| {
+        let mut d = Document::new();
+        d.settings.compat_mode = 15;
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        p.props = ParaProps { align: Some(Align::Justify), indent_right: Some(right), ..Default::default() };
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d
+    };
+    let first = |d: &Document| {
+        let l = lay(d);
+        let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+        let line = &pl.lines[0];
+        let text = &d.para(StoryRef::Body, &Path::top(0)).unwrap().text[line.start..line.stop];
+        text.split('\t').nth(1).unwrap_or("").split_whitespace().count()
+    };
+    let probe = para(&format!("{word} {word}"), 0.0);
+    let l = lay(&probe);
+    let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let w = pl.x_of(0, word.len()).unwrap() - pl.x_of(0, 0).unwrap();
+    let sw = pl.x_of(0, word.len() + 1).unwrap() - pl.x_of(0, word.len()).unwrap();
+    let room = (0.25 * n as f32 * sw).min(0.355 * (w + sw));
+    let text = format!("\t{}", vec![word; 3 * n].join(" "));
+    let full = probe.last_section.text_width();
+    let width = |overrun: f32| tab_at + (n + 1) as f32 * w + n as f32 * sw - overrun;
+    for (overrun, words) in [(room - 0.1, n + 1), (room + 0.1, n)] {
+        let d = para(&text, full - width(overrun));
+        assert_eq!(first(&d), words, "leading tab overrun {overrun:.2} of {room:.2} allowed");
+    }
+}
+
+/// #5847: fit-time and final space compression apply only after left/default tabs, not after
+/// right, center, or decimal tabs whose anchors are resolved with unshrunk widths.
+#[test]
+fn justified_line_with_non_left_tab_preserves_anchor_and_does_not_shrink() {
+    use wordcraft_doc::props::{TabAlign, TabStop};
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let para = |text: &str, right: f32, tabs: Vec<TabStop>| {
+        let mut d = Document::new();
+        d.settings.compat_mode = 15;
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        p.props = ParaProps { align: Some(Align::Justify), indent_right: Some(right), tabs: Some(tabs), ..Default::default() };
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d
+    };
+    let first_pl = |d: &Document| {
+        let l = lay(d);
+        l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.clone()) } else { None }).unwrap()
+    };
+
+    // 1. Right tab past the usable right edge: multiword run is absorbed against the stop and
+    // must keep its final edge at the stop rather than shrinking left of it.
+    let right_text = "lead\tnnnn nnnn nnnn";
+    let right_stop = 280.0;
+    let right_edge = 240.0;
+    let right_tabs = vec![TabStop { pos: right_stop, align: TabAlign::Right, leader: Default::default() }];
+    let right_unconstrained = para(right_text, 0.0, right_tabs.clone());
+    let full = right_unconstrained.last_section.text_width();
+    let pl_right_unconstrained = first_pl(&right_unconstrained);
+    let pl_right = first_pl(&para(right_text, full - right_edge, right_tabs));
+    assert_eq!(pl_right.lines.len(), 1, "absorbed multiword run after right tab stays on line 0");
+    assert!(
+        (pl_right.x_of(0, right_text.len()).unwrap() - right_stop).abs() < 0.01,
+        "right-tabbed multiword run must remain aligned to stop {right_stop}, got {:?}",
+        pl_right.x_of(0, right_text.len())
+    );
+    for k in 0..=right_text.len() {
+        assert_eq!(pl_right.x_of(0, k), pl_right_unconstrained.x_of(0, k), "char {k} after right tab must not shrink");
+    }
+
+    // 2. Decimal tab on an overfull line: spaces before the decimal point must not shrink and
+    // pull the decimal point left of its stop.
+    let dec_text = "\t12 34.56789";
+    let dec_stop = 200.0;
+    let dec_tabs = vec![TabStop { pos: dec_stop, align: TabAlign::Decimal, leader: Default::default() }];
+    let dec_unconstrained = para(dec_text, 0.0, dec_tabs.clone());
+    let pl_dec_unconstrained = first_pl(&dec_unconstrained);
+    let dot_idx = dec_text.find('.').unwrap();
+    let dec_end = pl_dec_unconstrained.x_of(0, dec_text.len()).unwrap();
+    let pl_dec = first_pl(&para(dec_text, full - (dec_end - 5.0), dec_tabs));
+    assert_eq!(pl_dec.lines.len(), 1, "decimal-tabbed run stays on line 0");
+    assert_eq!(
+        pl_dec.x_of(0, dot_idx),
+        pl_dec_unconstrained.x_of(0, dot_idx),
+        "decimal point must keep its unconstrained anchor on an overfull line"
+    );
+    for k in 0..=dec_text.len() {
+        assert_eq!(pl_dec.x_of(0, k), pl_dec_unconstrained.x_of(0, k), "char {k} after decimal tab must not shrink");
+    }
+
+    // 3. Center tab:
+    // (a) Overfull center-tabbed line must not run final compression and shift off its stop.
+    let center_overfull_text = "\taaaaaaaaaa bbbbbbbbbb";
+    let center_overfull_stop = 250.0;
+    let center_overfull_tabs = vec![TabStop { pos: center_overfull_stop, align: TabAlign::Center, leader: Default::default() }];
+    let center_unconstrained = para(center_overfull_text, 0.0, center_overfull_tabs.clone());
+    let pl_center_unconstrained = first_pl(&center_unconstrained);
+    let pl_center_overfull = first_pl(&para(center_overfull_text, full - 260.0, center_overfull_tabs));
+    assert_eq!(pl_center_overfull.lines.len(), 1, "overfull center-tabbed line stays on line 0");
+    let mid = (pl_center_overfull.x_of(0, 1).unwrap() + pl_center_overfull.x_of(0, center_overfull_text.len()).unwrap()) / 2.0;
+    assert!((mid - center_overfull_stop).abs() < 0.01, "centered midpoint {mid} must stay at {center_overfull_stop}");
+    for k in 0..=center_overfull_text.len() {
+        assert_eq!(pl_center_overfull.x_of(0, k), pl_center_unconstrained.x_of(0, k), "char {k} after center tab must not shrink");
+    }
+
+    // (b) Fit-time compression must not pull an overflowing trailing word onto a non-left-tabbed line.
+    let probe = para("n n i", 0.0, Vec::new());
+    let pl_probe = first_pl(&probe);
+    let sw = pl_probe.x_of(0, 2).unwrap() - pl_probe.x_of(0, 1).unwrap();
+    let w_i = pl_probe.x_of(0, 5).unwrap() - pl_probe.x_of(0, 4).unwrap();
+    let prefix = "n ".repeat(12);
+    let fit_text = format!("\t{prefix}i");
+    let pl_prefix = first_pl(&para(&prefix, 0.0, Vec::new()));
+    let w_pre = pl_prefix.x_of(0, prefix.len()).unwrap();
+    let room = (0.25 * 12.0 * sw).min(0.355 * (sw + w_i));
+    let fit_edge = w_pre + w_i - (room - 0.1);
+    for align in [TabAlign::Right, TabAlign::Center, TabAlign::Decimal] {
+        let pl_fit = first_pl(&para(&fit_text, full - fit_edge, vec![TabStop { pos: 3.0, align, leader: Default::default() }]));
+        assert_eq!(pl_fit.lines.len(), 2, "{align:?} tab must not use fit-time space shrinking to accept 'i'");
+    }
+
+    // 4. Right tab followed by a left tab: spaces after the final left tab still shrink while the
+    // earlier right tab keeps its anchor.
+    let word = "nnnn";
+    let n = 12;
+    let right_seg = "aa bb";
+    let pl_w = first_pl(&para(&format!("{word} {word}"), 0.0, Vec::new()));
+    let w = pl_w.x_of(0, word.len()).unwrap();
+    let left_room = (0.25 * n as f32 * sw).min(0.355 * (w + sw));
+    let mixed_text = format!("\t{right_seg}\t{}", vec![word; 3 * n].join(" "));
+    let mixed_right_stop = 120.0;
+    let mixed_left_stop = 160.0;
+    let mixed_width = mixed_left_stop + (n + 1) as f32 * w + n as f32 * sw - (left_room - 0.1);
+    let pl_mixed = first_pl(&para(
+        &mixed_text,
+        full - mixed_width,
+        vec![
+            TabStop { pos: mixed_right_stop, align: TabAlign::Right, leader: Default::default() },
+            TabStop { pos: mixed_left_stop, align: TabAlign::Left, leader: Default::default() },
+        ],
+    ));
+    assert!(
+        (pl_mixed.x_of(0, 1 + right_seg.len()).unwrap() - mixed_right_stop).abs() < 0.01,
+        "earlier right tab must keep its stop {mixed_right_stop}"
+    );
+    let first_line_words = mixed_text[pl_mixed.lines[0].start..pl_mixed.lines[0].stop].split('\t').nth(2).unwrap_or("").split_whitespace().count();
+    assert_eq!(first_line_words, n + 1, "spaces after final left tab still shrink");
 }
 
 #[test]

@@ -319,6 +319,7 @@ impl WordApp {
     pub fn logic(&mut self, ctx: &egui::Context) {
         let lang = i18n::Lang::from_pref(&self.ui.language);
         if self.ctx.is_none() {
+            theme::set_dark_text_curve(ctx);
             self.ctx = Some(ctx.clone());
         }
         updates_ui::tick(self, ctx);

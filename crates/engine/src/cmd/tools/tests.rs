@@ -1692,6 +1692,1254 @@ fn inspect_removals_work_when_the_document_does_not_track_changes() {
     assert!(text.contains("Visible text."), "{text}");
 }
 
+/// Helper that creates a session with a body paragraph and an attached footnote or endnote.
+fn session_with_note(body: &str, note_text: &str, endnote: bool) -> Session {
+    let mut s = Session::new(Document::from_text(body));
+    s.run("select.all", &json!({})).unwrap();
+    s.run("caret.end", &json!({})).unwrap();
+    let cmd = if endnote { "references.endnote" } else { "references.footnote" };
+    s.run(cmd, &json!({"text": note_text})).unwrap();
+    s
+}
+
+/// #5842: Compare diffs footnote content between the original and revised documents,
+/// tracking word deletions and insertions inside the footnote story without marking
+/// the unchanged body reference as replaced.
+#[test]
+fn compare_diffs_footnote_text_changes() {
+    let orig = session_with_note("Body paragraph.", "original note text", false);
+    let rev = session_with_note("Body paragraph.", "revised note text", false);
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-fn-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert!(r["changes"].as_u64().unwrap() >= 1, "footnote changes count: {r}");
+    // The body reference is unchanged.
+    let p = s.doc.body[0].as_para().unwrap();
+    assert!(p.runs.iter().all(|r| r.props.del.is_none() && r.props.ins.is_none()));
+
+    // The footnote story holds the tracked changes.
+    let fn_part = s.doc.parts.values().find(|p| p.kind == wordcraft_doc::PartKind::Footnote).unwrap();
+    let fn_para = fn_part.blocks[0].as_para().unwrap();
+    let deleted: Vec<String> = fn_para.run_ranges().filter(|(_, c)| c.del.is_some()).map(|(r, _)| fn_para.text[r].to_string()).collect();
+    let inserted: Vec<String> = fn_para.run_ranges().filter(|(_, c)| c.ins.is_some()).map(|(r, _)| fn_para.text[r].to_string()).collect();
+    assert!(deleted.iter().any(|s| s.contains("original")), "deleted text in note: {deleted:?}");
+    assert!(inserted.iter().any(|s| s.contains("revised")), "inserted text in note: {inserted:?}");
+
+    // Accepting all changes applies the revised footnote text.
+    s.run("review.acceptAll", &json!({})).unwrap();
+    let fn_part = s.doc.parts.values().find(|p| p.kind == wordcraft_doc::PartKind::Footnote).unwrap();
+    assert!(fn_part.blocks[0].as_para().unwrap().plain_text().contains("revised note text"));
+
+    // Rejecting all changes restores the original footnote text.
+    let orig2 = session_with_note("Body paragraph.", "original note text", false);
+    let rev2 = session_with_note("Body paragraph.", "revised note text", false);
+    let rev_path2 = std::env::temp_dir().join(format!("wc-rev-fn2-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path2, &rev2.doc).unwrap();
+    let mut s2 = orig2;
+    s2.run("review.compare", &json!({"path": rev_path2.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path2);
+    s2.run("review.rejectAll", &json!({})).unwrap();
+    let fn_part2 = s2.doc.parts.values().find(|p| p.kind == wordcraft_doc::PartKind::Footnote).unwrap();
+    assert!(fn_part2.blocks[0].as_para().unwrap().plain_text().contains("original note text"));
+}
+
+/// #5842: Compare records paragraph formatting changes within footnotes as `w:pPrChange`.
+#[test]
+fn compare_diffs_footnote_formatting_changes() {
+    use wordcraft_doc::props::Align;
+    let orig = session_with_note("Body paragraph.", "formatted note text", false);
+    let mut rev = session_with_note("Body paragraph.", "formatted note text", false);
+    // Change paragraph alignment in the revised footnote.
+    let fn_id = rev.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(k, _)| *k).unwrap();
+    let p = rev.doc.para_mut(StoryRef::Part(fn_id), &wordcraft_doc::Path::top(0)).unwrap();
+    p.props.align = Some(Align::Center);
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-fnfmt-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert_eq!(r["changes"], 1, "formatting change counted: {r}");
+    let fn_part = s.doc.parts.get(&fn_id).unwrap();
+    let fn_para = fn_part.blocks[0].as_para().unwrap();
+    assert!(fn_para.props.fmt_change.is_some(), "footnote paragraph has pPrChange");
+    assert_eq!(fn_para.props.align, Some(Align::Center));
+
+    // Rejecting restores original paragraph alignment.
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let fn_part = s.doc.parts.get(&fn_id).unwrap();
+    let fn_para = fn_part.blocks[0].as_para().unwrap();
+    assert!(fn_para.props.fmt_change.is_none());
+    assert_eq!(fn_para.props.align, None);
+}
+
+/// #5842: Compare diffs endnote stories identically to footnotes, tracking edits in endnotes.
+#[test]
+fn compare_diffs_endnotes() {
+    let orig = session_with_note("Body paragraph.", "original endnote", true);
+    let rev = session_with_note("Body paragraph.", "revised endnote", true);
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-en-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert!(r["changes"].as_u64().unwrap() >= 1, "endnote changes counted: {r}");
+    let en_part = s.doc.parts.values().find(|p| p.kind == wordcraft_doc::PartKind::Endnote).unwrap();
+    let en_para = en_part.blocks[0].as_para().unwrap();
+    assert!(en_para.runs.iter().any(|r| r.props.del.is_some() || r.props.ins.is_some()));
+
+    s.run("review.acceptAll", &json!({})).unwrap();
+    let en_part = s.doc.parts.values().find(|p| p.kind == wordcraft_doc::PartKind::Endnote).unwrap();
+    assert!(en_part.blocks[0].as_para().unwrap().plain_text().contains("revised endnote"));
+}
+
+/// #5842: When `footnotes` is explicitly false, footnote diffing is skipped and footnotes are
+/// carried over verbatim from the original document, and `footnotes` is not in `notHonoured`.
+#[test]
+fn compare_honours_footnotes_option_disabled() {
+    let orig = session_with_note("Body paragraph.", "original note", false);
+    let rev = session_with_note("Body paragraph.", "revised note", false);
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-fndis-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy(), "footnotes": false})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert_eq!(r["changes"], 0, "no changes when footnotes option disabled");
+    let not_honoured = r["notHonoured"].as_array().unwrap();
+    assert!(!not_honoured.iter().any(|v| v == "footnotes"), "footnotes option is honoured: {not_honoured:?}");
+
+    let fn_part = s.doc.parts.values().find(|p| p.kind == wordcraft_doc::PartKind::Footnote).unwrap();
+    let fn_para = fn_part.blocks[0].as_para().unwrap();
+    assert!(fn_para.plain_text().contains("original note"));
+    assert!(fn_para.runs.iter().all(|r| r.props.del.is_none() && r.props.ins.is_none()));
+}
+
+/// #5842: Compare correctly handles inserted and deleted footnotes across documents,
+/// tracking the deletion of the body reference and adopting newly added notes.
+#[test]
+fn compare_handles_inserted_and_deleted_footnotes() {
+    // Original has 2 footnotes.
+    let mut orig = Session::new(Document::from_text("Para one.\nPara two."));
+    orig.run("caret.set", &json!({"pos": Pos::body(0, "Para one.".len())})).unwrap();
+    orig.run("references.footnote", &json!({"text": "First note."})).unwrap();
+    orig.run("caret.set", &json!({"pos": Pos::body(1, "Para two.".len())})).unwrap();
+    orig.run("references.footnote", &json!({"text": "Second note."})).unwrap();
+
+    // Revised deletes the first footnote, keeps the second, and inserts a third.
+    let mut rev = Session::new(Document::from_text("Para one.\nPara two.\nPara three."));
+    rev.run("caret.set", &json!({"pos": Pos::body(1, "Para two.".len())})).unwrap();
+    rev.run("references.footnote", &json!({"text": "Second note."})).unwrap();
+    rev.run("caret.set", &json!({"pos": Pos::body(2, "Para three.".len())})).unwrap();
+    rev.run("references.footnote", &json!({"text": "Third note."})).unwrap();
+
+    let fn1_id = orig.doc.body[0]
+        .as_para()
+        .unwrap()
+        .objects
+        .iter()
+        .find_map(|o| if let InlineObject::NoteRef { id, .. } = o { Some(*id) } else { None })
+        .unwrap();
+    let fn2_id = orig.doc.body[1]
+        .as_para()
+        .unwrap()
+        .objects
+        .iter()
+        .find_map(|o| if let InlineObject::NoteRef { id, .. } = o { Some(*id) } else { None })
+        .unwrap();
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-fndel-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert!(r["changes"].as_u64().unwrap() >= 1);
+    // Para one has deleted footnote reference.
+    let p1 = s.doc.body[0].as_para().unwrap();
+    let deleted_ref = p1.runs.iter().any(|r| r.props.del.is_some());
+    assert!(deleted_ref, "deleted footnote reference mark is tracked as del");
+
+    // Para two has unchanged footnote reference.
+    let p2 = s.doc.body[1].as_para().unwrap();
+    let unchanged_ref = p2.runs.iter().all(|r| r.props.del.is_none() && r.props.ins.is_none());
+    assert!(unchanged_ref, "unchanged footnote reference is retained");
+
+    // Deleted footnote part content is marked with del.
+    let fn1_part = s.doc.parts.get(&fn1_id).unwrap();
+    assert!(fn1_part.blocks[0].as_para().unwrap().runs.iter().all(|r| r.props.del.is_some()), "deleted note content marked with del");
+
+    // Unchanged footnote part content has no del or ins.
+    let fn2_part = s.doc.parts.get(&fn2_id).unwrap();
+    assert!(
+        fn2_part.blocks[0].as_para().unwrap().runs.iter().all(|r| r.props.del.is_none() && r.props.ins.is_none()),
+        "unchanged note content has no tracked marks"
+    );
+
+    // Para three has inserted footnote reference, and inserted footnote part content is marked with ins.
+    let p3 = s.doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.plain_text().contains("Para three")).unwrap();
+    let fn3_id = p3.objects.iter().find_map(|o| if let InlineObject::NoteRef { id, .. } = o { Some(*id) } else { None }).unwrap();
+    let fn3_part = s.doc.parts.get(&fn3_id).unwrap();
+    assert!(fn3_part.blocks[0].as_para().unwrap().runs.iter().all(|r| r.props.ins.is_some()), "inserted note content marked with ins");
+}
+
+/// #5842: When original has two footnotes (note 1 and note 2), and revised deletes note 1
+/// and lightly edits note 2, note 2 must be paired with note 2 (not note 1).
+/// Paragraph 2 retains its unchanged footnote reference, and note 2 content diffs cleanly.
+#[test]
+fn compare_pairs_notes_across_deletion_and_edit() {
+    let mut orig = Session::new(Document::from_text("Para one.\nPara two."));
+    orig.run("caret.set", &json!({"pos": Pos::body(0, "Para one.".len())})).unwrap();
+    orig.run("references.footnote", &json!({"text": "First footnote content."})).unwrap();
+    orig.run("caret.set", &json!({"pos": Pos::body(1, "Para two.".len())})).unwrap();
+    orig.run("references.footnote", &json!({"text": "Second footnote content."})).unwrap();
+
+    // Revised deletes footnote 1 from Para one and lightly edits footnote 2 in Para two.
+    let mut rev = Session::new(Document::from_text("Para one.\nPara two."));
+    rev.run("caret.set", &json!({"pos": Pos::body(1, "Para two.".len())})).unwrap();
+    rev.run("references.footnote", &json!({"text": "Second footnote content revised."})).unwrap();
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-fnpair-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert!(r["changes"].as_u64().unwrap() >= 1);
+
+    // Para one: footnote reference was deleted.
+    let p1 = s.doc.body[0].as_para().unwrap();
+    let p1_has_del_ref = p1.runs.iter().any(|r| r.props.del.is_some());
+    assert!(p1_has_del_ref, "Para one footnote reference is tracked as deleted");
+
+    // Para two: footnote reference to Note 2 must be retained without deletion/insertion markup!
+    let p2 = s.doc.body[1].as_para().unwrap();
+    let p2_ref_clean = p2.runs.iter().all(|r| r.props.del.is_none() && r.props.ins.is_none());
+    assert!(p2_ref_clean, "Para two retains footnote reference cleanly without del/ins markup");
+
+    // Note 2 part: must contain the edit ("revised" inserted), rather than note 1 being rewritten.
+    let fn2_id = p2.objects.iter().find_map(|o| if let InlineObject::NoteRef { id, .. } = o { Some(*id) } else { None }).unwrap();
+    let fn2_part = s.doc.parts.get(&fn2_id).unwrap();
+    let fn2_text = fn2_part.blocks[0].as_para().unwrap().plain_text();
+    assert!(fn2_text.contains("Second footnote content"), "Note 2 content retained: {fn2_text}");
+    let has_ins = fn2_part.blocks[0].as_para().unwrap().runs.iter().any(|r| r.props.ins.is_some());
+    assert!(has_ins, "Note 2 tracks insertion of revised text");
+}
+
+/// #5842: DOCX roundtrip preserves footnote tracked revisions (`w:ins`, `w:del`) produced by compare.
+#[test]
+fn compare_footnote_docx_roundtrip() {
+    let orig = session_with_note("Body sentence.", "alpha note content", false);
+    let rev = session_with_note("Body sentence.", "beta note content", false);
+    let orig_path = std::env::temp_dir().join(format!("wc-orig-rt-{}.docx", std::process::id()));
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-rt-{}.docx", std::process::id()));
+    let out_path = std::env::temp_dir().join(format!("wc-out-rt-{}.docx", std::process::id()));
+
+    crate::io::save_path(&orig_path, &orig.doc).unwrap();
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = Session::new(Document::new());
+    s.run(
+        "review.compare",
+        &json!({
+            "original": orig_path.to_string_lossy(),
+            "path": rev_path.to_string_lossy()
+        }),
+    )
+    .unwrap();
+
+    crate::io::save_path(&out_path, &s.doc).unwrap();
+    let loaded = crate::io::open_path(&out_path).unwrap();
+
+    let _ = std::fs::remove_file(&orig_path);
+    let _ = std::fs::remove_file(&rev_path);
+    let _ = std::fs::remove_file(&out_path);
+
+    let fn_part = loaded.parts.values().find(|p| p.kind == wordcraft_doc::PartKind::Footnote).unwrap();
+    let fn_para = fn_part.blocks[0].as_para().unwrap();
+    assert!(fn_para.runs.iter().any(|r| r.props.del.is_some()), "del preserved in docx footnotes.xml");
+    assert!(fn_para.runs.iter().any(|r| r.props.ins.is_some()), "ins preserved in docx footnotes.xml");
+}
+
+/// #5842: Verifies that `lcs_len` returns genuine in-order common subsequences even when
+/// the comparison cell budget is exhausted (`budget = 0`), without allocating DP tables.
+#[test]
+fn lcs_len_exhausted_budget_bounded_fallback() {
+    let mut zero_budget = 0u64;
+
+    // 1. Identical slices: matches completely via prefix/suffix.
+    let identical_a = vec!["alpha", "beta", "gamma", "delta"];
+    let identical_b = vec!["alpha", "beta", "gamma", "delta"];
+    assert_eq!(super::lcs_len(&identical_a, &identical_b, &mut zero_budget), 4);
+    assert_eq!(zero_budget, 0);
+
+    // 2. Single word substitution in middle: prefix and suffix match surrounding tokens.
+    let mid_a = vec!["start", "word_a", "middle", "end"];
+    let mid_b = vec!["start", "word_b", "middle", "end"];
+    assert_eq!(super::lcs_len(&mid_a, &mid_b, &mut zero_budget), 3);
+
+    // 3. Edits at both ends: greedy scan matches unchanged core tokens in order.
+    let core_a = vec!["head1", "core_x", "core_y", "tail1"];
+    let core_b = vec!["head2", "core_x", "core_y", "tail2"];
+    assert_eq!(super::lcs_len(&core_a, &core_b, &mut zero_budget), 2);
+
+    // 4. Unrelated slices: returns 0 matches without false positives.
+    let unrelated_a = vec!["apple", "banana", "cherry"];
+    let unrelated_b = vec!["dog", "elephant", "fox"];
+    assert_eq!(super::lcs_len(&unrelated_a, &unrelated_b, &mut zero_budget), 0);
+
+    // 5. Normal budget debits only core DP cells, not whole sequence length.
+    let mut ample_budget = 100u64;
+    // Prefix 1 ("p"), suffix 1 ("s"), core 1x1 ("a" vs "b"). Cells = 1.
+    let budgeted_a = vec!["p", "a", "s"];
+    let budgeted_b = vec!["p", "b", "s"];
+    assert_eq!(super::lcs_len(&budgeted_a, &budgeted_b, &mut ample_budget), 2);
+    assert_eq!(ample_budget, 99);
+}
+
+/// #5842: When a document has many footnotes (30+) and both reference paragraphs and note
+/// contents are edited, note similarity scoring falls back to bounded greedy alignment after
+/// `MAX_NOTE_ALIGN_BUDGET` is exhausted, pairing all 30 corresponding notes rather than
+/// treating them as whole deletions and insertions.
+#[test]
+fn compare_pairs_many_notes_when_budget_exhausted() {
+    let note_count = 30usize;
+    let mut orig_text = String::new();
+    let mut rev_text = String::new();
+
+    for i in 0..note_count {
+        if i > 0 {
+            orig_text.push('\n');
+            rev_text.push('\n');
+        }
+        orig_text.push_str(&format!("Body paragraph {i} discussing original thesis topic."));
+        rev_text.push_str(&format!("Body paragraph {i} discussing revised thesis subject."));
+    }
+
+    let mut orig = Session::new(Document::from_text(&orig_text));
+    let mut rev = Session::new(Document::from_text(&rev_text));
+
+    let padding = "extra reference background context terminology narrative citations archive analysis documentation ";
+
+    for i in 0..note_count {
+        let orig_para_len = orig.doc.body[i].as_para().unwrap().text.len();
+        orig.run("caret.set", &json!({"pos": Pos::body(i, orig_para_len)})).unwrap();
+        orig.run(
+            "references.footnote",
+            &json!({"text": format!("Footnote entry {i} citing detailed historical observations and background data. {padding}{padding}{padding}{padding}")}),
+        )
+        .unwrap();
+
+        let rev_para_len = rev.doc.body[i].as_para().unwrap().text.len();
+        rev.run("caret.set", &json!({"pos": Pos::body(i, rev_para_len)})).unwrap();
+        rev.run(
+            "references.footnote",
+            &json!({"text": format!("Footnote entry {i} citing detailed historical commentary and background data. {padding}{padding}{padding}{padding}")}),
+        )
+        .unwrap();
+    }
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-manyfn-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert!(r["changes"].as_u64().unwrap() >= note_count as u64);
+
+    // Ensure all 30 footnotes survived as paired footnotes in the result document.
+    let footnotes: Vec<_> = s.doc.parts.values().filter(|p| p.kind == wordcraft_doc::PartKind::Footnote).collect();
+    assert_eq!(footnotes.len(), note_count, "All 30 footnotes must be paired rather than deleted and re-inserted");
+
+    // Verify every note paired with its counterpart and tracked the internal word substitution.
+    for part in &footnotes {
+        let para = part.blocks[0].as_para().unwrap();
+        let has_ins = para.run_ranges().any(|(r, c)| c.ins.is_some() && para.text[r].contains("commentary"));
+        let has_del = para.run_ranges().any(|(r, c)| c.del.is_some() && para.text[r].contains("observations"));
+        assert!(has_ins, "Note tracks insertion of 'commentary': {}", para.plain_text());
+        assert!(has_del, "Note tracks deletion of 'observations': {}", para.plain_text());
+    }
+}
+
+/// #5842: Past `MAX_NOTE_ALIGN_RUN` an edited run of notes must still pair by identity, not by
+/// position. The revised document deletes note 0 and edits every remaining note, so no note text
+/// anchors a pairing and the run is too large for the similarity matrix. Every remaining note
+/// must keep its own original counterpart: its body reference stays clean, its part diffs its own
+/// text, and rejecting one note's revision restores that note alone.
+#[test]
+fn compare_pairs_notes_above_alignment_run_boundary() {
+    let note_count = super::compare::MAX_NOTE_ALIGN_RUN + 1;
+    let mut orig_text = String::new();
+    let mut rev_text = String::new();
+    for i in 0..note_count {
+        if i > 0 {
+            orig_text.push('\n');
+            rev_text.push('\n');
+        }
+        orig_text.push_str(&format!("Paragraph {i} anchors a note."));
+        rev_text.push_str(&format!("Paragraph {i} anchors a note."));
+    }
+    let mut orig = Session::new(Document::from_text(&orig_text));
+    let mut rev = Session::new(Document::from_text(&rev_text));
+
+    let mut orig_note_ids = Vec::with_capacity(note_count);
+    for i in 0..note_count {
+        let len = orig.doc.body[i].as_para().unwrap().text.len();
+        orig.run("caret.set", &json!({"pos": Pos::body(i, len)})).unwrap();
+        orig.run("references.footnote", &json!({"text": format!("note[{i}] original observation.")})).unwrap();
+        let id = orig.doc.body[i]
+            .as_para()
+            .and_then(|p| p.objects.iter().find_map(|o| if let InlineObject::NoteRef { id, .. } = o { Some(*id) } else { None }))
+            .unwrap();
+        orig_note_ids.push(id);
+
+        // The revised document keeps every paragraph but deletes note 0 and edits all others.
+        if i > 0 {
+            let len = rev.doc.body[i].as_para().unwrap().text.len();
+            rev.run("caret.set", &json!({"pos": Pos::body(i, len)})).unwrap();
+            rev.run("references.footnote", &json!({"text": format!("note[{i}] revised commentary.")})).unwrap();
+        }
+    }
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-manyfn-boundary-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+    assert!(r["changes"].as_u64().unwrap() >= note_count as u64);
+
+    // Note 0's reference is deleted and its story is fully deleted.
+    let p0 = s.doc.body[0].as_para().unwrap();
+    assert!(p0.runs.iter().any(|run| run.props.del.is_some()), "paragraph 0 note reference is deleted");
+    let gone = s.doc.parts.get(&orig_note_ids[0]).unwrap();
+    assert!(gone.blocks[0].as_para().unwrap().runs.iter().all(|run| run.props.del.is_some()), "note 0 story is fully marked deleted");
+
+    // Every remaining paragraph keeps its own reference, and every remaining note diffs its own text.
+    for (i, &note_id) in orig_note_ids.iter().enumerate().skip(1) {
+        let para = s.doc.body.get(i).and_then(|b| b.as_para()).unwrap();
+        assert!(para.runs.iter().all(|run| run.props.del.is_none() && run.props.ins.is_none()), "paragraph {i} note reference is unchanged");
+        let part = s.doc.parts.get(&note_id).unwrap();
+        let text = part.blocks[0].as_para().unwrap().plain_text();
+        assert!(text.contains(&format!("note[{i}] original observation")), "note {i} keeps its own original text: {text}");
+        assert!(text.contains("revised commentary"), "note {i} tracks its revised text: {text}");
+        for other in [i.saturating_sub(1), i.saturating_add(1)] {
+            if other != i && other < note_count {
+                assert!(!text.contains(&format!("note[{other}]")), "note {i} must not carry note {other}'s text: {text}");
+            }
+        }
+    }
+
+    // Rejecting one note's revision restores that note and leaves its neighbours revised.
+    let victim = 150usize;
+    let victim_id = orig_note_ids[victim];
+    let end = s.doc.parts.get(&victim_id).and_then(|p| p.blocks.first()).and_then(|b| b.as_para()).map(Paragraph::len).unwrap();
+    let story = StoryRef::Part(victim_id);
+    s.run(
+        "select.range",
+        &json!({
+            "anchor": Pos::new(story, wordcraft_doc::Path::top(0), 0),
+            "focus": Pos::new(story, wordcraft_doc::Path::top(0), end),
+        }),
+    )
+    .unwrap();
+    s.run("review.reject", &json!({})).unwrap();
+
+    assert_eq!(
+        s.doc.plain_text(StoryRef::Part(victim_id)).trim(),
+        format!("note[{victim}] original observation."),
+        "rejecting note {victim}'s revision restores its original text"
+    );
+    let restored = s.doc.parts.get(&victim_id).unwrap();
+    assert!(
+        restored.blocks[0].as_para().unwrap().runs.iter().all(|run| run.props.ins.is_none() && run.props.del.is_none()),
+        "note {victim} has no tracked revisions left"
+    );
+    let neighbour = s.doc.parts.get(&orig_note_ids[victim + 1]).unwrap();
+    let neighbour_para = neighbour.blocks[0].as_para().unwrap();
+    assert!(
+        neighbour_para.runs.iter().any(|run| run.props.ins.is_some()),
+        "note {} keeps its own tracked revision: {}",
+        victim + 1,
+        neighbour_para.plain_text()
+    );
+    assert!(neighbour_para.plain_text().contains(&format!("note[{}]", victim + 1)));
+}
+
+/// #5842: When a paired footnote's text is edited, the note's run formatting is preserved:
+/// the footnote reference mark retains `FootnoteReference`, unchanged text retains its own
+/// font/style properties rather than inheriting the first run's props, and inserted words
+/// take the revised run props.
+#[test]
+fn compare_preserves_note_run_formatting() {
+    let mut orig = Session::new(Document::from_text("Body sentence."));
+    orig.run("caret.set", &json!({"pos": Pos::body(0, "Body sentence.".len())})).unwrap();
+    orig.run("references.footnote", &json!({"text": "Original note content."})).unwrap();
+
+    // Style a specific word in the original footnote as bold.
+    let fn_id = orig.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(&id, _)| id).unwrap();
+    if let Some(fn_part) = orig.doc.parts.get_mut(&fn_id)
+        && let Some(Block::Para(p)) = fn_part.blocks.get_mut(0).map(Arc::make_mut)
+        && let Some(idx) = p.text.find("Original")
+    {
+        let _ = p.format(idx, idx + "Original".len(), &|c| c.bold = Some(true));
+    }
+
+    let mut rev = Session::new(Document::from_text("Body sentence."));
+    rev.run("caret.set", &json!({"pos": Pos::body(0, "Body sentence.".len())})).unwrap();
+    rev.run("references.footnote", &json!({"text": "Original note updated."})).unwrap();
+    let rev_fn_id = rev.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(&id, _)| id).unwrap();
+    if let Some(fn_part) = rev.doc.parts.get_mut(&rev_fn_id)
+        && let Some(Block::Para(p)) = fn_part.blocks.get_mut(0).map(Arc::make_mut)
+    {
+        if let Some(idx) = p.text.find("Original") {
+            let _ = p.format(idx, idx + "Original".len(), &|c| c.bold = Some(true));
+        }
+        if let Some(idx) = p.text.find("updated") {
+            let _ = p.format(idx, idx + "updated".len(), &|c| c.italic = Some(true));
+        }
+    }
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-fnprops-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert!(r["changes"].as_u64().unwrap() >= 1);
+
+    let fn_part = s.doc.parts.get(&fn_id).unwrap();
+    let p = fn_part.blocks[0].as_para().unwrap();
+
+    // Verify the footnote reference run style is still FootnoteReference.
+    let ref_run = p.runs.first().unwrap();
+    assert_eq!(ref_run.props.style.as_deref(), Some("FootnoteReference"));
+
+    // Verify "Original" retained bold: true and is NOT FootnoteReference.
+    let orig_idx = p.text.find("Original").unwrap();
+    let orig_props = p.props_of_char(orig_idx);
+    assert_eq!(orig_props.bold, Some(true), "Original retained bold");
+    assert_ne!(orig_props.style.as_deref(), Some("FootnoteReference"), "Text does not inherit FootnoteReference");
+
+    // Verify "updated" is marked ins and has italic: true from revised run.
+    let upd_idx = p.text.find("updated").unwrap();
+    let upd_props = p.props_of_char(upd_idx);
+    assert!(upd_props.ins.is_some(), "'updated' is tracked as ins");
+    assert_eq!(upd_props.italic, Some(true), "'updated' has italic: true from revised run");
+}
+
+/// #5842: When `footnotes` is false, note references in the revised body are still aligned and
+/// remapped to their matching original notes, while revised-only notes are adopted without diffing
+/// so every reference resolves to a valid note part for layout and DOCX save.
+#[test]
+fn compare_remaps_revised_note_refs_when_footnotes_false() {
+    let mut orig = Session::new(Document::from_text("Para one.\nPara two."));
+    orig.run("caret.set", &json!({"pos": Pos::body(0, "Para one.".len())})).unwrap();
+    orig.run("references.footnote", &json!({"text": "First footnote content."})).unwrap();
+    orig.run("caret.set", &json!({"pos": Pos::body(1, "Para two.".len())})).unwrap();
+    orig.run("references.footnote", &json!({"text": "Second footnote content."})).unwrap();
+
+    let fn_ids: Vec<u32> = orig.doc.parts.iter().filter(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(&id, _)| id).collect();
+    assert_eq!(fn_ids.len(), 2);
+    let orig_fn1_id = fn_ids[0];
+    let orig_fn2_id = fn_ids[1];
+
+    let mut rev = Session::new(Document::from_text("Para two.\nPara three."));
+    rev.run("caret.set", &json!({"pos": Pos::body(0, "Para two.".len())})).unwrap();
+    rev.run("references.footnote", &json!({"text": "Second footnote content."})).unwrap();
+    rev.run("caret.set", &json!({"pos": Pos::body(1, "Para three.".len())})).unwrap();
+    rev.run("references.footnote", &json!({"text": "Third footnote content."})).unwrap();
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-fnremapdis-{}.docx", std::process::id()));
+    let out_path = std::env::temp_dir().join(format!("wc-out-fnremapdis-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let _ = s.run("review.compare", &json!({"path": rev_path.to_string_lossy(), "footnotes": false})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    // The surviving paragraph's footnote reference must resolve to orig_fn2_id, not note 1.
+    let p2 = s.doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.plain_text().contains("Para two.")).unwrap();
+    let p2_refs: Vec<u32> = p2.objects.iter().filter_map(|o| if let InlineObject::NoteRef { id, .. } = o { Some(*id) } else { None }).collect();
+    assert_eq!(p2_refs, vec![orig_fn2_id], "Surviving note reference was remapped to original note 2");
+
+    // The revised-only note reference must resolve to an adopted footnote part without diff marks.
+    let p3 = s.doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.plain_text().contains("Para three.")).unwrap();
+    let fn3_id = p3.objects.iter().find_map(|o| if let InlineObject::NoteRef { id, .. } = o { Some(*id) } else { None }).unwrap();
+    assert_ne!(fn3_id, orig_fn1_id);
+    assert_ne!(fn3_id, orig_fn2_id);
+    let fn3_part = s.doc.parts.get(&fn3_id).expect("revised-only footnote was adopted into s.doc.parts");
+    assert_eq!(fn3_part.kind, wordcraft_doc::PartKind::Footnote);
+    let fn3_para = fn3_part.blocks[0].as_para().unwrap();
+    assert!(fn3_para.plain_text().contains("Third footnote content."));
+    assert!(
+        fn3_para.runs.iter().all(|r| r.props.ins.is_none() && r.props.del.is_none()),
+        "adopted note has no tracked ins/del marks when footnotes=false"
+    );
+
+    // DOCX roundtrip preserves both surviving and adopted notes and their reference targets.
+    crate::io::save_path(&out_path, &s.doc).unwrap();
+    let loaded = crate::io::open_path(&out_path).unwrap();
+    let _ = std::fs::remove_file(&out_path);
+    let loaded_note_text = |para_prefix: &str| -> String {
+        let p = loaded.body.iter().filter_map(|b| b.as_para()).find(|p| p.plain_text().contains(para_prefix)).unwrap();
+        let ref_id = p.objects.iter().find_map(|o| if let InlineObject::NoteRef { id, .. } = o { Some(*id) } else { None }).unwrap();
+        let part = loaded.parts.get(&ref_id).expect("reloaded footnote reference resolves to a footnote part");
+        assert_eq!(part.kind, wordcraft_doc::PartKind::Footnote);
+        part.blocks.iter().filter_map(|b| b.as_para()).map(Paragraph::plain_text).collect::<Vec<_>>().join("\n")
+    };
+    assert!(loaded_note_text("Para two.").contains("Second footnote content."), "saved DOCX keeps Para two. -> second footnote");
+    assert!(loaded_note_text("Para three.").contains("Third footnote content."), "saved DOCX keeps Para three. -> third footnote");
+}
+
+/// #5842: Paired notes adopt revised text box stories before comparing blocks, so text box stories
+/// exist in `s.doc.parts` under independent IDs and comparison/output use the adopted slot IDs.
+#[test]
+fn compare_paired_note_adopts_text_boxes_before_comparing() {
+    let orig = session_with_note("Body paragraph.", "Footnote content.", false);
+    let orig_fn_id = orig.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(&id, _)| id).unwrap();
+
+    let mut rev = session_with_note("Body paragraph.", "Footnote content with text box.", false);
+    let rev_fn_id = rev.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(&id, _)| id).unwrap();
+
+    let tb_story_id =
+        rev.doc.add_part(wordcraft_doc::PartKind::TextBox, vec![para_block(Paragraph::with_text("Box inside paired note.", CharProps::default()))]);
+    let shape_obj = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w: 50.0,
+        h: 50.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: Default::default(),
+        story: Some(tb_story_id),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    if let Some(fn_part) = rev.doc.parts.get_mut(&rev_fn_id)
+        && let Some(Block::Para(p)) = fn_part.blocks.get_mut(0).map(Arc::make_mut)
+    {
+        let at = p.len();
+        let _ = p.insert_object(at, shape_obj, &CharProps::default());
+    }
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-paired-tb-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert!(r["changes"].as_u64().unwrap() >= 1);
+
+    // Verify text box part from the paired note was adopted into s.doc:
+    let adopted_tb = s.doc.parts.values().find(|p| p.kind == wordcraft_doc::PartKind::TextBox);
+    assert!(adopted_tb.is_some(), "Text box from paired note was adopted into s.doc");
+    let adopted_text = adopted_tb.unwrap().blocks[0].as_para().unwrap().plain_text();
+    assert_eq!(adopted_text, "Box inside paired note.");
+
+    // Verify footnote blocks reference the adopted ID:
+    let adopted_id = s.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::TextBox).map(|(&id, _)| id).unwrap();
+    let fn_part = s.doc.parts.get(&orig_fn_id).expect("original footnote part");
+    let mut found_slot = false;
+    for b in &fn_part.blocks {
+        if let Block::Para(p) = &**b {
+            for o in &p.objects {
+                if let InlineObject::Shape { story: Some(id), .. } = o
+                    && *id == adopted_id
+                {
+                    found_slot = true;
+                }
+            }
+        }
+    }
+    assert!(found_slot, "Paired footnote references adopted text box ID {adopted_id}");
+}
+
+/// #5842: Notes whose text repeats must pair by reference location: deleting the first duplicate
+/// leaves the surviving note with its own original identity, not the first one's.
+#[test]
+fn compare_pairs_duplicate_note_text_by_reference() {
+    let mut orig = Session::new(Document::from_text("Para one.\nPara two."));
+    orig.run("caret.set", &json!({"pos": Pos::body(0, "Para one.".len())})).unwrap();
+    orig.run("references.footnote", &json!({"text": "Identical note text."})).unwrap();
+    orig.run("caret.set", &json!({"pos": Pos::body(1, "Para two.".len())})).unwrap();
+    orig.run("references.footnote", &json!({"text": "Identical note text."})).unwrap();
+    let note_ids: Vec<u32> = orig
+        .doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| if let InlineObject::NoteRef { id, .. } = o { Some(*id) } else { None })
+        .collect();
+    assert_eq!(note_ids.len(), 2);
+
+    // The revised document keeps only the second paragraph and its note, word for word.
+    let mut rev = Session::new(Document::from_text("Para two."));
+    rev.run("caret.set", &json!({"pos": Pos::body(0, "Para two.".len())})).unwrap();
+    rev.run("references.footnote", &json!({"text": "Identical note text."})).unwrap();
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-dupnotes-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let _ = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    let ref_ids: Vec<u32> = s
+        .doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| if let InlineObject::NoteRef { id, .. } = o { Some(*id) } else { None })
+        .collect();
+    assert!(ref_ids.contains(&note_ids[1]), "the surviving reference resolves to the second note: {ref_ids:?}");
+    assert_eq!(ref_ids.iter().filter(|&&id| id == note_ids[0]).count(), 1, "the first note keeps only its deleted reference");
+    let kept = s.doc.parts.get(&note_ids[1]).unwrap();
+    assert!(
+        kept.blocks[0].as_para().unwrap().runs.iter().all(|run| run.props.ins.is_none() && run.props.del.is_none()),
+        "the surviving note is unchanged"
+    );
+    let gone = s.doc.parts.get(&note_ids[0]).unwrap();
+    assert!(gone.blocks[0].as_para().unwrap().runs.iter().all(|run| run.props.del.is_some()), "the first duplicate note is fully deleted");
+}
+
+/// #5842: Prepaired duplicate-text note anchors must bound the remaining note alignment so text
+/// LCS cannot match a note across an anchor (A–E five-paragraph regression).
+#[test]
+fn compare_keeps_prepaired_note_anchors_as_segment_boundaries() {
+    let body = "Paragraph A.\nParagraph B.\nParagraph C.\nParagraph D.\nParagraph E.";
+    let mut orig = Session::new(Document::from_text(body));
+    let mut rev = Session::new(Document::from_text(body));
+
+    let orig_notes = ["Shared anchor note.", "old beta", "Shared anchor note.", "Shared anchor note.", "old epsilon"];
+    let rev_notes = ["Shared anchor note.", "new beta", "Shared anchor note.", "Shared anchor note.", "old beta"];
+    let mut orig_ids = Vec::with_capacity(orig_notes.len());
+
+    for (i, (&o_text, &r_text)) in orig_notes.iter().zip(&rev_notes).enumerate() {
+        let o_len = orig.doc.body[i].as_para().unwrap().text.len();
+        orig.run("caret.set", &json!({"pos": Pos::body(i, o_len)})).unwrap();
+        orig.run("references.footnote", &json!({"text": o_text})).unwrap();
+        let o_id = orig.doc.body[i]
+            .as_para()
+            .and_then(|p| p.objects.iter().find_map(|o| if let InlineObject::NoteRef { id, .. } = o { Some(*id) } else { None }))
+            .unwrap();
+        orig_ids.push(o_id);
+
+        let r_len = rev.doc.body[i].as_para().unwrap().text.len();
+        rev.run("caret.set", &json!({"pos": Pos::body(i, r_len)})).unwrap();
+        rev.run("references.footnote", &json!({"text": r_text})).unwrap();
+    }
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-anchorseg-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let _ = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    let footnotes: Vec<_> = s.doc.parts.values().filter(|p| p.kind == wordcraft_doc::PartKind::Footnote).collect();
+    assert_eq!(footnotes.len(), 5, "all five footnotes stay paired within their segments");
+
+    for (i, &expected_id) in orig_ids.iter().enumerate() {
+        let para = s.doc.body[i].as_para().unwrap();
+        assert!(para.runs.iter().all(|r| r.props.del.is_none() && r.props.ins.is_none()), "paragraph {i} keeps its note reference cleanly");
+        let ref_ids: Vec<u32> = para.objects.iter().filter_map(|o| if let InlineObject::NoteRef { id, .. } = o { Some(*id) } else { None }).collect();
+        assert_eq!(ref_ids, vec![expected_id], "paragraph {i} keeps its own note id");
+    }
+
+    let note_b = s.doc.parts.get(&orig_ids[1]).unwrap().blocks[0].as_para().unwrap();
+    assert!(note_b.run_ranges().any(|(r, c)| c.del.is_some() && note_b.text[r].contains("old")), "note B deletes 'old': {}", note_b.plain_text());
+    assert!(note_b.run_ranges().any(|(r, c)| c.ins.is_some() && note_b.text[r].contains("new")), "note B inserts 'new': {}", note_b.plain_text());
+
+    let note_e = s.doc.parts.get(&orig_ids[4]).unwrap().blocks[0].as_para().unwrap();
+    assert!(
+        note_e.run_ranges().any(|(r, c)| c.del.is_some() && note_e.text[r].contains("epsilon")),
+        "note E deletes 'epsilon': {}",
+        note_e.plain_text()
+    );
+    assert!(note_e.run_ranges().any(|(r, c)| c.ins.is_some() && note_e.text[r].contains("beta")), "note E inserts 'beta': {}", note_e.plain_text());
+}
+
+/// #5842: Duplicate-text notes referenced in the same paragraph must use inline reference context
+/// so deleting the first reference preserves the surviving second note's identity (both when the
+/// surrounding text stays and when the first clause is also deleted).
+#[test]
+fn compare_pairs_duplicate_note_text_in_same_paragraph_by_inline_context() {
+    for (label, rev_body, rev_caret) in [
+        ("ref-only-deleted", "First claim. Second claim.", "First claim. Second claim".len()),
+        ("clause-and-ref-deleted", "Second claim.", "Second claim".len()),
+    ] {
+        let mut orig = Session::new(Document::from_text("First claim. Second claim."));
+        orig.run("caret.set", &json!({"pos": Pos::body(0, "First claim".len())})).unwrap();
+        orig.run("references.footnote", &json!({"text": "Identical note text."})).unwrap();
+        let second_pos = "First claim".len() + wordcraft_doc::para::OBJ.len_utf8() + ". Second claim".len();
+        orig.run("caret.set", &json!({"pos": Pos::body(0, second_pos)})).unwrap();
+        orig.run("references.footnote", &json!({"text": "Identical note text."})).unwrap();
+
+        let note_ids: Vec<u32> = orig.doc.body[0]
+            .as_para()
+            .unwrap()
+            .objects
+            .iter()
+            .filter_map(|o| if let InlineObject::NoteRef { id, .. } = o { Some(*id) } else { None })
+            .collect();
+        assert_eq!(note_ids.len(), 2, "{label}: expected 2 original notes");
+
+        // Make the first original note bold so a wrong pairing also leaks a formatting revision.
+        if let Some(part) = orig.doc.parts.get_mut(&note_ids[0])
+            && let Some(Block::Para(p)) = part.blocks.first_mut().map(Arc::make_mut)
+        {
+            let len = p.len();
+            let _ = p.format(0, len, &|c| c.bold = Some(true));
+        }
+
+        let mut rev = Session::new(Document::from_text(rev_body));
+        rev.run("caret.set", &json!({"pos": Pos::body(0, rev_caret)})).unwrap();
+        rev.run("references.footnote", &json!({"text": "Identical note text."})).unwrap();
+
+        let rev_path = std::env::temp_dir().join(format!("wc-rev-samepara-{label}-{}.docx", std::process::id()));
+        crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+        let mut s = orig;
+        let _ = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+        let _ = std::fs::remove_file(&rev_path);
+
+        let p = s.doc.body[0].as_para().unwrap();
+        let surviving_refs: Vec<u32> =
+            p.objects.iter().filter_map(|o| if let InlineObject::NoteRef { id, .. } = o { Some(*id) } else { None }).collect();
+        assert_eq!(surviving_refs, vec![note_ids[0], note_ids[1]], "{label}: both original note refs stay in order");
+
+        let ref_statuses: Vec<(u32, bool, bool)> = p
+            .run_ranges()
+            .filter_map(|(r, c)| {
+                let slice = &p.text[r.clone()];
+                if !slice.contains(wordcraft_doc::para::OBJ) {
+                    return None;
+                }
+                let mut obj_k = 0usize;
+                for (off, ch) in p.text.char_indices() {
+                    if ch == wordcraft_doc::para::OBJ {
+                        if r.contains(&off)
+                            && let Some(InlineObject::NoteRef { id, .. }) = p.objects.get(obj_k)
+                        {
+                            return Some((*id, c.del.is_some(), c.ins.is_some()));
+                        }
+                        obj_k += 1;
+                    }
+                }
+                None
+            })
+            .collect();
+        assert_eq!(
+            ref_statuses,
+            vec![(note_ids[0], true, false), (note_ids[1], false, false)],
+            "{label}: first note ref is deleted and second note ref stays clean"
+        );
+
+        let kept = s.doc.parts.get(&note_ids[1]).unwrap().blocks[0].as_para().unwrap();
+        assert!(
+            kept.runs.iter().all(|run| run.props.ins.is_none() && run.props.del.is_none() && run.props.fmt_change.is_none()),
+            "{label}: surviving second note is unchanged"
+        );
+        let gone = s.doc.parts.get(&note_ids[0]).unwrap().blocks[0].as_para().unwrap();
+        assert!(gone.runs.iter().all(|run| run.props.del.is_some()), "{label}: deleted first note is marked deleted");
+    }
+}
+
+/// #5842: Moving a footnote reference within a paragraph whose plain text did not change must
+/// still route through tracked diffing so Reject All restores the original reference offset.
+#[test]
+fn compare_tracks_moved_note_reference_in_unchanged_paragraph() {
+    let ref_prefix = |doc: &Document| -> String {
+        let p = doc.body[0].as_para().unwrap();
+        let mut out = String::new();
+        let mut obj_k = 0usize;
+        for c in p.text.chars() {
+            if c == wordcraft_doc::para::OBJ {
+                if let Some(InlineObject::NoteRef { .. }) = p.objects.get(obj_k) {
+                    return out;
+                }
+                obj_k += 1;
+            } else {
+                out.push(c);
+            }
+        }
+        panic!("missing NoteRef in paragraph: {:?}", p.text);
+    };
+
+    let mut orig = Session::new(Document::from_text("Alpha. Beta."));
+    orig.run("caret.set", &json!({"pos": Pos::body(0, "Alpha".len())})).unwrap();
+    orig.run("references.footnote", &json!({"text": "Shared note."})).unwrap();
+
+    let mut rev = Session::new(Document::from_text("Alpha. Beta."));
+    rev.run("caret.set", &json!({"pos": Pos::body(0, "Alpha. Beta".len())})).unwrap();
+    rev.run("references.footnote", &json!({"text": "Shared note."})).unwrap();
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-moveref-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    assert!(r["changes"].as_u64().unwrap() >= 1, "moved note ref counts as a change: {r}");
+    let p = s.doc.body[0].as_para().unwrap();
+    assert!(p.runs.iter().any(|run| run.props.del.is_some()), "original reference position is tracked as deleted");
+    assert!(p.runs.iter().any(|run| run.props.ins.is_some()), "revised reference position is tracked as inserted");
+
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(ref_prefix(&s.doc), "Alpha", "Reject All restores original note reference position");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Alpha. Beta.");
+
+    let mut orig2 = Session::new(Document::from_text("Alpha. Beta."));
+    orig2.run("caret.set", &json!({"pos": Pos::body(0, "Alpha".len())})).unwrap();
+    orig2.run("references.footnote", &json!({"text": "Shared note."})).unwrap();
+    orig2.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+    orig2.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(ref_prefix(&orig2.doc), "Alpha. Beta", "Accept All keeps revised note reference position");
+    assert_eq!(orig2.doc.plain_text(StoryRef::Body), "Alpha. Beta.");
+}
+
+/// #5842: Revised-only note references nested at `MAX_TABLE_DEPTH` must still be remapped when
+/// their source ID collides with an original note ID.
+#[test]
+fn compare_remaps_note_reference_at_max_table_depth() {
+    fn find_deep_para(blocks: &[Arc<Block>], depth: usize, target_depth: usize) -> Option<&Paragraph> {
+        for b in blocks {
+            match &**b {
+                Block::Para(p) if depth == target_depth => return Some(p),
+                Block::Para(_) => {}
+                Block::Table(t) => {
+                    for c in t.rows.iter().flat_map(|r| r.cells.iter()) {
+                        if let Some(p) = find_deep_para(&c.blocks, depth + 1, target_depth) {
+                            return Some(p);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    let mut orig = Session::new(Document::from_text("Orig."));
+    orig.run("caret.set", &json!({"pos": Pos::body(0, "Orig.".len())})).unwrap();
+    orig.run("references.footnote", &json!({"text": "Alpha footnote."})).unwrap();
+    let orig_fn_id = orig.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(&id, _)| id).unwrap();
+
+    let mut rev = Session::new(Document::from_text("Orig."));
+    rev.run("caret.set", &json!({"pos": Pos::body(0, "Orig.".len())})).unwrap();
+    for _ in 0..wordcraft_doc::table::MAX_TABLE_DEPTH {
+        rev.run("insert.table", &json!({"rows": 1, "cols": 1})).unwrap();
+    }
+    assert_eq!(rev.sel.focus.path.depth(), wordcraft_doc::table::MAX_TABLE_DEPTH);
+    rev.run("text.insert", &json!({"text": "Deep cell."})).unwrap();
+    rev.run("references.footnote", &json!({"text": "Gamma entry inside deepest cell."})).unwrap();
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-deeptbl-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let _ = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    let deep_para = find_deep_para(&s.doc.body, 0, wordcraft_doc::table::MAX_TABLE_DEPTH).expect("deepest cell paragraph exists");
+    assert!(deep_para.plain_text().contains("Deep cell."));
+    let remapped_id = deep_para.objects.iter().find_map(|o| if let InlineObject::NoteRef { id, .. } = o { Some(*id) } else { None }).unwrap();
+    assert_ne!(remapped_id, orig_fn_id, "deepest table cell note reference must be remapped off original note ID");
+    let adopted_part = s.doc.parts.get(&remapped_id).expect("remapped note ID resolves to adopted note part");
+    assert!(adopted_part.blocks[0].as_para().unwrap().plain_text().contains("Gamma entry inside deepest cell."));
+    assert!(s.doc.parts.get(&orig_fn_id).unwrap().blocks[0].as_para().unwrap().plain_text().contains("Alpha footnote."));
+}
+
+/// #5842: Multiple edited notes in the same unchanged paragraph use inline reference context to
+/// break ties rather than pairing with a later added note.
+#[test]
+fn compare_breaks_same_paragraph_note_tie_by_inline_context() {
+    let mut orig = Session::new(Document::from_text("Alpha. Beta."));
+    orig.run("caret.set", &json!({"pos": Pos::body(0, "Alpha".len())})).unwrap();
+    orig.run("references.footnote", &json!({"text": "Mercury note."})).unwrap();
+    let orig_fn_id = orig.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(&id, _)| id).unwrap();
+
+    let mut rev = Session::new(Document::from_text("Alpha. Beta."));
+    rev.run("caret.set", &json!({"pos": Pos::body(0, "Alpha".len())})).unwrap();
+    rev.run("references.footnote", &json!({"text": "Venus note."})).unwrap();
+    let second_pos = "Alpha".len() + wordcraft_doc::para::OBJ.len_utf8() + ". Beta".len();
+    rev.run("caret.set", &json!({"pos": Pos::body(0, second_pos)})).unwrap();
+    rev.run("references.footnote", &json!({"text": "Saturn note."})).unwrap();
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-sametie-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let _ = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    let paired_text = s.doc.parts.get(&orig_fn_id).unwrap().blocks[0].as_para().unwrap().plain_text();
+    assert!(paired_text.contains("Venus"), "original note pairs with Venus at Alpha: {paired_text}");
+    assert!(!paired_text.contains("Saturn"), "original note must not pair with Saturn at Beta: {paired_text}");
+
+    let footnotes: Vec<_> = s.doc.parts.iter().filter(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).collect();
+    assert_eq!(footnotes.len(), 2);
+    let inserted = footnotes.into_iter().find(|&(&id, _)| id != orig_fn_id).unwrap().1;
+    let inserted_para = inserted.blocks[0].as_para().unwrap();
+    assert!(inserted_para.plain_text().contains("Saturn note."));
+    assert!(inserted_para.runs.iter().all(|r| r.props.ins.is_some()));
+}
+
+/// #5842: Past `MAX_NOTE_ALIGN_RUN`, unique unchanged reference paragraphs anchor edited notes even
+/// when an inserted leading paragraph shifts every block index.
+#[test]
+fn compare_anchors_unique_note_paragraphs_past_run_limit_when_shifted() {
+    let note_count = super::compare::MAX_NOTE_ALIGN_RUN + 1;
+    let mut orig_text = String::new();
+    let mut rev_text = String::from("Inserted intro paragraph.");
+    for i in 0..note_count {
+        if i > 0 {
+            orig_text.push('\n');
+        }
+        orig_text.push_str(&format!("Unique anchor {i}."));
+        rev_text.push_str(&format!("\nUnique anchor {i}."));
+    }
+    let mut orig = Session::new(Document::from_text(&orig_text));
+    let mut rev = Session::new(Document::from_text(&rev_text));
+
+    let mut orig_note_ids = Vec::with_capacity(note_count);
+    for i in 0..note_count {
+        let o_len = orig.doc.body[i].as_para().unwrap().text.len();
+        orig.run("caret.set", &json!({"pos": Pos::body(i, o_len)})).unwrap();
+        orig.run("references.footnote", &json!({"text": format!("note[{i}] original text.")})).unwrap();
+        let id = orig.doc.body[i]
+            .as_para()
+            .and_then(|p| p.objects.iter().find_map(|o| if let InlineObject::NoteRef { id, .. } = o { Some(*id) } else { None }))
+            .unwrap();
+        orig_note_ids.push(id);
+
+        let r_len = rev.doc.body[i + 1].as_para().unwrap().text.len();
+        rev.run("caret.set", &json!({"pos": Pos::body(i + 1, r_len)})).unwrap();
+        rev.run("references.footnote", &json!({"text": format!("note[{i}] revised text.")})).unwrap();
+    }
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-shiftedanchor-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let _ = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    let footnotes: Vec<_> = s.doc.parts.values().filter(|p| p.kind == wordcraft_doc::PartKind::Footnote).collect();
+    assert_eq!(footnotes.len(), note_count, "all {note_count} shifted notes remain paired");
+    for (i, &note_id) in orig_note_ids.iter().enumerate() {
+        let para = s.doc.parts.get(&note_id).unwrap().blocks[0].as_para().unwrap();
+        assert!(para.run_ranges().any(|(r, c)| c.del.is_some() && para.text[r].contains("original")), "note {i} tracks del");
+        assert!(para.run_ranges().any(|(r, c)| c.ins.is_some() && para.text[r].contains("revised")), "note {i} tracks ins");
+    }
+}
+
+/// #5842: Source revision indices on revised note blocks are stripped before adoption or comparison
+/// so foreign revision IDs never alias Compare's own revision table.
+#[test]
+fn compare_strips_source_revisions_from_adopted_notes() {
+    let mut orig = Session::new(Document::from_text("Para one.\nPara two."));
+    orig.run("caret.set", &json!({"pos": Pos::body(0, "Para one.".len())})).unwrap();
+    orig.run("references.footnote", &json!({"text": "Unchanged note."})).unwrap();
+    let orig_fn_id = orig.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(&id, _)| id).unwrap();
+
+    let mut rev = Session::new(Document::from_text("Para one.\nPara two."));
+    rev.run("caret.set", &json!({"pos": Pos::body(0, "Para one.".len())})).unwrap();
+    rev.run("references.footnote", &json!({"text": "Unchanged note."})).unwrap();
+    rev.run("caret.set", &json!({"pos": Pos::body(1, "Para two.".len())})).unwrap();
+    rev.run("references.footnote", &json!({"text": "Inserted note."})).unwrap();
+
+    rev.doc.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Delete,
+        author: "Other".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    for part in rev.doc.parts.values_mut() {
+        if part.kind == wordcraft_doc::PartKind::Footnote
+            && let Some(Block::Para(p)) = part.blocks.first_mut().map(Arc::make_mut)
+            && let Some(r) = p.runs.last_mut()
+        {
+            r.props.del = Some(0);
+        }
+    }
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-srcrevs-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let _ = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    let paired_para = s.doc.parts.get(&orig_fn_id).unwrap().blocks[0].as_para().unwrap();
+    assert!(
+        paired_para.runs.iter().all(|r| r.props.del.is_none() && r.props.ins.is_none() && r.props.fmt_change.is_none()),
+        "paired unchanged note does not inherit revised source revision indices"
+    );
+
+    let inserted_part = s.doc.parts.iter().find(|&(&id, p)| id != orig_fn_id && p.kind == wordcraft_doc::PartKind::Footnote).unwrap().1;
+    let inserted_para = inserted_part.blocks[0].as_para().unwrap();
+    assert!(inserted_para.runs.iter().all(|r| r.props.del.is_none()), "adopted inserted note has no leaked del index");
+    assert!(inserted_para.runs.iter().all(|r| r.props.ins.is_some()), "adopted inserted note carries Compare's ins mark");
+}
+
+/// #5842: Adopting or comparing revised note blocks copies and remaps media referenced directly
+/// and inside nested text-box stories, preserving distinct images under colliding source keys
+/// across DOCX save and reopen.
+#[test]
+fn compare_adopts_and_remaps_note_media_across_docx_roundtrip() {
+    let solid_png = |rgba: [u8; 4]| {
+        let img = image::RgbaImage::from_pixel(4, 4, image::Rgba(rgba));
+        wordcraft_geom::picture::encode_format(&image::DynamicImage::ImageRgba8(img), image::ImageFormat::Png).unwrap()
+    };
+    let red_png = solid_png([220, 20, 20, 255]);
+    let blue_png = solid_png([20, 40, 220, 255]);
+    let green_png = solid_png([20, 180, 40, 255]);
+
+    let image_obj = |key: &str| InlineObject::Image {
+        media: key.into(),
+        w: 24.0,
+        h: 24.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
+    let tb_obj = |story_id: u32| InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w: 50.0,
+        h: 50.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: Default::default(),
+        story: Some(story_id),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let append_obj = |doc: &mut Document, part_id: u32, obj: InlineObject| {
+        if let Some(part) = doc.parts.get_mut(&part_id)
+            && let Some(Block::Para(p)) = part.blocks.first_mut().map(Arc::make_mut)
+        {
+            let at = p.len();
+            let _ = p.insert_object(at, obj, &CharProps::default());
+        }
+    };
+
+    // Original: body + paired footnote 1 with red image under key "image1.png".
+    let mut orig = Session::new(Document::from_text("Para one.\nPara two."));
+    orig.run("caret.set", &json!({"pos": Pos::body(0, "Para one.".len())})).unwrap();
+    orig.run("references.footnote", &json!({"text": "Shared note "})).unwrap();
+    let orig_fn1_id = orig.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(&id, _)| id).unwrap();
+    orig.doc.media.insert("image1.png".into(), Arc::new(red_png.clone()));
+    append_obj(&mut orig.doc, orig_fn1_id, image_obj("image1.png"));
+
+    // Revised: paired footnote 1 has blue image under the SAME key "image1.png";
+    // inserted footnote 2 has a direct image ("image1.png" = blue) and a nested text box
+    // ("image2.png" = green, absent from original).
+    let mut rev = Session::new(Document::from_text("Para one.\nPara two."));
+    rev.run("caret.set", &json!({"pos": Pos::body(0, "Para one.".len())})).unwrap();
+    rev.run("references.footnote", &json!({"text": "Shared note "})).unwrap();
+    rev.run("caret.set", &json!({"pos": Pos::body(1, "Para two.".len())})).unwrap();
+    rev.run("references.footnote", &json!({"text": "Adopted note "})).unwrap();
+
+    let rev_fn_ids: Vec<u32> = rev.doc.parts.iter().filter(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(&id, _)| id).collect();
+    assert_eq!(rev_fn_ids.len(), 2);
+    let rev_fn1_id = rev_fn_ids[0];
+    let rev_fn2_id = rev_fn_ids[1];
+
+    rev.doc.media.insert("image1.png".into(), Arc::new(blue_png.clone()));
+    rev.doc.media.insert("image2.png".into(), Arc::new(green_png.clone()));
+    append_obj(&mut rev.doc, rev_fn1_id, image_obj("image1.png"));
+
+    let nested_tb_id = rev.doc.add_part(wordcraft_doc::PartKind::TextBox, vec![para_block(Paragraph::with_text("Nested ", CharProps::default()))]);
+    append_obj(&mut rev.doc, nested_tb_id, image_obj("image2.png"));
+    let outer_tb_id = rev.doc.add_part(wordcraft_doc::PartKind::TextBox, vec![para_block(Paragraph::with_text("Outer ", CharProps::default()))]);
+    append_obj(&mut rev.doc, outer_tb_id, tb_obj(nested_tb_id));
+    append_obj(&mut rev.doc, rev_fn2_id, image_obj("image1.png"));
+    append_obj(&mut rev.doc, rev_fn2_id, tb_obj(outer_tb_id));
+
+    let pid = std::process::id();
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-note-media-{pid}.docx"));
+    let out_path = std::env::temp_dir().join(format!("wc-out-note-media-{pid}.docx"));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+    let reopened_rev = crate::io::open_path(&rev_path).unwrap();
+    assert!(reopened_rev.media.contains_key("image1.png"), "reopened revised DOCX uses colliding source key image1.png");
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+    assert!(r["changes"].as_u64().unwrap() >= 1);
+
+    // Save comparison result to DOCX and reopen to verify media keys and bytes survive roundtrip.
+    crate::io::save_path(&out_path, &s.doc).unwrap();
+    let loaded = crate::io::open_path(&out_path).unwrap();
+    let _ = std::fs::remove_file(&out_path);
+
+    let mut loaded_fns: Vec<&wordcraft_doc::Part> = loaded.parts.values().filter(|p| p.kind == wordcraft_doc::PartKind::Footnote).collect();
+    assert_eq!(loaded_fns.len(), 2);
+    loaded_fns.sort_by_key(|p| p.blocks[0].as_para().map(Paragraph::plain_text).unwrap_or_default());
+    let (adopted_fn, paired_fn) = if loaded_fns[0].blocks[0].as_para().unwrap().plain_text().contains("Adopted note") {
+        (loaded_fns[0], loaded_fns[1])
+    } else {
+        (loaded_fns[1], loaded_fns[0])
+    };
+
+    // Paired note keeps original red image (deleted) and remapped blue image (inserted).
+    let paired_imgs: Vec<&str> = paired_fn.blocks[0]
+        .as_para()
+        .unwrap()
+        .objects
+        .iter()
+        .filter_map(|o| if let InlineObject::Image { media, .. } = o { Some(media.as_str()) } else { None })
+        .collect();
+    assert_eq!(paired_imgs.len(), 2, "paired note retains original and revised images: {paired_imgs:?}");
+    let paired_bytes: Vec<&[u8]> = paired_imgs.iter().map(|k| loaded.media.get(*k).expect("paired image bytes present").as_slice()).collect();
+    assert!(paired_bytes.contains(&red_png.as_slice()), "paired note kept original red image");
+    assert!(paired_bytes.contains(&blue_png.as_slice()), "paired note kept revised blue image");
+
+    // Adopted note keeps its blue image and its nested text box's green image.
+    let adopted_para = adopted_fn.blocks[0].as_para().unwrap();
+    let adopted_img_key =
+        adopted_para.objects.iter().find_map(|o| if let InlineObject::Image { media, .. } = o { Some(media.as_str()) } else { None }).unwrap();
+    assert_eq!(loaded.media.get(adopted_img_key).expect("adopted note image").as_slice(), blue_png.as_slice());
+
+    let loaded_outer_tb_id = adopted_para.objects.iter().find_map(InlineObject::text_box).expect("adopted outer text box");
+    let loaded_nested_tb_id = loaded.parts[&loaded_outer_tb_id].blocks[0]
+        .as_para()
+        .unwrap()
+        .objects
+        .iter()
+        .find_map(InlineObject::text_box)
+        .expect("adopted nested text box");
+    let nested_img_key = loaded.parts[&loaded_nested_tb_id].blocks[0]
+        .as_para()
+        .unwrap()
+        .objects
+        .iter()
+        .find_map(|o| if let InlineObject::Image { media, .. } = o { Some(media.as_str()) } else { None })
+        .unwrap();
+    assert_eq!(loaded.media.get(nested_img_key).expect("nested text box image").as_slice(), green_png.as_slice());
+}
+
 /// #3518: every run and paragraph mark of a story, as (story, path, lang, noProof) rows.
 fn proofing_rows(s: &Session) -> Vec<(StoryRef, Option<String>, Option<bool>)> {
     let stories = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k)));
