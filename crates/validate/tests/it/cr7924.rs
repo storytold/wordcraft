@@ -699,7 +699,12 @@ fn a_content_type_declaration_without_its_key_does_not_certify_a_second_archive(
     let ordinary = Doc::minimal().build();
     let keyed_by_extension = valid.replace(r#"<Override PartName="/word/document.xml""#, r#"<Override Extension="/word/document.xml""#);
     let default_without_extension = valid.replace(r#"<Default Extension="xml" "#, "<Default ");
-    for (label, ct) in [("override without PartName", keyed_by_extension), ("default without Extension", default_without_extension)] {
+    let default_keyed_by_part_name = valid.replace(r#"<Default Extension="xml" "#, r#"<Default PartName="xml" Extension="xml" "#);
+    for (label, ct) in [
+        ("override without PartName", keyed_by_extension),
+        ("default without Extension", default_without_extension),
+        ("default with a substituted PartName key", default_keyed_by_part_name.clone()),
+    ] {
         assert_ne!(ct, valid, "{label}");
         let bad = archive_with_content_types(&ct);
         for (first, second) in [(&ordinary, &bad), (&bad, &ordinary)] {
@@ -714,4 +719,7 @@ fn a_content_type_declaration_without_its_key_does_not_certify_a_second_archive(
         &valid.replace(r#"<Override PartName="/word/document.xml""#, r#"<Override Extension="/word/document.xml""#),
     ));
     assert_eq!(alone.verdict, Verdict::Pass, "{alone:?}");
+    let alone_default = validate_bytes(&archive_with_content_types(&default_keyed_by_part_name));
+    let plain = validate_bytes(&Doc::minimal().build());
+    assert_eq!(alone_default.verdict, plain.verdict, "{alone_default:?}");
 }

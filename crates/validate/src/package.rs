@@ -2541,7 +2541,13 @@ fn record_content_type(e: &BytesStart, ct: &mut ContentTypes) {
         return;
     }
     let key = attr_plain(e, b"PartName").or_else(|| attr_plain(e, b"Extension"));
-    ct.malformed_declaration |= attr_plain(e, if l == b"Override" { b"PartName" } else { b"Extension" }).is_none();
+    // A declaration keyed by the other element's attribute stores the wrong key: a `Default` carrying `PartName` is read by
+    // `PartName` above, so it is flagged for the certification path only.
+    ct.malformed_declaration |= if l == b"Override" {
+        attr_plain(e, b"PartName").is_none()
+    } else {
+        attr_plain(e, b"Extension").is_none() || attr_plain(e, b"PartName").is_some()
+    };
     let Some(key) = key else { return };
     let Some(value) = attr_plain(e, b"ContentType") else { return };
     let key = key.trim_start_matches('/').to_ascii_lowercase();
