@@ -326,8 +326,14 @@ fn type_text(s: &mut Session, v: &Value) -> CmdResult {
                     pos = p;
                     changed = true;
                 }
-                if let Some(p) = me::build_up(&mut math.nodes, &pos, latex) {
-                    pos = p;
+                // As in Word, `\int` + Space leaves ∫ waiting for its limits: `_a^b` and then
+                // Space, or Space alone, builds the operator (#4917).
+                let waits = changed && c == ' ' && me::nary_before(&math.nodes, &pos);
+                // Only an operator this build-up makes takes the caret: one already there (from
+                // the gallery, say) keeps it after it.
+                let built_before = me::nary_node_before(&math.nodes, &pos);
+                if !waits && let Some(p) = me::build_up(&mut math.nodes, &pos, latex) {
+                    pos = if built_before { p } else { me::into_empty_operand(&math.nodes, &p) };
                     changed = true;
                 }
                 if changed {
@@ -335,6 +341,14 @@ fn type_text(s: &mut Session, v: &Value) -> CmdResult {
                 }
                 if c == ' ' && changed {
                     continue;
+                }
+            } else if !style.nor && !latex && !c.is_alphanumeric() {
+                // Word corrects `\name` on any character that can't continue it (`\int_`,
+                // `\alpha+`), keeps that character and builds nothing up yet. LaTeX input keeps
+                // its commands (`\sqrt{`).
+                if let Some(p) = me::autocorrect(&mut math.nodes, &pos) {
+                    pos = p;
+                    transformed = true;
                 }
             }
             pos = me::insert_text(&mut math.nodes, &pos, &c.to_string(), style);
@@ -758,6 +772,18 @@ fn set(s: &mut Session, v: &Value) -> CmdResult {
     }
     apply_effect(s, effect, false);
     result(s)
+}
+
+/// The equation at the caret (the one being edited, else one beside the caret) as `(display, linear)`, read without
+/// running a command. A surface that shows the equation's state every frame reads this: a command, even a query,
+/// would consume the replacement an input method's deletion promised (`Session::join_next_equation_edit`), whose
+/// commit can arrive in a later frame.
+pub fn at_caret(s: &Session) -> Option<(bool, &str)> {
+    let at = equation_at_caret(s)?;
+    match s.doc.para_at(&at).and_then(|p| p.object_at(at.off)) {
+        Some(InlineObject::Equation { linear, display, .. }) => Some((*display, linear.as_str())),
+        _ => None,
+    }
 }
 
 fn get(s: &mut Session, _: &Value) -> CmdResult {

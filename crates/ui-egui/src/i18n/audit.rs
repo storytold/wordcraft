@@ -1,5 +1,5 @@
-//! Finds interface text drawn without going through translation: the app is laid out in the
-//! pseudo-language (see `pseudo.rs`) in many states, and any visible word outside `⟦…⟧` marks is
+//! Finds interface text drawn without going through translation: the app is laid out in
+//! craft-i18n's pseudo locale in many states, and any visible word outside `⟦…⟧` marks is
 //! reported. The document itself is drawn as an image, so its text never shows up here.
 
 use std::cell::Cell;
@@ -7,15 +7,62 @@ use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
 
-use super::pseudo;
 use crate::WordApp;
 
+/// `text` without its marked segments. Lines are marked one by one, since multi-line labels are
+/// often drawn a line at a time.
+fn unmarked(text: &str) -> String {
+    let mut out = String::new();
+    let mut depth = 0usize;
+    for c in text.chars() {
+        match c {
+            '⟦' => depth += 1,
+            // A close with none open ends a mark a wrapped label began on the line before (a stacked button draws
+            // `⟦Data` and `Labels⟧` apart): what came before it on this line is inside that mark.
+            '⟧' if depth == 0 => out.clear(),
+            '⟧' => depth -= 1,
+            _ if depth == 0 => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// When the audit began: the Date and Time preview drawn at any moment since is clock data, not
+/// interface text, whatever second the audit compares it in (#7463).
+static CLOCK_START: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
+/// Seconds of clock `clock_text` catches up in one check after the clock jumps forward.
+const CLOCK_CATCH_UP: u64 = 60;
+
 thread_local! {
+    // Every date/time the preview list could show since `CLOCK_START`, up to the second last
+    // looked at: (next second to add, strings).
+    static CLOCK_TEXTS: std::cell::RefCell<(u64, std::collections::HashSet<String>)> = std::cell::RefCell::new(Default::default());
     // Input time, advanced every frame so tooltips and animations move on.
     static TIME: Cell<f64> = const { Cell::new(0.0) };
     // Process-wide names (font families, the custom dictionary) seen at any point of the run:
     // tests running alongside add and remove them, so one may be drawn and gone by the check.
     static GLOBAL_NAMES: std::cell::RefCell<std::collections::HashSet<String>> = std::cell::RefCell::new(Default::default());
+}
+
+/// Whether `text` is something the Date and Time preview list showed at any second since the audit began.
+fn clock_text(text: &str) -> bool {
+    let start = *CLOCK_START.get_or_init(wordcraft_engine::cmd::now_unix);
+    let now = wordcraft_engine::cmd::now_unix();
+    CLOCK_TEXTS.with_borrow_mut(|(next, set)| {
+        if *next == 0 {
+            *next = start;
+        }
+        // A clock stepped back still adds the current second; one stepped far forward catches up
+        // a minute at most, the longest a preview waits to be checked.
+        let from = (*next).min(now).max(now.saturating_sub(CLOCK_CATCH_UP));
+        for unix in from..=now {
+            set.extend(crate::dialogs_insert::date_time_previews_at(unix));
+        }
+        *next = now + 1;
+        set.contains(text)
+    })
 }
 
 /// Remember the process-wide names drawn this frame could have come from.
@@ -47,6 +94,8 @@ fn frames(ctx: &egui::Context, app: &mut WordApp, steps: Vec<Vec<egui::Event>>) 
         let input =
             egui::RawInput { screen_rect: Some(screen), time: Some(TIME.get()), events: steps.next().unwrap_or_default(), ..Default::default() };
         note_global_names();
+        // The runtime is handed the app's command input before each frame, as the driver does.
+        craft::ui::shell::embed::before_input(ctx, |out| app.frame_input(out));
         let mut out = ctx.run_ui(input, |ui| {
             app.logic(ui.ctx());
             app.ui(ui);
@@ -94,12 +143,26 @@ fn ribbon_controls(ctx: &egui::Context) -> Vec<egui::Pos2> {
     })
 }
 
+/// A fresh app whose language setting is the pseudo locale, bound by the frames' own per-pass
+/// language binding like any other language.
+fn pseudo_app(ctx: &egui::Context) -> WordApp {
+    let mut app = fresh_app(ctx);
+    app.ui.language = "pseudo".into();
+    frame(ctx, &mut app);
+    app
+}
+
 fn fresh_app(ctx: &egui::Context) -> WordApp {
+    CLOCK_START.get_or_init(wordcraft_engine::cmd::now_unix);
     ctx.all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), Default::default());
     // Read Aloud holds each sentence instead of starting the system's speech engine: no sound on
     // machines that have one, and no worker thread failing at its own pace on machines that don't.
     app.session.read_aloud.backend = wordcraft_engine::speech::Backend::Hold;
+    // Help › Check for Updates answers "up to date" instead of asking GitHub, whose rate limit
+    // would otherwise put the updater's error text on screen.
+    #[cfg(not(target_arch = "wasm32"))]
+    app.stub_update_check();
     // Fonts install over the first frames.
     for _ in 0..2 {
         frame(ctx, &mut app);
@@ -107,9 +170,14 @@ fn fresh_app(ctx: &egui::Context) -> WordApp {
     app
 }
 
+/// A link: one `http(s)://` word.
+fn is_url(text: &str) -> bool {
+    (text.starts_with("https://") || text.starts_with("http://")) && !text.contains(char::is_whitespace)
+}
+
 /// Words (two or more ASCII letters in a row) drawn outside translation marks.
 fn english_words(text: &str) -> bool {
-    let plain = pseudo::unmarked(text);
+    let plain = unmarked(text);
     plain.as_bytes().windows(2).any(|w| w[0].is_ascii_alphabetic() && w[1].is_ascii_alphabetic())
 }
 
@@ -128,7 +196,7 @@ struct Exempt<'a> {
 /// input, not interface wording; a character the interface fonts lack becomes its linear name
 /// (`┬` → `\below`), so the exact strings are recognized rather than a pattern.
 fn math_placeholders(ctx: &egui::Context) -> std::collections::HashSet<String> {
-    let font = crate::theme::regular(11.0);
+    let font = egui::FontId::proportional(11.0);
     math_placeholders_with(|c| ctx.fonts_mut(|fonts| fonts.has_glyph(&font, c)))
 }
 
@@ -164,6 +232,30 @@ impl<'a> Exempt<'a> {
             names.extend(c.categories.iter().cloned());
             names.extend(c.series.iter().map(|s| s.name.clone()));
         }
+        // About › Language data: the licences' own titles and texts, and the packs' names,
+        // licences and sources (File › Options › Language), as their authors wrote them.
+        for (title, text) in wordcraft_engine::packs::licence_texts() {
+            // Drawn texts are compared trimmed, and a licence file ends in a line break.
+            let trimmed = text.trim().to_string();
+            names.extend([title, text, trimmed]);
+        }
+        for p in wordcraft_engine::packs::available() {
+            names.extend([format!("{} · {}", p.name, p.locale), p.source_link().to_string(), p.locale, p.name, p.licence, p.url]);
+        }
+        for p in wordcraft_engine::packs::installed() {
+            names.extend([p.name.clone(), p.licence, format!("{} · {}", p.name, p.locale), p.locale]);
+        }
+        // Options › Language › Your languages: each row's language tag, and a pack's own name
+        // beside it, as the index and the document wrote them.
+        let index = wordcraft_engine::packs::available();
+        for row in wordcraft_engine::packs::your_languages(&app.session) {
+            let tag = row.tags.first().cloned().or_else(|| row.pack.as_deref().map(crate::ribbon::tag_for_pack)).unwrap_or_default();
+            if let Some(p) = row.pack.as_deref().and_then(|l| index.iter().find(|p| p.locale == l)) {
+                names.insert(format!("{} · {tag}", p.name));
+            }
+            names.extend(row.tags.iter().cloned());
+            names.insert(tag);
+        }
         for m in crate::credits::MODELS {
             names.extend([m.company, m.model, m.version].map(str::to_string));
         }
@@ -171,6 +263,10 @@ impl<'a> Exempt<'a> {
         // interface text.
         if let Some(sugg) = app.canvas.context_issue.as_ref().and_then(|i| i.get("suggestions")).and_then(Value::as_array) {
             names.extend(sugg.iter().filter_map(Value::as_str).map(str::to_string));
+        }
+        // The proofing pane displays document context and dictionary suggestions, not UI wording.
+        if let Some(form) = &app.spelling_review {
+            names.extend(form.content_text());
         }
         Exempt { body: app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), names, math: math_placeholders }
     }
@@ -180,13 +276,28 @@ impl<'a> Exempt<'a> {
     /// equation placeholders, document body and known names, contributor handles, default style
     /// names and fixed tokens.
     fn allows(&self, app: &WordApp, text: &str) -> bool {
-        let plain = pseudo::unmarked(text);
+        let plain = unmarked(text);
         let plain = plain.trim().trim_end_matches(" —").trim();
-        let is_shortcut =
-            || plain.split('+').all(|k| matches!(k, "Ctrl" | "Shift" | "Alt" | "Cmd" | "Esc" | "Tab" | "Enter") || k.chars().count() <= 3);
+        // A chord is `Ctrl+Shift+K` or, on macOS, the modifiers' symbols run into the key (`⌥⌘Space`, `⇧⌘K`).
+        let chord = |s: &str| {
+            let key = |k: &str| matches!(k, "Ctrl" | "Shift" | "Alt" | "Cmd" | "Esc" | "Tab" | "Enter" | "Space") || k.chars().count() <= 3;
+            s.split('+').all(|k| key(k) || key(k.trim_start_matches(['⌃', '⌥', '⇧', '⌘'])))
+        };
+        let is_shortcut = || chord(plain);
+        // A command's hover hint, drawn as one text: its marked label, name and location, so what is left is the
+        // shortcut after the title, `(Ctrl+B)`, and the location's separators.
+        let hint_frame = || plain.split_whitespace().all(|w| matches!(w, "›" | "‹") || chord(w.trim_start_matches('(').trim_end_matches(')')));
+        // Known names as a list (`Aptos, Aptos Display`), or cut short to fit (`Ant…`).
+        let names_listed = || plain.contains(", ") && plain.split(", ").all(|n| self.names.contains(n));
+        let name_cut = || plain.strip_suffix('…').is_some_and(|start| start.chars().count() >= 2 && self.names.iter().any(|n| n.starts_with(start)));
         // A command's error message in the status bar: commands answer scripts and MCP too, so
         // their messages stay English for now.
-        let status = app.status_msg.iter().map(|(m, _)| m).chain(&app.read_aloud_error).any(|m| text.contains(m.as_str()));
+        let status = app
+            .status
+            .iter()
+            .map(|s| s.text.as_str())
+            .chain(app.read_aloud_error.iter().map(String::as_str))
+            .any(|m| !m.is_empty() && text.contains(m));
         // A theme's fonts after its (translated) name: `Studio: Georgia / Georgia`.
         let theme_fonts = plain.strip_prefix(": ").is_some_and(|f| f.split(" / ").count() == 2);
         let icon_lettering = matches!(plain, "Aa" | "ab" | "abc" | "ac" | "cd" | "ab-" | "fx" | "ABC");
@@ -200,6 +311,9 @@ impl<'a> Exempt<'a> {
             || status
             || theme_fonts
             || is_shortcut()
+            || hint_frame()
+            || names_listed()
+            || name_cut()
             || self.body.contains(plain)
             || self.names.contains(plain)
             || self.math.contains(plain) // the Equation tab's `lim\below(n→∞)`-style placeholders
@@ -209,6 +323,8 @@ impl<'a> Exempt<'a> {
             || matches!(plain, "WordCraft" | "WordCraft User" | "Discord" | "https://" | "auto" | "I. II. III." | "i. ii. iii." | "I, II, III, …" | "i, ii, iii, …")
             || plain == "CONFIDENTIAL" // the watermark dialog's text: document content, kept as typed
             || plain == "Figure 1" // the caption dialog's sample: the label goes into the document as is
+            || clock_text(plain) // the Date and Time preview: formatted from the clock
+            || is_url(plain) // a link is data, not wording
     }
 }
 
@@ -224,6 +340,41 @@ fn math_placeholders_are_exact_math_input_only() {
     assert!(!set.contains("Translate"), "ordinary interface wording is not exempt");
 }
 
+/// Runtime data is exempt (links, the clock's dates and times), wording is not (#7463), and
+/// Check for Updates never reaches the network.
+#[test]
+fn runtime_data_is_exempt_and_wording_is_not() {
+    let ctx = crate::test_harness::context();
+    let mut app = fresh_app(&ctx);
+    let none = std::collections::HashSet::new();
+    let exempt = Exempt::new(&app, &none);
+    let now = wordcraft_engine::cmd::now_unix();
+    let offset = wordcraft_engine::cmd::local_offset_secs(now);
+    for picture in ["M/d/yyyy h:mm:ss am/pm", "h:mm:ss am/pm", "dddd, MMMM d, yyyy"] {
+        let drawn = wordcraft_engine::cmd::insert::format_date_at_in(picture, None, now, offset);
+        assert!(exempt.allows(&app, &drawn), "{drawn:?} is the clock");
+    }
+    assert!(exempt.allows(&app, "https://github.com/storytold/wordcraft/releases"));
+    assert!(!exempt.allows(&app, "Download the newest release"), "an unwrapped sentence is reported");
+    assert!(!exempt.allows(&app, "See https://example.com now"), "a sentence with a link is not a link");
+    assert!(!exempt.allows(&app, "11/22/1999 5:28:50 PM"), "a time before the audit began is not the preview");
+    // A stubbed check finds no update and puts no updater error on screen.
+    app.run("help.checkForUpdates", json!({})).expect("Check for Updates runs");
+    let calls = app.updates_rt.stub_calls.clone();
+    // The check runs on a worker thread: draw at least 30 frames, then until it has run (a loaded
+    // runner can be slow to start the thread, so the cap is wall-clock time, not a frame count).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    for n in 0.. {
+        let drawn = frame(&ctx, &mut app);
+        assert!(drawn.iter().all(|t| !t.contains("request limit")), "{drawn:?}");
+        if n >= 30 && (calls.load(std::sync::atomic::Ordering::SeqCst) > 0 || std::time::Instant::now() > deadline) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1, "the check went through the stub, not GitHub");
+}
+
 /// Fails on interface text drawn without going through the catalog, listed per UI state, and
 /// prints the missing-translation report (`report_catalog_gaps`). `cargo xtask i18n-report` runs it
 /// with `--nocapture`; `cargo xtask test` and `ci` run it that way instead of in the main test run.
@@ -231,9 +382,9 @@ fn math_placeholders_are_exact_math_input_only() {
 /// starts a speech thread, and process-wide names other tests change are gathered every frame.
 #[test]
 fn untranslated_interface_text() {
-    pseudo::set(true);
-    let ctx = egui::Context::default();
-    let mut app = fresh_app(&ctx);
+    let ctx = crate::test_harness::context();
+    super::embedded_host(&ctx);
+    let mut app = pseudo_app(&ctx);
     let math_placeholders = math_placeholders(&ctx);
     let mut found: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut record = |app: &WordApp, state: &str, drawn: Vec<String>| {
@@ -279,8 +430,10 @@ fn untranslated_interface_text() {
         "tableProperties",
         "pasteSpecial",
         "about",
+        "fontDownload",
         "contributors",
         "models",
+        "languageData",
         "insertMergeField",
         "findRecipient",
         "mergeRecords",
@@ -297,7 +450,8 @@ fn untranslated_interface_text() {
         let _ = app.run("ui.dialog", json!({"name": name}));
         let drawn = frame(&ctx, &mut app);
         record(&app, &format!("dialog {name}"), drawn);
-        app.dialog = None;
+        // PLAN(dialogs-w13): dg.A1 `close_all(app, ctx)` in `dialogs/host.rs`.
+        crate::dialogs::host::close_all(&mut app, &ctx);
     }
     let panes: Vec<String> =
         app.session.registry.all().iter().map(|c| c.id.to_string()).filter(|id| id.starts_with("view.") && id.ends_with("Pane")).collect();
@@ -327,7 +481,7 @@ fn untranslated_interface_text() {
     let _ = app.run("ui.dialog", json!({"name": "insertSmartArt"}));
     let drawn = frame(&ctx, &mut app);
     record(&app, "dialog insertSmartArt", drawn);
-    app.dialog = None;
+    crate::dialogs::host::close_all(&mut app, &ctx);
     let _ = app.run("insert.chart", json!({"type": "column"}));
     let _ = app.run("ui.tab", json!({"tab": "Chart Design"}));
     let drawn = frame(&ctx, &mut app);
@@ -336,7 +490,7 @@ fn untranslated_interface_text() {
         let _ = app.run("ui.dialog", json!({"name": name}));
         let drawn = frame(&ctx, &mut app);
         record(&app, &format!("dialog {name}"), drawn);
-        app.dialog = None;
+        crate::dialogs::host::close_all(&mut app, &ctx);
     }
     let _ = app.run("insert.equation", json!({}));
     let _ = app.run("ui.tab", json!({"tab": "Equation"}));
@@ -348,8 +502,8 @@ fn untranslated_interface_text() {
     // (Escape, for one, leaves an equation and takes the Equation tab with it).
     let contextual = ["Table Design", "Table Layout", "Equation", "Chart Design", "SmartArt Design"];
     let open = |tab: &str| {
-        let ctx = egui::Context::default();
-        let mut app = fresh_app(&ctx);
+        let ctx = crate::test_harness::context();
+        let mut app = pseudo_app(&ctx);
         match tab {
             "Table Design" | "Table Layout" => drop(app.run("insert.table", json!({"rows": 2, "cols": 2}))),
             "Equation" => drop(app.run("insert.equation", json!({}))),
@@ -373,15 +527,15 @@ fn untranslated_interface_text() {
             record(&app, &format!("{tab} › click"), drawn);
         }
     }
-    pseudo::set(false);
+    super::apply_language(super::Lang::EN);
     let mut report = String::new();
     for (text, states) in &found {
         let mut states = states.clone();
         states.sort();
         states.dedup();
-        report.push_str(&format!("{:?}  [{}]\n", pseudo::unmarked(text), states.join(", ")));
+        report.push_str(&format!("{:?}  [{}]\n", unmarked(text), states.join(", ")));
     }
-    report_catalog_gaps(pseudo::looked_up());
+    report_catalog_gaps(super::I18N.looked_up());
     assert!(found.is_empty(), "{} interface texts skip translation (wrap them in tl!):\n{report}", found.len());
 }
 
@@ -580,4 +734,246 @@ fn disabled_reasons() -> std::collections::BTreeSet<String> {
         }
     }
     reasons
+}
+
+/// One frame at a given window width; returns the left edge of every text drawn.
+fn frame_at(ctx: &egui::Context, app: &mut WordApp, width: f32) -> Vec<(String, f32)> {
+    fn collect(shape: &egui::Shape, out: &mut Vec<(String, f32)>) {
+        match shape {
+            egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.pos.x)),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| collect(s, out)),
+            _ => {}
+        }
+    }
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 900.0));
+    let mut drawn = Vec::new();
+    for _ in 0..4 {
+        TIME.set(TIME.get() + 0.1);
+        let input = egui::RawInput { screen_rect: Some(screen), time: Some(TIME.get()), ..Default::default() };
+        craft::ui::shell::embed::before_input(ctx, |out| app.frame_input(out));
+        let mut out = ctx.run_ui(input, |ui| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        });
+        drawn.clear();
+        for s in &out.shapes {
+            collect(&s.shape, &mut drawn);
+        }
+        out.textures_delta.clear();
+    }
+    drawn
+}
+
+/// The Arabic interface is mirrored: reading starts at the right. And nothing in it can panic:
+/// every tab (wide, and narrow enough to scroll), File page, dialog, pane, context menu and
+/// ribbon control is laid out right to left.
+#[test]
+fn the_arabic_interface_is_mirrored_and_never_panics() {
+    // Arabic comes from the craft-i18n catalogs: a build without them (English only) has nothing to mirror.
+    let Some(ar) = super::Lang::from_code("ar") else {
+        eprintln!("skipped: built without the craft-i18n Arabic catalog (set CRAFT_I18N_DIR to a checkout)");
+        return;
+    };
+    let start = |ctx: &egui::Context| {
+        let mut app = fresh_app(ctx);
+        app.ui.language = "ar".into();
+        frame(ctx, &mut app);
+        app
+    };
+    let ctx = crate::test_harness::context();
+    super::embedded_host(&ctx);
+    super::apply_language(ar);
+    let mut app = start(&ctx);
+    // PLAN(app-hub): sh.A1 `root_env` sets `RootEnv::direction` from the language.
+    assert_eq!(app.root_env().direction, craft::i18n::Direction::Rtl);
+    let x_of = |drawn: &[(String, f32)], english: &str| {
+        let label = super::tr(ar, english);
+        drawn.iter().find(|(t, _)| t == label).map(|(_, x)| *x).unwrap_or_else(|| panic!("{english} is not drawn"))
+    };
+    // Tabs run from the right: File, Home, Insert … and the Share button is at the far left.
+    let drawn = frame_at(&ctx, &mut app, 1600.0);
+    let (file, home, insert, share) = (x_of(&drawn, "File"), x_of(&drawn, "Home"), x_of(&drawn, "Insert"), x_of(&drawn, "Share"));
+    assert!(file > home && home > insert && insert > 800.0, "tabs: {file} {home} {insert}");
+    // The ribbon strip's end group (Share, Editing, Comments) is mirrored as a group: it sits at the left edge, in
+    // reverse order, so Share is the innermost of the three and starts a little way in from the edge.
+    assert!(share < 300.0, "Share: {share}");
+    // Ribbon groups too: Clipboard is right of Font, which is right of Styles.
+    assert!(x_of(&drawn, "Clipboard") > x_of(&drawn, "Font") && x_of(&drawn, "Font") > x_of(&drawn, "Styles"));
+    // The status bar starts at the right, and a narrow window still shows the ribbon's first group.
+    let page = drawn.iter().find(|(t, _)| t.contains(super::tr(ar, "Editing"))).map(|(_, x)| *x);
+    assert!(page.is_some());
+    let narrow = frame_at(&ctx, &mut app, 700.0);
+    let clipboard = x_of(&narrow, "Clipboard");
+    assert!((350.0..700.0).contains(&clipboard), "the narrow ribbon starts at its right end: {clipboard}");
+    // Side panes swap sides: Navigation is on the right.
+    let _ = app.run("view.navigationPane", json!({"value": true}));
+    let drawn = frame_at(&ctx, &mut app, 1600.0);
+    assert!(x_of(&drawn, "Navigation") > 1300.0);
+    let _ = app.run("view.navigationPane", json!({"value": false}));
+    // English stays as it was.
+    {
+        let ctx = crate::test_harness::context();
+        let mut app = fresh_app(&ctx);
+        let drawn = frame_at(&ctx, &mut app, 1600.0);
+        let x = |label: &str| drawn.iter().find(|(t, _)| t == label).map(|(_, x)| *x).unwrap();
+        assert!(x("File") < x("Home") && x("Home") < x("Insert") && x("Insert") < 400.0 && x("Share") > 1400.0);
+        assert!(x("Clipboard") < x("Font") && x("Font") < x("Styles"));
+        assert!(x("Cut") < 200.0, "ribbon buttons keep their icon on the left and start at the left");
+        assert_eq!(app.root_env().direction, craft::i18n::Direction::Ltr);
+        super::apply_language(ar);
+    }
+    // Everything else: no panic at any width.
+    let tabs: Vec<&str> = crate::ribbon::TABS.iter().copied().filter(|t| *t != "File").collect();
+    for tab in &tabs {
+        let _ = app.run("ui.tab", json!({"tab": tab}));
+        for width in [2560.0, 1100.0, 420.0] {
+            frame_at(&ctx, &mut app, width);
+        }
+    }
+    let _ = app.run("ui.tab", json!({"tab": "Home"}));
+    // Reading Mode's toolbar is mirrored too: its far-side button ("Edit Document") is at the left.
+    let _ = app.run("view.readMode", json!({}));
+    let drawn = frame_at(&ctx, &mut app, 1600.0);
+    let edit = x_of(&drawn, "Edit Document");
+    assert!(edit < 400.0, "Reading Mode: Edit Document at {edit}");
+    let _ = app.run("view.printLayout", json!({}));
+    // File › Print: the settings are on the right and the preview on the left, not over each other.
+    let _ = app.run("ui.backstage", json!({"value": true, "page": "print"}));
+    for width in [1600.0, 1100.0] {
+        let drawn = frame_at(&ctx, &mut app, width);
+        let settings = x_of(&drawn, "Save these pages as PDF…");
+        let indicator = super::tr(ar, "Sheet {page} of {pages}").split('{').next().unwrap_or_default();
+        // (The status bar's page count is drawn under the page too, at the right: take the leftmost.)
+        let preview = drawn.iter().filter(|(t, _)| t.starts_with(indicator)).map(|(_, x)| *x).fold(f32::MAX, f32::min);
+        assert!(preview < f32::MAX, "the preview's page indicator is drawn");
+        assert!(preview + 100.0 < settings, "print page at {width}: settings {settings}, preview {preview}");
+    }
+    for page in ["home", "new", "open", "info", "export", "print", "options"] {
+        let _ = app.run("ui.backstage", json!({"value": true, "page": page}));
+        frame(&ctx, &mut app);
+        frame_at(&ctx, &mut app, 500.0);
+    }
+    let _ = app.run("ui.backstage", json!({"value": false}));
+    // A dialog's columns start at the right too. Main's Go To set its list of targets beside its page number box; the
+    // framework's Find and Replace stacks Go to what over the target's field and keeps its buttons (Next, Previous,
+    // Close) in a column at the far side, so here the targets are right of that button column.
+    let _ = app.run("ui.dialog", json!({"name": "goto"}));
+    let drawn = frame_at(&ctx, &mut app, 1600.0);
+    let (targets, buttons) = (x_of(&drawn, "Go to what:"), x_of(&drawn, "Next"));
+    assert!(targets > buttons, "Go To: targets {targets}, buttons {buttons}");
+    crate::dialogs::host::close_all(&mut app, &ctx);
+    let dialogs = [
+        "font",
+        "paragraph",
+        "tabs",
+        "goto",
+        "insertTable",
+        "pageSetup",
+        "link",
+        "bookmark",
+        "wordCount",
+        "zoom",
+        "watermark",
+        "phonetic",
+        "newStyle",
+        "manageStyles",
+        "newTableStyle",
+        "modifyTableStyle",
+        "commands",
+        "icons",
+        "tableProperties",
+        "enclose",
+        "pasteSpecial",
+        "about",
+        "fontDownload",
+        "contributors",
+        "models",
+        "insertMergeField",
+        "findRecipient",
+        "fieldCode",
+        "encryptPassword",
+        "defineList",
+        "trackChangesOptions",
+        "customizeKeyboard",
+        "customizeRibbon",
+        "customizeQuickAccess",
+        "noteOptions",
+        "caption",
+        "index",
+        "markEntry",
+        "toc",
+        "sourceManager",
+        "createSource",
+        "lineNumbers",
+        "hyphenation",
+        "language",
+        "envelopes",
+        "labels",
+        "find",
+        "replace",
+        "symbol",
+        "field",
+        "columns",
+        "borders",
+        "pageBorders",
+        "newRecipientList",
+        "editRecipientList",
+        "rules",
+        "matchFields",
+        "dropCap",
+        "dateTime",
+        "crossReference",
+    ];
+    for name in dialogs {
+        let _ = app.run("ui.dialog", json!({"name": name}));
+        frame(&ctx, &mut app);
+        crate::dialogs::host::close_all(&mut app, &ctx);
+    }
+    let panes: Vec<String> =
+        app.session.registry.all().iter().map(|c| c.id.to_string()).filter(|id| id.starts_with("view.") && id.ends_with("Pane")).collect();
+    for pane in &panes {
+        let _ = app.run(pane, json!({"value": true}));
+        frame(&ctx, &mut app);
+        frame_at(&ctx, &mut app, 600.0);
+        let _ = app.run(pane, json!({"value": false}));
+    }
+    frames(&ctx, &mut app, click(egui::pos2(1280.0, 520.0), egui::PointerButton::Secondary));
+    frames(&ctx, &mut app, escape());
+    let _ = app.run("insert.table", json!({"rows": 2, "cols": 2}));
+    for tab in ["Table Design", "Table Layout"] {
+        let _ = app.run("ui.tab", json!({"tab": tab}));
+        frame(&ctx, &mut app);
+        frame_at(&ctx, &mut app, 600.0);
+    }
+    let _ = app.run("insert.equation", json!({}));
+    let _ = app.run("ui.tab", json!({"tab": "Equation"}));
+    frame(&ctx, &mut app);
+    // Every ribbon control on every tab, hovered and clicked: its tooltip, menu or dialog.
+    let contextual = ["Table Design", "Table Layout", "Equation"];
+    let open = |tab: &str| {
+        let ctx = crate::test_harness::context();
+        let mut app = start(&ctx);
+        match tab {
+            "Table Design" | "Table Layout" => drop(app.run("insert.table", json!({"rows": 2, "cols": 2}))),
+            "Equation" => drop(app.run("insert.equation", json!({}))),
+            _ => {}
+        }
+        let _ = app.run("ui.tab", json!({"tab": tab}));
+        frame(&ctx, &mut app);
+        (ctx, app)
+    };
+    for tab in tabs.iter().chain(&contextual) {
+        let (ctx, mut app) = open(tab);
+        for at in ribbon_controls(&ctx) {
+            frames(&ctx, &mut app, vec![vec![egui::Event::PointerMoved(at)]; 2]);
+            frames(&ctx, &mut app, click(at, egui::PointerButton::Primary));
+            frames(&ctx, &mut app, escape());
+            crate::dialogs::host::close_all(&mut app, &ctx);
+            app.ui.backstage = false;
+            if app.ui.tab != *tab {
+                (_, app) = open(tab);
+            }
+        }
+    }
+    super::apply_language(super::Lang::EN);
 }

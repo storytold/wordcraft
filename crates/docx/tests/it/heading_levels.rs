@@ -2,7 +2,6 @@
 //! `styles.xml` doesn't write `w:outlineLvl` (some producers leave it out). Word for Windows,
 //! opening such a file, reports `OutlineLevel` 1 and 2 for "heading 1" and "heading 2" (whatever
 //! their style ids) and body text for a custom style.
-use std::io::Write;
 use wordcraft_doc::Paragraph;
 
 const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
@@ -12,14 +11,13 @@ fn package(styles: &str, body: &str) -> Vec<u8> {
     let rels = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
     let doc = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W}"><w:body>{body}</w:body></w:document>"#);
     let styles = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="{W}">{styles}</w:styles>"#);
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, body) in
         [("_rels/.rels", root), ("word/document.xml", doc.as_str()), ("word/_rels/document.xml.rels", rels), ("word/styles.xml", styles.as_str())]
     {
-        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(body.as_bytes()).unwrap();
+        zw.add(name, body.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 fn para(style: &str, text: &str) -> String {

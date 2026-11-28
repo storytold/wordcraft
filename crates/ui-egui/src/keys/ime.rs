@@ -1,3 +1,7 @@
+use craft::behavior::intent::TextPos;
+use craft::ui::canvas::ToolPass;
+use craft::ui::primitives::{EditorState, EditorSurrounding, ImeStamp};
+
 use super::{ImeEditOutcome, WordApp, json};
 
 /// The most pre-edit text a UI pass will hold and paint. A composition is a word or a phrase;
@@ -26,126 +30,61 @@ fn ime_window(app: &mut WordApp) -> Option<wordcraft_doc::ime_text::ImeWindow> {
     window
 }
 
-/// Observe the settled editor at the end of a UI pass and publish its IME descriptor.
+/// Reports the page's editor to the input method for this pass: the caret's rect for the
+/// candidate window, the committed text around the caret and the target's epoch.
 ///
-/// The tracker is scoped by native viewport. A closed viewport releases its state; a pass without
-/// a visible focused editor reports an unfocused observation so a later focus starts afresh.
-pub(crate) fn observe_ime(app: &mut WordApp, ctx: &egui::Context, geometry: Option<(egui::Rect, egui::Rect)>, interrupt: bool) {
-    let viewport = ctx.viewport_id();
-    // Drain an application-origin change before the final observation. The signal survives later
-    // commands until here (or until a receipt publishes), so an edit after the receipt still
-    // makes the frame `Other`.
+/// An equation's structured tree has no reversible text mapping: it reports an explicit
+/// `Unavailable` with the engine revision, never fabricated surroundings, and its session token is
+/// the replacement epoch. A body replaced under the same document id (setText, version restore,
+/// compare, Undo/Redo) advances the epoch, so the platform clears the old composition. A pass
+/// without the keyboard on the page clears a pre-edit painted from the old focus.
+pub(crate) fn report_editor(app: &mut WordApp, pass: &ToolPass, ctx: &egui::Context, caret: egui::Rect) {
+    let Some(handle) = pass.editor.as_ref() else { return };
+    // An application-origin change survives later commands until here (or until a receipt
+    // publishes), so an edit after the receipt still makes the frame `Other`.
     if app.session.take_pending_ime_application_change() {
-        note_ime_application_change(app);
+        pass.ime_application_change(ctx);
     }
-    if app.canvas.ime_viewport != Some(viewport) {
-        if let Some(old) = app.canvas.ime_viewport {
-            app.canvas.ime_tracker.end_viewport(old);
-        }
-        app.canvas.ime_viewport = Some(viewport);
-    }
-    let frame = ctx.cumulative_frame_nr_for(viewport);
-    let pass = ctx.cumulative_pass_nr_for(viewport);
-    let focused = app.canvas.focused && geometry.is_some();
-    let update = if focused {
-        let target = ime_target(app);
-        if app.session.math.is_some() {
-            // An equation's structured tree has no reversible text mapping yet: report an
-            // explicit Unavailable, never fabricated surroundings. Its stable session token is
-            // the replacement epoch, so caret motion keeps one context. The engine revision lets
-            // an unavailable receipt prove a committed edit.
-            let mut observation = egui::ImeObservation::new(frame, pass, target);
-            if let Some(rev) = app.session.ime_state_revision() {
-                observation = observation.unavailable_revision(rev);
-            }
-            app.canvas.ime_tracker.observe(viewport, Some(observation))
-        } else {
-            let window = ime_window(app);
-            if let Some(w) = &window {
-                let committed = Some(egui::CommittedText::new(&w.text, w.cursor, w.anchor));
-                app.canvas.ime_tracker.observe(viewport, Some(egui::ImeObservation::new(frame, pass, target).committed(committed)))
-            } else {
-                // A wide selection or cross-story caret has no single surrounding window. Its
-                // engine revision orders unavailable observations; no text is fabricated.
-                let mut observation = egui::ImeObservation::new(frame, pass, target);
-                if let Some(rev) = app.session.ime_state_revision() {
-                    observation = observation.unavailable_revision(rev);
-                }
-                app.canvas.ime_tracker.observe(viewport, Some(observation))
-            }
-        }
-    } else {
-        // No editor has the keyboard: a pre-edit painted from the old focus must not linger.
+    if !app.canvas.focused(ctx) {
         app.canvas.ime_preedit.clear();
         app.canvas.ime_preedit_range = None;
-        app.canvas.ime_tracker.observe(viewport, None)
+        return;
+    }
+    let in_equation = app.session.math.is_some();
+    let epoch = match &app.session.math {
+        Some(math) => math.session,
+        None => app.session.ime_body_epoch(),
     };
-    if let (Some(update), Some((rect, cursor_rect))) = (update, geometry) {
-        ctx.output_mut(|o| {
-            o.ime = Some(egui::output::IMEOutput {
-                owner: update.owner,
-                context_generation: update.context_generation,
-                purpose: update.purpose,
-                rect,
-                cursor_rect,
-                should_interrupt_composition: interrupt,
-                reset_request: None,
-                change_cause: update.change_cause,
-                surrounding_text: update.surrounding_text,
-            });
-        });
-    }
-}
-
-/// The immutable IME owner for the editor that currently has the keyboard.
-///
-/// The document identity and story are stable across edits; an equation adds its editing-session
-/// token as the replacement epoch because its document position moves with the text.
-fn ime_target(app: &WordApp) -> egui::ImeTarget {
-    let document = app.session.document_id();
-    if let Some(math) = &app.session.math {
-        egui::ImeTarget::new(egui::Id::unique(("wordcraft-ime-equation", document)), math.session)
-    } else {
-        // A body replaced under the same document id (setText, version restore, compare,
-        // Undo/Redo) advances the epoch, so the platform clears the old composition.
-        egui::ImeTarget::new(egui::Id::unique(("wordcraft-ime-body", document, app.session.sel.focus.story)), app.session.ime_body_epoch())
-    }
+    let revision = app.session.ime_state_revision();
+    // A wide selection or cross-story caret has no single surrounding window either.
+    let window = if in_equation { None } else { ime_window(app) };
+    let surrounding = match &window {
+        Some(w) => EditorSurrounding::text(&w.text, w.cursor, w.anchor),
+        None => EditorSurrounding::unavailable(revision),
+    };
+    // The page reports no lines: the page view's describer carries the text and selection.
+    // The page draws the marked text itself, so a pass that dropped it (a refused deletion) reports
+    // that, and the framework interrupts the composition even in the pre-edit's own pass.
+    let state = EditorState::new(caret, &[], TextPos::new(0, 0)).surrounding(epoch, surrounding).marked(!app.canvas.ime_preedit.is_empty());
+    handle.report(ctx, state);
 }
 
 /// The bounded committed snapshot used by IME receipts.
 ///
 /// An equation has no reversible tree-to-text mapping, and a selection across blocks has no
 /// single visible paragraph, so both are honestly unavailable rather than fabricated.
-pub(super) fn ime_stamp(app: &mut WordApp) -> egui::ImeMutationStamp {
+pub(super) fn ime_stamp(app: &mut WordApp) -> ImeStamp {
     let unavailable = |app: &mut WordApp| match app.session.ime_state_revision() {
-        Some(rev) => egui::ImeMutationStamp::unavailable_at_revision(rev),
-        None => egui::ImeMutationStamp::unavailable(),
+        Some(rev) => ImeStamp::unavailable_at_revision(rev),
+        None => ImeStamp::unavailable(),
     };
     if app.session.math.is_some() {
         return unavailable(app);
     }
     match ime_window(app) {
-        Some(w) => egui::ImeMutationStamp::from_committed(&w.text, w.cursor, w.anchor, None),
+        Some(w) => ImeStamp::from_committed(&w.text, w.cursor, w.anchor, None),
         None => unavailable(app),
     }
-}
-
-/// Record a successful accepted IME commit/delete for the current frame and viewport.
-fn note_ime_receipt(app: &mut WordApp, before: egui::ImeMutationStamp, after: egui::ImeMutationStamp) {
-    let Some(ctx) = app.ctx.clone() else { return };
-    let viewport = ctx.viewport_id();
-    let frame = ctx.cumulative_frame_nr_for(viewport);
-    let target = ime_target(app);
-    app.canvas.ime_tracker.note_input_method_apply(viewport, frame, target, before, after);
-}
-
-/// Record an application-origin edit in the current frame; `Other` dominates the frame.
-pub(super) fn note_ime_application_change(app: &mut WordApp) {
-    let Some(ctx) = app.ctx.clone() else { return };
-    let viewport = ctx.viewport_id();
-    let frame = ctx.cumulative_frame_nr_for(viewport);
-    let target = ime_target(app);
-    app.canvas.ime_tracker.note_application_change(viewport, frame, target);
 }
 
 /// Whether the stamp pair proves the transition an IME receipt needs.
@@ -161,14 +100,14 @@ pub(super) enum ImeProof {
 }
 
 /// Wraps egui's unavailable-revision accessor for an IME mutation stamp.
-fn unavailable_revision(stamp: &egui::ImeMutationStamp) -> Option<u64> {
+fn unavailable_revision(stamp: &ImeStamp) -> Option<u64> {
     stamp.unavailable_revision()
 }
 
 /// Whether a pair of IME mutation stamps proves a transition: changed surrounding text, an
 /// increase between unavailable revisions, or a mixed transition whose unavailable endpoint
 /// carries a revision.
-fn stamp_transition_proven(before: &egui::ImeMutationStamp, after: &egui::ImeMutationStamp) -> bool {
+fn stamp_transition_proven(before: &ImeStamp, after: &ImeStamp) -> bool {
     use egui::output::IMESurroundingText;
     match (before.surrounding_text(), after.surrounding_text()) {
         (IMESurroundingText::Available(a), IMESurroundingText::Available(b)) => a != b,
@@ -185,7 +124,7 @@ fn stamp_transition_proven(before: &egui::ImeMutationStamp, after: &egui::ImeMut
 
 /// Classifies an IME outcome and stamp pair as no mutation, unproven mutation or certified. Only a
 /// classified, untransformed content change with a proven stamp transition is certified.
-pub(super) fn classify_ime_proof(outcome: ImeEditOutcome, before: &egui::ImeMutationStamp, after: &egui::ImeMutationStamp) -> ImeProof {
+pub(super) fn classify_ime_proof(outcome: ImeEditOutcome, before: &ImeStamp, after: &ImeStamp) -> ImeProof {
     if !outcome.classified {
         return if outcome.state_changed { ImeProof::UnprovenMutation } else { ImeProof::NoMutation };
     }
@@ -203,20 +142,19 @@ pub(super) fn classify_ime_proof(outcome: ImeEditOutcome, before: &egui::ImeMuta
 
 /// Publish at most one receipt for a successful IME command, or force `Other` when the engine
 /// outcome and the bounded stamps cannot prove a pure content change.
-pub(super) fn publish_ime_receipt(app: &mut WordApp, before: egui::ImeMutationStamp, after: egui::ImeMutationStamp, outcome: ImeEditOutcome) {
-    if app.ctx.is_none() {
-        return;
-    }
+pub(super) fn ime_report(app: &mut WordApp, pass: &ToolPass, ctx: &egui::Context, before: ImeStamp, after: ImeStamp, outcome: ImeEditOutcome) {
     // A successful application-origin command since the last observation poisons the frame, even
     // when the available text stamp is unchanged (formatting-only changes).
     if app.session.take_pending_ime_application_change() {
-        note_ime_application_change(app);
+        pass.ime_application_change(ctx);
         return;
     }
     match classify_ime_proof(outcome, &before, &after) {
         ImeProof::NoMutation => {}
-        ImeProof::UnprovenMutation => note_ime_application_change(app),
-        ImeProof::Certified => note_ime_receipt(app, before, after),
+        ImeProof::UnprovenMutation => pass.ime_application_change(ctx),
+        ImeProof::Certified => {
+            let _ = pass.ime_receipt(ctx, before, after);
+        }
     }
 }
 
@@ -242,8 +180,8 @@ pub(super) fn note_automatic_change(app: &mut WordApp, outcome: ImeEditOutcome) 
 /// pre-edit (which never lives in the model here). Erasure joins an open typing group and the
 /// text that follows joins it too ([`type_text`]), so one Undo takes back the typing with its
 /// correction. Neither path runs inside an equation, whose text is not the document's.
-pub(super) fn delete_surrounding(app: &mut WordApp, before: usize, after: usize) {
-    delete_surrounding_common(app, before, after, wordcraft_doc::ime_text::DeleteUnit::Chars);
+pub(super) fn delete_surrounding(app: &mut WordApp, pass: &ToolPass, ctx: &egui::Context, before: usize, after: usize) {
+    delete_surrounding_common(app, pass, ctx, before, after, wordcraft_doc::ime_text::DeleteUnit::Chars);
 }
 
 /// An input method's byte-counted `DeleteSurroundingBytes` (macOS and Wayland): erase the UTF-8
@@ -251,8 +189,8 @@ pub(super) fn delete_surrounding(app: &mut WordApp, before: usize, after: usize)
 /// character boundary (a start forward, an end backward), so a count that ends inside a
 /// character leaves that character whole. The selection and paragraph marks stay outside the
 /// range.
-pub(super) fn delete_surrounding_bytes(app: &mut WordApp, before: usize, after: usize) {
-    delete_surrounding_common(app, before, after, wordcraft_doc::ime_text::DeleteUnit::Bytes);
+pub(super) fn delete_surrounding_bytes(app: &mut WordApp, pass: &ToolPass, ctx: &egui::Context, before: usize, after: usize) {
+    delete_surrounding_common(app, pass, ctx, before, after, wordcraft_doc::ime_text::DeleteUnit::Bytes);
 }
 
 /// Refuse a body surrounding request and discard the composition it invalidates.
@@ -310,7 +248,6 @@ fn restored_placeholder_end(s: &wordcraft_engine::Session, deleted_start: usize)
 struct ImeRollback {
     snapshot: Option<wordcraft_engine::EditSnapshot>,
     original: wordcraft_engine::Selection,
-    pending: Option<wordcraft_doc::props::CharProps>,
     goal_x: Option<f32>,
 }
 
@@ -320,8 +257,9 @@ impl ImeRollback {
             return;
         };
         app.session.restore(snapshot);
+        // The snapshot puts back the formatting waiting at the caret, with where Backspace
+        // carried it over (#6518).
         app.session.sel = self.original.clone();
-        app.session.pending = self.pending.clone();
         app.session.goal_x = self.goal_x;
         refuse_ime_request(app);
     }
@@ -415,7 +353,14 @@ fn ime_surrounding_offsets(
 }
 
 /// Both delete-surrounding paths: one visible-logical mapping for the query and the deletion.
-fn delete_surrounding_common(app: &mut WordApp, before: usize, after: usize, unit: wordcraft_doc::ime_text::DeleteUnit) {
+fn delete_surrounding_common(
+    app: &mut WordApp,
+    pass: &ToolPass,
+    ctx: &egui::Context,
+    before: usize,
+    after: usize,
+    unit: wordcraft_doc::ime_text::DeleteUnit,
+) {
     if before == 0 && after == 0 {
         return;
     }
@@ -442,7 +387,6 @@ fn delete_surrounding_common(app: &mut WordApp, before: usize, after: usize, uni
     let join = app.session.typing_open();
     let props = app.session.typing_props();
     let original = app.session.sel.clone();
-    let pending_before = app.session.pending.clone();
     let goal_x_before = app.session.goal_x;
     let before_stamp = ime_stamp(app);
     // Both sides are one IME request: if the second half is refused (Restrict Editing, a
@@ -452,7 +396,7 @@ fn delete_surrounding_common(app: &mut WordApp, before: usize, after: usize, uni
     // restored: `last_command`, macro recording, Go Back marks, `also_selected`, `typing`/
     // `autocap` and canvas preedit (a refusal clears it).
     let snapshot = app.session.edit_snapshot();
-    let mut rollback = ImeRollback { snapshot: Some(snapshot), original, pending: pending_before, goal_x: goal_x_before };
+    let mut rollback = ImeRollback { snapshot: Some(snapshot), original, goal_x: goal_x_before };
     // Stored offsets of the suffix (and of the original selection) move by the paragraph's
     // signed length change. A placeholder can make that positive; subtracting a removed-byte
     // count cannot describe that, and would leave the second range and the caret inside the
@@ -519,7 +463,7 @@ fn delete_surrounding_common(app: &mut WordApp, before: usize, after: usize, uni
         app.canvas.ime_join_text = Some(props);
         let after_stamp = ime_stamp(app);
         let outcome = ImeEditOutcome { classified: true, content_changed: true, state_changed: true, transformed: false, selection_changed: true };
-        publish_ime_receipt(app, before_stamp, after_stamp, outcome);
+        ime_report(app, pass, ctx, before_stamp, after_stamp, outcome);
     }
 }
 
@@ -530,7 +474,7 @@ fn delete_surrounding_common(app: &mut WordApp, before: usize, after: usize, uni
 /// `Session::run` has already consumed the pending undo joins before dispatch and may have
 /// recorded the attempted no-op command in the macro/Repeat; those generic side effects are not
 /// rolled back.
-pub(super) fn delete_in_equation(app: &mut WordApp, before: usize, after: usize) {
+pub(super) fn delete_in_equation(app: &mut WordApp, pass: &ToolPass, ctx: &egui::Context, before: usize, after: usize) {
     if app.session.math.is_none() {
         return;
     }
@@ -560,7 +504,7 @@ pub(super) fn delete_in_equation(app: &mut WordApp, before: usize, after: usize)
             app.session.join_next_equation_edit();
             let outcome = app.session.ime_edit_outcome();
             let after_stamp = ime_stamp(app);
-            publish_ime_receipt(app, before_stamp, after_stamp, outcome);
+            ime_report(app, pass, ctx, before_stamp, after_stamp, outcome);
         }
         Err(_) => {
             app.canvas.ime_interrupt_now = true;

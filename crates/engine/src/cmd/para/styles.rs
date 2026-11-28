@@ -1,6 +1,7 @@
 use super::format::fmt;
 use super::lists::touch_all;
 use super::{CharProps, CmdError, CmdResult, ParaProps, Session, Style, StyleKind, Value, json, p, sel_result};
+use std::sync::Arc;
 
 pub(super) fn style_id(s: &Session, name: &str) -> Result<String, CmdError> {
     s.doc.styles.find(name).map(|x| x.id.clone()).ok_or_else(|| CmdError::Params(format!("no style `{name}`")))
@@ -101,11 +102,12 @@ pub(super) fn create_style(s: &mut Session, v: &Value) -> CmdResult {
         st.chr.fmt_change = None;
         st.para = st.para.formatting();
     }
-    s.doc.styles.upsert(st);
+    Arc::make_mut(&mut s.doc.styles).upsert(st);
     apply_style(s, &json!({"style": id}))?;
     Ok(json!({"id": id}))
 }
 
+/// Modify a style's character and paragraph formatting, display name or next-paragraph style.
 pub(super) fn modify_style(s: &mut Session, v: &Value) -> CmdResult {
     let id = style_id(s, p::req_str(v, "style")?)?;
     let chr: Option<CharProps> = v.get("chr").map(|c| serde_json::from_value(c.clone())).transpose().map_err(|e| CmdError::Params(e.to_string()))?;
@@ -113,8 +115,19 @@ pub(super) fn modify_style(s: &mut Session, v: &Value) -> CmdResult {
         v.get("para").map(|c| serde_json::from_value(c.clone())).transpose().map_err(|e| CmdError::Params(e.to_string()))?;
     let next = p::str(v, "next").map(str::to_string);
     let name = p::str(v, "name").map(str::to_string);
-    let st = s.doc.styles.get_mut(&id).ok_or_else(|| CmdError::Params("no such style".into()))?;
-    if let Some(c) = chr {
+    let d = &s.doc.styles.default_chr;
+    let (eff_b, eff_b_cs, eff_i, eff_i_cs) =
+        s.doc.styles.chain(&id).into_iter().fold((d.bold, d.bold_cs, d.italic, d.italic_cs), |(b, b_cs, i, i_cs), st| {
+            (st.chr.bold.or(b), st.chr.bold_cs.or(b_cs), st.chr.italic.or(i), st.chr.italic_cs.or(i_cs))
+        });
+    let st = Arc::make_mut(&mut s.doc.styles).get_mut(&id).ok_or_else(|| CmdError::Params("no such style".into()))?;
+    if let Some(mut c) = chr {
+        if eff_b_cs.filter(|&cs| Some(cs) != eff_b).is_none() {
+            c.bold_cs = c.bold_cs.or(c.bold);
+        }
+        if eff_i_cs.filter(|&cs| Some(cs) != eff_i).is_none() {
+            c.italic_cs = c.italic_cs.or(c.italic);
+        }
         st.chr.overlay(&c);
     }
     if let Some(pp) = para {
@@ -175,7 +188,7 @@ pub(super) fn update_to_match(s: &mut Session, v: &Value) -> CmdResult {
     };
     let chr = retarget(&target.chr, &have_c, &want_c, CHAR_KEEP)?;
     let pp = if target.kind == StyleKind::Paragraph { retarget(&target.para, &have_p, &want_p, PARA_KEEP)? } else { target.para.clone() };
-    if let Some(st) = s.doc.styles.get_mut(&id) {
+    if let Some(st) = Arc::make_mut(&mut s.doc.styles).get_mut(&id) {
         st.chr = chr;
         st.para = pp;
     }
@@ -263,7 +276,7 @@ pub(super) fn delete_style(s: &mut Session, v: &Value) -> CmdResult {
     }
     let mut changed = 0;
     for g in &gone {
-        s.doc.styles.remove(&g.id);
+        Arc::make_mut(&mut s.doc.styles).remove(&g.id);
         // Fall back to the base only while it is a style of the same kind that still exists.
         let base = g.based_on.clone().filter(|b| s.doc.styles.get(b).is_some_and(|x| x.kind == g.kind));
         changed += s.doc.restyle(&g.id, base);
@@ -279,7 +292,7 @@ pub(super) fn set_visibility(s: &mut Session, v: &Value) -> CmdResult {
     if gallery.is_none() && hidden.is_none() {
         return Err(CmdError::Params("give `gallery` and/or `hidden`".into()));
     }
-    let st = s.doc.styles.get_mut(&id).ok_or_else(|| CmdError::Params(format!("no style `{id}`")))?;
+    let st = Arc::make_mut(&mut s.doc.styles).get_mut(&id).ok_or_else(|| CmdError::Params(format!("no style `{id}`")))?;
     if let Some(h) = hidden {
         st.hidden = h;
     }

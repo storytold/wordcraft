@@ -7,7 +7,9 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use kurbo::BezPath;
 use skrifa::instance::{Location, LocationRef, Size};
-use skrifa::outline::{DrawSettings, Engine, Hinting, HintingInstance, HintingOptions, OutlinePen, Target};
+use skrifa::outline::{
+    DrawSettings, Engine, GlyphStyles, Hinting, HintingInstance, HintingOptions, OutlineGlyphFormat, OutlinePen, SmoothMode, Target,
+};
 use skrifa::raw::FileRef;
 use skrifa::string::StringId;
 use skrifa::{GlyphId, MetadataProvider};
@@ -24,25 +26,30 @@ mod names;
 
 use face::{BUNDLED, FontBytes};
 pub use face::{FALLBACK_FAMILY, FaceRef, FontFace, bundled};
+#[cfg(test)]
+use fallback_data::{Coverage, RUN_FALLBACK_CACHE_CHARS, SYS_FALLBACK_MAX_FILE, file_coverage, ranges_hold};
 #[cfg(not(target_arch = "wasm32"))]
 use fallback_data::{CoverageIndex, SysFallback};
-use fallback_data::{FallbackCache, RunFallbackCache};
-#[cfg(test)]
-use fallback_data::{RUN_FALLBACK_CACHE_CHARS, coverage_ranges, ranges_hold};
+use fallback_data::{DiagramFallbackCache, FallbackCache, RunFallbackCache};
 #[cfg(not(target_arch = "wasm32"))]
 use names::CatalogEntry;
-pub(crate) use names::face_names;
 pub use names::{LocalName, base_style, name_language_matches, system_font_dirs};
 use names::{MAX_FILE_FACES, enumerate_faces, make_face};
 #[cfg(test)]
-use names::{file_face_names, font_faces, mini_font, name};
+use names::{MAX_NAME_CHARS, file_face_names, font_faces, mini_font, name};
 #[cfg(test)]
 pub(crate) use names::{last_resort_face, legacy_family};
+
+static GLOBAL: std::sync::OnceLock<FontDb> = std::sync::OnceLock::new();
 
 /// Process-wide font database.
 pub struct FontDb {
     faces: RwLock<Vec<Arc<FontFace>>>,
     outlines: Mutex<HashMap<(u32, u32), Arc<BezPath>>>,
+    /// Screen-hinted outlines per (face, glyph, ppem bits); `None` where the face can't be hinted.
+    hinted: Mutex<HashMap<(u32, u32, u32), Option<Arc<BezPath>>>>,
+    /// Light hinting instances per (face, ppem bits); `None` where the face can't be hinted.
+    hinters: Mutex<HashMap<(u32, u32), Option<Arc<HintingInstance>>>>,
     /// Fallback faces found per (character, excluded face), valid while the face count is the
     /// one stored (faces are only ever added) and dropped when the system fonts are cataloged
     /// again. Layout asks once per uncovered character, and the search sorts every loaded face,
@@ -50,6 +57,13 @@ pub struct FontDb {
     /// every font loaded.
     fallbacks: RwLock<FallbackCache>,
     run_fallbacks: RwLock<RunFallbackCache>,
+    diagram_fallbacks: RwLock<DiagramFallbackCache>,
+    #[cfg(test)]
+    diagram_searches: std::sync::atomic::AtomicU64,
+    #[cfg(test)]
+    diagram_search_hook: Mutex<Option<Box<dyn FnOnce(&FontDb) + Send>>>,
+    #[cfg(test)]
+    diagram_publish_hook: Mutex<Option<Box<dyn FnOnce(&FontDb) + Send>>>,
     #[cfg(not(target_arch = "wasm32"))]
     catalog: RwLock<Vec<CatalogEntry>>,
     /// Fonts the user added at run time, and the folder they are stored in (#582).
@@ -92,10 +106,14 @@ impl FontDb {
     /// Arabic, so Arabic and Persian text draws without system fonts (#1652) (all empty without
     /// `CRAFT_FONTS_DIR`), whose system font scan reads `font_dirs`.
     pub fn with_font_dirs(font_dirs: Vec<std::path::PathBuf>) -> Self {
-        let mut faces = Vec::new();
         let others = crate::CRAFT_FONTS.iter().filter(|f| !f.scripts.contains(&"Jpan"));
         let craft = crate::japanese_document_fonts().into_iter().chain(others).map(|f| f.bytes);
-        for data in BUNDLED.iter().copied().chain(craft) {
+        Self::with_static_fonts(font_dirs, BUNDLED.iter().copied().chain(craft))
+    }
+
+    fn with_static_fonts(font_dirs: Vec<std::path::PathBuf>, fonts: impl Iterator<Item = &'static [u8]>) -> Self {
+        let mut faces = Vec::new();
+        for data in fonts {
             for f in enumerate_faces(data, MAX_FILE_FACES) {
                 if let Some(mut face) = make_face(FontBytes::Static(data), f.index, f.family, f.style, f.legacy, f.coords) {
                     face.local_names = f.local;
@@ -106,8 +124,17 @@ impl FontDb {
         Self {
             faces: RwLock::new(faces),
             outlines: Mutex::new(HashMap::new()),
+            hinted: Mutex::new(HashMap::new()),
+            hinters: Mutex::new(HashMap::new()),
             fallbacks: RwLock::new(FallbackCache::default()),
             run_fallbacks: RwLock::new(RunFallbackCache::default()),
+            diagram_fallbacks: RwLock::new(DiagramFallbackCache::default()),
+            #[cfg(test)]
+            diagram_searches: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(test)]
+            diagram_search_hook: Mutex::new(None),
+            #[cfg(test)]
+            diagram_publish_hook: Mutex::new(None),
             #[cfg(not(target_arch = "wasm32"))]
             catalog: RwLock::new(Vec::new()),
             user: RwLock::new(user::UserFonts::default()),
@@ -136,24 +163,44 @@ impl FontDb {
             self.sys.lock().unwrap_or_else(std::sync::PoisonError::into_inner).enabled = on;
         }
         // Misses remembered while it was off may be found now.
+        self.generation.fetch_add(1, Ordering::AcqRel);
         self.drop_fallback_caches();
         #[cfg(target_arch = "wasm32")]
         let _ = on;
     }
 
-    /// Forget the cached fallback choices (per character and per run), so the next lookups search
-    /// again.
-    fn drop_fallback_caches(&self) {
-        self.fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner).map.clear();
+    /// Forget the cached fallback choices (per character, per run, and diagram), so the next
+    /// lookups search again.
+    pub(crate) fn drop_fallback_caches(&self) {
+        *self.fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner) = FallbackCache::default();
         *self.run_fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner) = RunFallbackCache::default();
+        *self.diagram_fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner) = DiagramFallbackCache::default();
     }
 
     /// Process-wide database: the bundled fonts, then the installed system fonts, cataloged the
     /// first time a lookup by family name needs them (or ahead of time by
     /// [`FontDb::scan_in_background`]).
     pub fn global() -> &'static FontDb {
-        static DB: std::sync::OnceLock<FontDb> = std::sync::OnceLock::new();
-        DB.get_or_init(|| FontDb::with_font_dirs(system_font_dirs()))
+        GLOBAL.get_or_init(|| FontDb::with_font_dirs(system_font_dirs()))
+    }
+
+    /// Initialize a test process with only the repository's pinned bundled fonts: no optional
+    /// craft-fonts, user fonts or system font directories. Call before any global font lookup.
+    /// Returns false if a normal global database was already initialized; never replaces it.
+    /// Repeated/concurrent calls are safe. Merely enabling `test-support` changes nothing.
+    #[cfg(feature = "test-support")]
+    pub fn init_test_fonts() -> bool {
+        static INIT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *INIT.get_or_init(|| {
+            let mut installed = false;
+            GLOBAL.get_or_init(|| {
+                installed = true;
+                let db = Self::with_static_fonts(Vec::new(), BUNDLED.iter().copied());
+                db.set_system_fallback(false);
+                db
+            });
+            installed
+        })
     }
 
     fn read_faces(&self) -> std::sync::RwLockReadGuard<'_, Vec<Arc<FontFace>>> {

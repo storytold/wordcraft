@@ -201,7 +201,11 @@ pub(super) fn bib_order(doc: &Document, st: &CiteStyle, lang: Option<String>) ->
     let mut idx: Vec<usize> = if cited.is_empty() {
         (0..doc.sources.len()).collect()
     } else if st.order == Order::Cited {
-        cited.iter().filter_map(|t| doc.sources.iter().position(|x| &x.tag == t)).collect()
+        let mut by_tag = std::collections::HashMap::new();
+        for (i, source) in doc.sources.iter().enumerate() {
+            by_tag.entry(source.tag.as_str()).or_insert(i);
+        }
+        cited.iter().filter_map(|t| by_tag.get(t.as_str()).copied()).collect()
     } else {
         let cited: std::collections::HashSet<&str> = cited.iter().map(String::as_str).collect();
         doc.sources.iter().enumerate().filter(|(_, x)| cited.contains(x.tag.as_str())).map(|(i, _)| i).collect()
@@ -233,6 +237,21 @@ pub fn update_citations(s: &mut Session) -> Result<(), CmdError> {
 fn refresh_citations(s: &mut Session) -> Result<(), CmdError> {
     let st = style(&s.bib_style);
     let order = bib_order(&s.doc, st, crate::cmd::default_lang(s));
+    // Native data can repeat tags: keep the first source record and, independently, the first
+    // bibliography position with that tag. Own the keys so paragraph writes don't borrow sources.
+    let fallback = order.len().saturating_add(1);
+    let mut by_tag = std::collections::HashMap::new();
+    for (i, source) in s.doc.sources.iter().enumerate() {
+        by_tag.entry(source.tag.clone()).or_insert((i, fallback));
+    }
+    for (n, &i) in order.iter().enumerate() {
+        if let Some(source) = s.doc.sources.get(i)
+            && let Some((_, number)) = by_tag.get_mut(&source.tag)
+            && *number == fallback
+        {
+            *number = n.saturating_add(1);
+        }
+    }
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
         let updates: Vec<(usize, String)> = p
@@ -242,8 +261,9 @@ fn refresh_citations(s: &mut Session) -> Result<(), CmdError> {
             .filter_map(|(k, o)| match o {
                 InlineObject::Field { instr, .. } => {
                     let (tag, pages) = citation_field(instr)?;
-                    let src = s.doc.sources.iter().find(|x| x.tag == tag)?;
-                    Some((k, cite(src, st.name, number_of(&s.doc, &order, tag), pages)))
+                    let &(i, number) = by_tag.get(tag)?;
+                    let src = s.doc.sources.get(i)?;
+                    Some((k, cite(src, st.name, number, pages)))
                 }
                 _ => None,
             })

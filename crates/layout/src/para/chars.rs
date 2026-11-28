@@ -1,4 +1,4 @@
-use super::{Document, FaceRef, ResolvedChar, SOFT_HYPHEN};
+use super::{Document, FaceRef, OBJ, ResolvedChar, SOFT_HYPHEN};
 
 /// What a piece of text is shaped as: one face, case, script formatting and direction.
 #[derive(Clone, Copy)]
@@ -124,19 +124,52 @@ pub(crate) fn remap_range(map_starts: &[usize], orig_of: &[usize], orig_len: usi
 /// as roman (measured in Word; Calibri otherwise, which our own substitutes already match).
 pub(super) const MISSING_ROMAN_FONT: &str = "Cambria";
 
-/// The family to look `font` up as: [`MISSING_ROMAN_FONT`] for a missing roman font, else `font`.
-/// A missing Thai font keeps its name: it is drawn in a Thai face, not in Cambria (#1549).
-/// A font with substitutes of its own keeps them: Times New Roman is roman in every font table,
-/// and where it isn't installed Liberation Serif has its metrics; Word never meets it missing.
-pub(super) fn lookup_family<'f>(doc: &Document, font: &'f str) -> &'f str {
+/// The family to look `font` up as. A font that isn't installed is drawn, as Word draws it
+/// (measured in Word 2024, #2702):
+/// 1. in the alternate the font table names for it (`w:altName`), when that one can be drawn:
+///    installed, or a font one of whose own substitutes is installed. That comes before the
+///    family class: a roman font with an installed alternate is drawn in the alternate;
+/// 2. in [`MISSING_ROMAN_FONT`] when the font table classes it as roman, or as modern with an
+///    alternate that can't be drawn either (a modern font with no alternate, and a swiss one with
+///    or without, take the generic substitutes, as Calibri does in Word). Not for a Thai font
+///    (drawn in a Thai face, #1549), a symbol font, or a font with substitutes of its own (Times
+///    New Roman is roman in every font table, and where it isn't installed Liberation Serif has
+///    its metrics; Word never meets it missing);
+/// 3. else as `font`, which [`wordcraft_fonts::word::resolve`] substitutes.
+pub(super) fn lookup_family<'f>(doc: &'f Document, font: &'f str) -> &'f str {
+    let settings = &doc.settings;
+    // A fallback list (`Liberation Serif;Times New Roman`) is in a class when one of its
+    // candidates is.
+    let listed = |list: &[String]| {
+        !list.is_empty() && font.split(';').map(str::trim).filter(|f| !f.is_empty()).any(|f| list.iter().any(|r| r.eq_ignore_ascii_case(f)))
+    };
+    let alternate = settings.font_alt_names.iter().find(|(f, _)| f.eq_ignore_ascii_case(font)).map(|(_, alt)| alt.as_str());
+    let roman = listed(&settings.roman_fonts);
+    if alternate.is_none() && !roman {
+        return font;
+    }
     let db = wordcraft_fonts::FontDb::global();
-    let roman = doc.settings.roman_fonts.iter().any(|f| f.eq_ignore_ascii_case(font));
-    if roman
+    let installed = |f: &str| db.has_family(f) || db.has_family(wordcraft_fonts::word::charset_base_family(f));
+    // A fallback list is there when one of its candidates is.
+    let missing = if font.contains(';') { wordcraft_fonts::word::resolve(font, false, false).substituted } else { !installed(font) };
+    if !missing {
+        return font;
+    }
+    // Calibri has no list of its own because the generic sans list is its (Carlito first).
+    let drawable =
+        |f: &&str| !f.is_empty() && (installed(f) || wordcraft_fonts::word::has_installed_substitute(f) || f.eq_ignore_ascii_case("Calibri"));
+    // ECMA-376 calls the alternate a comma-separated list, but Word reads the whole value as one
+    // name (MS-OE376 2.1.264), so a value with a comma names a font that isn't there.
+    if let Some(alt) = alternate.map(str::trim).filter(drawable) {
+        return alt;
+    }
+    let modern_alternate_missing = alternate.is_some() && listed(&settings.modern_fonts);
+    // Thai, symbol and fonts with substitutes of their own keep their name: those substitutes
+    // draw them, Cambria wouldn't.
+    if (roman || modern_alternate_missing)
         && !wordcraft_fonts::word::is_thai_family(font)
         && !wordcraft_doc::symbol_fonts::is_symbol_font(font)
         && !wordcraft_fonts::word::has_named_substitutes(font)
-        && !db.has_family(font)
-        && !db.has_family(wordcraft_fonts::word::charset_base_family(font))
     {
         MISSING_ROMAN_FONT
     } else {
@@ -146,9 +179,10 @@ pub(super) fn lookup_family<'f>(doc: &Document, font: &'f str) -> &'f str {
 
 /// One face for a run in a Thai font that isn't installed (#1549): Word substitutes one font
 /// (Cordia New) for the whole run, so the Latin letters, digits and ฿ keep the Thai letters' face
-/// and size. `None` unless `font` is a Thai family, it was substituted, and its substitute
-/// `primary` lacks some of the run's Thai or Latin characters; then the first face covering all of
-/// them, if one does. Other families keep Latin text in their own substitute, as Word does.
+/// and size. `None` unless `font` is a Thai family, it was substituted (or drawn in its font
+/// table alternate, #2702), and its stand-in `primary` lacks some of the run's Thai or Latin
+/// characters; then the first face covering all of them, if one does. Other families keep Latin
+/// text in their own substitute, as Word does.
 pub(crate) fn thai_run_face(font: &str, substituted: bool, primary: FaceRef, text: &str, bold: bool, italic: bool) -> Option<FaceRef> {
     if !substituted || !wordcraft_fonts::word::is_thai_family(font) {
         return None;
@@ -164,4 +198,56 @@ pub(crate) fn thai_run_face(font: &str, substituted: bool, primary: FaceRef, tex
 /// and punctuation.
 fn thai_or_latin(c: char) -> bool {
     matches!(u32::from(c), 0x0021..=0x024F | 0x0E00..=0x0E7F) && !c.is_whitespace() && !c.is_control() && c != SOFT_HYPHEN
+}
+
+/// The face text set in `font` is drawn in when `font` isn't installed, as layout picks it (a
+/// missing font the document classes as roman is drawn in [`MISSING_ROMAN_FONT`]); `None` when it
+/// is installed. Characters the face lacks are drawn in fallback faces.
+pub fn substitute_face(doc: &Document, font: &str) -> Option<FaceRef> {
+    if font.trim().is_empty() {
+        return None;
+    }
+    let family = lookup_family(doc, font);
+    let r = wordcraft_fonts::word::resolve(family, false, false);
+    (r.substituted || family != font).then_some(r.face)
+}
+
+/// The face Chinese, Japanese and Korean text is drawn in when its East Asian font (`w:eastAsia`)
+/// `font_ea` isn't installed and the run's font is `font`; `None` when `font_ea` is installed. As
+/// layout draws it: an East Asian font is looked up by name alone (the roman-font rule of
+/// [`substitute_face`] is for the run's font), and the text goes to the run's font when it has the
+/// characters, else to the first fallback face that does.
+pub fn east_asian_substitute_face(doc: &Document, font_ea: &str, font: &str) -> Option<FaceRef> {
+    if font_ea.trim().is_empty() || !wordcraft_fonts::word::resolve(font_ea, false, false).substituted {
+        return None;
+    }
+    // 日: one ideograph stands for the text, which isn't known yet.
+    const IDEOGRAPH: char = '\u{65E5}';
+    let primary = wordcraft_fonts::word::resolve(lookup_family(doc, font), false, false).face;
+    if primary.covers(IDEOGRAPH) {
+        return Some(primary);
+    }
+    let fallback = wordcraft_fonts::FontDb::global().fallback_for_run(&[IDEOGRAPH], primary.id(), false, false);
+    Some(fallback.map_or(primary, |f| FaceRef::of(&f)))
+}
+
+/// `font` as [`ParaLayout::substituted`](super::ParaLayout::substituted) records it: a hostile
+/// file's font name can be megabytes long, so the first 256 characters. Look names up through
+/// this to match it.
+pub fn reported_font_name(font: &str) -> &str {
+    font.char_indices().nth(256).and_then(|(i, _)| font.get(..i)).unwrap_or(font)
+}
+
+/// Whether `c` draws anything: not whitespace, a control, an object's placeholder or a Unicode
+/// Default_Ignorable_Code_Point (soft hyphen, zero-width spaces and joiners, bidi controls,
+/// variation selectors, Hangul fillers, the BOM, tags…).
+pub fn draws_something(c: char) -> bool {
+    !c.is_whitespace()
+        && !c.is_control()
+        && c != OBJ
+        && !matches!(c,
+            '\u{00AD}' | '\u{034F}' | '\u{061C}' | '\u{115F}'..='\u{1160}' | '\u{17B4}'..='\u{17B5}' | '\u{180B}'..='\u{180F}'
+            | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{3164}' | '\u{FE00}'..='\u{FE0F}'
+            | '\u{FEFF}' | '\u{FFA0}' | '\u{FFF0}'..='\u{FFF8}' | '\u{1BCA0}'..='\u{1BCA3}' | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0000}'..='\u{E0FFF}')
 }

@@ -8,6 +8,10 @@ description = "WordCraft fonts: font database (bundled OFL + system), metrics, g
 [lints]
 workspace = true
 
+[features]
+# Opt-in test harness support; enabling this alone never changes the application database.
+test-support = []
+
 [dependencies]
 kurbo = { workspace = true }
 skrifa = { workspace = true }
@@ -17,3 +21,4 @@ brotli-decompressor = { workspace = true }
 unicode-bidi = { workspace = true }
 unicode-script = { workspace = true }
 log = { workspace = true }
+serde_json = { workspace = true }

@@ -75,8 +75,22 @@ pub fn tool_definitions() -> Value {
         tool(
             "execute",
             "Run a command",
-            "Run one command by id with params, e.g. {command:\"format.bold\"} or {command:\"insert.table\", params:{rows:3, cols:4}}. Commands work on the active document, or on the open document `doc` names. file.new and file.open open another document beside the open ones and make it active; view.switchWindows {id} makes another one active and file.closeDocument {id, force?} closes one.",
+            "Run one command by id with params, e.g. {command:\"format.bold\"} or {command:\"insert.table\", params:{rows:3, cols:4}}. To insert a table that is already filled, use `insert_table`. Commands work on the active document, or on the open document `doc` names. file.new and file.open open another document beside the open ones and make it active; view.switchWindows {id} makes another one active and file.closeDocument {id, force?} closes one.",
             with_doc(obj(json!({"command": s("Command id"), "params": {"type": "object", "description": "Command parameters"}}), &["command"])),
+            false
+        ),
+        tool(
+            "insert_table",
+            "Insert filled table",
+            "Insert a table at the caret, filled from `values` in one call (an array of rows, each an array of cells; all rows the same length, up to 1000 rows and 63 columns). Set `header` to make the first row a repeating header row.",
+            with_doc(obj(
+                json!({
+                    "values": {"type": "array", "description": "Rows of cells (text, numbers or booleans)", "items": {"type": "array", "items": {"type": ["string", "number", "boolean", "null"]}}},
+                    "header": {"type": "boolean", "description": "First row is a header row that repeats on each page"},
+                    "style": s("Table style name (default GridTable1Light)")
+                }),
+                &["values"]
+            )),
             false
         ),
         tool(
@@ -131,7 +145,7 @@ pub fn tool_definitions() -> Value {
         tool(
             "inspect_document",
             "Inspect document",
-            "Structure: blocks with text, styles, formatting runs, lists, tables, sections, parts, selection, pages.",
+            "Structure: blocks with text, styles, formatting runs, lists, tables, sections, parts (headers, footers, notes: their text and fields; a field with perPage true, such as PAGE, NUMPAGES or STYLEREF, shows its own value on each page, so its stored result is not what every page shows: render_page shows it; fieldsTruncated means a part has more than the 200 fields listed; a range field's result, such as a TOC's, is cut at 2000 characters, with resultTruncated), selection, pages.",
             with_doc(obj(json!({}), &[])),
             true
         ),
@@ -155,14 +169,20 @@ pub fn tool_definitions() -> Value {
             "click",
             "Click",
             "Click at window coordinates (desktop app only).",
-            obj(json!({"x": n("x"), "y": n("y"), "count": n("1-3 clicks"), "shift": {"type": "boolean"}, "cmd": {"type": "boolean"}}), &["x", "y"]),
+            obj(
+                json!({"x": n("x"), "y": n("y"), "count": n("1-3 clicks"), "button": s("left (default) or right"), "shift": {"type": "boolean"}, "alt": {"type": "boolean"}, "cmd": {"type": "boolean"}, "ctrl": {"type": "boolean"}, "command": {"type": "boolean"}}),
+                &["x", "y"]
+            ),
             false
         ),
         tool(
             "key",
             "Press key",
             "Press a key with modifiers (desktop app only), e.g. {key:\"B\", cmd:true}.",
-            obj(json!({"key": s("Key name"), "shift": {"type": "boolean"}, "alt": {"type": "boolean"}, "cmd": {"type": "boolean"}}), &["key"]),
+            obj(
+                json!({"key": s("Key name"), "shift": {"type": "boolean"}, "alt": {"type": "boolean"}, "cmd": {"type": "boolean"}, "ctrl": {"type": "boolean"}, "command": {"type": "boolean"}}),
+                &["key"]
+            ),
             false
         ),
         tool(
@@ -237,6 +257,18 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
         "execute" => match st("command") {
             Some(c) => wrap(exec(b, c, a.get("params").cloned().unwrap_or(json!({})), doc)),
             None => ToolResult::error("missing `command`"),
+        },
+        "insert_table" => match a.get("values") {
+            Some(values) => {
+                let mut params = json!({"values": values});
+                for k in ["header", "style"] {
+                    if let Some(x) = a.get(k) {
+                        params[k] = x.clone();
+                    }
+                }
+                wrap(exec(b, "insert.spreadsheet", params, doc))
+            }
+            None => ToolResult::error("missing `values`: an array of rows, each an array of cells"),
         },
         "batch" => {
             let keep = a.get("keepGoing").and_then(Value::as_bool).unwrap_or(false);

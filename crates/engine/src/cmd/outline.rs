@@ -520,13 +520,25 @@ pub(crate) fn after_command(s: &mut Session, before: &Selection, changed: bool) 
     if s.layout().caret(&s.sel.focus).is_some() {
         return;
     }
-    let Some(&block) = s.sel.focus.path.0.first() else { return };
-    let block = block as usize;
+    let forward = before.focus <= s.sel.focus;
+    let focus = s.sel.focus.clone();
+    if let Some(t) = shown_pos(s, &focus, forward) {
+        s.sel = Selection::caret(t);
+    }
+}
+
+/// In Outline view, the nearest place the outline shows to body position `pos`, which it doesn't
+/// show (in collapsed text, or past a body paragraph's first line), going on (`forward`) or back
+/// from it. `None` outside Outline view and the body, or when no paragraph shows that way.
+pub(crate) fn shown_pos(s: &mut Session, pos: &Pos, forward: bool) -> Option<Pos> {
+    if s.view.mode != ViewMode::Outline || pos.story != StoryRef::Body {
+        return None;
+    }
+    let block = *pos.path.0.first()? as usize;
     let levels = ol::levels(&s.doc);
     let hidden = ol::hidden(&levels, &s.view.outline.view());
     let layout = s.layout();
     let shown_para = |j: usize| !hidden.get(j).copied().unwrap_or(true) && matches!(s.doc.body.get(j).map(|b| &**b), Some(Block::Para(_)));
-    let forward = before.focus <= s.sel.focus;
     let next = (block + 1..levels.len()).find(|j| shown_para(*j)).map(|j| Pos::body(j, 0));
     let prev = || {
         if shown_para(block) {
@@ -538,8 +550,5 @@ pub(crate) fn after_command(s: &mut Session, before: &Selection, changed: bool) 
         Some(if layout.caret(&end).is_some() { end } else { Pos::body(j, 0) })
     };
     let target = if forward { next.or_else(prev) } else { prev().or(next) };
-    if let Some(t) = target {
-        let t = s.doc.clamp(&t);
-        s.sel = Selection::caret(t);
-    }
+    target.map(|t| s.doc.clamp(&t))
 }

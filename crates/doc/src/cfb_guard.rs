@@ -7,8 +7,9 @@
 /// makes it allocate gigabytes. Here the DIFAT is walked the way `cfb` walks it (header entries,
 /// then the DIFAT chain, at most one step per sector; trailing zero and free entries trimmed
 /// the same way) and the file is refused when it lists one FAT sector twice, or more FAT sectors
-/// than its sectors need (one FAT sector covers `sector_len / 4` of them, plus one spare), so the
-/// FAT `cfb` builds is about the size the file needs. Anything else that is wrong is left for
+/// than the file has sectors — every FAT sector is a sector of the file, so a longer list is
+/// duplicates or names `cfb` refuses anyway, and the FAT `cfb` builds (one sector of entries per
+/// listed name) stays within about the file's own size. Anything else that is wrong is left for
 /// `cfb` to report.
 pub fn check(bytes: &[u8]) -> Result<(), String> {
     const MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
@@ -52,12 +53,14 @@ pub fn check(bytes: &[u8]) -> Result<(), String> {
     while difat.last() == Some(&FREE) {
         difat.pop();
     }
-    // Each listed FAT sector adds a whole sector of entries. A FAT sector holds the entries of
-    // `sector_len / 4` sectors, so a file needs no more FAT sectors than that covers (one spare),
-    // and none of them twice. A free entry in the middle is left for `cfb` to refuse.
+    // Each listed FAT sector adds a whole sector of entries. A real file lists no more FAT
+    // sectors than the file has — every FAT sector is a sector of the file, and none of them
+    // twice (checked below) — so the FAT `cfb` builds stays within about the file's own size.
+    // The #3642 blowup listed 2048 × 127 names in a ~1 MB file. A tighter bound (one FAT sector
+    // per `sector_len / 4` sectors plus a spare) refused real files, whose writers reserve FAT
+    // for growth: an encrypted package of 78 sectors lists 4 and didn't open (#5109).
     let listed: Vec<u32> = difat.into_iter().filter(|&s| s != FREE).collect();
-    let needed = num_sectors.div_ceil(sector_len / 4).saturating_add(1);
-    if listed.len() > needed {
+    if listed.len() > num_sectors {
         return Err(format!("the DIFAT lists {} FAT sectors in a file of {num_sectors} sectors", listed.len()));
     }
     let mut seen = std::collections::HashSet::with_capacity(listed.len());
@@ -123,10 +126,16 @@ mod tests {
     }
 
     #[test]
-    fn a_fat_sector_listed_twice_or_more_than_the_file_needs_is_refused() {
-        // Each list is shorter than the file has sectors, which the guard used to accept.
+    fn a_fat_sector_listed_twice_or_more_than_the_file_has_is_refused() {
+        // A duplicate, and a list longer than the file has sectors: every FAT sector is a
+        // sector of the file, so a longer list is one of the two.
         assert!(super::check(&header_difat(10, &[0, 0])).is_err_and(|e| e.contains("FAT sector 0 twice")));
-        assert!(super::check(&header_difat(10, &[0, 1, 2])).is_err_and(|e| e.contains("3 FAT sectors")));
+        assert!(
+            super::check(&header_difat(10, &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10])).is_err_and(|e| e.contains("11 FAT sectors in a file of 10 sectors"))
+        );
+        // A writer may reserve FAT for growth: a real encrypted package of 78 sectors lists
+        // 4 FAT sectors and didn't open since the #3642 guard landed (#5109).
+        assert!(super::check(&header_difat(78, &[0, 1, 2, 3])).is_ok());
         assert!(super::check(&header_difat(10, &[0])).is_ok());
         assert!(super::check(&header_difat(200, &[0, 1])).is_ok());
     }

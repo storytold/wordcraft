@@ -11,6 +11,9 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Writes `bytes` safely to `path`, replacing an existing destination atomically via a
+/// temporary file. If the destination's folder refuses the temporary file, a new file
+/// is created directly and removed on failure; an existing file is left untouched.
 pub(super) fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let permissions = match fs::metadata(path) {
         Ok(meta) if meta.is_file() => Some(meta.permissions()),
@@ -28,9 +31,39 @@ pub(super) fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         }
         // Synchronize the prepared file before replacing the destination. Directory durability
         // and network-filesystem/power-loss guarantees are outside this operation's contract.
-        file.sync_all()
+        sync_file(file)
     });
     written.map_err(explain)
+}
+
+/// Flushes `file` to stable storage (`sync_all`). On Apple platforms that is a full flush
+/// (`F_FULLFSYNC`); where the file system can't do one (SMB shares and virtual file systems
+/// refuse it with `ENOTSUP` #6155, `EINVAL`, or `ENOTTY`), this falls back to a plain `fsync`,
+/// as Apple's own `removefile` and SQLite do. Plain `fsync` flushes to the drive controller but
+/// does not guarantee disk cache durability; any other error is returned as it is.
+fn sync_file(file: &File) -> io::Result<()> {
+    #[cfg(target_vendor = "apple")]
+    let plain = || rustix::fs::fsync(file).map_err(io::Error::from);
+    #[cfg(not(target_vendor = "apple"))]
+    let plain = || Ok(());
+    or_plain_fsync(file.sync_all(), plain)
+}
+
+/// Returns `full`, or calls `fsync()` when `full` failed only because the file system can't do a full flush.
+fn or_plain_fsync(full: io::Result<()>, fsync: impl FnOnce() -> io::Result<()>) -> io::Result<()> {
+    match full {
+        Err(e) if full_flush_unsupported(&e) => fsync(),
+        other => other,
+    }
+}
+
+/// Whether `e` is a file system refusing a full flush (`F_FULLFSYNC`): `ENOTSUP` (45, SMB),
+/// `EINVAL` (22), or `ENOTTY` (25) on Apple platforms. Never elsewhere: there `sync_all` is a plain `fsync`.
+fn full_flush_unsupported(e: &io::Error) -> bool {
+    const EINVAL: i32 = 22;
+    const ENOTTY: i32 = 25;
+    const ENOTSUP: i32 = 45;
+    cfg!(target_vendor = "apple") && matches!(e.raw_os_error(), Some(ENOTSUP | EINVAL | ENOTTY))
 }
 
 /// A folder that keeps no Unix modes refuses to set one with "Operation not supported": a NAS
@@ -447,5 +480,42 @@ mod tests {
         write(&path, b"Saved again.").unwrap();
         assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o640);
         assert_eq!(fs::read(&path).unwrap(), b"Saved again.");
+    }
+
+    /// A share that refuses the full flush (`F_FULLFSYNC`, #6155) still saves through a plain fsync
+    /// on Apple platforms; every other sync error still fails the save.
+    #[test]
+    fn a_refused_full_flush_falls_back_to_a_plain_fsync_on_apple_only() {
+        use std::cell::Cell;
+        let refused = |errno| Err(io::Error::from_raw_os_error(errno));
+        for (errno, name) in [(45, "ENOTSUP, SMB"), (22, "EINVAL"), (25, "ENOTTY")] {
+            let fsynced = Cell::new(false);
+            let r = or_plain_fsync(refused(errno), || {
+                fsynced.set(true);
+                Ok(())
+            });
+            let apple = cfg!(target_vendor = "apple");
+            assert_eq!(r.is_ok(), apple, "{name}");
+            assert_eq!(fsynced.get(), apple, "{name}: the plain fsync runs only on Apple platforms");
+        }
+        // The plain fsync's own failure is reported.
+        if cfg!(target_vendor = "apple") {
+            let r = or_plain_fsync(refused(45), || Err(io::Error::from_raw_os_error(5)));
+            assert_eq!(r.map_err(|e| e.raw_os_error()), Err(Some(5)));
+        }
+        // Real errors (EIO, ENOSPC, EACCES) never fall back, and success needs no fallback.
+        for errno in [5, 28, 13] {
+            let r = or_plain_fsync(refused(errno), || panic!("no fallback for errno {errno}"));
+            assert_eq!(r.map_err(|e| e.raw_os_error()), Err(Some(errno)));
+        }
+        assert!(or_plain_fsync(Ok(()), || panic!("no fallback after a full flush")).is_ok());
+    }
+
+    #[test]
+    fn sync_file_flushes_a_local_file() {
+        let d = Scratch::new();
+        let path = d.0.join("f.bin");
+        let file = OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
+        sync_file(&file).unwrap();
     }
 }

@@ -59,15 +59,16 @@ fn relative_font_sizes_resolve_styles_and_preserve_other_properties() {
     use wordcraft_doc::styles::{Style, StyleKind};
 
     let mut s = mixed();
-    s.doc.styles.default_chr.size_cs = Some(30.0);
-    s.doc.styles.upsert(Style {
+    let styles = std::sync::Arc::make_mut(&mut s.doc.styles);
+    styles.default_chr.size_cs = Some(30.0);
+    styles.upsert(Style {
         id: "Large".into(),
         name: "Large".into(),
         based_on: Some("Normal".into()),
         chr: CharProps { size: Some(20.0), bold: Some(true), ..Default::default() },
         ..Default::default()
     });
-    s.doc.styles.upsert(Style {
+    styles.upsert(Style {
         id: "Small".into(),
         name: "Small".into(),
         kind: StyleKind::Character,

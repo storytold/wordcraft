@@ -14,7 +14,9 @@ fn commented() -> Session {
 }
 
 fn invalid_ids_leave_state_untouched(command: &str) {
-    for id in [json!(-1), json!(0.5), json!(0.0), json!("0"), Value::Null, json!(false), json!(4294967296u64)] {
+    // Past `u32`: 2^32 truncates to comment 0 and 2^32 + 5 to 5, and `u64::MAX` is the far end.
+    for id in [json!(-1), json!(0.5), json!(0.0), json!("0"), Value::Null, json!(false), json!(4294967296u64), json!(4294967301u64), json!(u64::MAX)]
+    {
         for at_comment in [true, false] {
             let mut s = commented();
             if !at_comment {
@@ -28,6 +30,11 @@ fn invalid_ids_leave_state_untouched(command: &str) {
             let before = (s.doc.clone(), s.sel.clone(), s.undo_labels(), s.redo_label().map(str::to_owned), s.dirty);
             let result = s.run(command, &json!({"id": id, "text": "Replacement"}));
             assert!(matches!(result, Err(CmdError::Params(_))), "{command}, id={id}, at_comment={at_comment}: {result:?}");
+            // Past `u32` it is the range check that refuses, not a lookup of whatever the id
+            // truncated to: 2^32 + 5 names no comment here, so "no such comment" would hide a cast.
+            if id.as_u64().is_some_and(|n| n > u64::from(u32::MAX)) {
+                assert!(format!("{result:?}").contains("32-bit"), "{command}, id={id}: {result:?}");
+            }
             assert_eq!(
                 (s.doc.clone(), s.sel.clone(), s.undo_labels(), s.redo_label().map(str::to_owned), s.dirty),
                 before,

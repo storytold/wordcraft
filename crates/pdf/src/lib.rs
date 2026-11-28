@@ -22,10 +22,13 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod imposition;
+
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU16;
 use std::sync::Arc;
 
+use craft_metafile::{Picture, PlacedItem};
 use craft_pdf::write::{self, Metadata, WriteError, Writer, backend as krilla};
 use krilla::annotation::{Annotation, LinkAnnotation, Target};
 use krilla::color::rgb;
@@ -47,10 +50,9 @@ use wordcraft_doc::{Document, Path as DocPath, Rgb, StoryRef};
 use wordcraft_fonts::FaceRef;
 use wordcraft_geom::Rect;
 use wordcraft_layout::display::Paint;
-use wordcraft_layout::display::{DisplayOptions, Draw, ItemDisplay, Stroke as LineStyle};
+use wordcraft_layout::display::{Draw, ItemDisplay, Stroke as LineStyle};
 use wordcraft_layout::para::{ClKind, LineEnd};
-use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, NumeralMode, Page, Placed, layout};
-use wordcraft_metafile::{Picture, PlacedItem};
+use wordcraft_layout::{DocLayout, LayoutCache, NumeralMode, Page, Placed, layout};
 
 mod export;
 mod exporter;
@@ -61,6 +63,8 @@ mod paint;
 mod picture;
 mod tags;
 
+#[cfg(test)]
+use export::Fit;
 pub use export::{export, export_layout};
 #[cfg(test)]
 use exporter::Exporter;
@@ -68,7 +72,7 @@ use exporter::Exporter;
 use glyphs::{baseline, cluster_ends, left_to_right, split_clusters, visual_order};
 #[cfg(test)]
 use metadata::{civil, parse_iso};
-pub use options::{PdfError, PdfOptions};
+pub use options::{PdfError, PdfOptions, WATERMARK_MAX_CHARS};
 #[cfg(test)]
 use paint::shape_path;
 #[cfg(test)]
@@ -76,3 +80,6 @@ use picture::{load_image, load_image_within};
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod fill_alpha_tests;

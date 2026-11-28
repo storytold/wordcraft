@@ -16,6 +16,12 @@ pub type Arg = Vec<MNode>;
 /// Deepest structure nesting kept (parsers stop here; layout draws nothing deeper).
 pub const MAX_DEPTH: usize = 64;
 
+/// Most matrix columns kept (writers pad every row to the widest, so this bounds a row's cost).
+pub const MAX_MATRIX_COLS: usize = 64;
+
+/// Most matrix rows kept.
+pub const MAX_MATRIX_ROWS: usize = 1000;
+
 /// An equation's structure, plus what's needed to write it back.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct Math {
@@ -604,11 +610,12 @@ fn lin_node(n: &MNode, s: &mut String, depth: usize) {
         }
         MNode::Nary { chr, sub_hide, sup_hide, sub, sup, e, .. } => {
             s.push(*chr);
-            if !sub_hide && !sub.is_empty() {
+            // A shown limit is written even when empty (`_()`): left out, it reads back hidden (#6076).
+            if !sub_hide {
                 s.push('_');
                 lin_script(sub, s, depth);
             }
-            if !sup_hide && !sup.is_empty() {
+            if !sup_hide {
                 s.push('^');
                 lin_script(sup, s, depth);
             }

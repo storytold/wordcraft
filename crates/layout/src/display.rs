@@ -29,6 +29,7 @@ pub use lines::{mark_text_width, section_break_label};
 pub(crate) use objects::inline_rect;
 pub use objects::seg_path;
 pub use options::{BalloonMode, ChangeBar, CommentDisplay, DeleteMark, DisplayOptions, FormattingMarks, InsertMark, MarkupOptions};
+pub(crate) use page::rule_width;
 pub use page::{CHANGE_BAR, ItemDisplay, MOVE_COLOR, object_display, page_display, page_layers, revision_color};
 pub use paint::{Paint, Stroke, paint_for};
 
@@ -81,9 +82,12 @@ pub enum Draw {
         rect: Rect,
         media: String,
         crop: [f32; 4],
+        /// Opacity, the picture's own transparency folded in.
         alpha: f32,
         /// The picture's alt text (empty for a floating or diagram picture, which tag themselves).
         alt: String,
+        /// Brightness and contrast to apply to the pixels (transparency is in `alpha`).
+        fx: wordcraft_doc::picfx::PicFx,
         /// Marked decorative (Alt Text › Mark as decorative): an artifact in tagged PDF, which
         /// screen readers skip. Always `false` for a floating or diagram picture, as `alt`.
         decorative: bool,

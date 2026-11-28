@@ -1,0 +1,227 @@
+name: Nightly build check
+
+# Builds the unsigned WordCraft Nightly the way the producer does (packaging/linux/nightly.sh,
+# packaging/windows/package.ps1 -Nightly, packaging/macos/nightly.sh) and checks each archive as the
+# Launcher unpacks it. No secrets and no environment: the real Nightly is signed by the shared
+# release-ref signer (craft-common-actions), which calls packaging/macos/nightly-sign.sh and the
+# app's sign.ps1.
+on:
+  # The platform runners are shared with release builds: pull requests run this only with the
+  # `full-ci` label, never by changed paths. `labeled` so adding it starts a run.
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a labelled PR cancels its older run. Any event that will not build (no `full-ci`
+# label, or another label added) gets a group of its own, so it never cancels a real build.
+concurrency:
+  group: nightly-build-${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci') && (github.event.action != 'labeled' || github.event.label.name == 'full-ci') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  linux:
+    name: Nightly tar (x86_64, unsigned)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (contains(github.event.pull_request.labels.*.name, 'full-ci') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'full-ci'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the system libraries the GUI links
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgtk-3-dev libfontconfig1-dev libfreetype-dev
+      - name: Check out craft-fonts
+        uses: storytold/craft-common-actions/actions/checkout-craft-fonts@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+        with:
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      - uses: storytold/craft-common-actions/actions/checkout-craft-i18n@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
+        with:
+          toolchain: stable
+      - name: Prepare a Nightly identity for this commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"].split("-")[0])')"
+          sha="$(git rev-parse HEAD)"
+          date="$(date -u +%Y-%m-%d)"
+          {
+            echo "WORDCRAFT_BUILD_SHA=$sha"
+            echo "WORDCRAFT_BUILD_DATE=$date"
+            echo "WORDCRAFT_VERSION=$base-nightly.${date//-/}.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT.g${sha:0:12}"
+            echo "WORDCRAFT_BUILD_CHANNEL=nightly-v1"
+            echo "CARGO_TARGET_DIR=$RUNNER_TEMP/nightly-targets"
+            echo "DIST=$RUNNER_TEMP/nightly-dist"
+            echo "CRAFT_FONTS_DIR=$GITHUB_WORKSPACE/craft-fonts"
+            echo "CRAFT_FONTS_REQUIRED=1"
+          } >>"$GITHUB_ENV"
+      - name: Build the unsigned Nightly tar
+        run: bash packaging/linux/nightly.sh --arch x86_64
+      - name: Check the tar as the Launcher unpacks it, and ask its version
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/nightly-check"
+          mkdir -p "$work"
+          archive="$DIST/wordcraft-$WORDCRAFT_VERSION-linux-x86_64-nightly.tar.gz"
+          # The launcher and the GUI it starts, the icon and the notices; the embedded fonts'
+          # OFL-*.txt licences appear when the build has CRAFT_FONTS_DIR.
+          core="$(tar -tzf "$archive" | sort | grep -Ev '^OFL-[A-Za-z0-9_.-]+\.txt$' | tr '\n' ' ')"
+          [ "$core" = "ATTRIBUTION.md LICENSE-APACHE LICENSE-MIT NOTICE README.md wordcraft wordcraft-bin wordcraft-nightly.png " ] \
+            || { echo "unexpected members: $core"; exit 1; }
+          tar -xzf "$archive" -C "$work"
+          [ -x "$work/wordcraft" ] && [ ! -L "$work/wordcraft" ]
+          [ "$(stat -c %a "$work/wordcraft")" = 755 ]
+          [ -x "$work/wordcraft-bin" ] && [ ! -L "$work/wordcraft-bin" ]
+          mkdir -p "$work/home" "$work/profile"
+          chmod 700 "$work/home" "$work/profile"
+          out="$(env -i HOME="$work/home" PATH=/usr/bin:/bin "$work/wordcraft" --version 2>"$work/stderr")" \
+            || { cat "$work/stderr"; exit 1; }
+          [ ! -s "$work/stderr" ]
+          [ "$out" = "WordCraft $WORDCRAFT_VERSION (nightly-v1)" ]
+          out="$(env -i HOME="$work/home" PATH=/usr/bin:/bin "$work/wordcraft" --launch-profile nightly-v1 --profile-root "$work/profile" --version)"
+          [ "$out" = "WordCraft $WORDCRAFT_VERSION (nightly-v1)" ]
+          [ "$(head -c 2 "$work/wordcraft")" = '#!' ]
+          echo "==> verified (unsigned): $out"
+      - name: Keep the unsigned archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wordcraft-nightly-linux-x86_64-unsigned
+          path: ${{ runner.temp }}/nightly-dist/wordcraft-${{ env.WORDCRAFT_VERSION }}-linux-x86_64-nightly.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  windows:
+    name: Nightly ZIP (x86_64, unsigned)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (contains(github.event.pull_request.labels.*.name, 'full-ci') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'full-ci'))
+    runs-on: windows-latest
+    timeout-minutes: 150
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check out craft-fonts
+        uses: storytold/craft-common-actions/actions/checkout-craft-fonts@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+        with:
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      - uses: storytold/craft-common-actions/actions/checkout-craft-i18n@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+      - name: Prepare a Nightly identity for this commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"].split("-")[0])')"
+          sha="$(git rev-parse HEAD)"
+          date="$(date -u +%Y-%m-%d)"
+          {
+            echo "WORDCRAFT_BUILD_SHA=$sha"
+            echo "WORDCRAFT_BUILD_DATE=$date"
+            echo "WORDCRAFT_VERSION=$base-nightly.${date//-/}.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT.g${sha:0:12}"
+            echo "WORDCRAFT_BUILD_CHANNEL=nightly-v1"
+            echo "CARGO_TARGET_DIR=$RUNNER_TEMP/nightly-targets"
+            echo "DIST=$RUNNER_TEMP/nightly-dist"
+            echo "CRAFT_FONTS_DIR=$GITHUB_WORKSPACE/craft-fonts"
+            echo "CRAFT_FONTS_REQUIRED=1"
+          } >>"$GITHUB_ENV"
+      - name: Build the unsigned Nightly intermediate
+        run: ./packaging/windows/package.ps1 -Arch x64 -Nightly -BuildOnly -Target x86_64-pc-windows-msvc -TargetDir $env:CARGO_TARGET_DIR -Dist $env:DIST
+      - name: Run the packaging contracts (no signing material)
+        run: ./packaging/windows/nightly-package-tests.ps1 -FixtureRoot $env:RUNNER_TEMP
+      - name: Run the signing contracts (dummy keys, no signing)
+        run: ./packaging/windows/nightly-signing-tests.ps1 -FixtureRoot $env:RUNNER_TEMP
+      - name: Keep the unsigned intermediate
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wordcraft-nightly-windows-x86_64-unsigned
+          path: ${{ runner.temp }}/nightly-dist/wordcraft-${{ env.WORDCRAFT_VERSION }}-windows-x86_64-nightly.unsigned.zip
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  macos:
+    name: Nightly .app (aarch64, unsigned)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (contains(github.event.pull_request.labels.*.name, 'full-ci') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'full-ci'))
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check out craft-fonts
+        uses: storytold/craft-common-actions/actions/checkout-craft-fonts@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+        with:
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      - uses: storytold/craft-common-actions/actions/checkout-craft-i18n@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin
+      - name: Prepare a Nightly identity for this commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"].split("-")[0])')"
+          sha="$(git rev-parse HEAD)"
+          date="$(date -u +%Y-%m-%d)"
+          {
+            echo "WORDCRAFT_BUILD_SHA=$sha"
+            echo "WORDCRAFT_BUILD_DATE=$date"
+            echo "WORDCRAFT_VERSION=$base-nightly.${date//-/}.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT.g${sha:0:12}"
+            echo "WORDCRAFT_BUILD_CHANNEL=nightly-v1"
+            echo "CARGO_TARGET_DIR=$RUNNER_TEMP/nightly-targets"
+            echo "DIST=$RUNNER_TEMP/nightly-dist"
+            echo "CRAFT_FONTS_DIR=$GITHUB_WORKSPACE/craft-fonts"
+            echo "CRAFT_FONTS_REQUIRED=1"
+          } >>"$GITHUB_ENV"
+      - name: Build the unsigned Nightly bundle
+        run: bash packaging/macos/nightly.sh --arch aarch64
+      - name: Check the archive and the bundle version
+        run: bash packaging/macos/nightly-verify.sh --expect unsigned --input "$DIST/wordcraft-$WORDCRAFT_VERSION-macos-aarch64-nightly.zip"
+      - name: Keep the unsigned archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wordcraft-nightly-macos-aarch64-unsigned
+          path: ${{ runner.temp }}/nightly-dist/wordcraft-${{ env.WORDCRAFT_VERSION }}-macos-aarch64-nightly.zip
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

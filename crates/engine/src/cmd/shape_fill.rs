@@ -9,11 +9,9 @@ use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::props::Rgb;
 use wordcraft_doc::wordart::GradStop;
 
-use super::objects::{edit_obj, picked_objects, selected_all};
+use super::objects::{edit_obj, target_objects};
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 
-/// Most shapes one command fills (a selection over a whole document).
-const MAX_FILL_SHAPES: usize = 10_000;
 /// Most stops read from a command (the fill keeps at most `MAX_STOPS` after sanitizing).
 const MAX_PARAM_STOPS: usize = 64;
 
@@ -68,16 +66,9 @@ fn shape_fill(s: &mut Session, v: &Value) -> CmdResult {
     Ok(serde_json::json!({"object": last, "count": targets.len()}))
 }
 
-/// The shapes and canvases in the selection and those added to it (Shift+click).
+/// The shapes and canvases in the selection, those added with `select.addObject`, or the active text box.
 fn targets(s: &Session) -> Vec<Pos> {
-    let fillable = |o: &InlineObject| matches!(o, InlineObject::Shape { .. }) || o.is_canvas();
-    let mut out: Vec<Pos> = selected_all(s, MAX_FILL_SHAPES).into_iter().filter(|(_, o)| fillable(o)).map(|(pos, _)| pos).collect();
-    for pos in picked_objects(s) {
-        if !out.contains(&pos) && s.doc.para_at(&pos).and_then(|q| q.object_at(pos.off)).is_some_and(fillable) {
-            out.push(pos);
-        }
-    }
-    out
+    target_objects(s, |o| matches!(o, InlineObject::Shape { .. }) || o.is_canvas()).into_iter().map(|(pos, _)| pos).collect()
 }
 
 fn color(v: &Value) -> Result<Rgb, CmdError> {

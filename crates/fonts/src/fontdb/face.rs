@@ -1,7 +1,7 @@
 use super::names::{LocalName, east_asian_font};
 use super::{
-    Arc, AtomicU32, BezPath, DrawSettings, Engine, GlyphId, Hinting, HintingInstance, HintingOptions, Location, LocationRef, MetadataProvider,
-    Ordering, OutlinePen, RwLock, Size, Target,
+    Arc, AtomicU32, BezPath, DrawSettings, Engine, GlyphId, GlyphStyles, Hinting, HintingInstance, HintingOptions, Location, LocationRef,
+    MetadataProvider, Ordering, OutlineGlyphFormat, OutlinePen, RwLock, Size, SmoothMode, Target,
 };
 
 /// The family used when a requested family is unknown (the UI sans).
@@ -67,6 +67,11 @@ pub struct FontFace {
     /// values).
     pub cap_height: f64,
     pub x_height: f64,
+    /// Average character width in font units (`OS/2.xAvgCharWidth`), half the em for an East
+    /// Asian font, whose average a platform's text metrics report as its half-width cell rather
+    /// than the full-width figure in the table. Word's automatic spacing between East Asian and
+    /// Latin text is half of it (see `wordcraft_layout::para::grid::auto_space`).
+    pub avg_char_width: f64,
     pub shaper: harfrust::ShaperData,
     /// Variable fonts: the named instance's axis settings (user units; empty = default instance),
     /// the normalised location and the shaper's view of it.
@@ -77,6 +82,8 @@ pub struct FontFace {
     pub(super) bmp: std::sync::OnceLock<Box<[u64]>>,
     // Some legacy CJK fonts assemble their contours with TrueType instructions.
     pub(super) outline_hinter: std::sync::OnceLock<Option<HintingInstance>>,
+    /// The autohinter's analysis of the font for screen hinting, made once for every size.
+    pub(super) glyph_styles: std::sync::OnceLock<GlyphStyles>,
     /// Hinted draws so far, those that ran too long, and whether that turned hinting off
     /// ([`FontFace::count_hinted`]).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -288,6 +295,42 @@ impl FontFace {
             })
             .as_ref()
     }
+    /// Glyph `gid`'s outline hinted for screen text at `ppem` device pixels per em, in device
+    /// pixels, y-down (flipped), or `None` when the face can't be hinted. The hinting is light,
+    /// as FreeType's `hintslight`: horizontal edges (baseline, x-height, cap height) move onto
+    /// whole pixels, nothing moves sideways, so advances and layout stay as they are.
+    pub(super) fn hinted_glyph_outline(&self, gid: u32, hinter: &HintingInstance) -> Option<BezPath> {
+        let f = self.skrifa()?;
+        let g = f.outline_glyphs().get(GlyphId::new(gid))?;
+        let mut pen = FlipPen { path: BezPath::new(), room: usize::MAX, over: false, hinted: true };
+        g.draw(DrawSettings::hinted(hinter, false), &mut pen).map_err(|e| log::warn!("Cannot hint glyph {gid} in {:?}: {e}", self.family)).ok()?;
+        Some(pen.path)
+    }
+
+    /// A light hinting instance for `ppem` device pixels per em, with the engine FreeType's light
+    /// hinting picks: the autohinter for TrueType outlines (their own instructions are ignored;
+    /// measured against Firefox on Linux, the autohinter matches its rows of pixels and the
+    /// TrueType instructions don't), the font's own hints for PostScript (CFF) outlines, and for
+    /// fonts whose glyphs need their instructions to be assembled at all their instructions with
+    /// the monochrome target, as skrifa requires for them.
+    pub(super) fn screen_hinter(&self, ppem: f32) -> Option<HintingInstance> {
+        let f = self.skrifa()?;
+        let outlines = f.outline_glyphs();
+        let light = Target::Smooth { mode: SmoothMode::Light, symmetric_rendering: true, preserve_linear_metrics: true };
+        let (engine, target) = if outlines.require_interpreter() {
+            // FreeType's "tricky" fonts (old CJK fonts that assemble glyphs with their
+            // instructions): skrifa asks for the interpreter with the monochrome target, under
+            // which the instructions may move points sideways, or glyphs come apart.
+            (Engine::Interpreter, Target::Mono)
+        } else if outlines.format() == Some(OutlineGlyphFormat::Glyf) {
+            (Engine::Auto(Some(self.glyph_styles.get_or_init(|| GlyphStyles::new(&outlines)).clone())), light)
+        } else {
+            (Engine::Interpreter, light)
+        };
+        HintingInstance::new(&outlines, Size::new(ppem), self.location(), HintingOptions { engine, target })
+            .map_err(|e| log::warn!("Cannot hint {:?} at {ppem} px: {e}", self.family))
+            .ok()
+    }
     /// Is `family` this face's typographic, legacy, full or PostScript name?
     pub fn named(&self, family: &str) -> bool {
         self.family.eq_ignore_ascii_case(family)
@@ -353,18 +396,164 @@ impl FontFace {
     pub fn is_east_asian(&self) -> bool {
         self.skrifa().is_some_and(|f| east_asian_font(&f))
     }
+    /// Is this a serif face? Checks family name conventions (e.g. Mincho, Song, Times vs Sans, Gothic, Arial),
+    /// falling back to the OS/2 family class and Panose serif style.
+    pub fn is_serif(&self) -> bool {
+        if is_explicit_sans(&self.family) {
+            return false;
+        }
+        if is_explicit_serif(&self.family) {
+            return true;
+        }
+        use skrifa::raw::TableProvider;
+        if let Some(sk) = self.skrifa()
+            && let Ok(os2) = sk.os2()
+        {
+            let class_id = (os2.s_family_class() >> 8) as u8;
+            if (1..=5).contains(&class_id) || class_id == 7 {
+                return true;
+            }
+            if class_id == 8 {
+                return false;
+            }
+            let panose = os2.panose_10();
+            if panose[0] == 2 {
+                let serif_style = panose[1];
+                if (2..=10).contains(&serif_style) {
+                    return true;
+                }
+                if (11..=15).contains(&serif_style) {
+                    return false;
+                }
+            }
+        }
+        false
+    }
+}
+
+/// Tokens identifying known sans-serif font families by naming convention (#5672).
+const SANS_TOKENS: &[&str] = &[
+    "sans",
+    "gothic",
+    "hei",
+    "yahei",
+    "simhei",
+    "zenhei",
+    "heiti",
+    "meiryo",
+    "pingfang",
+    "dotum",
+    "gulim",
+    "malgun",
+    "arial",
+    "calibri",
+    "aptos",
+    "carlito",
+    "inter",
+    "helvetica",
+    "segoe",
+    "tahoma",
+    "verdana",
+];
+
+/// Tokens identifying known serif font families by naming convention (#5672).
+const SERIF_TOKENS: &[&str] = &[
+    "serif",
+    "mincho",
+    "song",
+    "songti",
+    "simsun",
+    "nsimsun",
+    "fangsong",
+    "ming",
+    "mingti",
+    "batang",
+    "sun",
+    "times",
+    "cambria",
+    "georgia",
+    "garamond",
+    "palatino",
+    "century",
+    "bookman",
+    "baskerville",
+    "caladea",
+    "tinos",
+];
+
+/// Split a font family name into lowercased tokens along non-alphanumeric boundaries,
+/// camelCase / acronym transitions, and letter-to-digit/digit-to-letter boundaries (#5672).
+fn font_name_tokens(name: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut prev_char: Option<char> = None;
+    let mut chars = name.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if !c.is_alphanumeric() {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current).to_ascii_lowercase());
+            }
+            prev_char = None;
+            continue;
+        }
+        let next_lower = chars.peek().is_some_and(|n| n.is_lowercase());
+        let is_split = if let Some(prev) = prev_char {
+            (prev.is_lowercase() && c.is_uppercase())
+                || (prev.is_uppercase() && c.is_uppercase() && next_lower)
+                || (prev.is_alphabetic() && c.is_numeric())
+                || (prev.is_numeric() && c.is_alphabetic())
+        } else {
+            false
+        };
+
+        if is_split && !current.is_empty() {
+            tokens.push(std::mem::take(&mut current).to_ascii_lowercase());
+        }
+
+        current.push(c);
+        prev_char = Some(c);
+    }
+
+    if !current.is_empty() {
+        tokens.push(current.to_ascii_lowercase());
+    }
+
+    let flattened: String = name.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_ascii_lowercase();
+    if !flattened.is_empty() && !tokens.iter().any(|t| t == &flattened) {
+        tokens.push(flattened);
+    }
+
+    tokens
+}
+
+/// Does a family name explicitly identify a sans-serif font by whole tokens?
+fn is_explicit_sans(name: &str) -> bool {
+    let tokens = font_name_tokens(name);
+    tokens.iter().any(|t| SANS_TOKENS.contains(&t.as_str()))
+}
+
+/// Does a family name explicitly identify a serif font by whole tokens?
+fn is_explicit_serif(name: &str) -> bool {
+    let tokens = font_name_tokens(name);
+    tokens.iter().any(|t| SERIF_TOKENS.contains(&t.as_str()))
 }
 
 pub(super) static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 
 pub(super) const OUTLINE_CACHE_MAX: usize = 50_000;
+/// Hinting instances kept (one per face and text size on screen).
+pub(super) const HINTER_CACHE_MAX: usize = 256;
+/// Sizes hinted, in device pixels per em: below, text is too small to read anyway; above, the
+/// half-pixel hinting moves is invisible (and each size would cost a cache entry).
+pub(super) const HINT_PPEM: std::ops::RangeInclusive<f32> = 4.0..=96.0;
 
 /// Collects an outline flipped to y-down, keeping at most `room` path elements (`over` once it
 /// had to drop one).
 pub(super) struct FlipPen {
     pub(super) path: BezPath,
-    room: usize,
-    over: bool,
+    pub(super) room: usize,
+    pub(super) over: bool,
     /// Drawn with the face's TrueType interpreter.
     pub(super) hinted: bool,
 }
@@ -410,5 +599,35 @@ impl OutlinePen for FlipPen {
         if self.take() {
             self.path.close_path();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn whole_token_serif_sans_matching() {
+        // #5672: Whole tokens match rather than bare substrings ("hei", "sun").
+        assert!(!is_explicit_sans("Heisei Mincho"), "Heisei Mincho must not match sans 'hei'");
+        assert!(is_explicit_serif("Heisei Mincho"), "Heisei Mincho is serif");
+
+        assert!(!is_explicit_serif("Sunflower"), "Sunflower must not match serif 'sun'");
+        assert!(!is_explicit_sans("Sunflower"));
+
+        assert!(is_explicit_sans("SimHei"));
+        assert!(is_explicit_sans("STHeiti"));
+        assert!(is_explicit_sans("BIZ UDPGothic"));
+        assert!(is_explicit_sans("MS PGothic"));
+        assert!(is_explicit_sans("Microsoft YaHei"));
+        assert!(is_explicit_sans("WenQuanYi Zen Hei"));
+        assert!(is_explicit_sans("Source Sans 3"));
+
+        assert!(is_explicit_serif("SimSun"));
+        assert!(is_explicit_serif("NSimSun"));
+        assert!(is_explicit_serif("BIZ UDPMincho"));
+        assert!(is_explicit_serif("MS PMincho"));
+        assert!(is_explicit_serif("Shippori Mincho"));
+        assert!(is_explicit_serif("Source Serif 4"));
     }
 }
