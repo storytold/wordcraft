@@ -305,6 +305,8 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                             MenuItem::command(CommandRef::with_params("para.numbering", json!({"off": true})))
                                 .label(tl!("None").to_string())
                                 .show(ui);
+                            Divider::horizontal().show(ui);
+                            MenuItem::command(CommandRef::new("para.defineNumber")).label(tl!("Define New Number Format…").to_string()).show(ui);
                         })),
                     )
                     .icon(crate::icons::spec("numbering"))

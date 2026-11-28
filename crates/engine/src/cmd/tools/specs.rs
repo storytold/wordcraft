@@ -319,25 +319,10 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("para.defineBullet", "Define New Bullet", "Home › Paragraph › Bullets", crate::cmd::lists::define_bullet).params(
             r#"{"char"?: one character (default ★), "font"?: family (the bullet's own font; "" = the text's), "size"?: pt, "bold"?: bool, "italic"?: bool, "color"?: "RRGGBB" | "auto", "align"?: "left|center|right"} (the selected paragraphs get a list of their own; each keeps its level)"#,
         ),
-        CommandSpec::new("para.defineNumber", "Define New Number Format", "Home › Paragraph › Numbering", |s, v| {
-            let fmt = wordcraft_doc::section::NumFormat::from_ooxml(p::str(v, "format").unwrap_or("decimal"));
-            let text = p::str(v, "text").unwrap_or("%1.").to_string();
-            let start = p::u64(v, "start").unwrap_or(1).min(100_000) as u32;
-            let id = Arc::make_mut(&mut s.doc.numbering).try_add_list(wordcraft_doc::ListKind::Numbered)?;
-            if let Some(a) = s.doc.numbering.abstract_of(id).map(|a| a.id)
-                && let Some(abs) = Arc::make_mut(&mut s.doc.numbering).abstracts.iter_mut().find(|x| x.id == a)
-                && let Some(l) = abs.levels.first_mut()
-            {
-                l.format = fmt;
-                l.text = text;
-                l.start = start;
-            }
-            crate::cmd::para::fmt(s, &|pp| {
-                pp.numbering = Some(NumRef { num: id, level: 0 });
-                pp.style = Some("ListParagraph".into());
-            })
-        })
-        .params(r#"{"format": "decimal|upperRoman|lowerLetter…", "text"?: "%1.", "start"?: n}"#),
+        CommandSpec::new("para.defineNumber", "Define New Number Format", "Home › Paragraph › Numbering", crate::cmd::lists::define_number)
+            .params(
+                r#"{"format"?: "decimal|lowerLetter|upperLetter|lowerRoman|upperRoman|decimalZero|ordinal|cardinalText|…|none" (a number style, default decimal; none = no number, every label is text), "text"?: "%1." (the number format, default "%1."; with a number style it must hold %1, the number; with none it is required and holds no %1), "start"?: n, "align"?: "left|center|right", "font"?: string | null, "bold"?: bool, "italic"?: bool, "color"?: "RRGGBB" | null, "props"?: CharProps (as format.set: size, underline…)} (the number's font; the selected paragraphs get a numbered list of their own)"#,
+            ),
         CommandSpec::new("review.language", "Language", "Review › Language", language).params(
             r#"{"lang"?: "en-US|en-GB|pl-PL|fr-FR|…" (BCP 47; default en-US), "noProof"?: bool, "detect"?: bool (detect language automatically, a preference), "default"?: bool (also the document's default and the saved language for future blank documents), "scope"?: "selection" (default) | "document" (every run and paragraph mark of every story: body, headers, footers, notes, comments, text boxes, tables, glossary (skipped while Track Changes and Track Formatting are on); one undo step, selection unchanged; returns the caret, "scope":"document" and "glossarySkipped":true when the glossary was skipped)}"#,
         ),
