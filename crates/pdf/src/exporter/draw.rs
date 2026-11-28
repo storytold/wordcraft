@@ -6,6 +6,28 @@ use super::{
 use wordcraft_doc::picfx::PicFx;
 
 impl Exporter<'_> {
+    pub(super) fn draw_glyphs_item(&mut self, s: &mut Surface, d: &Draw, para_tag: Option<usize>) {
+        let Draw::Glyphs { face, size, glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges, x_scale, .. } = d else {
+            return;
+        };
+        let paint = GlyphPaint { color: *color, alpha: *alpha, bold: *synth_bold, italic: *synth_italic };
+        match glyphs.first().map(|g| g.1).filter(|_| x_scale.is_finite() && *x_scale > 0.0 && (x_scale - 1.0).abs() > 1e-4) {
+            // Scaled letters (`w:w`): drawn stretched across from the run's start, their
+            // positions brought back so the stretch puts each where the layout has it.
+            Some(x0) => {
+                let k = *x_scale;
+                let moved: Vec<(u32, f32, f32)> = glyphs.iter().map(|&(g, x, y)| (g, x0 + (x - x0) / k, y)).collect();
+                s.push_transform(&Transform::from_row(k, 0.0, 0.0, 1.0, x0 * (1.0 - k), 0.0));
+                self.glyphs(s, (face, *size), &moved, paint, (text, ranges), para_tag);
+                s.pop();
+            }
+            None => self.glyphs(s, (face, *size), glyphs, paint, (text, ranges), para_tag),
+        }
+        if let Some(l) = link {
+            self.link_rect(face, *size, glyphs, l);
+        }
+    }
+
     /// Paint one display item on the PDF surface in its current point-coordinate system.
     /// Nested clips and turns are pushed and popped around their child items. Shape and path
     /// outlines set their own dash and cap state, then clear their fill and stroke; ink retains
@@ -17,24 +39,7 @@ impl Exporter<'_> {
                     self.draw(s, d);
                 }
             }
-            Draw::Glyphs { face, size, glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges, x_scale, .. } => {
-                let paint = GlyphPaint { color: *color, alpha: *alpha, bold: *synth_bold, italic: *synth_italic };
-                match glyphs.first().map(|g| g.1).filter(|_| x_scale.is_finite() && *x_scale > 0.0 && (x_scale - 1.0).abs() > 1e-4) {
-                    // Scaled letters (`w:w`): drawn stretched across from the run's start, their
-                    // positions brought back so the stretch puts each where the layout has it.
-                    Some(x0) => {
-                        let k = *x_scale;
-                        let moved: Vec<(u32, f32, f32)> = glyphs.iter().map(|&(g, x, y)| (g, x0 + (x - x0) / k, y)).collect();
-                        s.push_transform(&Transform::from_row(k, 0.0, 0.0, 1.0, x0 * (1.0 - k), 0.0));
-                        self.glyphs(s, face, *size, &moved, paint, (text, ranges));
-                        s.pop();
-                    }
-                    None => self.glyphs(s, face, *size, glyphs, paint, (text, ranges)),
-                }
-                if let Some(l) = link {
-                    self.link_rect(face, *size, glyphs, l);
-                }
-            }
+            Draw::Glyphs { .. } => self.draw_glyphs_item(s, d, None),
             Draw::Fill { rect, color, alpha, .. } => {
                 if let Some(p) = rect_path(rect) {
                     s.set_stroke(None);

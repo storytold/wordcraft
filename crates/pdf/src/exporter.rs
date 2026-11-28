@@ -1,5 +1,5 @@
 use super::export::Fit;
-use super::glyphs::{baseline, cluster_ends, glyph_id, glyph_outlines, left_to_right, split_clusters, visual_order};
+use super::glyphs::{baseline, cluster_ends, glyph_id, glyph_outlines, left_to_right, split_clusters_with_actual, visual_order};
 use super::options::{PdfError, PdfOptions};
 use super::paint::{append_path, fill, grown, norm, ok, paint_fill, pdf_line_cap, rect_path, shape_effects, shape_path};
 use super::picture::{Vector, build_vector, load_image, paint_of, vector_picture};
@@ -190,7 +190,18 @@ impl Exporter<'_> {
     /// (structure entry `idx`), pictures and figures on their own, anything else an artifact.
     fn line_item(&mut self, s: &mut Surface, d: &Draw, idx: usize) {
         match d {
-            Draw::Glyphs { .. } | Draw::Turned { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
+            Draw::Glyphs { .. } => self.draw_glyphs_item(s, d, Some(idx)),
+            Draw::Turned { x, y, turn, items } => {
+                if !ok(*x) || !ok(*y) {
+                    return;
+                }
+                let [a, b, c, d, e, f] = Draw::turn_matrix(*turn, *x, *y);
+                s.push_transform(&Transform::from_row(a, b, c, d, e, f));
+                for it in items {
+                    self.line_item(s, it, idx);
+                }
+                s.pop();
+            }
             // A picture marked decorative: an artifact screen readers skip.
             Draw::Image { decorative: true, .. } => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
             Draw::Image { alt, .. } => self.tagged(s, Role::Figure, Some(alt), |me, s| me.draw(s, d)),
