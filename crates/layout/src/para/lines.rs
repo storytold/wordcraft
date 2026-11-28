@@ -177,11 +177,7 @@ impl<'e> Breaker<'e> {
         let grid = Some(env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid);
         // Multiple spacing accounts for the tallest run; `close_line` checks any taller measured
         // content against exclusions before storing the line.
-        let mark_natural = pl
-            .styles
-            .get(mark_style as usize)
-            .map(|st| st.ascent + st.descent)
-            .unwrap_or(14.0);
+        let mark_natural = pl.styles.get(mark_style as usize).map(|st| st.ascent + st.descent).unwrap_or(14.0);
         let natural = if matches!(rp.line_spacing, LineSpacing::Multiple(_)) {
             pl.styles
                 .iter()
@@ -424,9 +420,8 @@ impl<'e> Breaker<'e> {
                 let table_h = if matches!(self.rp.line_spacing, LineSpacing::Exactly(_)) { self.table_h } else { v.height };
                 let row = (self.top, v.height, table_h);
                 let spans = row_spans(self.exclusions, row, (sc.row_lo, self.base_right), self.tight_indent);
-                let fits = spans.as_ref().is_ok_and(|spans| {
-                    spans.iter().any(|(left, right)| *left <= sc.left + 0.01 && *right >= sc.right_edge - 0.01)
-                });
+                let fits =
+                    spans.as_ref().is_ok_and(|spans| spans.iter().any(|(left, right)| *left <= sc.left + 0.01 && *right >= sc.right_edge - 0.01));
                 if !fits {
                     self.top = match spans {
                         Err(below) => below,
