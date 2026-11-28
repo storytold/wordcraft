@@ -7,6 +7,7 @@ use craft::menu::{Ribbon, RibbonOutput, RibbonRow, RibbonTab};
 use craft::theme::Variant;
 use craft::ui::contract::{Bind, Entry};
 use craft::ui::primitives::IconSpec;
+use craft::ui::style::Ink;
 use craft::ui::tabs::StripEnd;
 use egui::Ui;
 use serde_json::json;
@@ -73,11 +74,15 @@ pub(crate) fn no_ribbon() -> RibbonOutput<String> {
     RibbonOutput { shown: None, picked: None, controls: None, tabs: None, tab_ids: Default::default() }
 }
 
-/// How the ribbon buttons look, in points: the old ribbon drew its large icons 32
-/// points square and the rest 17, its menu arrows as filled triangles in 10 points, and its small
-/// rows 22 points apart (20-point buttons a tight gap apart); its tabs rest in the text colour
-/// over a 3-point underline; its body stands on its own lighter fill, ruled above and below.
-const RIBBON_LOOK: RibbonLook = RibbonLook::new(32, 17).arrow(10).row(20).tabs(3).body();
+/// How the ribbon buttons look, in points: large icons 36 points square, so a large button (its
+/// icon over two label lines) is as tall as the three small rows beside it and leaves no more room
+/// under a one-line label than the old ribbon's 32-point icons did over its shorter rows; the rest
+/// 16, the grid the icon set is drawn on (`icons/*.svg`), so they land on whole pixels at 1× and
+/// 2×; menu arrows as filled triangles in 10 points; small rows 24 points high, the least
+/// target size the accessibility standard asks for (and the old ribbon's 24-point-wide icon
+/// buttons), a tight gap apart; tabs in the text colour over a 3-point underline; the body on its
+/// own lighter fill, ruled above and below.
+pub(crate) const RIBBON_LOOK: RibbonLook = RibbonLook::new(36, 16).arrow(10).row(24).tabs(3).body();
 
 /// Draws the Read toolbar or the full ribbon, switching to and from the contextual Equation and
 /// Outlining tabs and showing the available tab strip. The output carries the record of the ribbon's
@@ -154,9 +159,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) -> RibbonOutput<String> {
         // Editing are plain (ghost) buttons, as in v0.18.1; Share is a filled accent button.
         StripEnd::command(tl!("Comments").to_string(), IconSpec::svg(IconId::new("comment")), CommandRef::new("view.commentsPane")),
         StripEnd::menu(editing_label.to_string(), IconSpec::svg(IconId::new("wordcraft.pencil")), &modes),
+        // Share sits on the accent fill, so its icon paints its accent parts (the arrow) in its own ink, as an icon on
+        // any strong fill does; otherwise they would vanish into the fill.
         StripEnd::command(
             tl!("Share").to_string(),
-            IconSpec::svg(IconId::new("share")),
+            IconSpec::svg(IconId::new("share")).ink(Ink::OnDark),
             CommandRef::with_params("ui.backstage", json!({"value": true, "page": "export"})),
         )
         .variant(Variant::PRIMARY),
@@ -170,8 +177,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) -> RibbonOutput<String> {
         .trailing(&ends)
         .minimised(Bind::bound(&mut collapsed))
         .context_menu(&mut |ui, request, _| context_menu::rows(ui, request, &qat, qat_shown))
-        // The old ribbon drew its large icons 32 points square and every other icon 17, and its
-        // dialog launcher as a small corner arrow.
+        // Large icons 36 points square and every other icon 16 (`RIBBON_LOOK`), and the dialog
+        // launcher as a small corner arrow, as the old ribbon drew it.
         .look(RIBBON_LOOK)
         .launcher_icon(IconId::new("launcher"))
         .show(ui, |row, key| {

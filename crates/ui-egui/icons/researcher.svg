@@ -1,6 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="20" height="20">
-  <circle cx="9" cy="9" r="5" fill="none" stroke="currentColor" stroke-width="1.25"/>
-  <path d="M12.5 12.5 L17 17" fill="none" stroke="#1E6FD9" class="accent" stroke-width="1.25"/>
-  <path d="M6.5 8 L11.5 8" fill="none" stroke="currentColor" stroke-width="1.25"/>
-  <path d="M6.5 10 L11.5 10" fill="none" stroke="currentColor" stroke-width="1.25"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <polygon points="1.5 2.109 1.538 1.843 1.652 1.652 1.843 1.538 2.109 1.5 5.629 1.5 5.923 1.527 6.194 1.608 6.443 1.742 6.669 1.931 7.838 3.1 8.027 3.327 8.162 3.575 8.242 3.847 8.269 4.14 8.269 8.891 8.231 9.157 8.117 9.348 7.927 9.462 7.66 9.5 2.109 9.5 1.843 9.462 1.652 9.348 1.538 9.157 1.5 8.891" class="accent" fill="#1E6FD9" fill-opacity="0.161"/>
+  <polygon points="1.5 2.109 1.538 1.843 1.652 1.652 1.843 1.538 2.109 1.5 5.629 1.5 5.923 1.527 6.194 1.608 6.443 1.742 6.669 1.931 7.838 3.1 8.027 3.327 8.162 3.575 8.242 3.847 8.269 4.14 8.269 8.891 8.231 9.157 8.117 9.348 7.927 9.462 7.66 9.5 2.109 9.5 1.843 9.462 1.652 9.348 1.538 9.157 1.5 8.891" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="11.5" cy="11.5" r="1.75" class="accent" fill="#1E6FD9" fill-opacity="0.161"/>
+  <circle cx="11.5" cy="11.5" r="1.75" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="14.328 14.328 14.47 14.47" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

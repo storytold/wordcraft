@@ -1,17 +1,15 @@
 use craft::behavior::IconId;
 use craft::keymap::CommandRef;
-use craft::menu::ribbon::{RibbonGroup, RibbonRow};
+use craft::menu::ribbon::{Gallery, GalleryFace, GalleryItem, RibbonGroup, RibbonRow};
 use craft::ui::buttons::{Arrangement, Button, ToggleButton};
 use craft::ui::contract::{Gap, Props as _, Show as _, ShowContainer as _};
 use craft::ui::layout_components::Stack;
-use craft::ui::list::ThumbAspect;
+use craft::ui::list::{ThumbAspect, ThumbSize};
 use craft::ui::menu::MenuItem;
-use craft::ui::primitives::FacePaint;
-use craft::ui::tile_grid::{CaptionPlace, Tile};
+use craft::ui::primitives::{ContentPainterCx, FacePaint};
 
-use super::common::{menu_button, size_field};
+use super::common::{gallery_rows, menu_button, size_field, two_rows};
 use super::{WordApp, json};
-use crate::equation_tab::pick_tile;
 
 /// Chart Design and SmartArt Design › Size: the selected graphic's height and width in points. A
 /// size outside the range is shown as it is and writes nothing.
@@ -19,10 +17,10 @@ fn graphic_size(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     row.group(RibbonGroup::new("size", tl!("Size").to_string(), IconId::new("size").into()), |ui| {
         let (w0, h0) =
             wordcraft_engine::cmd::objects::selected(&app.session).and_then(|(_, o)| o.frame().map(|(w, h, _)| (w, h))).unwrap_or((0.0, 0.0));
-        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-            for (label, key, v0) in [("H:", "height", h0), ("W:", "width", w0)] {
-                size_field(ui, app, label, key, v0, false, 36.0..=2000.0);
-            }
+        // Two rows of fields spread over the ribbon's height, as Home's Font and Paragraph (`two_rows`).
+        two_rows(ui, |ui, at| {
+            let (label, key, v0) = if at == 0 { ("H:", "height", h0) } else { ("W:", "width", w0) };
+            size_field(ui, app, label, key, v0, false, 36.0..=2000.0);
         });
     });
 }
@@ -62,13 +60,30 @@ pub(super) fn smart_art_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         let colors = g.colors;
         let theme = &theme;
         let line = ui.visuals().weak_text_color();
-        let picked = pick_tile(ui, tl!("Layouts"), 4, CaptionPlace::None, on, layouts.len(), |at| match layouts.get(at).copied() {
-            Some(layout) => Tile::new(tl!(layout.label()).to_string())
-                .thumb(ThumbAspect::new(46, 31), move |cx, r| crate::dialogs_smart_art::preview(cx, r, layout, colors, theme, line)),
-            None => Tile::new(String::new()),
+        // An in-ribbon gallery, as Design › Style Sets: one row of previews in the layouts' 46:31 shape, the scroll
+        // buttons and More, which opens every layout. The menu's grid of all eight made the ribbon two rows tall.
+        let painters: Vec<Box<dyn Fn(&ContentPainterCx<'_>, egui::Rect) + '_>> = layouts
+            .iter()
+            .map(|&layout| {
+                Box::new(move |cx: &ContentPainterCx<'_>, r: egui::Rect| crate::dialogs_smart_art::preview(cx, r, layout, colors, theme, line))
+                    as Box<dyn Fn(&ContentPainterCx<'_>, egui::Rect) + '_>
+            })
+            .collect();
+        let items: Vec<GalleryItem<'_, usize>> = layouts
+            .iter()
+            .zip(&painters)
+            .enumerate()
+            .map(|(at, (layout, paint))| GalleryItem { key: at, label: tl!(layout.label()).to_string().into(), face: GalleryFace::Paint(&**paint) })
+            .collect();
+        let out = gallery_rows(ui, |ui| {
+            Gallery::new(tl!("Layouts").to_string(), &items, on.as_ref())
+                .tiles(4, 2)
+                .thumb(ThumbSize::Large)
+                .aspect(ThumbAspect::new(46, 31))
+                .show(ui)
         });
         // A pick of the current layout does nothing.
-        if let Some(layout) = picked.and_then(|i| layouts.get(i)).copied().filter(|l| *l != g.layout) {
+        if let Some(layout) = out.and_then(|out| out.picked).and_then(|i| layouts.get(i)).copied().filter(|l| *l != g.layout) {
             let _ = app.run("smartArt.layout", json!({"layout": layout.id()}));
         }
     });

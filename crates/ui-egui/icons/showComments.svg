@@ -1,4 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="20" height="20">
-  <rect x="3" y="3" width="14" height="14" rx="1" fill="none" stroke="currentColor" stroke-width="1.25"/>
-  <rect x="12" y="3" width="5" height="14" rx="1" fill="#1E6FD9" class="accent" fill-opacity="0.4"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <polyline points="1.5 3.5 7.5 3.5" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="1.5 6.5 7.5 6.5" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="1.5 9.5 7.5 9.5" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="1.5 12.5 7.5 12.5" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="10" y="2" width="4.5" height="3.288" rx="1" class="accent" fill="#1E6FD9" fill-opacity="0.161"/>
+  <polygon points="11.766 5.288 11.502 5.316 11.264 5.397 11.051 5.532 10.865 5.721 10.79 5.816 10.671 5.937 10.587 5.961 10.536 5.889 10.519 5.721 10.519 5.548 10.503 5.434 10.454 5.353 10.373 5.305 10.26 5.288 10.26 5.288 10.146 5.272 10.065 5.224 10.016 5.142 10 5.029 10 3 10.062 2.562 10.25 2.25 10.562 2.062 11 2 13.5 2 13.938 2.062 14.25 2.25 14.438 2.562 14.5 3 14.5 4.288 14.438 4.726 14.25 5.038 13.938 5.226 13.5 5.288" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

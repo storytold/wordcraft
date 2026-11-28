@@ -1,4 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="20" height="20">
-  <circle cx="10" cy="10" r="6" fill="none" stroke="currentColor" stroke-width="1.25"/>
-  <path d="M14.5 3 L17.5 6 L13.5 7 Z" fill="#1E6FD9" class="accent"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <rect x="5.5" y="8" width="5" height="5" rx="1" class="accent" fill="#1E6FD9" fill-opacity="0.161"/>
+  <rect x="5.5" y="8" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="1.892 7.777 2.184 7.175 2.338 6.879 2.506 6.591 2.689 6.313 2.886 6.044 2.886 6.044 3.097 5.785 3.321 5.538 3.557 5.303 3.805 5.08 3.805 5.08 4.064 4.87 4.334 4.674 4.613 4.493 4.901 4.325 4.901 4.325 5.198 4.173 5.502 4.036 5.812 3.916 6.129 3.811 6.129 3.811 6.451 3.723 6.776 3.651 7.105 3.597 7.436 3.559 7.436 3.559 7.77 3.539 8.103 3.535 8.435 3.549 8.768 3.58 8.768 3.58 9.098 3.628 9.424 3.693 9.747 3.775 10.066 3.874 10.066 3.874 10.38 3.988 10.686 4.119 10.985 4.265 11.277 4.427 11.277 4.427 11.56 4.603 11.833 4.793 12.096 4.998 12.349 5.216 12.349 5.216 12.59 5.447 12.819 5.689 13.034 5.943 13.237 6.208 13.629 6.75" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="11.723 6.148 13.249 6.63 13.421 6.658 13.556 6.622 13.655 6.523 13.717 6.359 14.063 4.797" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

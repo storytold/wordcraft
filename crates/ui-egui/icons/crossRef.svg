@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="20" height="20">
-  <path d="M3 2 L8 2 L12 6 L12 14 L3 14 Z" fill="none" stroke="currentColor" stroke-width="1.25"/>
-  <path d="M8 2 L8 6 L12 6" fill="none" stroke="currentColor" stroke-width="1.25"/>
-  <path d="M9 12 L17 17" fill="none" stroke="#1E6FD9" class="accent" stroke-width="1.25"/>
-  <path d="M14 17.5 L17 17 L16.5 14" fill="none" stroke="#1E6FD9" class="accent" stroke-width="1.25"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <polygon points="1.5 2.109 1.538 1.843 1.652 1.652 1.843 1.538 2.109 1.5 5.629 1.5 5.923 1.527 6.194 1.608 6.443 1.742 6.669 1.931 7.838 3.1 8.027 3.327 8.162 3.575 8.242 3.847 8.269 4.14 8.269 8.891 8.231 9.157 8.117 9.348 7.927 9.462 7.66 9.5 2.109 9.5 1.843 9.462 1.652 9.348 1.538 9.157 1.5 8.891" class="accent" fill="#1E6FD9" fill-opacity="0.161"/>
+  <polygon points="1.5 2.109 1.538 1.843 1.652 1.652 1.843 1.538 2.109 1.5 5.629 1.5 5.923 1.527 6.194 1.608 6.443 1.742 6.669 1.931 7.838 3.1 8.027 3.327 8.162 3.575 8.242 3.847 8.269 4.14 8.269 8.891 8.231 9.157 8.117 9.348 7.927 9.462 7.66 9.5 2.109 9.5 1.843 9.462 1.652 9.348 1.538 9.157 1.5 8.891" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="5 12.5 5 13.25 5.047 13.578 5.188 13.812 5.422 13.953 5.75 14 12.5 14 12.938 13.938 13.25 13.75 13.438 13.438 13.5 13 13.5 6" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="14.851 6.975 13.77 5.795 13.635 5.684 13.5 5.647 13.365 5.684 13.23 5.795 12.149 6.975" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

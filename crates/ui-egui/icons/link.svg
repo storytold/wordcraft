@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="20" height="20">
-  <path d="M3 10 L7 6 L9.5 6 L9.5 8 L7.5 8 L5 10.5 L7.5 13 L9.5 13 L9.5 15 L7 15 Z" fill="none" stroke="currentColor" stroke-width="1.25"/>
-  <path d="M7.5 10.5 L12.5 10.5" fill="none" stroke="#1E6FD9" class="accent" stroke-width="1.25"/>
-  <path d="M17 10.5 L13 14.5 L10.5 14.5 L10.5 12.5 L12.5 12.5 L15 10 L12.5 7.5 L10.5 7.5 L10.5 5.5 L13 5.5 Z" fill="none" stroke="currentColor" stroke-width="1.25"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <polyline points="7.15 4.6 7.928 3.822 8.185 3.586 8.46 3.375 8.753 3.189 9.062 3.027 9.062 3.027 9.385 2.897 9.716 2.804 10.056 2.749 10.403 2.73 10.465 2.73 10.844 2.748 11.216 2.803 11.58 2.894 11.937 3.021 11.953 3.027 12.287 3.203 12.569 3.431 12.797 3.713 12.972 4.047 12.979 4.063 13.106 4.42 13.197 4.784 13.252 5.156 13.27 5.535 13.27 5.597 13.251 5.944 13.196 6.284 13.103 6.615 12.972 6.938 12.972 6.938 12.811 7.247 12.625 7.54 12.414 7.815 12.178 8.072 11.4 8.85" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="8.85 11.4 8.072 12.178 7.815 12.414 7.54 12.625 7.247 12.811 6.938 12.972 6.938 12.972 6.615 13.103 6.284 13.196 5.944 13.251 5.597 13.27 5.535 13.27 5.156 13.252 4.784 13.197 4.42 13.106 4.063 12.979 4.047 12.972 3.713 12.797 3.431 12.569 3.203 12.287 3.027 11.953 3.021 11.937 2.894 11.58 2.803 11.216 2.748 10.844 2.73 10.465 2.73 10.403 2.749 10.056 2.804 9.716 2.897 9.385 3.027 9.062 3.027 9.062 3.189 8.753 3.375 8.46 3.586 8.185 3.822 7.928 4.6 7.15" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="6.5 9.5 9.5 6.5" class="accent" fill="none" stroke="#1E6FD9" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

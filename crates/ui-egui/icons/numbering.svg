@@ -1,7 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="20" height="20">
-  <path d="M3.3 4.1 L4.4 3.2 L4.4 6.8" fill="none" stroke="#1E6FD9" class="accent" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M2.9 9 C3.1 8.4 3.6 8.2 4.1 8.2 C4.8 8.2 5.3 8.6 5.3 9.3 C5.3 10.2 2.9 10.9 2.9 11.8 L5.4 11.8 M2.9 13.2 L5.2 13.2 L4 14.7 C4.8 14.7 5.4 15.1 5.4 15.8 C5.4 16.5 4.8 16.9 4.1 16.9 C3.6 16.9 3.1 16.7 2.9 16.3" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M7.5 5 L17 5" fill="none" stroke="currentColor" stroke-width="1.25"/>
-  <path d="M7.5 10 L17 10" fill="none" stroke="currentColor" stroke-width="1.25"/>
-  <path d="M7.5 15 L17 15" fill="none" stroke="currentColor" stroke-width="1.25"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <polyline points="7 3 14.5 3" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="7 8 14.5 8" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="7 13 14.5 13" fill="none" stroke="currentColor" stroke-width="1.250" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M3.443 1.181V4.819H2.796V1.762H2.772L1.922 2.373V1.752L2.721 1.181Z" class="accent" fill="#1E6FD9"/>
+  <path d="M1.52 9.819V9.35L2.782 8.107Q3.048 7.836 3.187 7.644Q3.326 7.451 3.326 7.219Q3.326 6.962 3.154 6.813Q2.982 6.665 2.723 6.665Q2.45 6.665 2.286 6.827Q2.123 6.989 2.123 7.27H1.5Q1.5 6.926 1.657 6.669Q1.815 6.413 2.093 6.273Q2.372 6.132 2.73 6.132Q3.094 6.132 3.37 6.269Q3.646 6.406 3.8 6.644Q3.954 6.882 3.954 7.187Q3.954 7.387 3.877 7.583Q3.8 7.778 3.604 8.02Q3.409 8.261 3.055 8.603L2.423 9.248V9.274H4.007V9.819Z" fill="currentColor"/>
+  <path d="M2.749 14.868Q2.365 14.868 2.069 14.737Q1.772 14.606 1.601 14.372Q1.43 14.138 1.421 13.833H2.077Q2.092 14.057 2.282 14.189Q2.473 14.321 2.749 14.321Q3.042 14.321 3.23 14.169Q3.418 14.018 3.418 13.776Q3.418 13.527 3.224 13.37Q3.03 13.212 2.683 13.212H2.361V12.709H2.683Q2.966 12.709 3.144 12.563Q3.323 12.417 3.323 12.177Q3.323 11.945 3.167 11.805Q3.012 11.665 2.756 11.665Q2.505 11.665 2.318 11.796Q2.131 11.928 2.124 12.16H1.496Q1.501 11.857 1.671 11.625Q1.841 11.394 2.125 11.263Q2.409 11.132 2.761 11.132Q3.125 11.132 3.393 11.269Q3.662 11.406 3.81 11.634Q3.957 11.862 3.957 12.138Q3.957 12.446 3.777 12.653Q3.596 12.861 3.301 12.927V12.956Q3.681 13.01 3.885 13.239Q4.089 13.469 4.089 13.811Q4.089 14.116 3.916 14.355Q3.742 14.594 3.44 14.731Q3.137 14.868 2.749 14.868Z" fill="currentColor"/>
 </svg>
