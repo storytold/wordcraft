@@ -2562,6 +2562,43 @@ fn pdf_fill_opacities(bytes: &[u8]) -> Vec<f32> {
     pdf.objects().into_iter().filter_map(|o| if let Object::Dict(d) = o { d.get::<f32>(b"ca") } else { None }).collect()
 }
 
+#[test]
+fn picture_soft_edge_exports_a_mask_without_changing_the_embedded_pixels() {
+    use hayro_syntax::object::Object;
+
+    let export_picture = |soft_edge_emu| {
+        let mut doc = Document::new();
+        let media = doc.add_media(png(), "png");
+        let mut para = Paragraph::new();
+        para.insert_object(
+            0,
+            InlineObject::Image {
+                media,
+                w: 72.0,
+                h: 48.0,
+                alt: "Feathered illustration".into(),
+                float: Default::default(),
+                crop: [0.1, 0.2, 0.0, 0.0],
+                fx: PicFx { soft_edge_emu, ..Default::default() },
+                ole: None,
+            },
+            &CharProps::default(),
+        )
+        .unwrap();
+        doc.body = vec![para_block(para)];
+        export(&doc, &PdfOptions::default()).unwrap()
+    };
+    let plain = export_picture(None);
+    let feathered = export_picture(Some(76_200));
+    assert!(!pdf_images(&plain).is_empty());
+    assert_eq!(pdf_images(&plain), pdf_images(&feathered));
+    let mask_count = |bytes: &[u8]| {
+        let pdf = hayro_syntax::Pdf::new(bytes.to_vec()).expect("parse");
+        pdf.objects().into_iter().filter(|object| matches!(object, Object::Dict(dict) if dict.contains_key(b"SMask"))).count()
+    };
+    assert!(mask_count(&feathered) > mask_count(&plain));
+}
+
 /// A JPEG with brightness and contrast (#1766) is embedded with its corrected pixels, read back
 /// from the PDF itself (Flate, not passed through as DCT); the same JPEG without them still is
 /// passed through; the same picture and corrections twice are embedded once; transparency alone
@@ -2624,7 +2661,10 @@ fn picture_fx_is_baked_into_the_embedded_image() {
     assert!(pdf_fill_opacities(&faded).iter().any(|a| (a - 0.4).abs() < 0.01), "{:?}", pdf_fill_opacities(&faded));
     assert!(!pdf_fill_opacities(&export_with(&jpeg, "jpeg", &[PicFx::default()])).iter().any(|a| *a < 0.99));
     // Hostile corrections export.
-    assert_eq!(pdf_images(&export_with(&jpeg, "jpeg", &[PicFx { bright: i32::MAX, contrast: i32::MIN, transparency: -7 }])).len(), 1);
+    assert_eq!(
+        pdf_images(&export_with(&jpeg, "jpeg", &[PicFx { bright: i32::MAX, contrast: i32::MIN, transparency: -7, ..Default::default() }])).len(),
+        1
+    );
 }
 
 /// A hostile header (a few bytes claiming 20 000 × 20 000 RGBA, 1.6 GB decoded) is refused by

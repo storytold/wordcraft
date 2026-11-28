@@ -44,7 +44,19 @@ impl Exporter<'_> {
                 }
             }
             Draw::Line { x0, y0, x1, y1, width, color, stroke, alpha, .. } => self.line(s, (*x0, *y0, *x1, *y1), *width, *color, *stroke, *alpha),
-            Draw::Image { rect, media, crop, alpha, fx, .. } => self.picture(s, rect, media, crop, *alpha, *fx),
+            Draw::Image { rect, media, crop, alpha, fx, .. } => {
+                let feather = fx.soft_edge_points().zip(rect_path(rect));
+                if let Some((radius, clip)) = feather.as_ref() {
+                    for horizontal in [true, false] {
+                        picture_mask(s, rect, clip, *radius, horizontal);
+                    }
+                }
+                self.picture(s, rect, media, crop, *alpha, *fx);
+                if feather.is_some() {
+                    s.pop();
+                    s.pop();
+                }
+            }
             Draw::Path { segs, fill: f, stroke, stroke_width, dash, cap } => {
                 let mut pb = PathBuilder::new();
                 append_path(&mut pb, &wordcraft_layout::display::seg_path(segs));
@@ -336,6 +348,33 @@ impl Exporter<'_> {
             s.pop();
         }
     }
+}
+
+/// One axis of the frame's feather, composed with the other as an alpha mask.
+fn picture_mask(s: &mut Surface, rect: &Rect, clip: &krilla::geom::Path, radius: f32, horizontal: bool) {
+    let stops = wordcraft_doc::effects::picture_soft_edge_stops(if horizontal { rect.w } else { rect.h }, radius)
+        .into_iter()
+        .map(|(offset, alpha)| krilla::paint::Stop { offset: norm(offset), color: rgb::Color::new(255, 255, 255).into(), opacity: norm(alpha) })
+        .collect();
+    let gradient = krilla::paint::LinearGradient {
+        x1: rect.x,
+        y1: rect.y,
+        x2: if horizontal { rect.right() } else { rect.x },
+        y2: if horizontal { rect.y } else { rect.bottom() },
+        transform: Transform::default(),
+        spread_method: krilla::paint::SpreadMethod::Pad,
+        stops,
+        anti_alias: true,
+    };
+    let mask = {
+        let mut builder = s.stream_builder();
+        let mut surface = builder.surface();
+        surface.set_fill(Some(Fill { paint: gradient.into(), opacity: norm(1.0), rule: FillRule::NonZero }));
+        surface.draw_path(clip);
+        surface.finish();
+        krilla::mask::Mask::new(builder.finish(), krilla::mask::MaskType::Alpha)
+    };
+    s.push_mask(mask);
 }
 
 /// A centred page picture's size: its natural size (pixels at 96 dpi), scaled down by one factor

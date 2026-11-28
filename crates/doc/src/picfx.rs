@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 /// The largest magnitude of a correction (100 %).
 pub const FX_MAX: i32 = 100_000;
 
-/// Brightness, contrast and transparency of a picture (see the module docs).
+/// Colour corrections, transparency and soft edge of a picture.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PicFx {
@@ -40,17 +40,34 @@ pub struct PicFx {
     pub contrast: i32,
     /// 0 (opaque) ..= 100 000 (invisible).
     pub transparency: i32,
+    /// DrawingML soft-edge radius in EMUs. An absent or zero value leaves a sharp edge.
+    /// The DOCX adapter converts this field by name to and from craft-wordmodel's `PicFx`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub soft_edge_emu: Option<u32>,
 }
 
 impl PicFx {
     /// Corrections clamped to their ranges.
     pub fn new(bright: i32, contrast: i32, transparency: i32) -> PicFx {
-        PicFx { bright: bright.clamp(-FX_MAX, FX_MAX), contrast: contrast.clamp(-FX_MAX, FX_MAX), transparency: transparency.clamp(0, FX_MAX) }
+        PicFx {
+            bright: bright.clamp(-FX_MAX, FX_MAX),
+            contrast: contrast.clamp(-FX_MAX, FX_MAX),
+            transparency: transparency.clamp(0, FX_MAX),
+            soft_edge_emu: None,
+        }
     }
 
     /// The same corrections, each clamped to its range (for values that came from anywhere).
     pub fn clamped(self) -> PicFx {
-        PicFx::new(self.bright, self.contrast, self.transparency)
+        let mut bounded = PicFx::new(self.bright, self.contrast, self.transparency);
+        const MAX_RADIUS_EMU: u32 = crate::effects::MAX_SOFT_EDGE as u32 * 12_700;
+        bounded.soft_edge_emu = self.soft_edge_emu.filter(|&r| r > 0).map(|r| r.min(MAX_RADIUS_EMU));
+        bounded
+    }
+
+    /// The visible feather radius in display points.
+    pub fn soft_edge_points(self) -> Option<f32> {
+        crate::effects::picture_soft_edge(self.soft_edge_emu.map(|r| r as f32 / 12_700.0))
     }
 
     /// No correction at all.
@@ -174,7 +191,7 @@ mod tests {
     #[test]
     fn hostile_values_clamp() {
         for v in [i32::MIN, -100_001, 0, 100_001, i32::MAX] {
-            let fx = PicFx { bright: v, contrast: v, transparency: v };
+            let fx = PicFx { bright: v, contrast: v, transparency: v, ..Default::default() };
             let _ = fx.table();
             assert!((0.0..=1.0).contains(&fx.opacity()));
             let mut px = [1u8, 2, 3, 4];

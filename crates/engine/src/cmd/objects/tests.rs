@@ -8,6 +8,39 @@ fn png(w: u32, h: u32) -> Vec<u8> {
 
     wordcraft_geom::picture::encode_format(&image::DynamicImage::ImageRgba8(img).clone(), image::ImageFormat::Png).unwrap()
 }
+#[test]
+fn imported_picture_soft_edge_follows_style_reset_and_undo() {
+    let mut doc = wordcraft_doc::Document::new();
+    let media = doc.add_media(png(20, 12), "png");
+    let mut paragraph = wordcraft_doc::Paragraph::new();
+    let fx = PicFx { soft_edge_emu: Some(76_200), ..PicFx::new(10_000, 0, 0) };
+    paragraph
+        .insert_object(
+            0,
+            InlineObject::Image { media, w: 72.0, h: 48.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], fx, ole: None },
+            &Default::default(),
+        )
+        .unwrap();
+    doc.body = vec![wordcraft_doc::para_block(paragraph)];
+    let mut session = Session::new(doc);
+    session.run("select.objects", &json!({"index": 0})).unwrap();
+    let original = session.doc.body.clone();
+    session.run("picture.crop", &json!({"left": 0.2})).unwrap();
+    assert!(matches!(selected(&session).unwrap().1, InlineObject::Image { fx: after, .. } if after == fx));
+    session.run("edit.undo", &json!({})).unwrap();
+    session.run("picture.style", &json!({"style": "softEdge"})).unwrap();
+    assert!(matches!(
+        selected(&session).unwrap().1,
+        InlineObject::Image { fx: after, .. } if after.soft_edge_emu.is_none() && after.bright == fx.bright
+    ));
+    session.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(session.doc.body, original);
+    session.run("picture.reset", &json!({})).unwrap();
+    assert!(matches!(selected(&session).unwrap().1, InlineObject::Image { fx: after, .. } if after.is_identity()));
+    session.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(session.doc.body, original);
+}
+
 /// The laid-out area of the only picture or shape (not a text box).
 fn object_area(s: &mut Session) -> wordcraft_layout::hit::ObjectHit {
     s.layout().find_object(0, |o| o.text_box.is_none()).unwrap()
