@@ -27,6 +27,7 @@ pub fn specs() -> Vec<CommandSpec> {
             r#"{"type"?: "indented|runIn", "columns"?: 1-4, "rightAlign"?: bool, "tabLeader"?: "dot|hyphen|underscore|none", "headings"?: bool (letter headings)} (replaces an existing index's settings)"#,
         ),
         CommandSpec::new("references.updateIndex", "Update Index", "References › Index", |s, _| {
+            check_index_reachable(s)?;
             super::citations::update_generated(s)?;
             sel_result(s)
         }),
@@ -135,8 +136,38 @@ fn index_field(s: &Session) -> Option<(usize, String)> {
     })
 }
 
+/// Whether an INDEX field (a plain one or a range field, as Word files hold it) sits in the main
+/// text's own paragraphs (`main`), or anywhere else: a table cell, a text box, a header or a
+/// footer. Only an index in the main text is rebuilt.
+fn has_index(s: &Session, main: bool) -> bool {
+    std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).any(|story| {
+        s.doc
+            .para_paths(story)
+            .iter()
+            .filter(|path| (story == StoryRef::Body && path.depth() == 0) == main)
+            .filter_map(|path| s.doc.para(story, path))
+            .any(|p| {
+                p.objects.iter().any(|o| {
+                    matches!(o, InlineObject::Field { instr, .. } | InlineObject::FieldStart { instr, .. } if FieldCode::parse(instr).name == "INDEX")
+                })
+            })
+    })
+}
+
+/// Refuses Insert and Update Index when the document's only index is one they can't rebuild,
+/// rather than adding a second index or reporting an update that didn't happen.
+fn check_index_reachable(s: &Session) -> Result<(), CmdError> {
+    if !has_index(s, true) && has_index(s, false) {
+        return Err(CmdError::Failed(
+            "the index is in a table, text box, header or footer, where it can't be updated; move it into the main text".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn insert_index(s: &mut Session, v: &Value) -> CmdResult {
     let instr = index_instr(v);
+    check_index_reachable(s)?;
     match index_field(s) {
         Some((i, _)) => {
             // Settings for the index that is there: a new field code, then rebuild it.
@@ -483,5 +514,48 @@ mod tests {
         s.run("references.updateIndex", &json!({})).unwrap();
         let (i, _) = index_field(&s).unwrap();
         assert_eq!(s.doc.body[i + 2].as_para().unwrap().props.tabs.as_ref().unwrap()[0].leader, TabLeader::Hyphen);
+    }
+
+    /// #3670: an index in a table cell or a text box (as imported documents have it) can't be
+    /// rebuilt where it is, so Insert and Update Index say so, and Insert Index doesn't add a
+    /// second index at the caret.
+    #[test]
+    fn an_index_outside_the_main_text_is_refused_not_doubled() {
+        let indexes = |s: &Session| {
+            std::iter::once(StoryRef::Body)
+                .chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k)))
+                .flat_map(|story| s.doc.para_paths(story).into_iter().filter_map(move |path| s.doc.para(story, &path).cloned()))
+                .flat_map(|p| p.objects)
+                .filter(|o| matches!(o, InlineObject::Field { instr, .. } | InlineObject::FieldStart { instr, .. } if FieldCode::parse(instr).name == "INDEX"))
+                .count()
+        };
+        for in_box in [false, true] {
+            let mut s = Session::new(wordcraft_doc::Document::from_text(
+                "Kilns are hot.
+End.",
+            ));
+            s.run("select.text", &json!({"text": "Kilns"})).unwrap();
+            s.run("references.markEntry", &json!({})).unwrap();
+            s.run("caret.docEnd", &json!({})).unwrap();
+            let at = if in_box {
+                s.run("insert.textBox", &json!({"text": "Box"})).unwrap();
+                let id = s.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::TextBox).map(|(id, _)| *id).unwrap();
+                Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 }
+            } else {
+                s.run("insert.table", &json!({"rows": 1, "cols": 1})).unwrap();
+                let cell = s.doc.para_paths(StoryRef::Body).into_iter().find(|path| path.depth() > 0).unwrap();
+                Pos { story: StoryRef::Body, path: cell, off: 0 }
+            };
+            // A range field, as a Word file holds its index.
+            let p = s.doc.para_mut(at.story, &at.path).unwrap();
+            p.insert_object(0, InlineObject::FieldEnd, &CharProps::default()).unwrap();
+            p.insert_object(0, InlineObject::FieldStart { instr: r#"INDEX \h "A""#.into(), locked: false, dirty: false }, &CharProps::default())
+                .unwrap();
+            s.run("caret.docEnd", &json!({})).unwrap();
+            let r = s.run("references.index", &json!({"columns": 2}));
+            assert!(r.is_err(), "Insert Index with the index in a {}: {r:?}", if in_box { "text box" } else { "table" });
+            assert_eq!(indexes(&s), 1, "INDEX fields after Insert Index");
+            assert!(s.run("references.updateIndex", &json!({})).is_err(), "Update Index reports the index it can't rebuild");
+        }
     }
 }
