@@ -94,3 +94,159 @@ fn character_grid_places_east_asian_text_on_the_pitch() {
         }
     }
 }
+
+/// Multiple spacing on an 18 pt grid, against Word for Mac's line heights (grid probe, Roboto
+/// Regular): 11 and 14 pt text is m pitches tall; 18 pt text, whose natural height (about 21 pt)
+/// is over one pitch, is 36 pt up to 2× and 54 pt at 3×. Natural heights are passed in directly,
+/// so the assertions hold whatever font the machine has.
+#[test]
+fn multiple_spacing_follows_word_on_an_18_point_grid() {
+    let g = para::Grid { line: Some(18.0), ..Default::default() };
+    for natural in [13.0, 16.5] {
+        for (m, want) in [(1.0, 18.0), (1.5, 27.0), (2.0, 36.0), (3.0, 54.0)] {
+            assert_eq!(g.multiple_height(natural, m), want, "natural {natural} at {m}x");
+        }
+    }
+    for (m, want) in [(1.0, 36.0), (1.5, 36.0), (2.0, 36.0), (3.0, 54.0)] {
+        assert_eq!(g.multiple_height(21.1, m), want, "18 pt text at {m}x");
+    }
+    // Below single spacing the multiple still scales the snapped height.
+    assert_eq!(g.multiple_height(13.0, 0.5), 9.0);
+    // Without a line grid the natural height is simply multiplied.
+    assert_eq!(para::Grid::default().multiple_height(21.0, 1.5), 31.5);
+}
+
+/// Lays out a 3× grid-aligned line against a page-anchored top-and-bottom shape.
+fn grid_multiple_line_with_float(font_size: f32, float_top: f32) -> (f32, f32, f32) {
+    use wordcraft_doc::para::{Anchor, Float, InlineObject, ShapeKind, Wrap};
+    use wordcraft_doc::{CharProps, Paragraph, Pos};
+    let mut d = Document::new();
+    d.last_section.doc_grid = Some(DocGrid { kind: DocGridType::Lines, line_pitch: 18.0, char_space: 0 });
+    let ch = CharProps { font: Some("Source Sans 3".into()), size: Some(font_size), ..Default::default() };
+    d.body = (1..=3)
+        .map(|n| {
+            let mut p = Paragraph::with_text(&format!("P{n}"), ch.clone());
+            p.mark = ch.clone();
+            p.props = wordcraft_doc::props::ParaProps {
+                space_before: Some(0.0),
+                space_after: Some(0.0),
+                line_spacing: Some(LineSpacing::Multiple(3.0)),
+                widow_control: Some(false),
+                ..Default::default()
+            };
+            wordcraft_doc::para_block(p)
+        })
+        .collect();
+    let shape = InlineObject::Shape {
+        kind: ShapeKind::Rectangle,
+        w: 468.0,
+        h: 20.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { wrap: Wrap::TopAndBottom, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 72.0, y: 72.0 + float_top, ..Default::default() },
+        story: None,
+        effects: Default::default(),
+        freeform: None,
+        extra: Default::default(),
+    };
+    d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+    let l = lay(&d);
+    l.pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Lines { path, y, para, story: StoryRef::Body, .. } if path.0.len() == 1 => {
+                let line = para.lines.first()?;
+                let style = para.styles.first()?;
+                Some((*y, line.height, style.ascent + style.descent))
+            }
+            _ => None,
+        })
+        .expect("first paragraph's lines")
+}
+
+/// A 55 pt offset leaves the measured 54 pt line above the shape; the old `natural × 3` estimate
+/// was over 63 pt and moved it below the shape unnecessarily.
+#[test]
+fn grid_multiple_spacing_estimates_the_line_the_float_check_meets() {
+    let (y, height, _) = grid_multiple_line_with_float(18.0, 55.0);
+    assert!((height - 54.0).abs() < 0.01, "a 3× line on an 18 pt grid is 3 pitches: {height}");
+    assert!((y - 72.0).abs() < 0.01, "the line ends above the shape, so it stays at the top: {y}");
+}
+
+/// At 11 pt the old `natural × 3` estimate is below 45 pt, but the grid line measures 54 pt and
+/// overlaps a shape starting at 45 pt. The line must move below the shape.
+#[test]
+fn grid_multiple_spacing_does_not_underestimate_float_overlap() {
+    let (y, height, natural) = grid_multiple_line_with_float(11.0, 45.0);
+    assert!(natural * 3.0 < 45.0, "fixture must exercise the underestimate case: {natural}");
+    assert!((height - 54.0).abs() < 0.01, "a 3× line on an 18 pt grid is 3 pitches: {height}");
+    assert!(y >= 137.0, "line must start below the shape at 137 pt: {y}");
+}
+
+#[test]
+fn multiple_spacing_rechecks_tall_run_and_inline_content_against_floats() {
+    use wordcraft_doc::para::{Anchor, Float, InlineObject, ShapeKind, Wrap};
+    use wordcraft_doc::section::{DocGrid, DocGridType};
+    use wordcraft_doc::{CharProps, Paragraph, Pos};
+
+    crate::test_fonts();
+    let mut d = Document::new();
+    d.last_section.doc_grid = Some(DocGrid { kind: DocGridType::Lines, line_pitch: 18.0, char_space: 0 });
+    let small = CharProps { font: Some("Source Sans 3".into()), size: Some(11.0), ..Default::default() };
+    d.body = (1..=3)
+        .map(|n| {
+            let mut p = Paragraph::with_text(&format!("P{n}"), small.clone());
+            p.format(0, 2, &|c| c.size = Some(50.0)).unwrap();
+            p.mark = small.clone();
+            if n == 1 {
+                let image = InlineObject::Image {
+                    media: "inline".into(),
+                    w: 20.0,
+                    h: 80.0,
+                    alt: "inline image".into(),
+                    float: Float { wrap: Wrap::Inline, ..Default::default() },
+                    crop: [0.0; 4],
+                    fx: Default::default(),
+                    ole: None,
+                };
+                p.insert_object(2, image, &Default::default()).unwrap();
+            }
+            p.props = wordcraft_doc::props::ParaProps {
+                space_before: Some(0.0),
+                space_after: Some(0.0),
+                line_spacing: Some(LineSpacing::Multiple(3.0)),
+                widow_control: Some(false),
+                ..Default::default()
+            };
+            wordcraft_doc::para_block(p)
+        })
+        .collect();
+    let shape = InlineObject::Shape {
+        kind: ShapeKind::Rectangle,
+        w: 468.0,
+        h: 20.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { wrap: Wrap::TopAndBottom, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 72.0, y: 145.0, ..Default::default() },
+        story: None,
+        effects: Default::default(),
+        freeform: None,
+        extra: Default::default(),
+    };
+    d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+
+    let l = lay(&d);
+    let (y, height) = l.pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Lines { path, y, para, story: StoryRef::Body, .. } if path.0.len() == 1 => Some((*y, para.lines[0].height)),
+            _ => None,
+        })
+        .unwrap();
+    assert!(height > 72.0, "inline content must make the line taller than the run-based estimate: {height}");
+    assert!(y >= 165.0, "the taller line must start below the shape at 165 pt: {y}");
+}

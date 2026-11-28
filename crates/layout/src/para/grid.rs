@@ -36,6 +36,16 @@ impl Grid {
             _ => h,
         }
     }
+    /// Applies the measured multiple-spacing rule to a grid-aligned line.
+    /// At `m >= 1`, keep at least `m` pitches and the natural height snapped to the grid. Below
+    /// `1`, the multiple still scales the snapped height.
+    pub fn multiple_height(&self, natural: f32, m: f32) -> f32 {
+        let snapped = self.snap_height(natural);
+        match self.line {
+            Some(p) if m.is_finite() && m >= 1.0 => snapped.max(m * p).min(1e6),
+            _ => snapped * m,
+        }
+    }
 }
 
 /// East Asian characters the character grid places on its pitch: CJK ideographs, kana, Hangul,
