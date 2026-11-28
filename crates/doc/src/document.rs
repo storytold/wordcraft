@@ -79,6 +79,7 @@ impl Document {
             kept: Default::default(),
             missing_pictures: Default::default(),
             fit_state: None,
+            compare_hf: None,
         }
     }
 
@@ -158,6 +159,8 @@ impl Document {
             kept: _,
             missing_pictures: _,
             fit_state: _,
+            // A record Reject All consumes, not content: it travels with the revisions.
+            compare_hf: _,
         } = self;
         let Document {
             body: other_body,
@@ -180,6 +183,7 @@ impl Document {
             kept: _,
             missing_pictures: _,
             fit_state: _,
+            compare_hf: _,
         } = other;
         same_blocks(body, other_body)
             && same_parts(parts, other_parts)
@@ -433,6 +437,9 @@ impl Document {
         let Some(Block::Para(p)) = self.body.get_mut(block).map(Arc::make_mut) else { return false };
         let Some(before) = p.section.take() else { return false };
         self.section_mut(block).absorb(&before);
+        if before.compare_title_page.0.is_some() || self.has_live_compare_title_page() {
+            self.sync_compare_hf_title_page();
+        }
         true
     }
 
@@ -808,22 +815,39 @@ impl Document {
         self.para_paths(StoryRef::Body).len()
     }
 
-    /// Add a media item; returns its key (deduplicated by content).
-    pub fn add_media(&mut self, bytes: Vec<u8>, ext: &str) -> String {
+    /// Look up an existing media key with the exact `bytes`, rebuilding `media_index` if stale.
+    pub(crate) fn find_media(&mut self, bytes: &Vec<u8>) -> Option<String> {
         let ix = &mut self.media_index;
         if ix.len != self.media.len() {
             ix.rebuild(&self.media);
         }
-        if let Some(k) = ix.find(&self.media, &bytes) {
-            return k;
+        if let Some(k) = ix.find(&self.media, bytes) {
+            return Some(k);
         }
-        if ix.by_bytes.contains_key(&bytes) {
+        if ix.by_bytes.contains_key(bytes) {
             // Stale (`media` was edited directly without changing its size): look again.
             ix.rebuild(&self.media);
-            if let Some(k) = ix.find(&self.media, &bytes) {
-                return k;
-            }
+            return ix.find(&self.media, bytes);
         }
+        None
+    }
+
+    /// Insert `bytes` under `key` and keep `media_index` in sync.
+    pub(crate) fn insert_media(&mut self, key: String, bytes: Arc<Vec<u8>>) {
+        if self.media_index.len != self.media.len() {
+            self.media_index.rebuild(&self.media);
+        }
+        self.media.insert(key.clone(), bytes.clone());
+        self.media_index.by_bytes.entry(bytes).or_insert(key);
+        self.media_index.len = self.media.len();
+    }
+
+    /// Add a media item; returns its key (deduplicated by content).
+    pub fn add_media(&mut self, bytes: Vec<u8>, ext: &str) -> String {
+        if let Some(k) = self.find_media(&bytes) {
+            return k;
+        }
+        let ix = &mut self.media_index;
         let n = self.media.len().saturating_add(1);
         let mut i = n.max(ix.next);
         let mut key = format!("image{i}.{ext}");

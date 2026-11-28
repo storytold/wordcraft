@@ -4,6 +4,7 @@
 //! between the shared `craft-wordmodel` and WordCraft's application document model.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod compare_hf;
 mod fit;
 mod model_bridge;
 

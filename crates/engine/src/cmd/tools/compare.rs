@@ -7,7 +7,7 @@ use super::{
 use wordcraft_doc::para::OBJ;
 
 /// Compare and Combine take the same settings.
-pub(super) const COMPARE_PARAMS: &str = r#"{"path"?: string (revised document), "text"?: string (revised text), "original"?: string (original document; default: this one), "author"?: string (label changes with), "caseChanges"?: bool, "whiteSpace"?: bool, "formatting"?: bool (default true: differences count), "level"?: "word|character" (character: paragraphs over 2000 characters fall back to word; see characterFallback/notHonoured), "showIn"?: "original|revised|new" (revised/new: an untitled document), "moves"|"comments"|"tables"|"headersFooters"|"textBoxes"|"fields"?: bool (accepted; not honoured yet except tables, always compared), "footnotes"?: bool (default true: compare footnotes and endnotes)}"#;
+pub(super) const COMPARE_PARAMS: &str = r#"{"path"?: string (revised document), "text"?: string (revised text), "original"?: string (original document; default: this one), "author"?: string (label changes with), "caseChanges"?: bool, "whiteSpace"?: bool, "formatting"?: bool (default true: differences count), "level"?: "word|character" (character: paragraphs over 2000 characters fall back to word; see characterFallback/notHonoured), "showIn"?: "original|revised|new" (revised/new: an untitled document), "moves"|"comments"|"tables"|"textBoxes"|"fields"?: bool (accepted; not honoured yet except tables, always compared), "headersFooters"?: bool (default true: compare headers and footers), "footnotes"?: bool (default true: compare footnotes and endnotes)}"#;
 
 /// What Compare / Combine compares (the More >> settings of Word's dialog).
 struct CompareOptions {
@@ -50,14 +50,16 @@ const MAX_CHAR_DIFF: usize = 2000;
 /// Compare the current document (original, or `original` from a file) with a revised one: the
 /// result shows the differences as tracked insertions, deletions and formatting changes, labelled
 /// with `author`. Options Word offers that the comparison can't honour yet (moves, comments,
-/// headers and footers, text boxes, fields) are accepted and listed in the result. Footnotes and
-/// endnotes are compared by default (`footnotes`: true), tracking edits, insertions, deletions,
-/// and paragraph formatting changes within note stories.
-/// When character-level comparison is requested (`"level": "character"`) but any paragraph exceeds
-/// [`MAX_CHAR_DIFF`] characters, it falls back to word-level diff for that paragraph, surfaces the
-/// fallback count in `"characterFallback"`, and includes `"level"` in `"notHonoured"`. When a
-/// same-text table has media changes but an incompatible layout or exceeds [`wordcraft_doc::table::MAX_TABLE_DEPTH`],
-/// structural table replacement is deferred and `"tables"` is listed in `"notHonoured"`.
+/// text boxes, fields) are accepted and listed in the result. Headers and footers are compared by
+/// default (`headersFooters`: true), tracking edits, insertions, deletions, and paragraph formatting
+/// changes within header and footer stories. Footnotes and endnotes are compared by default
+/// (`footnotes`: true), tracking edits, insertions, deletions, and paragraph formatting changes
+/// within note stories. When character-level comparison is requested (`"level": "character"`) but
+/// any paragraph exceeds [`MAX_CHAR_DIFF`] characters, it falls back to word-level diff for that
+/// paragraph, surfaces the fallback count in `"characterFallback"`, and includes `"level"` in
+/// `"notHonoured"`. When a same-text table has media changes but an incompatible layout or exceeds
+/// [`wordcraft_doc::table::MAX_TABLE_DEPTH`], structural table replacement is deferred and `"tables"`
+/// is listed in `"notHonoured"`.
 pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     // A revised side given as plain text carries no real runs or properties; one opened from a
     // path does. The diff takes the revised formatting only in the latter case.
@@ -79,6 +81,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         s.note_body_replaced();
         s.math = None;
     }
+    s.doc.clear_compare_hf();
     let level = p::str(v, "level").unwrap_or("word");
     let opts = CompareOptions {
         case: p::bool(v, "caseChanges").unwrap_or(true),
@@ -86,18 +89,57 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         formatting: p::bool(v, "formatting").unwrap_or(true),
         characters: matches!(level, "character" | "char"),
     };
+    let compare_headers_footers = p::bool(v, "headersFooters").unwrap_or(true);
     let compare_notes = p::bool(v, "footnotes").unwrap_or(true);
-    let mut not_honoured: Vec<&str> =
-        ["moves", "comments", "headersFooters", "textBoxes", "fields"].into_iter().filter(|k| v.get(*k).is_some()).collect();
+    let mut not_honoured: Vec<&str> = ["moves", "comments", "textBoxes", "fields"].into_iter().filter(|k| v.get(*k).is_some()).collect();
     let author = p::str(v, "author").map(str::trim).filter(|a| !a.is_empty()).map(str::to_string).unwrap_or_else(|| s.author.clone());
     let date = crate::cmd::now_iso();
-    let mut budget = MAX_COMPARE_CELLS;
+    let orig_sec_pairs = s.doc.sections();
+    let mut orig_ends = Vec::with_capacity(orig_sec_pairs.len());
+    let mut orig_sections = Vec::with_capacity(orig_sec_pairs.len());
+    for (e, sec) in orig_sec_pairs {
+        orig_ends.push(e);
+        orig_sections.push(sec.clone());
+    }
+
+    let rev_sec_pairs = revised.sections();
+    let mut rev_ends = Vec::with_capacity(rev_sec_pairs.len());
+    let mut rev_sections = Vec::with_capacity(rev_sec_pairs.len());
+    for (e, sec) in rev_sec_pairs {
+        rev_ends.push(e);
+        rev_sections.push(sec.clone());
+    }
+
+    let mut orig_eff_headers = Vec::with_capacity(orig_sections.len());
+    let mut orig_eff_footers = Vec::with_capacity(orig_sections.len());
+    let mut prev_h = wordcraft_doc::section::HeaderSet::default();
+    let mut prev_f = wordcraft_doc::section::HeaderSet::default();
+    for sec in &orig_sections {
+        prev_h = wordcraft_doc::section::HeaderSet {
+            default: sec.headers.default.or(prev_h.default),
+            first: sec.headers.first.or(prev_h.first),
+            even: sec.headers.even.or(prev_h.even),
+        };
+        prev_f = wordcraft_doc::section::HeaderSet {
+            default: sec.footers.default.or(prev_f.default),
+            first: sec.footers.first.or(prev_f.first),
+            even: sec.footers.even.or(prev_f.even),
+        };
+        orig_eff_headers.push(prev_h);
+        orig_eff_footers.push(prev_f);
+    }
+
+    let rev_has_text_boxes = revised.parts.values().any(|p| p.kind == wordcraft_doc::PartKind::TextBox);
+    // Adopt media referenced by the revised body and reachable text boxes into the original
+    // document: identical bytes reuse the original's key (deduplicated by content), while
+    // replaced or new media receives a fresh key in s.doc.media so both media parts are
+    // preserved in the result (#6086).
     let mut revised = revised;
     let mut raw_media = std::mem::take(&mut revised.media);
     let mut media_map = BTreeMap::new();
     let notes = prepare_notes(&mut s.doc, &mut revised, &mut raw_media, &mut media_map, &opts, compare_notes);
     let old: Vec<Arc<Block>> = s.doc.body.clone();
-    let new: Vec<Arc<Block>> = if revised.parts.values().any(|p| p.kind == wordcraft_doc::PartKind::TextBox) {
+    let new: Vec<Arc<Block>> = if rev_has_text_boxes {
         let mut frag = revised.body_fragment();
         for b in &mut frag.blocks {
             remap_block_media(b, &mut |k| adopt_media_key(&mut s.doc, &mut raw_media, &mut media_map, k));
@@ -120,28 +162,52 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let ins = (s.doc.revisions.len() - 1) as u32;
     s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Delete, author: author.clone(), date: date.clone(), move_name: None });
     let del = (s.doc.revisions.len() - 1) as u32;
+
+    let run = CompareRun {
+        ins,
+        del,
+        compare_hf: compare_headers_footers,
+        orig_ends: &orig_ends,
+        orig_eff_headers: &orig_eff_headers,
+        orig_eff_footers: &orig_eff_footers,
+    };
+    let mut budget = MAX_COMPARE_CELLS;
     let mut char_fallbacks = 0usize;
     let mut table_fallbacks = 0usize;
-    let (out, changes) = {
-        let mut ctx = DiffCtx {
-            ins,
-            del,
-            opts: &opts,
-            author: &author,
-            date: &date,
-            budget: &mut budget,
-            char_fallbacks: &mut char_fallbacks,
-            table_fallbacks: &mut table_fallbacks,
-            changes: 0,
-            plain_revised,
-        };
-        let out = diff_blocks(&mut s.doc, &old, &new, &mut ctx, 0);
-        if compare_notes {
-            diff_notes(&mut s.doc, &revised, &mut raw_media, &mut media_map, &notes, &mut ctx);
-        }
-        (out, ctx.changes)
+    let mut sources = Vec::with_capacity(old.len() + new.len());
+    let mut ctx = DiffCtx {
+        ins,
+        del,
+        opts: &opts,
+        author: &author,
+        date: &date,
+        budget: &mut budget,
+        char_fallbacks: &mut char_fallbacks,
+        table_fallbacks: &mut table_fallbacks,
+        changes: 0,
+        plain_revised,
     };
+    let out = diff_blocks_inner(&mut s.doc, &old, &new, &mut ctx, 0, Some(&run), Some(&mut sources));
+    if compare_notes {
+        diff_notes(&mut s.doc, &revised, &mut raw_media, &mut media_map, &notes, &mut ctx);
+    }
+    revised.media = raw_media;
+    let body_changes = ctx.changes;
     s.doc.body = out;
+    let mut changes = body_changes;
+
+    if compare_headers_footers {
+        let snaps = SectionSnapshots {
+            orig_sections: &orig_sections,
+            rev_sections: &rev_sections,
+            orig_ends: &orig_ends,
+            rev_ends: &rev_ends,
+            orig_eff_headers: &orig_eff_headers,
+            orig_eff_footers: &orig_eff_footers,
+        };
+        changes += compare_headers_and_footers(s, &revised, &snaps, &sources, rev_has_text_boxes, &run, &mut ctx);
+    }
+
     s.doc.ensure_nonempty();
     s.note_body_replaced();
     s.math = None;
@@ -176,6 +242,164 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         "notHonoured": not_honoured,
         "characterFallback": char_fallbacks,
     }))
+}
+
+/// Context describing the author, date, options, and change IDs for compare emissions.
+struct CompareRun<'a> {
+    /// Revision ID for insertions.
+    ins: u32,
+    /// Revision ID for deletions.
+    del: u32,
+    /// Whether header and footer comparison is enabled.
+    compare_hf: bool,
+    /// Boundaries of sections in the original document.
+    orig_ends: &'a [usize],
+    /// Effective headers for each section in the original document.
+    orig_eff_headers: &'a [wordcraft_doc::section::HeaderSet],
+    /// Effective footers for each section in the original document.
+    orig_eff_footers: &'a [wordcraft_doc::section::HeaderSet],
+}
+
+/// Slot of a header or footer within a section.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HfSlot {
+    /// Default header or footer for normal pages.
+    Default,
+    /// First-page header or footer when Different First Page is enabled.
+    First,
+    /// Even-page header or footer when Different Odd & Even Pages is enabled.
+    Even,
+}
+
+/// Retrieves the part ID for a specific slot from a `HeaderSet`.
+fn get_set_slot(set: &wordcraft_doc::section::HeaderSet, slot: HfSlot) -> Option<u32> {
+    match slot {
+        HfSlot::Default => set.default,
+        HfSlot::First => set.first,
+        HfSlot::Even => set.even,
+    }
+}
+
+/// Retrieves the header or footer part ID for a section given its footer flag and slot.
+fn get_hf_slot(sec: &wordcraft_doc::section::SectionProps, footer: bool, slot: HfSlot) -> Option<u32> {
+    let set = if footer { &sec.footers } else { &sec.headers };
+    get_set_slot(set, slot)
+}
+
+/// Sets the header or footer part ID for a section given its footer flag and slot.
+fn set_hf_slot(sec: &mut wordcraft_doc::section::SectionProps, footer: bool, slot: HfSlot, id: Option<u32>) {
+    let set = if footer { &mut sec.footers } else { &mut sec.headers };
+    match slot {
+        HfSlot::Default => set.default = id,
+        HfSlot::First => set.first = id,
+        HfSlot::Even => set.even = id,
+    }
+}
+
+/// Maps each section index in the result document to the corresponding section index in the
+/// original and revised documents, based on body block correspondence. Pre-allocated count
+/// vectors and binary search over section end boundaries avoid O(blocks x sections) scans
+/// and per-section heap allocations.
+fn map_result_sections_to_snapshots(
+    res_sections: &[(usize, &wordcraft_doc::section::SectionProps)],
+    orig_ends: &[usize],
+    rev_ends: &[usize],
+    sources: &[(Option<usize>, Option<usize>)],
+) -> Vec<(Option<usize>, Option<usize>)> {
+    let mut mapping = Vec::with_capacity(res_sections.len());
+    let mut prev_end = 0;
+    let mut orig_counts = vec![0usize; orig_ends.len()];
+    let mut rev_counts = vec![0usize; rev_ends.len()];
+
+    for (res_si, &(end_block, _)) in res_sections.iter().enumerate() {
+        let block_range = prev_end..=end_block;
+        prev_end = end_block + 1;
+
+        orig_counts.fill(0);
+        rev_counts.fill(0);
+
+        for bi in block_range {
+            if let Some(&(orig_b, rev_b)) = sources.get(bi) {
+                if let Some(ob) = orig_b
+                    && !orig_ends.is_empty()
+                {
+                    let osi = orig_ends.partition_point(|&e| e < ob).min(orig_ends.len().saturating_sub(1));
+                    if let Some(c) = orig_counts.get_mut(osi) {
+                        *c += 1;
+                    }
+                }
+                if let Some(rb) = rev_b
+                    && !rev_ends.is_empty()
+                {
+                    let rsi = rev_ends.partition_point(|&e| e < rb).min(rev_ends.len().saturating_sub(1));
+                    if let Some(c) = rev_counts.get_mut(rsi) {
+                        *c += 1;
+                    }
+                }
+            }
+        }
+
+        let orig_si = orig_counts
+            .iter()
+            .enumerate()
+            .filter(|&(_, &count)| count > 0)
+            .max_by(|(si_a, count_a), (si_b, count_b)| count_a.cmp(count_b).then_with(|| si_b.cmp(si_a)))
+            .map(|(si, _)| si);
+        let rev_si = rev_counts
+            .iter()
+            .enumerate()
+            .filter(|&(_, &count)| count > 0)
+            .max_by(|(si_a, count_a), (si_b, count_b)| count_a.cmp(count_b).then_with(|| si_b.cmp(si_a)))
+            .map(|(si, _)| si);
+
+        let both_none = orig_si.is_none() && rev_si.is_none();
+        let orig_si = orig_si.or_else(|| (both_none && res_si < orig_ends.len()).then_some(res_si));
+        let rev_si = rev_si.or_else(|| (both_none && res_si < rev_ends.len()).then_some(res_si));
+
+        mapping.push((orig_si, rev_si));
+    }
+
+    mapping
+}
+
+/// Section resolution context used during header and footer slot assignment.
+struct SectionContext<'a> {
+    res_ends: &'a [usize],
+    res_si: usize,
+}
+
+/// Assigns a header or footer part ID to a specific section index in the session's document.
+/// Precomputed `res_ends` avoids rescanning document sections on every slot assignment.
+fn assign_section_slot(s: &mut Session, ctx: &SectionContext<'_>, footer: bool, slot: HfSlot, id: u32) {
+    let sec_key = (ctx.res_si + 1 < ctx.res_ends.len()).then_some(ctx.res_si);
+    let end_opt = sec_key.and_then(|si| ctx.res_ends.get(si).copied());
+
+    if let Some(end) = end_opt {
+        let sect = s.doc.section_mut(end);
+        set_hf_slot(sect, footer, slot, Some(id));
+    } else {
+        set_hf_slot(&mut s.doc.last_section, footer, slot, Some(id));
+    }
+}
+
+/// Collects all text box story IDs referenced by inline objects within `b`, recursively inspecting table cells.
+fn block_box_ids(b: &Block, ids: &mut Vec<u32>) {
+    match b {
+        Block::Para(p) => {
+            for o in &p.objects {
+                ids.extend(o.text_boxes());
+            }
+        }
+        Block::Table(t) => {
+            for r in &t.rows {
+                for c in &r.cells {
+                    for blk in &c.blocks {
+                        block_box_ids(blk, ids);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Paired, inserted, and deleted footnote/endnote IDs resolved by [`prepare_notes`].
@@ -319,6 +543,395 @@ fn strip_block_revisions(b: &mut Block) {
     }
 }
 
+/// Adopts the text boxes and media of `blocks` from `revised` into `doc`, returning blocks that
+/// belong to `doc`. Only the stories and media actually referenced are brought over; blocks with
+/// neither are returned as they are.
+fn adopt_hf_blocks(doc: &mut Document, revised: &Document, blocks: &[Arc<Block>], rev_has_text_boxes: bool) -> Vec<Arc<Block>> {
+    let mut todo = Vec::new();
+    if rev_has_text_boxes {
+        for b in blocks {
+            block_box_ids(b, &mut todo);
+        }
+    }
+    let mut parts = std::collections::BTreeMap::new();
+    while let Some(id) = todo.pop() {
+        if parts.contains_key(&id) {
+            continue;
+        }
+        if let Some(part) = revised.parts.get(&id).filter(|p| p.kind == wordcraft_doc::PartKind::TextBox) {
+            for b in &part.blocks {
+                block_box_ids(b, &mut todo);
+            }
+            parts.insert(id, part.clone());
+        }
+    }
+    let blocks: Vec<Block> = blocks.iter().map(|b| (**b).clone()).collect();
+    let media = revised.media_of_blocks(&blocks);
+    if parts.is_empty() && media.is_empty() {
+        return blocks.into_iter().map(Arc::new).collect();
+    }
+    let frag = wordcraft_doc::edit::Fragment { blocks, parts, media };
+    doc.adopt_fragment(&frag).into_iter().map(Arc::new).collect()
+}
+
+/// Returns true if two slices of header/footer blocks, the text boxes they reference and the
+/// images those blocks draw have identical structure and content. Two stories may name an image
+/// with the same key and hold different bytes (each document keys its own media), so the bytes
+/// are compared too: otherwise the revised image would be called unchanged and never adopted.
+fn hf_blocks_identical(doc: &Document, revised: &Document, snap_blocks: &[Arc<Block>], rev_blocks: &[Arc<Block>]) -> bool {
+    if snap_blocks.len() != rev_blocks.len() {
+        return false;
+    }
+    if !snap_blocks.iter().zip(rev_blocks).all(|(a, b)| Arc::ptr_eq(a, b) || a == b) {
+        return false;
+    }
+    // `media_of_blocks` walks plain blocks; cloning a header's is cheap next to reading a file.
+    let owned = |blocks: &[Arc<Block>]| blocks.iter().map(|b| (**b).clone()).collect::<Vec<Block>>();
+    let snap_media = doc.media_of_blocks(&owned(snap_blocks));
+    let rev_media = revised.media_of_blocks(&owned(rev_blocks));
+    if snap_media.len() != rev_media.len() || snap_media.iter().any(|(key, bytes)| rev_media.get(key) != Some(bytes)) {
+        return false;
+    }
+    let mut snap_boxes = Vec::new();
+    for b in snap_blocks {
+        block_box_ids(b, &mut snap_boxes);
+    }
+    let mut rev_boxes = Vec::new();
+    for b in rev_blocks {
+        block_box_ids(b, &mut rev_boxes);
+    }
+    if snap_boxes.is_empty() && rev_boxes.is_empty() {
+        return true;
+    }
+    if snap_boxes != rev_boxes {
+        return false;
+    }
+    let mut todo: Vec<(u32, u32)> = snap_boxes.into_iter().zip(rev_boxes).collect();
+    let mut seen = std::collections::HashSet::new();
+    while let Some((id1, id2)) = todo.pop() {
+        if !seen.insert((id1, id2)) {
+            continue;
+        }
+        match (doc.parts.get(&id1), revised.parts.get(&id2)) {
+            (Some(p1), Some(p2)) => {
+                if p1.blocks != p2.blocks {
+                    return false;
+                }
+                let mut b1 = Vec::new();
+                for b in &p1.blocks {
+                    block_box_ids(b, &mut b1);
+                }
+                let mut b2 = Vec::new();
+                for b in &p2.blocks {
+                    block_box_ids(b, &mut b2);
+                }
+                if b1.len() != b2.len() {
+                    return false;
+                }
+                todo.extend(b1.into_iter().zip(b2));
+            }
+            (None, None) => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// Section snapshots and boundaries for original and revised documents during comparison.
+struct SectionSnapshots<'a> {
+    orig_sections: &'a [wordcraft_doc::section::SectionProps],
+    rev_sections: &'a [wordcraft_doc::section::SectionProps],
+    orig_ends: &'a [usize],
+    rev_ends: &'a [usize],
+    orig_eff_headers: &'a [wordcraft_doc::section::HeaderSet],
+    orig_eff_footers: &'a [wordcraft_doc::section::HeaderSet],
+}
+
+/// Compares header and footer stories across all sections in the original and revised documents,
+/// tracking insertions, deletions, and formatting changes in-place on `s.doc.parts`.
+fn compare_headers_and_footers(
+    s: &mut Session,
+    revised: &Document,
+    snaps: &SectionSnapshots<'_>,
+    sources: &[(Option<usize>, Option<usize>)],
+    rev_has_text_boxes: bool,
+    run: &CompareRun<'_>,
+    ctx: &mut DiffCtx<'_>,
+) -> usize {
+    let mut changes = 0usize;
+    let mut seen_inserted = std::collections::HashSet::new();
+    let mut seen_deleted = std::collections::HashSet::new();
+    let mut deleted_clones: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    let mut inserted_clones: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    let mut pair_to_target = std::collections::HashMap::new();
+    let orig_parts_snapshot: std::collections::HashMap<u32, (wordcraft_doc::PartKind, Vec<Arc<Block>>)> = s
+        .doc
+        .parts
+        .iter()
+        .filter(|(_, p)| matches!(p.kind, wordcraft_doc::PartKind::Header | wordcraft_doc::PartKind::Footer))
+        .map(|(&id, p)| (id, (p.kind, p.blocks.clone())))
+        .collect();
+    let mut matched_orig_parts = std::collections::HashSet::new();
+
+    let orig_eff_headers = snaps.orig_eff_headers;
+    let orig_eff_footers = snaps.orig_eff_footers;
+
+    let mut rev_eff_headers = Vec::with_capacity(snaps.rev_sections.len());
+    let mut rev_eff_footers = Vec::with_capacity(snaps.rev_sections.len());
+    let mut prev_h = wordcraft_doc::section::HeaderSet::default();
+    let mut prev_f = wordcraft_doc::section::HeaderSet::default();
+    for sec in snaps.rev_sections {
+        prev_h = wordcraft_doc::section::HeaderSet {
+            default: sec.headers.default.or(prev_h.default),
+            first: sec.headers.first.or(prev_h.first),
+            even: sec.headers.even.or(prev_h.even),
+        };
+        prev_f = wordcraft_doc::section::HeaderSet {
+            default: sec.footers.default.or(prev_f.default),
+            first: sec.footers.first.or(prev_f.first),
+            even: sec.footers.even.or(prev_f.even),
+        };
+        rev_eff_headers.push(prev_h);
+        rev_eff_footers.push(prev_f);
+    }
+
+    let res_sections = s.doc.sections();
+    let res_ends: Vec<usize> = res_sections.iter().map(|(e, _)| *e).collect();
+    let mapping = map_result_sections_to_snapshots(&res_sections, snaps.orig_ends, snaps.rev_ends, sources);
+    let mut flag_changed = false;
+    let orig_even_odd = s.doc.settings.even_odd_headers;
+    let rev_even_odd = revised.settings.even_odd_headers;
+    if orig_even_odd != rev_even_odd {
+        s.doc.settings.even_odd_headers = rev_even_odd;
+        s.doc.compare_hf.get_or_insert_with(Default::default).even_odd.get_or_insert(orig_even_odd);
+        flag_changed = true;
+    }
+
+    let mut mapped_orig = std::collections::HashSet::new();
+
+    for (res_si, &(orig_si, rev_si)) in mapping.iter().enumerate() {
+        if let Some(osi) = orig_si {
+            mapped_orig.insert(osi);
+        }
+
+        let orig_sec = orig_si.and_then(|si| snaps.orig_sections.get(si));
+        let rev_sec = rev_si.and_then(|si| snaps.rev_sections.get(si));
+        let orig_title_page = orig_sec.map(|sec| sec.title_page).unwrap_or(false);
+        let rev_title_page = rev_sec.map(|sec| sec.title_page).unwrap_or(false);
+        let sec_key = (res_si + 1 < res_ends.len()).then_some(res_si);
+
+        if orig_title_page != rev_title_page {
+            if let Some(end) = sec_key.and_then(|si| res_ends.get(si).copied()) {
+                let sec = s.doc.section_mut(end);
+                sec.title_page = rev_title_page;
+                sec.compare_title_page = wordcraft_doc::section::CompareTitlePage(Some(orig_title_page));
+            } else {
+                s.doc.last_section.title_page = rev_title_page;
+                s.doc.last_section.compare_title_page = wordcraft_doc::section::CompareTitlePage(Some(orig_title_page));
+            }
+            let flags = s.doc.compare_hf.get_or_insert_with(Default::default);
+            if !flags.title_page.iter().any(|(k, _)| *k == sec_key) {
+                flags.title_page.push((sec_key, orig_title_page));
+            }
+            flag_changed = true;
+        }
+
+        let sec_ctx = SectionContext { res_ends: &res_ends, res_si };
+
+        for footer in [false, true] {
+            for slot in [HfSlot::Default, HfSlot::First, HfSlot::Even] {
+                let orig_own = orig_sec.and_then(|sec| get_hf_slot(sec, footer, slot));
+                let rev_own = rev_sec.and_then(|sec| get_hf_slot(sec, footer, slot));
+
+                if orig_own.is_none() && rev_own.is_none() {
+                    // Both sections leave this slot unlinked/inherited from the previous section.
+                    continue;
+                }
+
+                let orig_id = orig_si.and_then(|si| {
+                    if footer {
+                        orig_eff_footers.get(si).and_then(|f| get_set_slot(f, slot))
+                    } else {
+                        orig_eff_headers.get(si).and_then(|h| get_set_slot(h, slot))
+                    }
+                });
+                let rev_id = rev_si.and_then(|si| {
+                    if footer {
+                        rev_eff_footers.get(si).and_then(|f| get_set_slot(f, slot))
+                    } else {
+                        rev_eff_headers.get(si).and_then(|h| get_set_slot(h, slot))
+                    }
+                });
+
+                match (orig_id, rev_id) {
+                    (Some(o), Some(r)) => {
+                        let target = if let Some(&existing_target) = pair_to_target.get(&(o, r)) {
+                            existing_target
+                        } else {
+                            let (snap_kind, snap_blocks) =
+                                orig_parts_snapshot.get(&o).map(|(k, b)| (*k, b.as_slice())).unwrap_or((wordcraft_doc::PartKind::Header, &[]));
+                            let rev_blocks_raw = revised.parts.get(&r).map(|p| p.blocks.as_slice()).unwrap_or(&[]);
+
+                            let are_identical = hf_blocks_identical(&s.doc, revised, snap_blocks, rev_blocks_raw);
+
+                            let target = if matched_orig_parts.insert(o) && !seen_deleted.contains(&o) {
+                                o
+                            } else {
+                                s.doc.add_part(snap_kind, snap_blocks.to_vec())
+                            };
+                            pair_to_target.insert((o, r), target);
+
+                            if !are_identical {
+                                let rev_blocks = adopt_hf_blocks(&mut s.doc, revised, rev_blocks_raw, rev_has_text_boxes);
+                                let before_hf = ctx.changes;
+                                let hf_out = diff_blocks(&mut s.doc, snap_blocks, &rev_blocks, ctx, 0);
+                                let hf_changes = ctx.changes.saturating_sub(before_hf);
+                                if let Some(part) = s.doc.parts.get_mut(&target) {
+                                    part.blocks = hf_out;
+                                }
+                                changes += hf_changes;
+                            }
+                            target
+                        };
+                        assign_section_slot(s, &sec_ctx, footer, slot, target);
+                    }
+                    (None, Some(r)) => {
+                        let doc_id = if let Some(&existing_id) = inserted_clones.get(&r) {
+                            existing_id
+                        } else {
+                            let rev_blocks_raw = revised.parts.get(&r).map(|p| p.blocks.as_slice()).unwrap_or(&[]);
+                            let rev_blocks = adopt_hf_blocks(&mut s.doc, revised, rev_blocks_raw, rev_has_text_boxes);
+                            let kind = if footer { wordcraft_doc::PartKind::Footer } else { wordcraft_doc::PartKind::Header };
+                            let new_id = s.doc.add_part(kind, rev_blocks);
+                            if let Some(part) = s.doc.parts.get_mut(&new_id) {
+                                part.blocks = part
+                                    .blocks
+                                    .iter()
+                                    .map(|b| {
+                                        Arc::new(mark_block(b, &|c| {
+                                            if c.del.is_some() {
+                                                c.del = Some(run.del);
+                                                c.ins = None;
+                                            } else {
+                                                c.ins = Some(run.ins);
+                                            }
+                                        }))
+                                    })
+                                    .collect();
+                            }
+                            inserted_clones.insert(r, new_id);
+                            if seen_inserted.insert(r) {
+                                changes += s.doc.parts.get(&new_id).map(|p| p.blocks.len().max(1)).unwrap_or(1);
+                            }
+                            new_id
+                        };
+                        assign_section_slot(s, &sec_ctx, footer, slot, doc_id);
+                    }
+                    (Some(o), None) => {
+                        if seen_deleted.contains(&o) {
+                            assign_section_slot(s, &sec_ctx, footer, slot, o);
+                        } else if matched_orig_parts.contains(&o) {
+                            let target = if let Some(&existing) = deleted_clones.get(&o) {
+                                existing
+                            } else {
+                                let (kind, blocks) =
+                                    orig_parts_snapshot.get(&o).map(|(k, b)| (*k, b.as_slice())).unwrap_or((wordcraft_doc::PartKind::Header, &[]));
+                                let marked: Vec<_> = blocks.iter().map(|b| Arc::new(mark_block(b, &|c| c.del = Some(run.del)))).collect();
+                                let n = marked.len().max(1);
+                                let id = s.doc.add_part(kind, marked);
+                                changes += n;
+                                deleted_clones.insert(o, id);
+                                id
+                            };
+                            assign_section_slot(s, &sec_ctx, footer, slot, target);
+                        } else {
+                            seen_deleted.insert(o);
+                            if let Some(part) = s.doc.parts.get_mut(&o) {
+                                part.blocks = part.blocks.iter().map(|b| Arc::new(mark_block(b, &|c| c.del = Some(run.del)))).collect();
+                            }
+                            changes += s.doc.parts.get(&o).map(|p| p.blocks.len().max(1)).unwrap_or(1);
+                            assign_section_slot(s, &sec_ctx, footer, slot, o);
+                        }
+                    }
+                    (None, None) => {}
+                }
+            }
+        }
+    }
+
+    mark_unmapped_orig_hf_deleted(s, snaps.orig_sections, &mapped_orig, &matched_orig_parts, &mut seen_deleted, run.del, &mut changes);
+
+    if changes == 0 && flag_changed {
+        changes += 1;
+    }
+    changes
+}
+
+/// Marks header/footer parts from unmapped original sections as deleted when not already matched or seen.
+fn mark_unmapped_orig_hf_deleted(
+    s: &mut Session,
+    orig_sections: &[wordcraft_doc::section::SectionProps],
+    mapped_orig: &std::collections::HashSet<usize>,
+    matched_orig_parts: &std::collections::HashSet<u32>,
+    seen_deleted: &mut std::collections::HashSet<u32>,
+    del_rev: u32,
+    changes: &mut usize,
+) {
+    for (osi, orig_sec) in orig_sections.iter().enumerate() {
+        if mapped_orig.contains(&osi) {
+            continue;
+        }
+        for footer in [false, true] {
+            for slot in [HfSlot::Default, HfSlot::First, HfSlot::Even] {
+                if let Some(o) = get_hf_slot(orig_sec, footer, slot)
+                    && !matched_orig_parts.contains(&o)
+                    && seen_deleted.insert(o)
+                {
+                    if let Some(part) = s.doc.parts.get_mut(&o) {
+                        part.blocks = part.blocks.iter().map(|b| Arc::new(mark_block(b, &|c| c.del = Some(del_rev)))).collect();
+                    }
+                    *changes += s.doc.parts.get(&o).map(|p| p.blocks.len().max(1)).unwrap_or(1);
+                }
+            }
+        }
+    }
+}
+
+/// Returns the effective headers and footers for the original document at block index `orig_idx`.
+fn effective_orig_hf(run: &CompareRun<'_>, orig_idx: usize) -> (wordcraft_doc::section::HeaderSet, wordcraft_doc::section::HeaderSet) {
+    let osi = run.orig_ends.iter().position(|e| orig_idx <= *e).unwrap_or(run.orig_ends.len().saturating_sub(1));
+    let h = run.orig_eff_headers.get(osi).copied().unwrap_or_default();
+    let f = run.orig_eff_footers.get(osi).copied().unwrap_or_default();
+    (h, f)
+}
+
+/// Adjusts section headers and footers for a paragraph in the result document.
+///
+/// When `headersFooters` comparison is disabled, section breaks preserve original section
+/// headers or inherit the effective headers of the surrounding original section to prevent
+/// dangling or colliding revised part IDs.
+fn sanitize_section_hf(
+    orig_sec: Option<&wordcraft_doc::section::SectionProps>,
+    res_sec: &mut wordcraft_doc::section::SectionProps,
+    run: &CompareRun<'_>,
+    orig_idx: usize,
+) {
+    if !run.compare_hf {
+        if let Some(sa) = orig_sec {
+            res_sec.headers = sa.headers;
+            res_sec.footers = sa.footers;
+            res_sec.title_page = sa.title_page;
+        } else {
+            let (eff_h, eff_f) = effective_orig_hf(run, orig_idx);
+            res_sec.headers = eff_h;
+            res_sec.footers = eff_f;
+        }
+    } else if let Some(sa) = orig_sec {
+        res_sec.headers = sa.headers;
+        res_sec.footers = sa.footers;
+    }
+}
+
 /// Pushes every text box story ID referenced inside `blocks` (walking nested tables).
 fn collect_text_box_ids(blocks: &[Arc<Block>], todo: &mut Vec<u32>) {
     let mut stack: Vec<&Block> = blocks.iter().map(|b| &**b).collect();
@@ -392,6 +1005,20 @@ fn adopt_revised_blocks(
 
 /// Compare two block slices (`old` vs `new`) at table nesting `depth`, emitting tracked changes.
 fn diff_blocks(doc: &mut Document, old: &[Arc<Block>], new: &[Arc<Block>], ctx: &mut DiffCtx<'_>, depth: usize) -> Vec<Arc<Block>> {
+    diff_blocks_inner(doc, old, new, ctx, depth, None, None)
+}
+
+/// Compare two block slices (`old` vs `new`), optionally sanitizing top-level section headers/footers
+/// and recording block correspondence in `sources`.
+fn diff_blocks_inner(
+    doc: &mut Document,
+    old: &[Arc<Block>],
+    new: &[Arc<Block>],
+    ctx: &mut DiffCtx<'_>,
+    depth: usize,
+    hf_run: Option<&CompareRun<'_>>,
+    mut sources: Option<&mut Vec<(Option<usize>, Option<usize>)>>,
+) -> Vec<Arc<Block>> {
     let key = |b: &Arc<Block>| match &**b {
         Block::Para(p) => ctx.opts.key(&p.plain_text()),
         // Tables match as a whole, by their text.
@@ -410,22 +1037,40 @@ fn diff_blocks(doc: &mut Document, old: &[Arc<Block>], new: &[Arc<Block>], ctx: 
                         // Same text, but objects (text boxes, pictures…) differ: diffed, so the
                         // original's objects aren't lost.
                         out.push(para_block(word_diff(doc, pa, pb, ctx)));
+                        if let Some(src) = sources.as_deref_mut() {
+                            src.push((Some(i), Some(j)));
+                        }
                         ctx.changes = ctx.changes.saturating_add(1);
                     } else {
                         let mut p = pb.clone();
+                        if let Some(sb) = p.section.as_mut()
+                            && let Some(run) = hf_run
+                        {
+                            sanitize_section_hf(pa.section.as_deref(), sb, run, i);
+                        }
                         if ctx.opts.formatting && pa.text == pb.text {
                             let before = doc.revisions.len();
+                            let unformatted = p.clone();
                             crate::cmd::fmt_revisions::compare_formatting(pa, &mut p, &mut doc.revisions, ctx.author, ctx.date);
-                            if doc.revisions.len() > before || p != *pb {
+                            if doc.revisions.len() > before || p != unformatted {
                                 ctx.changes = ctx.changes.saturating_add(1);
                             }
                         }
                         out.push(para_block(p));
+                        if let Some(src) = sources.as_deref_mut() {
+                            src.push((Some(i), Some(j)));
+                        }
                     }
                 } else if let (Some(Block::Table(ta)), Some(Block::Table(tb))) = (a.map(|x| &**x), b.map(|x| &**x)) {
                     diff_matched_table(doc, (a, ta), (b, tb), ctx, depth, &mut out);
+                    if let Some(src) = sources.as_deref_mut() {
+                        src.push((a.is_some().then_some(i), b.is_some().then_some(j)));
+                    }
                 } else if let Some(x) = b.or(a) {
                     out.push(x.clone());
+                    if let Some(src) = sources.as_deref_mut() {
+                        src.push((a.is_some().then_some(i), b.is_some().then_some(j)));
+                    }
                 }
                 i += 1;
                 j += 1;
@@ -434,19 +1079,38 @@ fn diff_blocks(doc: &mut Document, old: &[Arc<Block>], new: &[Arc<Block>], ctx: 
             Some(_) => {
                 // A run of deletions and insertions: changed paragraphs pair up and are diffed
                 // word by word (or by character); the rest are deleted or inserted whole.
-                let run = ops.get(k..).unwrap_or_default().iter().take_while(|o| **o != Op::Same).count();
-                let dels = ops.get(k..k + run).unwrap_or_default().iter().filter(|o| **o == Op::Del).count();
-                let inss = run - dels;
+                let run_len = ops.get(k..).unwrap_or_default().iter().take_while(|o| **o != Op::Same).count();
+                let dels = ops.get(k..k + run_len).unwrap_or_default().iter().filter(|o| **o == Op::Del).count();
+                let inss = run_len - dels;
                 for x in 0..dels.max(inss) {
                     let (a, b) = (if x < dels { old.get(i + x) } else { None }, if x < inss { new.get(j + x) } else { None });
                     match (a.map(|x| &**x), b.map(|x| &**x)) {
-                        (Some(Block::Para(pa)), Some(Block::Para(pb))) => out.push(para_block(word_diff(doc, pa, pb, ctx))),
-                        _ => {
-                            if let Some(x) = a {
-                                out.push(Arc::new(mark_block(x, &|c| c.del = Some(ctx.del))));
+                        (Some(Block::Para(pa)), Some(Block::Para(pb))) => {
+                            out.push(para_block(word_diff(doc, pa, pb, ctx)));
+                            if let Some(src) = sources.as_deref_mut() {
+                                src.push((Some(i + x), Some(j + x)));
                             }
-                            if let Some(x) = b {
-                                out.push(Arc::new(mark_block(x, &|c| c.ins = Some(ctx.ins))));
+                        }
+                        _ => {
+                            if let Some(bx) = a {
+                                out.push(Arc::new(mark_block(bx, &|c| c.del = Some(ctx.del))));
+                                if let Some(src) = sources.as_deref_mut() {
+                                    src.push((Some(i + x), None));
+                                }
+                            }
+                            if let Some(bx) = b {
+                                let mut marked = mark_block(bx, &|c| c.ins = Some(ctx.ins));
+                                if let Block::Para(p) = &mut marked
+                                    && let Some(sb) = p.section.as_mut()
+                                    && let Some(run) = hf_run
+                                {
+                                    let orig_idx = if x < dels { i + x } else { i + dels };
+                                    sanitize_section_hf(None, sb, run, orig_idx);
+                                }
+                                out.push(Arc::new(marked));
+                                if let Some(src) = sources.as_deref_mut() {
+                                    src.push((None, Some(j + x)));
+                                }
                             }
                         }
                     }
@@ -454,7 +1118,7 @@ fn diff_blocks(doc: &mut Document, old: &[Arc<Block>], new: &[Arc<Block>], ctx: 
                 }
                 i += dels;
                 j += inss;
-                k += run.max(1);
+                k += run_len.max(1);
             }
             None => break,
         }

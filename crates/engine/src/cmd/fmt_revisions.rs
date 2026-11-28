@@ -489,8 +489,8 @@ pub fn resolve_style_rev(st: &mut Style, rev: u32, accept: bool) {
 pub fn resolve_section(s: &mut SectionProps, accept: bool) {
     let Some(ch) = s.fmt_change.take() else { return };
     if !accept {
-        let (headers, footers) = (std::mem::take(&mut s.headers), std::mem::take(&mut s.footers));
-        *s = SectionProps { headers, footers, fmt_change: None, ..ch.old };
+        let (headers, footers, compare_title_page) = (std::mem::take(&mut s.headers), std::mem::take(&mut s.footers), s.compare_title_page);
+        *s = SectionProps { headers, footers, fmt_change: None, compare_title_page, ..ch.old };
     }
 }
 

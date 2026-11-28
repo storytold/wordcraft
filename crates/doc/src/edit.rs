@@ -869,6 +869,11 @@ impl Document {
         if bl.is_empty() || matches!(bl.last().map(|b| &**b), Some(Block::Table(_))) {
             bl.push(para_block(Paragraph::new()));
         }
+        let removed_sec = matches!(&*b, Block::Para(p) if p.section.is_some());
+        let removed_tag = matches!(&*b, Block::Para(p) if p.section.as_ref().is_some_and(|s| s.compare_title_page.0.is_some()));
+        if story == crate::StoryRef::Body && path.0.len() == 1 && (removed_tag || (removed_sec && self.has_live_compare_title_page())) {
+            self.sync_compare_hf_title_page();
+        }
         Ok(Arc::try_unwrap(b).unwrap_or_else(|a| (*a).clone()))
     }
 
@@ -988,8 +993,15 @@ impl Document {
             if a.story == crate::StoryRef::Body && a.path.0.len() == 1 {
                 // Nearest first, as "link to previous" resolved them before the delete.
                 let following = self.section_mut(a.path.last());
+                let mut dropped_sec = false;
+                let mut dropped_tag = false;
                 for s in between.iter().rev().chain(before.iter()) {
                     following.absorb(s);
+                    dropped_sec = true;
+                    dropped_tag |= s.compare_title_page.0.is_some();
+                }
+                if dropped_tag || (dropped_sec && self.has_live_compare_title_page()) {
+                    self.sync_compare_hf_title_page();
                 }
             }
             return Ok(a);
@@ -1657,7 +1669,7 @@ impl Document {
     }
 
     /// Copies `media` into `self.media`, returning a remap for keys whose bytes differ from an
-    /// existing entry under the same key.
+    /// existing entry under the same key or match an existing entry under another key.
     fn adopt_media(&mut self, media: &BTreeMap<String, Arc<Vec<u8>>>) -> BTreeMap<String, String> {
         let mut media_remap = BTreeMap::new();
         for (k, v) in media {
@@ -1667,8 +1679,10 @@ impl Document {
                     let new_key = self.add_media((**v).clone(), ext);
                     media_remap.insert(k.clone(), new_key);
                 }
+            } else if let Some(existing_key) = self.find_media(v) {
+                media_remap.insert(k.clone(), existing_key);
             } else {
-                self.media.insert(k.clone(), v.clone());
+                self.insert_media(k.clone(), v.clone());
             }
         }
         media_remap
