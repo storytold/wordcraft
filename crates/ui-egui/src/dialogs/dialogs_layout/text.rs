@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use wordcraft_doc::section::LineNumberRestart;
 
 use super::{WordApp, count_field, length_field, named_field, number_or_zero, points};
-use crate::dialogs::host::{Asks, Filed, WordForm};
+use crate::dialogs::host::{Asks, Filed, WordForm, captioned};
 
 /// The field's one name: no limit on consecutive hyphens.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -105,12 +105,14 @@ impl WordForm for LineNumbersForm {
         length_field(ui, tl!("From text:"), &mut self.distance, lengths, 0.0..=22.0 * 72.0, on && !self.auto_distance);
         count_field(ui, tl!("Count by:"), &mut self.count_by, 1..=100, on);
         let opts = [("restartPage", tl!("Restart Each Page")), ("restartSection", tl!("Restart Each Section")), ("continuous", tl!("Continuous"))];
-        RadioGroup::new(tl!("Numbering:").to_string(), Bind::bound(&mut self.restart)).show(ui, |ui, _| {
-            Stack::new().show(ui, |ui, cx| {
-                for (at, (v, l)) in opts.iter().enumerate() {
-                    cx.labelled(ui, at, Label::from(*l), SideLabel::new().layout(FieldLayout::After), Radio::new((*v).to_string()));
-                }
-            });
+        captioned(ui, tl!("Numbering:").to_string(), |name, ui| {
+            RadioGroup::new(name, Bind::bound(&mut self.restart)).show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, cx| {
+                    for (at, (v, l)) in opts.iter().enumerate() {
+                        cx.labelled(ui, at, Label::from(*l), SideLabel::new().layout(FieldLayout::After), Radio::new((*v).to_string()));
+                    }
+                });
+            })
         });
         true
     }
@@ -444,6 +446,8 @@ impl WordForm for LanguageForm {
         let which: Vec<usize> = (0..list.len()).collect();
         let source = keyed(which.as_slice(), |i: &usize| *i);
         let selection = at.map_or_else(|| Selection::new(Vec::new(), None, None), Selection::single);
+        // A plain caption, not a `Field`: the list keeps its own accessible name (#7976).
+        Text::new(Label::from(heading.to_string())).show(ui);
         let shown = List::<usize>::new(Label::from(heading.to_string()))
             .select(SelectMode::Single)
             .selection(Bind::given(selection))

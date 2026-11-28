@@ -2283,3 +2283,41 @@ fn modal_dialog_with_open_popup_does_not_shake_on_inside_click_but_shakes_on_out
     let key2 = chrome::nudge_id(&h.ctx, id2);
     assert!(h.ctx.data(|d| d.get_temp::<f64>(key2)).is_none(), "reopened dialog starts still");
 }
+
+/// #7976: a text box, number box, drop-down or radio group has an accessible name but draws no caption of its own;
+/// the dialog must draw one beside or above it, or the field reads as a bare box.
+#[test]
+fn bare_fields_and_groups_draw_their_captions() {
+    use egui::accesskit::Role;
+    for (dialog, captions) in
+        [("envelopes", &["Delivery address", "Return address", "Envelope size"][..]), ("dropCap", &["Position", "Lines to drop"][..])]
+    {
+        let mut h = app_harness(app_with("Lanterns"));
+        h.state_mut().run("ui.dialog", json!({"name": dialog})).unwrap();
+        h.run_steps(6);
+        for caption in captions {
+            let drawn = h.query_all(egui_kittest::kittest::By::new().role(Role::Label).label_contains(caption)).count();
+            assert!(drawn > 0, "{dialog} draws no caption \"{caption}\"");
+        }
+    }
+}
+
+/// #7976: a caption is drawn once. A group inside a titled section, or a box after a radio that says the same
+/// words, must not repeat them as a second caption.
+#[test]
+fn captions_are_not_drawn_twice() {
+    use egui::accesskit::Role;
+    for (dialog, caption) in
+        [("trackChangesOptions", "Balloons"), ("trackChangesOptions", "Comments"), ("pageNumbers", "Start at"), ("tableSort", "My list has")]
+    {
+        let mut app = app_with("Lanterns");
+        if dialog == "tableSort" {
+            app.run("insert.table", json!({"rows": 3, "cols": 3})).unwrap();
+        }
+        let mut h = app_harness(app);
+        h.state_mut().run("ui.dialog", json!({"name": dialog})).unwrap();
+        h.run_steps(6);
+        let drawn = h.query_all(egui_kittest::kittest::By::new().role(Role::Label).label_contains(caption)).count();
+        assert!(drawn <= 1, "{dialog} draws \"{caption}\" {drawn} times");
+    }
+}

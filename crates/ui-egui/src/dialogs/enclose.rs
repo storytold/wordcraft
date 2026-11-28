@@ -17,7 +17,7 @@ use egui::{CornerRadius, Rect, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::host::{Asks, WordForm, open_form};
+use super::host::{Asks, WordForm, captioned, open_form};
 use crate::WordApp;
 
 const PREVIEW_W: f32 = 110.0;
@@ -86,19 +86,21 @@ impl EncloseForm {
 
 /// A radio group over `value` whose options are `(id, label)`.
 fn radios(ui: &mut Ui, name: &'static str, value: &mut String, options: &[(&'static str, &'static str)], enabled: bool, horizontal: bool) {
-    let group = RadioGroup::new(Label::from(name), Bind::given(value.clone())).enabled(enabled).show(ui, |ui, _| {
-        let items = |ui: &mut Ui| {
-            for (id, label) in options {
-                Radio::new((*id).to_string()).label(Label::from(tl!(*label))).enabled(enabled).show(ui);
+    let group = captioned(ui, Label::from(name), |name, ui| {
+        RadioGroup::new(name, Bind::given(value.clone())).enabled(enabled).show(ui, |ui, _| {
+            let items = |ui: &mut Ui| {
+                for (id, label) in options {
+                    Radio::new((*id).to_string()).label(Label::from(tl!(*label))).enabled(enabled).show(ui);
+                }
+            };
+            if horizontal {
+                Row::new().show(ui, |ui, _| items(ui));
+            } else {
+                Stack::new().show(ui, |ui, _| items(ui));
             }
-        };
-        if horizontal {
-            Row::new().show(ui, |ui, _| items(ui));
-        } else {
-            Stack::new().show(ui, |ui, _| items(ui));
-        }
+        })
     });
-    if let Some(v) = group.output.value().cloned() {
+    if let Some(v) = group.and_then(|g| g.output.value().cloned()) {
         *value = v;
     }
 }

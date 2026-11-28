@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{WordApp, count_field, named_field, number_or_zero, points};
-use crate::dialogs::host::{Asks, WordForm};
+use crate::dialogs::host::{Asks, WordForm, labelled};
 
 /// The field's one name: a width that shares the text width out.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -96,7 +96,7 @@ impl WordForm for FormulaForm {
         });
         let functions: Vec<Entry<String>> = FORMULA_FUNCTIONS.iter().map(|n| Entry::new((*n).to_string(), (*n).to_string())).collect();
         let mut picked = String::new();
-        Select::new(tl!("Paste function:").to_string(), Bind::bound(&mut picked), &functions).show(ui);
+        labelled(ui, tl!("Paste function:").to_string(), |name, ui| Select::new(name, Bind::bound(&mut picked), &functions).show(ui));
         if !picked.is_empty() {
             self.paste(&picked);
         }

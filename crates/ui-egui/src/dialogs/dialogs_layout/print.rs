@@ -12,7 +12,7 @@ use wordcraft_engine::cmd::mailings::{ENVELOPE_SIZES, LABEL_PRODUCTS};
 use wordcraft_geom::Region;
 
 use crate::WordApp;
-use crate::dialogs::host::{Asks, WordForm, open_form};
+use crate::dialogs::host::{Asks, WordForm, labelled, open_form};
 
 // ---------------------------------------------------------------------------------------------
 // Envelopes
@@ -72,10 +72,12 @@ impl WordForm for EnvelopeForm {
     fn body(&mut self, ui: &mut egui::Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
         let sizes: Vec<Entry<usize>> =
             ENVELOPE_SIZES.iter().enumerate().map(|(i, (n, w, h))| Entry::new(i, envelope_label(n, *w, *h, &self.region))).collect();
-        TextField::new(tl!("Delivery address:"), Bind::bound(&mut self.delivery)).lines(4).show(ui);
+        labelled(ui, tl!("Delivery address:"), |name, ui| TextField::new(name, Bind::bound(&mut self.delivery)).lines(4).show(ui));
         Checkbox::new(Bind::bound(&mut self.omit_return)).label(tl!("Omit")).show(ui);
-        TextField::new(tl!("Return address:"), Bind::bound(&mut self.ret)).lines(3).enabled(!self.omit_return).show(ui);
-        Select::new(tl!("Envelope size:"), Bind::bound(&mut self.size), &sizes).show(ui);
+        labelled(ui, tl!("Return address:"), |name, ui| {
+            TextField::new(name, Bind::bound(&mut self.ret)).lines(3).enabled(!self.omit_return).show(ui)
+        });
+        labelled(ui, tl!("Envelope size:"), |name, ui| Select::new(name, Bind::bound(&mut self.size), &sizes).show(ui));
         self.ready()
     }
     fn commands(&self) -> Vec<(String, Value)> {
@@ -202,9 +204,9 @@ impl WordForm for LabelsForm {
             Checkbox::new(Bind::bound(&mut self.recipients)).label(tl!("One label per recipient")).show(ui);
         }
         let per_recipient = self.has_recipients && self.recipients && !self.single;
-        TextField::new(tl!("Address:"), Bind::bound(&mut self.text)).lines(4).enabled(!per_recipient).show(ui);
+        labelled(ui, tl!("Address:"), |name, ui| TextField::new(name, Bind::bound(&mut self.text)).lines(4).enabled(!per_recipient).show(ui));
         let products: Vec<Entry<usize>> = (0..LABEL_PRODUCTS.len()).map(|i| Entry::new(i, product_label(i, &self.region))).collect();
-        Select::new(tl!("Label:"), Bind::bound(&mut self.product), &products).show(ui);
+        labelled(ui, tl!("Label:"), |name, ui| Select::new(name, Bind::bound(&mut self.product), &products).show(ui));
         let (rows, cols) = LABEL_PRODUCTS.get(self.product).map_or((1, 1), |p| (p.rows, p.cols));
         let mut single = self.single;
         let (mut row, mut col) = (self.row, self.col);
@@ -216,21 +218,17 @@ impl WordForm for LabelsForm {
                 Radio::new(1u8).label(tl!("Single label")).show(ui);
             });
             single = mode == 1;
-            if let Some(Some(v)) = NumberField::new(tl!("Row:"), Bind::given(Some(row as f64)))
-                .range(1.0..=rows.max(1) as f64)
-                .enabled(single_on)
-                .show(ui)
-                .value()
-                .copied()
+            if let Some(Some(v)) = labelled(ui, tl!("Row:"), |name, ui| {
+                NumberField::new(name, Bind::given(Some(row as f64))).range(1.0..=rows.max(1) as f64).enabled(single_on).show(ui)
+            })
+            .and_then(|out| out.value().copied())
             {
                 row = v as usize;
             }
-            if let Some(Some(v)) = NumberField::new(tl!("Column:"), Bind::given(Some(col as f64)))
-                .range(1.0..=cols.max(1) as f64)
-                .enabled(single_on)
-                .show(ui)
-                .value()
-                .copied()
+            if let Some(Some(v)) = labelled(ui, tl!("Column:"), |name, ui| {
+                NumberField::new(name, Bind::given(Some(col as f64))).range(1.0..=cols.max(1) as f64).enabled(single_on).show(ui)
+            })
+            .and_then(|out| out.value().copied())
             {
                 col = v as usize;
             }

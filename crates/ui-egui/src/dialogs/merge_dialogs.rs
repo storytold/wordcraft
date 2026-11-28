@@ -15,7 +15,7 @@ use craft::ui::text::{NumberField, TextField};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::host::{Asks, DialogHooks, FormHost, Settle, WordForm, open_form, open_form_with, open_with};
+use super::host::{Asks, DialogHooks, FormHost, Settle, WordForm, captioned, labelled, open_form, open_form_with, open_with};
 use super::mailings::ADDRESS_PARTS;
 use crate::WordApp;
 
@@ -115,7 +115,7 @@ impl WordForm for InsertMergeFieldForm {
         } else if let (Some(name), _) = pick_name(ui, tl!("Fields:"), &self.fields, &self.field) {
             self.field = name;
         }
-        TextField::new(tl!("Field:"), Bind::bound(&mut self.field)).show(ui);
+        labelled(ui, tl!("Field:"), |name, ui| TextField::new(name, Bind::bound(&mut self.field)).show(ui));
         !self.field.trim().is_empty()
     }
     fn commands(&self) -> Vec<(String, Value)> {
@@ -209,7 +209,7 @@ impl WordForm for FindRecipientForm {
         Some(tl!("Find").into())
     }
     fn body(&mut self, ui: &mut egui::Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
-        TextField::new(tl!("Find:"), Bind::bound(&mut self.text)).show(ui);
+        labelled(ui, tl!("Find:"), |name, ui| TextField::new(name, Bind::bound(&mut self.text)).show(ui));
         !self.text.trim().is_empty()
     }
     fn commands(&self) -> Vec<(String, Value)> {
@@ -261,10 +261,12 @@ impl WordForm for MergeRecordsForm {
     }
     fn body(&mut self, ui: &mut egui::Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
         let mut choice = self.choice;
-        RadioGroup::new(tl!("Records"), Bind::bound(&mut choice)).show(ui, |ui, _| {
-            Radio::new(0u8).label(tl!("All")).show(ui);
-            Radio::new(1u8).label(tl!("Current record")).show(ui);
-            Radio::new(2u8).label(tl!("From:")).show(ui);
+        captioned(ui, tl!("Records"), |name, ui| {
+            RadioGroup::new(name, Bind::bound(&mut choice)).show(ui, |ui, _| {
+                Radio::new(0u8).label(tl!("All")).show(ui);
+                Radio::new(1u8).label(tl!("Current record")).show(ui);
+                Radio::new(2u8).label(tl!("From:")).show(ui);
+            })
         });
         self.choice = choice;
         // Typing a number picks the range.
@@ -344,17 +346,19 @@ impl WordForm for MergeRuleForm {
         }))
         .show(ui);
         if self.fields.is_empty() {
-            TextField::new(tl!("Field:"), Bind::bound(&mut self.field)).show(ui);
+            labelled(ui, tl!("Field:"), |name, ui| TextField::new(name, Bind::bound(&mut self.field)).show(ui));
         } else {
             let entries: Vec<Entry<String>> = self.fields.iter().map(|f| Entry::new(f.clone(), Label::from(f.clone()))).collect();
-            if let Some(f) = Select::new(tl!("Field:"), Bind::given(self.field.clone()), &entries).show(ui).value().cloned() {
+            if let Some(f) = labelled(ui, tl!("Field:"), |name, ui| Select::new(name, Bind::given(self.field.clone()), &entries).show(ui))
+                .and_then(|out| out.value().cloned())
+            {
                 self.field = f;
             }
         }
-        TextField::new(tl!("Equals:"), Bind::bound(&mut self.value)).show(ui);
+        labelled(ui, tl!("Equals:"), |name, ui| TextField::new(name, Bind::bound(&mut self.value)).show(ui));
         if !skip {
-            TextField::new(tl!("Then insert:"), Bind::bound(&mut self.then)).show(ui);
-            TextField::new(tl!("Otherwise insert:"), Bind::bound(&mut self.els)).show(ui);
+            labelled(ui, tl!("Then insert:"), |name, ui| TextField::new(name, Bind::bound(&mut self.then)).show(ui));
+            labelled(ui, tl!("Otherwise insert:"), |name, ui| TextField::new(name, Bind::bound(&mut self.els)).show(ui));
         }
         self.params().is_some()
     }

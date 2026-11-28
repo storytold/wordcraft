@@ -15,7 +15,7 @@ use egui::Ui;
 use serde_json::Value;
 
 use crate::WordApp;
-use crate::dialogs::host::{DialogHooks, open_form, open_form_with};
+use crate::dialogs::host::{DialogHooks, labelled, open_form, open_form_with};
 
 mod page;
 pub(crate) mod print;
@@ -92,11 +92,23 @@ pub(crate) fn points() -> LengthUnits {
     LengthUnits::new(UnitKind::Points, UnitKind::Points, 96.0)
 }
 
-/// A whole-number field over `value` within `range`; true when the user changed it.
+/// A whole-number field over `value` within `range`, with its caption; true when the user changed it.
 pub(crate) fn count_field(ui: &mut Ui, label: &str, value: &mut u32, range: RangeInclusive<u32>, enabled: bool) -> bool {
+    labelled(ui, label.to_string(), |name, ui| count_box(ui, name, value, range.clone(), enabled)).unwrap_or(false)
+}
+
+/// `count_field` with no caption, named `label` for assistive technology: for a box that follows a radio carrying the
+/// same words ("Start at:").
+pub(crate) fn count_box(
+    ui: &mut Ui,
+    label: impl Into<craft::ui::runtime::env::Label>,
+    value: &mut u32,
+    range: RangeInclusive<u32>,
+    enabled: bool,
+) -> bool {
     let was = f64::from(*value);
     let mut shown = Some(was);
-    NumberField::new(label.to_string(), Bind::bound(&mut shown)).range(f64::from(*range.start())..=f64::from(*range.end())).enabled(enabled).show(ui);
+    NumberField::new(label, Bind::bound(&mut shown)).range(f64::from(*range.start())..=f64::from(*range.end())).enabled(enabled).show(ui);
     match shown {
         Some(n) if n != was => {
             *value = (n.round().max(0.0) as u32).clamp(*range.start(), *range.end());
@@ -116,8 +128,10 @@ pub(crate) fn length_field(ui: &mut Ui, label: &str, value: &mut f32, lengths: L
     let was = f64::from(*value);
     // The form takes the field's edit events, not a write into a copy that lives one pass: an edit that commits as the
     // dialog files its OK (Enter, or a click on OK) reaches the form in the pass that files it.
-    let out = NumberField::length(label.to_string(), Bind::given(Some(was)), lengths).range(range).enabled(enabled).show(ui);
-    match edited(&out.edit.events) {
+    let out = labelled(ui, label.to_string(), |name, ui| {
+        NumberField::length(name, Bind::given(Some(was)), lengths).range(range.clone()).enabled(enabled).show(ui)
+    });
+    match out.as_ref().and_then(|out| edited(&out.edit.events)) {
         Some(n) if n != was => {
             *value = n as f32;
             true
@@ -129,8 +143,8 @@ pub(crate) fn length_field(ui: &mut Ui, label: &str, value: &mut f32, lengths: L
 /// A percentage field over `value`; true when the user changed it.
 pub(crate) fn percent_field(ui: &mut Ui, label: &str, value: &mut f32, range: RangeInclusive<f64>) -> bool {
     let was = f64::from(*value);
-    let out = NumberField::new(label.to_string(), Bind::given(Some(was))).range(range).unit("%").show(ui);
-    match edited(&out.edit.events) {
+    let out = labelled(ui, label.to_string(), |name, ui| NumberField::new(name, Bind::given(Some(was))).range(range.clone()).unit("%").show(ui));
+    match out.as_ref().and_then(|out| edited(&out.edit.events)) {
         Some(n) if n != was => {
             *value = n as f32;
             true
@@ -151,11 +165,16 @@ pub(crate) fn named_field<K: NumberName + 'static>(
     enabled: bool,
 ) {
     let presets = vec![Entry::new(NumberPick::Choice(name.0.id()), name.1.to_string()).checked(matches!(*value, NamedOr::Named(_)))];
-    let mut field = NumberField::named(label.to_string(), Bind::bound(value)).range(range).presets(&presets).enabled(enabled);
-    if let Some(lengths) = lengths {
-        field = field.lengths(lengths);
-    }
-    field.show(ui);
+    labelled(ui, label.to_string(), |name, ui| {
+        {
+            let field = NumberField::named(name, Bind::bound(&mut *value)).range(range.clone()).presets(&presets).enabled(enabled);
+            match lengths {
+                Some(lengths) => field.lengths(lengths),
+                None => field,
+            }
+        }
+        .show(ui)
+    });
 }
 
 /// The number a named field holds, 0 while it holds its name.

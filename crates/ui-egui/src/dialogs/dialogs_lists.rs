@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use wordcraft_doc::section::NumFormat;
 use wordcraft_engine::cmd::lists::{LEVELS, caret_list, level_json, levels_of};
 
-use super::dialogs_para::{color_row, pick, radios, srgba, word};
+use super::dialogs_para::{color_row, pick, radios, radios_in_section, srgba, word};
 use super::host::{Asks, ChildAnswer, WordForm, open_form};
 use crate::WordApp;
 use crate::colors::{AutoFace, ColorFieldEmpty, Palette};
@@ -599,7 +599,7 @@ fn choose(ui: &mut Ui, salt: &'static str, label: Label, options: &[(&str, &str)
 /// A radio group over `options` setting `value`.
 fn choose_radio(ui: &mut Ui, label: Label, options: &[(&str, &str)], value: &mut String) {
     let current = index_of(options, value).unwrap_or(0);
-    if let Some((v, _)) = radios(ui, label, &labels(options), current).and_then(|at| options.get(at)) {
+    if let Some((v, _)) = radios_in_section(ui, label, &labels(options), current).and_then(|at| options.get(at)) {
         *value = v.to_string();
     }
 }

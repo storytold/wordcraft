@@ -4,10 +4,11 @@ use craft::text::ui::columns::{ColumnsApply, TextColumns, TextColumnsDialog};
 use craft::ui::choice::{Radio, RadioGroup};
 use craft::ui::contract::{Bind, FieldLayout, Props as _, Show as _, ShowContainer as _, SideLabel};
 use craft::ui::dialog::DialogId;
-use craft::ui::form::{Field, FieldGroup};
+use craft::ui::form::Field;
 use craft::ui::layout_components::Stack;
 use craft::ui::patterns::form_dialogs::FormCx;
 use craft::ui::runtime::env::Label;
+use craft::ui::sections::GroupBox;
 use craft::ui::text::NumberField;
 use egui::Ui;
 use serde::{Deserialize, Serialize};
@@ -15,7 +16,7 @@ use serde_json::{Map, Value, json};
 
 use super::{settled, word};
 use crate::WordApp;
-use crate::dialogs::host::{Asks, DialogHooks, Keyed, Settle, WordForm, open_with};
+use crate::dialogs::host::{Asks, DialogHooks, Keyed, Settle, WordForm, captioned, open_with};
 use crate::options::lengths;
 use crate::widgets::font_box::{CatalogRef, font_picker};
 
@@ -104,14 +105,16 @@ impl WordForm for DropCapForm {
     fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
         let enabled = self.position != "none";
         Stack::new().show(ui, |ui, _| {
-            RadioGroup::new(word("Position"), Bind::bound(&mut self.position)).show(ui, |ui, _| {
-                Stack::new().show(ui, |ui, cx| {
-                    for (at, (v, l)) in [("none", "None"), ("dropped", "Dropped"), ("margin", "In margin")].into_iter().enumerate() {
-                        cx.labelled(ui, at, word(l), SideLabel::new().layout(FieldLayout::After), Radio::new(v.to_string()));
-                    }
-                });
+            captioned(ui, word("Position"), |name, ui| {
+                RadioGroup::new(name, Bind::bound(&mut self.position)).show(ui, |ui, _| {
+                    Stack::new().show(ui, |ui, cx| {
+                        for (at, (v, l)) in [("none", "None"), ("dropped", "Dropped"), ("margin", "In margin")].into_iter().enumerate() {
+                            cx.labelled(ui, at, word(l), SideLabel::new().layout(FieldLayout::After), Radio::new(v.to_string()));
+                        }
+                    });
+                })
             });
-            FieldGroup::new(word("Options")).show(ui, |ui, _| {
+            GroupBox::new(word("Options"), None).show(ui, |ui, _| {
                 if let Some(catalog) = self.catalog.get() {
                     Field::new(word("Font:")).show(ui, |ui, _| {
                         font_picker(word("Font:"), Bind::bound(&mut self.font), catalog, Bind::bound(&mut self.settings), &[], None)

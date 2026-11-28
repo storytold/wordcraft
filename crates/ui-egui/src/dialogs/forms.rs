@@ -19,7 +19,7 @@ use craft::ui::sections::Section;
 use craft::ui::style::TypeRole;
 use craft::ui::text::{NumberField, TextField};
 
-use super::host::{Asks, WordForm, open_form};
+use super::host::{Asks, WordForm, captioned, labelled, open_form};
 
 /// Opens the form dialog `name` when it is one of this file's: Table Properties (only with a table selection) or Custom
 /// Properties.
@@ -49,14 +49,16 @@ fn flag(ui: &mut Ui, id: &'static str, label: String, value: &mut bool, enabled:
 
 /// A radio group choosing one of `options` (key, label) into `value`.
 fn choose(ui: &mut Ui, id: &'static str, label: String, value: &mut String, options: &[(&str, String)]) {
-    let chosen = RadioGroup::new(Label::from(label), Bind::given(value.clone())).id_salt(id).show(ui, |ui, _| {
-        Stack::new().show(ui, |ui, _| {
-            for (key, text) in options {
-                Radio::new((*key).to_string()).label(Label::from(text.clone())).show(ui);
-            }
-        });
+    let chosen = captioned(ui, Label::from(label), |name, ui| {
+        RadioGroup::new(name, Bind::given(value.clone())).id_salt(id).show(ui, |ui, _| {
+            Stack::new().show(ui, |ui, _| {
+                for (key, text) in options {
+                    Radio::new((*key).to_string()).label(Label::from(text.clone())).show(ui);
+                }
+            });
+        })
     });
-    if let Some(next) = chosen.output.value().cloned() {
+    if let Some(next) = chosen.and_then(|c| c.output.value().cloned()) {
         *value = next;
     }
 }
@@ -265,15 +267,16 @@ impl WordForm for CustomPropertiesForm {
                 self.delete();
             }
         });
-        let typed = TextField::new(Label::from(tl!("Name:").to_string()), Bind::given(self.name.clone()))
-            .id_salt("name")
-            .limit(wordcraft_engine::cmd::file::MAX_CUSTOM_NAME)
-            .show(ui);
-        if let Some(text) = typed.value().cloned() {
+        let typed = labelled(ui, Label::from(tl!("Name:").to_string()), |name, ui| {
+            TextField::new(name, Bind::given(self.name.clone())).id_salt("name").limit(wordcraft_engine::cmd::file::MAX_CUSTOM_NAME).show(ui)
+        });
+        if let Some(text) = typed.and_then(|out| out.value().cloned()) {
             self.name = text;
         }
-        let typed = TextField::new(Label::from(tl!("Value:").to_string()), Bind::given(self.value.clone())).id_salt("value").show(ui);
-        if let Some(text) = typed.value().cloned() {
+        let typed = labelled(ui, Label::from(tl!("Value:").to_string()), |name, ui| {
+            TextField::new(name, Bind::given(self.value.clone())).id_salt("value").show(ui)
+        });
+        if let Some(text) = typed.and_then(|out| out.value().cloned()) {
             self.value = text;
         }
         if !self.message.is_empty() {
@@ -444,11 +447,9 @@ fn mixed_check(ui: &mut Ui, id: &'static str, label: String, key: &str, value: &
 /// A length field over points, shown in the interface unit of `units`, within `lo..=hi` points.
 fn length(ui: &mut Ui, id: &'static str, label: String, value: &mut f32, (lo, hi): (f32, f32), units: LengthUnits, enabled: bool) {
     let mut points = Some(f64::from(*value));
-    NumberField::length(Label::from(label), Bind::bound(&mut points), units)
-        .id_salt(id)
-        .range(f64::from(lo)..=f64::from(hi))
-        .enabled(enabled)
-        .show(ui);
+    labelled(ui, Label::from(label), |name, ui| {
+        NumberField::length(name, Bind::bound(&mut points), units).id_salt(id).range(f64::from(lo)..=f64::from(hi)).enabled(enabled).show(ui)
+    });
     if let Some(next) = points {
         *value = next as f32;
     }
