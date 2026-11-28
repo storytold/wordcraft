@@ -4,15 +4,13 @@ use super::options::{PdfError, PdfOptions};
 use super::paint::{append_path, fill, grown, norm, ok, paint_fill, pdf_line_cap, rect_path, shape_effects, shape_path};
 use super::picture::{Vector, build_vector, load_image, paint_of, vector_picture};
 use super::tags::{
-    ListPlace, PendingItem, Role, Slot, TableSlot, TagEntry, figure_alt, graphic_alt, holds_picture, holds_text, list_group, list_numbering,
-    slot_in,
+    ListPlace, PendingItem, Role, Slot, TableSlot, TagEntry, figure_alt, graphic_alt, holds_picture, holds_text, list_group, list_numbering, slot_in,
 };
 use super::{
-    Annotation, Arc, Artifact, ArtifactType, ClKind, ContentTag, DocLayout, DocPath, Document, Draw, FaceRef, Fill, FillRule, Font,
-    HashMap, HashSet, Identifier, Image, InlineObject, ItemDisplay, KrillaGlyph, LineCap, LineEnd, LineJoin, LineStyle, LinkAnnotation,
-    ListNumbering, Node, NonZeroU16, NonZeroU32, Outline, OutlineNode, Page, PathBuilder, Placed, Point, Rect, Rgb, ShapeKind, Size, SpanTag,
-    StoryRef, Stroke, StrokeDash, Surface, TableHeaderScope, Tag, TagGroup, TagKind, TagTree, Target, Transform, WriteError, XyzDestination, krilla,
-    rgb, write,
+    Annotation, Arc, Artifact, ArtifactType, ClKind, ContentTag, DocLayout, DocPath, Document, Draw, FaceRef, Fill, FillRule, Font, HashMap, HashSet,
+    Identifier, Image, InlineObject, ItemDisplay, KrillaGlyph, LineCap, LineEnd, LineJoin, LineStyle, LinkAnnotation, ListNumbering, Node,
+    NonZeroU16, NonZeroU32, Outline, OutlineNode, Page, PathBuilder, Placed, Point, Rect, Rgb, ShapeKind, Size, SpanTag, StoryRef, Stroke,
+    StrokeDash, Surface, TableHeaderScope, Tag, TagGroup, TagKind, TagTree, Target, Transform, WriteError, XyzDestination, krilla, rgb, write,
 };
 use wordcraft_doc::picfx::PicFx;
 
@@ -287,9 +285,7 @@ impl Exporter<'_> {
             Draw::Glyphs { list_label: true, .. } => self.tagged(s, Role::Label(idx), None, |me, s| me.draw(s, d)),
             // Link text: in a `Link` element with its annotation (see `link_slot`). Without
             // annotations (a print job), it stays plain text: a `Link` with nothing to follow.
-            Draw::Glyphs { link: Some(target), .. }
-                if self.opts.tagged && self.opts.links && self.link_target(target).is_some() =>
-            {
+            Draw::Glyphs { link: Some(target), .. } if self.opts.tagged && self.opts.links && self.link_target(target).is_some() => {
                 let c = self.link_slot(idx, target);
                 self.link_runs.entry((idx, l0)).or_default().push(c);
                 self.link_owner = Some((idx, c));

@@ -3642,7 +3642,16 @@ fn lists_pictures_and_tables_in_a_cell_stay_in_the_cell() {
     };
     let mut pictured = Paragraph::with_text("See: ", CharProps::default());
     let n = pictured.len();
-    let obj = InlineObject::Image { media, w: 30.0, h: 30.0, alt: "A red square".into(), float: Default::default(), crop: [0.0; 4], ole: None, fx: Default::default() };
+    let obj = InlineObject::Image {
+        media,
+        w: 30.0,
+        h: 30.0,
+        alt: "A red square".into(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        ole: None,
+        fx: Default::default(),
+    };
     pictured.insert_object(n, obj, &CharProps::default()).unwrap();
     let mut inner = Table::new(1, 1, 120.0);
     inner.rows[0].cells[0].blocks = text_cell("Inner");
