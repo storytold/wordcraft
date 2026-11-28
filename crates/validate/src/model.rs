@@ -19,9 +19,8 @@
 //! 1335 elements (794 WML + 541 DML), 61 with more than one type variant; 0 ambiguous (parent type, element)
 //! pairs left to fallback selection; 63 `ST_NumberFormat` values.
 //!
-//! Group contexts that no type flattens contribute no parent types. Where such a group is a
-//! type's whole content, the extractor records that type as empty: these tables do not carry
-//! its content, so a consumer must not read its empty child list as "no children allowed".
+//! Group contexts that no type flattens contribute no parent types (each is
+//! referenced by no in-scope complex type):
 //! - `a:EG_Media`: referenced by no in-scope complex type
 //! - `a:EG_TextGeometry`: referenced by no in-scope complex type
 

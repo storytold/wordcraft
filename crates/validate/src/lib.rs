@@ -194,7 +194,9 @@ pub struct Report {
     /// Informational notes about skipped checks and observations from completed checks,
     /// such as unattached custom XML schemas.
     pub coverage_notes: Vec<String>,
-    /// Every rule id that executed, in the documented order.
+    /// Every rule id whose check pass ran, in the documented order. Per-part skips
+    /// (such as unreadable parts, DTD-tainted parts, or inactive/conflicting grammar
+    /// scopes) are disclosed in `coverage_notes`.
     pub checks_run: Vec<&'static str>,
 }
 
@@ -1537,7 +1539,7 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     acc.ran("PROTECTION-PASSWORD");
     acc.ran("HEADERSOURCE-PRESENT");
     let roles = story_roles(pkg);
-    let scopes = grammar_scopes(pkg);
+    let scopes = grammar_scopes(pkg, acc.limits.events);
     let graph = PartGraph::new(pkg);
     if graph.budget_exhausted() {
         acc.note(
@@ -2272,16 +2274,17 @@ fn relationship_role(kind: Option<&str>) -> Option<scan::PartRole> {
 }
 
 /// Classify each XML part's grammar vocabulary scope from main-part resolution,
-/// effective content types, and official relationships. Conflicting declarations
-/// merge to [`grammar::GrammarScope::Conflicting`] so traversal order never
-/// chooses a scope.
-fn grammar_scopes(pkg: &Package) -> HashMap<String, grammar::GrammarScope> {
+/// effective content types, and official relationships (including standard
+/// `customXml` bibliography parts whose resolved root is `b:Sources`, ECMA-376
+/// Part 1 §15.2.3). Conflicting declarations merge to
+/// [`grammar::GrammarScope::Conflicting`] so traversal order never chooses a scope.
+fn grammar_scopes(pkg: &Package, max_events: usize) -> HashMap<String, grammar::GrammarScope> {
     observation_contract! {
         rules: "-";
-        collections: "field.content_types*1,field.entries*1,field.rels*2,lookup.canonical_entry*1,type.HashMap*3";
-        scope: "source-local grammar vocabulary classification across package declarations";
-        loss: "source unavailable or malformed; conflicting content-type and relationship declarations";
-        fallback: "merge conflicts to Conflicting (grammar skipped) without changing verdict";
+        collections: "field.content_types*1,field.entries*1,field.rels*2,lookup.canonical_entry*1,lookup.entry_by_name*1,type.HashMap*5";
+        scope: "source-local grammar vocabulary classification across package declarations and customXml b:Sources roots";
+        loss: "source unavailable or malformed; conflicting content-type and relationship declarations; customXml prolog event budget";
+        fallback: "merge conflicts to Conflicting (grammar skipped) and keep non-bibliography or unreadable customXml inactive without changing verdict";
         package_loss: "independent";
     }
 
@@ -2294,12 +2297,34 @@ fn grammar_scopes(pkg: &Package) -> HashMap<String, grammar::GrammarScope> {
             scopes.entry(e.name.to_ascii_lowercase()).and_modify(|existing| *existing = existing.merge(scope)).or_insert(scope);
         }
     }
+    let mut bib_checked: HashMap<String, bool> = HashMap::new();
     for rp in &pkg.rels {
         for r in &rp.rels {
-            let Some(scope) = relationship_grammar_scope(r.role.kind()) else { continue };
+            let kind = r.role.kind();
+            let fixed_scope = relationship_grammar_scope(kind);
+            if fixed_scope.is_none() && kind != Some("customXml") {
+                continue;
+            }
             let Some(target) = &r.target_abs else { continue };
             if let Resolution::One(name) = package::canonical_entry(pkg, target) {
-                scopes.entry(name.to_ascii_lowercase()).and_modify(|existing| *existing = existing.merge(scope)).or_insert(scope);
+                let lower = name.to_ascii_lowercase();
+                let scope = match fixed_scope {
+                    Some(s) => s,
+                    None => {
+                        let is_bib = *bib_checked.entry(lower.clone()).or_insert_with(|| match package::entry_by_name(pkg, &name) {
+                            Resolution::One(e) => e.decoded.as_deref().is_some_and(|text| scan::has_bibliography_root(text, max_events)),
+                            Resolution::Absent => false,
+                            Resolution::Unknown(_) => false,
+                            Resolution::Ambiguous(_) => false,
+                        });
+                        if is_bib {
+                            grammar::GrammarScope::Wml
+                        } else {
+                            continue;
+                        }
+                    }
+                };
+                scopes.entry(lower).and_modify(|existing| *existing = existing.merge(scope)).or_insert(scope);
             }
         }
     }

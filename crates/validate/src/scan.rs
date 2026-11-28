@@ -3296,12 +3296,17 @@ fn delivered_attribute_value(raw: &[u8], decls: &BTreeMap<String, String>) -> Op
     Some(out)
 }
 
-/// Append literal attribute text (or plain entity replacement text) with XML 1.0 §3.3.3
-/// attribute-value whitespace normalization (`\r\n`, `\r`, `\n`, `\t` -> `' '`), returning
-/// `None` if `out.len()` would exceed `max_len`.
-fn push_normalized_attr_text_bounded(out: &mut String, text: &str, max_len: usize) -> Option<()> {
+/// Append `text` to `out` with XML 1.0 §3.3.3 attribute-value whitespace
+/// normalization (`\r\n`, `\r`, `\n`, `\t` -> `' '`), returning `None` if
+/// `out.len()` would exceed `max_len`. When `reject_markup` is `true` (used for
+/// plain internal-entity replacement text), also returns `None` immediately upon
+/// encountering `&` or `<` so rejection and the byte cap both stop scanning early.
+fn push_normalized_attr_text_bounded(out: &mut String, text: &str, max_len: usize, reject_markup: bool) -> Option<()> {
     let mut prev_cr = false;
     for ch in text.chars() {
+        if reject_markup && matches!(ch, '&' | '<') {
+            return None;
+        }
         if prev_cr {
             prev_cr = false;
             if ch == '\n' {
@@ -3322,6 +3327,36 @@ fn push_normalized_attr_text_bounded(out: &mut String, text: &str, max_len: usiz
         out.push(emitted);
     }
     Some(())
+}
+
+/// Whether `text`'s XML root element resolves to `b:Sources` in the ECMA-376
+/// bibliography namespace (`NS_B`). Used to classify standard `customXml`
+/// bibliography parts (`application/xml` + `customXml` relationship, ECMA-376
+/// Part 1 §15.2.3) before grammar dispatch.
+pub(crate) fn has_bibliography_root(text: &str, max_events: usize) -> bool {
+    observation_contract! {
+        rules: "-";
+        collections: "type.Vec*1";
+        scope: "XML prolog and root element of one decoded customXml target part";
+        loss: "malformed prolog, unresolved root namespace, or event budget exhausted before root element";
+        fallback: "return false so non-bibliography or unreadable customXml stays inactive without setting Incomplete";
+        package_loss: "independent";
+    }
+
+    let mut reader = XmlReader::new(text);
+    let mut buf = Vec::new();
+    for _ in 0..max_events {
+        buf.clear();
+        match reader.read_resolved_event_into(&mut buf) {
+            Ok((_, Event::Decl(_) | Event::Comment(_) | Event::PI(_) | Event::DocType(_))) => {}
+            Ok((_, Event::Text(t))) if t.iter().all(|b| matches!(b, b' ' | b'\t' | b'\r' | b'\n')) => {}
+            Ok((ResolveResult::Bound(Namespace(ns)), Event::Start(e) | Event::Empty(e))) => {
+                return ns == crate::NS_B.as_bytes() && e.name().local_name().as_ref() == b"Sources";
+            }
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// Maximum UTF-8 byte length of a normalized attribute value delivered to
@@ -3348,7 +3383,7 @@ fn delivered_grammar_attribute_value(raw: &[u8], decls: &BTreeMap<String, String
     let mut out = String::new();
     let mut rest = text;
     while let Some(at) = rest.find('&') {
-        push_normalized_attr_text_bounded(&mut out, rest.get(..at)?, GRAMMAR_ATTR_MAX_LEN)?;
+        push_normalized_attr_text_bounded(&mut out, rest.get(..at)?, GRAMMAR_ATTR_MAX_LEN, false)?;
         let after = rest.get(at + 1..)?;
         let semi = after.find(';')?;
         let name = after.get(..semi)?;
@@ -3377,14 +3412,13 @@ fn delivered_grammar_attribute_value(raw: &[u8], decls: &BTreeMap<String, String
                     }
                     out.push(ch);
                 } else {
-                    let expansion = decls.get(name).filter(|text| text.find(['&', '<']).is_none())?;
-                    push_normalized_attr_text_bounded(&mut out, expansion, GRAMMAR_ATTR_MAX_LEN)?;
+                    push_normalized_attr_text_bounded(&mut out, decls.get(name)?, GRAMMAR_ATTR_MAX_LEN, true)?;
                 }
             }
         }
         rest = after.get(semi + 1..)?;
     }
-    push_normalized_attr_text_bounded(&mut out, rest, GRAMMAR_ATTR_MAX_LEN)?;
+    push_normalized_attr_text_bounded(&mut out, rest, GRAMMAR_ATTR_MAX_LEN, false)?;
     Some(out)
 }
 
@@ -5288,5 +5322,36 @@ mod tests {
         assert!(doctype_grammar_taint(br#"w:ftr [<!ENTITY % pe "<!ATTLIST x a CDATA '1'>"> %pe;]"#) == DtdTaint::InternalSubsetWithAttlist);
         assert!(doctype_grammar_taint(br#"w:ftr [<!ENTITY a "b""#) == DtdTaint::InternalSubsetWithAttlist);
         assert!(doctype_grammar_taint(br#"w:ftr SYSTEM "unclosed [<!ATTLIST x a CDATA '1'>]"#) == DtdTaint::InternalSubsetWithAttlist);
+    }
+
+    #[test]
+    fn delivered_grammar_attribute_value_stops_early_on_markup_and_cap() {
+        let mut decls = BTreeMap::new();
+        decls.insert("ok".to_string(), "de\r\nci\tmal".to_string());
+        decls.insert("has_amp".to_string(), "foo&bar;".to_string());
+        decls.insert("has_lt".to_string(), "foo<bar".to_string());
+        decls.insert("huge".to_string(), "a".repeat(200_000));
+
+        assert_eq!(delivered_grammar_attribute_value(b"&ok;", &decls).as_deref(), Some("de ci mal"));
+        assert!(delivered_grammar_attribute_value(b"&has_amp;", &decls).is_none());
+        assert!(delivered_grammar_attribute_value(b"&has_lt;", &decls).is_none());
+        assert!(delivered_grammar_attribute_value(b"&huge;", &decls).is_none());
+        assert!(delivered_grammar_attribute_value("&huge;".repeat(200).as_bytes(), &decls).is_none());
+    }
+
+    #[test]
+    fn has_bibliography_root_identifies_b_sources_only() {
+        assert!(has_bibliography_root(
+            r#"<?xml version="1.0"?><!-- comment --><b:Sources xmlns:b="http://schemas.openxmlformats.org/officeDocument/2006/bibliography"/>"#,
+            64,
+        ));
+        assert!(has_bibliography_root(
+            r#"<Sources xmlns="http://schemas.openxmlformats.org/officeDocument/2006/bibliography"><Source/></Sources>"#,
+            64,
+        ));
+        assert!(!has_bibliography_root(r#"<Sources/>"#, 64));
+        assert!(!has_bibliography_root(r#"<b:Sources xmlns:b="urn:example:wrong"/>"#, 64));
+        assert!(!has_bibliography_root(r#"<b:Source xmlns:b="http://schemas.openxmlformats.org/officeDocument/2006/bibliography"/>"#, 64));
+        assert!(!has_bibliography_root(r#"<custom xmlns="urn:example:custom"/>"#, 64));
     }
 }

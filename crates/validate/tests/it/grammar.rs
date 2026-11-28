@@ -17,6 +17,8 @@ use wordcraft_validate::{Evidence, Finding, Report, Severity, Verdict, validate_
 
 const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const A_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+const WP_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+const B_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/bibliography";
 const M_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/math";
 
 fn validate(doc: &Doc) -> Report {
@@ -183,7 +185,7 @@ fn grammar_required_child_nullable_choices_group_branches_veto_and_any() {
     let report = validate(&d);
     let hits = rule_findings(&report, "GRAMMAR-REQUIRED-CHILD");
     assert_eq!(hits.len(), 1, "{hits:?}");
-    assert!(hits[0].message.contains("w:drawing"), "{:?}", hits[0]);
+    assert!(hits[0].message.contains("w:pict") && hits[0].message.contains("w:drawing"), "{:?}", hits[0]);
 
     // mc:AlternateContent direct child prevents false required-child firing on parent.
     d.add_with_override(
@@ -285,7 +287,12 @@ fn grammar_child_too_many_fires_once_at_crossing_as_warning() {
     assert_eq!(hits.len(), 1, "{hits:?}");
     assert_eq!(hits[0].severity, Severity::Warning);
     assert_eq!(hits[0].evidence, Evidence::MsDocumented);
-    assert!(hits[0].message.contains("at w:document/w:body[1]/w:tbl[1]/w:tblPr[2]"), "{:?}", hits[0]);
+    assert!(
+        hits[0].message.contains("at w:document/w:body[1]/w:tbl[1]/w:tblPr[2]") && hits[0].message.contains("has at least 2 w:tblPr elements"),
+        "{:?}",
+        hits[0]
+    );
+    assert!(!hits[0].message.contains("has 2 w:tblPr"), "{:?}", hits[0]);
 
     // Max 2: c:barChart allows at most 2 c:axId; a 3rd fires once at c:axId[3].
     let report = validate(&chart_doc("<c:barChart><c:barDir/><c:axId/><c:axId/><c:axId/></c:barChart>"));
@@ -455,21 +462,25 @@ fn grammar_runs_on_macro_enabled_main_part_and_conflicting_scope_is_order_indepe
     assert_eq!(report.verdict, Verdict::Pass);
     assert_eq!(rule_findings(&report, "GRAMMAR-CHILD-NOT-ALLOWED").len(), 1);
 
-    // Conflicting scopes (chart content type + header relationship) skip grammar cleanly in both entry orders.
-    let mut reports = Vec::new();
-    for reverse in [false, true] {
-        let mut d = Doc::minimal();
-        d.add_with_override("word/weird.xml", CT_CHART, format!(r#"<?xml version="1.0"?><w:hdr xmlns:w="{W_NS}"><w:sectPr/></w:hdr>"#));
-        d.set_doc_rels(
-            r#"<Relationship Id="rW" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="weird.xml"/>"#,
-        );
-        if reverse {
-            d.entries.reverse();
+    // Conflicting scopes skip grammar cleanly in both entry orders and in BOTH directions
+    // (chart content type + header rel, and header content type + chart rel), so neither a
+    // "content type wins" nor a "relationship wins" classifier can pass.
+    for (ct, rel_kind) in [(CT_CHART, "header"), (CT_HEADER, "chart")] {
+        let mut reports = Vec::new();
+        for reverse in [false, true] {
+            let mut d = Doc::minimal();
+            d.add_with_override("word/weird.xml", ct, format!(r#"<?xml version="1.0"?><w:hdr xmlns:w="{W_NS}"><w:sectPr/></w:hdr>"#));
+            d.set_doc_rels(&format!(
+                r#"<Relationship Id="rW" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{rel_kind}" Target="weird.xml"/>"#
+            ));
+            if reverse {
+                d.entries.reverse();
+            }
+            reports.push(validate(&d));
         }
-        reports.push(validate(&d));
+        assert_eq!(grammar_findings(&reports[0]).len(), 0, "ct={ct} rel={rel_kind}: {:?}", reports[0].findings);
+        assert_eq!(serde_json::to_value(&reports[0]).unwrap(), serde_json::to_value(&reports[1]).unwrap());
     }
-    assert_eq!(grammar_findings(&reports[0]).len(), 0);
-    assert_eq!(serde_json::to_value(&reports[0]).unwrap(), serde_json::to_value(&reports[1]).unwrap());
 }
 
 #[test]
@@ -966,7 +977,7 @@ fn grammar_paths_and_counts_use_lower_bounds_after_loss_and_mark_unknown_namespa
     );
     let tbl_grid = hits.iter().find(|f| f.message.contains("w:tblGrid")).expect("tblGrid too-many");
     assert!(
-        tbl_grid.message.contains("at w:document/w:body[1]/w:tbl[1]/w:tblGrid[2] ") && tbl_grid.message.contains("has 2 w:tblGrid elements"),
+        tbl_grid.message.contains("at w:document/w:body[1]/w:tbl[1]/w:tblGrid[2] ") && tbl_grid.message.contains("has at least 2 w:tblGrid elements"),
         "{tbl_grid:?}"
     );
 
@@ -1489,4 +1500,117 @@ fn ordinary_output_stays_byte_identical_on_astras_two_differential_packages() {
     assert_eq!(r3.verdict, Verdict::Fail, "{r3:?}");
     assert!(r3.coverage_notes.is_empty(), "non-DOCTYPE part must emit zero grammar notes: {:?}", r3.coverage_notes);
     assert!(grammar_findings(&r3).is_empty(), "{:?}", r3.findings);
+}
+
+#[test]
+fn grammar_enforces_finite_child_limits_across_namespace_boundaries_without_widening_child_scope() {
+    // wp:inline, wp:anchor, and wp:graphicFrame each allow at most one a:graphic child.
+    // One a:graphic is valid (and its inner a:* subtree stays out of Wml scope).
+    let make_doc = |drawing_inner: &str| {
+        let mut d = Doc::minimal();
+        d.set(
+            "word/document.xml",
+            format!(
+                r#"<?xml version="1.0"?><w:document xmlns:w="{W_NS}" xmlns:wp="{WP_NS}" xmlns:a="{A_NS}"><w:body><w:p><w:r><w:drawing>{drawing_inner}</w:drawing></w:r></w:p></w:body></w:document>"#
+            ),
+        );
+        d
+    };
+
+    // Valid single a:graphic inside wp:inline (with unmodelled-in-Wml a:graphic content).
+    let valid = validate(&make_doc(
+        r#"<wp:inline><wp:extent cx="1" cy="1"/><wp:docPr id="1" name="p"/><a:graphic><a:notCheckedInWml/></a:graphic></wp:inline>"#,
+    ));
+    assert_eq!(valid.verdict, Verdict::Pass, "{:?}", valid.findings);
+    assert!(grammar_findings(&valid).is_empty(), "{:?}", valid.findings);
+
+    // Duplicate a:graphic in wp:inline fires GRAMMAR-CHILD-TOO-MANY while leaving a:graphic's subtree unjudged.
+    let dup_inline = validate(&make_doc(
+        r#"<wp:inline><wp:extent cx="1" cy="1"/><wp:docPr id="1" name="p"/><a:graphic><a:notCheckedInWml/></a:graphic><a:graphic/></wp:inline>"#,
+    ));
+    assert_eq!(dup_inline.verdict, Verdict::Pass, "{:?}", dup_inline.findings);
+    let hits = rule_findings(&dup_inline, "GRAMMAR-CHILD-TOO-MANY");
+    assert_eq!(hits.len(), 1, "{:?}", dup_inline.findings);
+    assert!(
+        hits[0].message.contains("a:graphic[2]")
+            && hits[0].message.contains("has at least 2 a:graphic elements")
+            && hits[0].message.contains("at most 1"),
+        "{:?}",
+        hits[0]
+    );
+    assert!(rule_findings(&dup_inline, "GRAMMAR-CHILD-NOT-ALLOWED").is_empty(), "{:?}", dup_inline.findings);
+
+    // Duplicate a:graphic in wp:anchor fires GRAMMAR-CHILD-TOO-MANY.
+    let dup_anchor = validate(&make_doc(
+        r#"<wp:anchor><wp:simplePos x="0" y="0"/><wp:positionH/><wp:positionV/><wp:extent cx="1" cy="1"/><wp:wrapNone/><wp:docPr id="1" name="p"/><a:graphic/><a:graphic/></wp:anchor>"#,
+    ));
+    assert_eq!(rule_findings(&dup_anchor, "GRAMMAR-CHILD-TOO-MANY").len(), 1, "{:?}", dup_anchor.findings);
+
+    // Duplicate a:graphic in wp:graphicFrame fires GRAMMAR-CHILD-TOO-MANY.
+    let dup_frame =
+        validate(&make_doc(r#"<wp:graphicFrame><wp:cNvPr id="1" name="g"/><wp:cNvFrPr/><wp:xfrm/><a:graphic/><a:graphic/></wp:graphicFrame>"#));
+    assert_eq!(rule_findings(&dup_frame, "GRAMMAR-CHILD-TOO-MANY").len(), 1, "{:?}", dup_frame.findings);
+
+    // Out-of-scope undeclared a:* child under w:p remains ignored (no GRAMMAR-CHILD-NOT-ALLOWED).
+    let mut foreign = Doc::minimal();
+    foreign.set(
+        "word/document.xml",
+        format!(r#"<?xml version="1.0"?><w:document xmlns:w="{W_NS}" xmlns:a="{A_NS}"><w:body><w:p><a:graphic/></w:p></w:body></w:document>"#),
+    );
+    assert!(grammar_findings(&validate(&foreign)).is_empty());
+}
+
+#[test]
+fn grammar_classifies_standard_customxml_bibliography_parts_and_keeps_other_customxml_inactive() {
+    let custom_xml_rel = r#"<Relationship Id="rBib" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="../customXml/item1.xml"/>"#;
+
+    // 1. Valid standard ECMA-376 bibliography part (application/xml + customXml rel + b:Sources root) is clean.
+    let mut valid = Doc::minimal();
+    valid.add_with_override(
+        "customXml/item1.xml",
+        "application/xml",
+        format!(r#"<?xml version="1.0"?><b:Sources xmlns:b="{B_NS}"><b:Source><b:Tag>S1</b:Tag></b:Source></b:Sources>"#),
+    );
+    valid.set_doc_rels(custom_xml_rel);
+    let r_valid = validate(&valid);
+    assert_eq!(r_valid.verdict, Verdict::Pass, "{:?}", r_valid.findings);
+    assert!(grammar_findings(&r_valid).is_empty(), "{:?}", r_valid.findings);
+
+    // 2. Defective standard bibliography part (b:Tag directly under b:Sources) emits GRAMMAR-CHILD-NOT-ALLOWED.
+    let mut invalid = Doc::minimal();
+    invalid.add_with_override(
+        "customXml/item1.xml",
+        "application/xml",
+        format!(r#"<?xml version="1.0"?><b:Sources xmlns:b="{B_NS}"><b:Tag>bad</b:Tag></b:Sources>"#),
+    );
+    invalid.set_doc_rels(custom_xml_rel);
+    let r_invalid = validate(&invalid);
+    assert_eq!(r_invalid.verdict, Verdict::Pass, "{:?}", r_invalid.findings);
+    let hits = rule_findings(&r_invalid, "GRAMMAR-CHILD-NOT-ALLOWED");
+    assert_eq!(hits.len(), 1, "{:?}", r_invalid.findings);
+    assert_eq!(hits[0].part.as_deref(), Some("customXml/item1.xml"));
+    assert!(hits[0].message.contains("b:Tag") && hits[0].message.contains("b:CT_Sources"), "{:?}", hits[0]);
+
+    // 3. Unrelated customXml part stays inactive even if it contains WML/bibliography-named elements.
+    let mut unrelated = Doc::minimal();
+    unrelated.add_with_override(
+        "customXml/item1.xml",
+        "application/xml",
+        format!(r#"<?xml version="1.0"?><custom xmlns="urn:example:custom" xmlns:w="{W_NS}"><w:pPr><w:r/></w:pPr></custom>"#),
+    );
+    unrelated.set_doc_rels(custom_xml_rel);
+    let r_unrelated = validate(&unrelated);
+    assert_eq!(r_unrelated.verdict, Verdict::Pass, "{:?}", r_unrelated.findings);
+    assert!(grammar_findings(&r_unrelated).is_empty(), "{:?}", r_unrelated.findings);
+
+    // 4. Conflicting scope (CT_CHART content type + customXml bibliography root) merges to Conflicting and skips grammar.
+    let mut conflict = Doc::minimal();
+    conflict.add_with_override(
+        "customXml/item1.xml",
+        CT_CHART,
+        format!(r#"<?xml version="1.0"?><b:Sources xmlns:b="{B_NS}"><b:Tag>bad</b:Tag></b:Sources>"#),
+    );
+    conflict.set_doc_rels(custom_xml_rel);
+    let r_conflict = validate(&conflict);
+    assert!(grammar_findings(&r_conflict).is_empty(), "{:?}", r_conflict.findings);
 }

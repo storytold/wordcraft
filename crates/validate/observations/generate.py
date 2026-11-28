@@ -598,7 +598,7 @@ fn unregistered_read(pkg: &Package) -> usize { (|package_pattern!(items): &Packa
     mutations['new undeclared accessor']=('lib.rs', lambda s:s.replace('acc.ran("CUSTOMXML-SCHEMA");','acc.ran("CUSTOMXML-SCHEMA"); let _ = new_collection.retain_budget(n, cap);',1))
     # Grammar and proven accumulator emitters must never escape the rule-ID audit when their contract is removed or omitted.
     mutations['grammar emitter declaration removal']=('grammar.rs', lambda s: re.sub(
-        r'(fn judge_order\([^)]*\)\s*\{\s*)observation_contract!\s*\{[^}]*\}',
+        r'(fn judge_order\([^{]*\{\s*)observation_contract!\s*\{[^}]*\}',
         r'\1',
         s,
         count=1,

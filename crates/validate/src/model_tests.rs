@@ -154,10 +154,11 @@ fn bare_group_content_expands_to_parents_and_slots() {
 
 #[test]
 fn unflattened_group_context_adds_no_parent() {
-    // Groups no in-scope type references at all (`a:EG_Media`, `a:EG_TextGeometry`) still
-    // contribute no parents; generation accepts them via the unflattened-group check.
+    // Groups no in-scope type references at all (`a:EG_Media`, `a:EG_TextGeometry`)
+    // contribute no parent contexts in the generated table.
     let el = element_model("a:videoFile").expect("a:videoFile row");
-    let _ = el; // presence of the row is the assertion: generation did not fail
+    let video = el.variants.iter().find(|v| v.type_key == "a:CT_VideoFile").expect("a:CT_VideoFile variant");
+    assert!(video.contexts.is_empty(), "a:CT_VideoFile must have no parent contexts: {:?}", video.contexts);
 }
 
 #[test]

@@ -30,13 +30,13 @@ SHA-256 of the checked-in files:
 
 | File | SHA-256 |
 |---|---|
-| `extract_content_model.py` | `0029627206d37a5635764a0526d75ae5bbf85e14805a27cf86ebd2b9e6b41684` |
-| `generate_model.py` | `29e631ab2a7396186ce25eef516c2cd14c027898fb855d9ff48235d8cfa34969` |
+| `extract_content_model.py` | `d336b9d20dac1a3813127e0f9046e836d0533a0cea3ec9f254956f643b504f03` |
+| `generate_model.py` | `762e3841e1303c36e4b0e27b1d64b055052199116e5fa5c091f724bbc40a9d16` |
 | `content_model_v2.json` | `72b60bbd5204d213d7ba80a71836a5b4944643eb9f139e2b5aa273425b7ed6f3` |
 | `content_model_v2_transitional.json` | `7a564d9940abf151bab97bc615ecca14814faa7a424bc4a9a77b0c67dc08076e` |
 | `content_model_dml_v2.json` | `04ed5e7b8a794de38395521d76900c53dbf84c4b28f4fc2d1bdc67439cc1be80` |
 | `content_model_dml_v2_transitional.json` | `84a91ddd00c2b7aa956f035c1ac7102c11dae2a9dc1c5f7c6ee1bbb62b89d29b` |
-| `../src/model.rs` | `77fe86f35b866b9d93a56307bb153cb5502f69054193dfa9824b301bcb3a3158` |
+| `../src/model.rs` | `a26133744203d6268deb9e5d3a8c7355fe742db43fdc3839d95d68d59f9f5794` |
 
 ## Line endings and regeneration
 
@@ -47,12 +47,10 @@ Use `extract_model_lf.py` for extraction: it calls the shared builder in
 platform-default output entry point is superseded by the LF entry point.
 The generator already explicitly requests LF for its Rust output.
 
-The extractor now rejects a missing required schema before either entry point opens
-its output. Its recorded hash reflects this input-validation change. The four JSON
-tables and generated Rust remain byte-identical: no tables were regenerated and no
-schema provenance or table hashes were rewritten. Complete-input extraction logic
-is unchanged. Run `python3 test_missing_schemas.py` for both profiles and entry points,
-including missing directories, individual missing files and existing-output preservation.
+The extractor rejects any missing required schema before either entry point opens its
+output. Run `python3 test_missing_schemas.py` for both profiles and entry points,
+including missing directories, individual missing files, existing-output preservation,
+extension choice-group uniqueness, and generator group-owner guards.
 
 Run `python3 test_model_checkout.py` to simulate autocrlf checkout bytes from Git's
 attributes and verify them, and to check the LF entry point's output options without
@@ -113,8 +111,8 @@ loudly if any file was edited without regenerating.
   exactly `c:CT_PrintSettings` (DML);
 - a part root (`w:document`, `w:hdr`, `c:chartSpace`, `a:theme`, …) has more than one type
   variant;
-- a group context expands to no parent type, unless no type flattens that group at all and every
-  in-scope complex type that references it is an empty row (see below);
+- a group context expands to no parent type when an in-scope complex type references that group, or
+  any direct referencing complex type is missing the group's slots (see below);
 - an in-scope schema file the extractor reads is missing from `--xsd-dir`.
 
 Two group contexts are flattened into no type, and contribute no parent types: `a:EG_Media` and
