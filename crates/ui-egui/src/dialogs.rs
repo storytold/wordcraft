@@ -39,6 +39,13 @@ pub(crate) use host::close_all;
 pub(crate) use mailings::{FilterRow, RecipientDraft, RecipientFilter, RecipientListDialog, hold_rows, merge_order, visible_recipients};
 pub(crate) use page_setup::PAPER_LABELS;
 
+/// `max_rows` for a `TileGrid` that shows `rows` rows of `columns` tiles. The collection counts the cap in
+/// items (the tile `rows` in, not the grid row it is in), so a cap of `rows` shows one row; a cap past the item
+/// count adds blank rows, so it stops at `len`. lean: upstream fix in craft-libs `rows_height`, then drop this.
+pub(crate) fn tile_rows_cap(len: usize, columns: usize, rows: usize) -> u16 {
+    u16::try_from(len.min(columns * rows)).unwrap_or(u16::MAX)
+}
+
 /// Opens the dialog `name` for a script, a button or a command, with `params`; the module of the name reads what it
 /// needs of them. Returns the dialog's id, or `None` when no dialog opened (an unknown name, nothing to show, or a
 /// pane such as Restrict Editing).
