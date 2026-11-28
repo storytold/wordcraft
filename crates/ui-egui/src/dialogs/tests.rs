@@ -2294,7 +2294,8 @@ fn cell_margins_dialog_shows_points_in_the_interface_unit_and_ok_changes_nothing
     let mut h = app_harness(app);
     h.run_steps(2);
     let (tp, _, _) = h.state().session.sel.focus.path.cell().unwrap();
-    let margins = |h: &egui_kittest::Harness<'_, WordApp>| h.state().session.doc.table(h.state().session.sel.focus.story, &tp).unwrap().props.cell_margins;
+    let margins =
+        |h: &egui_kittest::Harness<'_, WordApp>| h.state().session.doc.table(h.state().session.sel.focus.story, &tp).unwrap().props.cell_margins;
     let before = margins(&h);
     let _ = h.state_mut().run("ui.dialog", json!({"name": "tableCellMargins"}));
     h.run_steps(3);
@@ -2306,4 +2307,29 @@ fn cell_margins_dialog_shows_points_in_the_interface_unit_and_ok_changes_nothing
     let _ = h.state_mut().dialog_host.confirm_by_id(&ctx, id);
     h.run_steps(4);
     assert_eq!(margins(&h), before, "OK without an edit writes no margins");
+}
+
+/// #7980: the Organizer shows this document's styles and the other file's side by side, with Copy, Delete and
+/// Rename between them, all inside the dialog.
+#[test]
+fn organizer_shows_both_lists_and_its_buttons() {
+    use egui::accesskit::Role;
+    let mut h = app_harness(app_with(""));
+    h.run_steps(2);
+    let _ = h.state_mut().run("ui.dialog", json!({"name": "organizer"}));
+    h.run_steps(4);
+    let rect = |h: &egui_kittest::Harness<'_, WordApp>, role, name: &str| h.get_by_role_and_label(role, name).rect();
+    let mine = rect(&h, Role::List, "Document");
+    let other = rect(&h, Role::List, "Template");
+    assert!(mine.is_positive() && other.is_positive() && mine.right() <= other.left(), "the lists stand side by side: {mine:?} {other:?}");
+    // Each list is wider than the button column between them, empty (no other file) or not.
+    let rename = rect(&h, Role::Button, "Rename…");
+    assert!(mine.width() > rename.width() && other.width() > rename.width(), "the lists are wider than the buttons: {mine:?} {other:?} {rename:?}");
+    // The ribbon has its own Copy: the one that counts stands between the lists.
+    for name in ["Copy", "Delete", "Rename…"] {
+        let between = h
+            .query_all(egui_kittest::kittest::By::new().role(Role::Button).label(name))
+            .any(|b| b.rect().left() >= mine.right() - 1.0 && b.rect().right() <= other.left() + 1.0);
+        assert!(between, "{name} stands between the lists {mine:?} {other:?}");
+    }
 }

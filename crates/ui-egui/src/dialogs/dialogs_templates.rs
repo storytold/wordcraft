@@ -3,13 +3,15 @@
 //! `styles.copyFrom`, `styles.delete`, `styles.rename`), so agents get the same result without
 //! the dialogs.
 
-use craft::behavior::{EditEvent, Selection, SelectionChange, item_source::keyed};
+use craft::behavior::{ColumnWidth, EditEvent, Selection, SelectionChange, item_source::keyed};
 use craft::host::PickRequest;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::contract::{Bind, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, request_rename};
 use craft::ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft::ui::display::Text;
 use craft::ui::form::Field;
-use craft::ui::layout_components::Row;
+use craft::ui::layout::CellAlign;
+use craft::ui::layout_components::{Grid, Stack};
 use craft::ui::list::{List, ListRow};
 use craft::ui::notices::Notice;
 use craft::ui::patterns::form_dialogs::{FormCx, PathRow};
@@ -24,6 +26,15 @@ use super::styles::{action, label};
 use crate::WordApp;
 
 const ORGANIZER_KEY: &str = "organizer";
+/// The Organizer's columns: each takes what it holds, and a list holds at least `LIST_WIDTH` (a fill column takes no more
+/// than its content in a dialog that sizes to its content, so an empty list was a few pixels wide).
+const COLUMNS: [ColumnWidth; 3] = [ColumnWidth::Content; 3];
+/// The least width of a list, in points.
+const LIST_WIDTH: f32 = 200.0;
+/// The rows each list shows before it scrolls.
+const LIST_ROWS: u16 = 12;
+/// The other file's list has its name above it, so it shows one row fewer to end level with the first.
+const OTHER_ROWS: u16 = LIST_ROWS - 1;
 
 /// The Templates and Add-ins dialog's fields.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -236,43 +247,58 @@ impl OrganizerDialog {
 
     fn body(&mut self, ui: &mut Ui) {
         let reason = browse_reason(ui);
-        Row::new().show(ui, |ui, _| {
-            let mut selection = Selection::single(self.left.clone());
-            let mine = &self.mine;
-            let source = keyed(mine, |st| text_of(st, "id"));
-            let out = List::new(label(tl!("Document")))
-                .select(SelectMode::Single)
-                .selection(Bind::bound(&mut selection))
-                .rename(true)
-                .can_rename(|key: &String| {
-                    mine.iter().find(|x| text_of(x, "id") == *key).is_some_and(|x| !x.get("builtIn").and_then(Value::as_bool).unwrap_or(true))
-                })
-                .id_salt("mine")
-                .show_items(ui, &source, &mut |_, icx| {
-                    let Some(st) = mine.get(icx.at) else { return ListRow::spacer() };
-                    ListRow::new(label(text_of(st, "name"))).lead_text(label(glyph(&text_of(st, "type"))), label("¶"))
-                });
-            for event in out.events {
-                match event {
-                    CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
-                        if let Some(key) = keys.last() {
-                            self.left = key.clone();
+        let mine_id = ui.scope_id().with("organizer_mine");
+        // Three columns as the old dialog had: this document's styles, Copy / Delete / Rename, the other file's styles.
+        Grid::new(&COLUMNS).cells(CellAlign::Top).show(ui, |ui, _| {
+            Stack::new().show(ui, |ui, _| {
+                ui.set_min_width(LIST_WIDTH);
+                let mut selection = Selection::single(self.left.clone());
+                let mine = &self.mine;
+                let source = keyed(mine, |st| text_of(st, "id"));
+                let out = List::new(label(tl!("Document")))
+                    .select(SelectMode::Single)
+                    .selection(Bind::bound(&mut selection))
+                    .rename(true)
+                    .can_rename(|key: &String| {
+                        mine.iter().find(|x| text_of(x, "id") == *key).is_some_and(|x| !x.get("builtIn").and_then(Value::as_bool).unwrap_or(true))
+                    })
+                    .id(mine_id)
+                    .min_rows(LIST_ROWS)
+                    .max_rows(LIST_ROWS)
+                    .show_items(ui, &source, &mut |_, icx| {
+                        let Some(st) = mine.get(icx.at) else { return ListRow::spacer() };
+                        ListRow::new(label(text_of(st, "name"))).lead_text(label(glyph(&text_of(st, "type"))), label("¶"))
+                    });
+                for event in out.events {
+                    match event {
+                        CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
+                            if let Some(key) = keys.last() {
+                                self.left = key.clone();
+                            }
                         }
+                        CollectionEvent::Rename(EditEvent::Commit { after, .. }) => {
+                            self.requests.push(Request::Rename { style: after.key, name: after.name });
+                        }
+                        _ => {}
                     }
-                    CollectionEvent::Rename(EditEvent::Commit { after, .. }) => {
-                        self.requests.push(Request::Rename { style: after.key, name: after.name });
-                    }
-                    _ => {}
                 }
-            }
-            if action(ui, "copy", label(tl!("Copy")), !self.right.is_empty(), None) {
-                self.requests.push(Request::Copy);
-            }
-            if action(ui, "delete", label(tl!("Delete")), !self.left_builtin(), None) {
-                self.requests.push(Request::Delete(self.left.clone()));
-            }
-            let name = std::path::Path::new(&self.file).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "—".into());
-            Field::new(label(name)).show(ui, |ui, _| {
+            });
+            Stack::new().show(ui, |ui, _| {
+                if action(ui, "copy", label(tl!("Copy")), !self.right.is_empty(), None) {
+                    self.requests.push(Request::Copy);
+                }
+                if action(ui, "delete", label(tl!("Delete")), !self.left_builtin(), None) {
+                    self.requests.push(Request::Delete(self.left.clone()));
+                }
+                // The list's own rename field takes the name in place.
+                if action(ui, "rename", label(tl!("Rename…")), !self.left_builtin(), None) {
+                    request_rename(ui.ctx(), mine_id, &self.left);
+                }
+            });
+            Stack::new().show(ui, |ui, _| {
+                ui.set_min_width(LIST_WIDTH);
+                let name = std::path::Path::new(&self.file).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "—".into());
+                Text::new(label(name)).show(ui);
                 let mut selection = Selection::single(self.right.clone());
                 let other = &self.other;
                 let source = keyed(other, |(n, _)| n.clone());
@@ -280,6 +306,8 @@ impl OrganizerDialog {
                     .select(SelectMode::Single)
                     .selection(Bind::bound(&mut selection))
                     .id_salt("other")
+                    .min_rows(OTHER_ROWS)
+                    .max_rows(OTHER_ROWS)
                     .show_items(ui, &source, &mut |_, icx| {
                         let Some((n, ty)) = other.get(icx.at) else { return ListRow::spacer() };
                         ListRow::new(label(n)).lead_text(label(glyph(ty)), label("¶"))
@@ -291,12 +319,13 @@ impl OrganizerDialog {
                         self.right = key.clone();
                     }
                 }
-                let picked = template_row(label(tl!("Template")), Bind::bound(&mut self.file), reason.clone()).show(ui).picked;
-                if let Some(path) = picked {
-                    self.requests.push(Request::Load(path));
-                }
             });
         });
+        // The other file's path and Browse stand under both lists, at the dialog's full width.
+        let picked = template_row(label(tl!("Template")), Bind::bound(&mut self.file), reason.clone()).show(ui).picked;
+        if let Some(path) = picked {
+            self.requests.push(Request::Load(path));
+        }
         if !self.message.is_empty() {
             Notice::new(craft::theme::variant::Tone::Bad, label(&self.message)).show(ui);
         }
