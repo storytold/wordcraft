@@ -474,6 +474,7 @@ fn text_glyphs(
             ranges,
             text_bg: None,
             x_scale: 1.0,
+            list_label: false,
         });
     }
     out

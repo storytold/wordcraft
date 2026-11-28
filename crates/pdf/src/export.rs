@@ -3,7 +3,7 @@ use super::metadata::metadata;
 use super::options::{PdfError, PdfOptions};
 use super::paint::{clamp_side, ok, rect_path};
 use super::{
-    DocLayout, Document, FillRule, HashMap, HashSet, KrillaError, LayoutCache, Page, PageSettings, Rect, Size, Transform, WriteError, Writer,
+    DocLayout, Document, FillRule, HashMap, HashSet, KrillaError, LayoutCache, Node, Page, PageSettings, Rect, Size, Transform, WriteError, Writer,
     imposition, krilla, layout, write,
 };
 
@@ -104,7 +104,13 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
         vectors: HashMap::new(),
         tags: Vec::new(),
         tag_index: HashMap::new(),
+        inline_owner: None,
+        anchor: None,
+        drawn_lines: HashSet::new(),
         links: Vec::new(),
+        link_owner: None,
+        open_link: None,
+        link_runs: HashMap::new(),
         bookmarks: std::cell::OnceCell::new(),
     };
     if let Some(o) = ex.outline(pages) {
@@ -134,8 +140,19 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
             }
         }
         surface.finish();
-        for annotation in annotations {
-            kp.add_annotation(annotation);
+        for (a, owner) in annotations {
+            // A tagged link's annotation goes in its `Link` element, beside the link text.
+            match owner {
+                Some((i, c)) if opts.tagged => {
+                    let id = kp.add_tagged_annotation(a);
+                    if let Some(Node::Group(g)) = ex.tags.get_mut(i).and_then(|e| e.children.get_mut(c)) {
+                        g.push(Node::Leaf(id));
+                    }
+                }
+                _ => {
+                    kp.add_annotation(a);
+                }
+            }
         }
         kp.finish();
     }

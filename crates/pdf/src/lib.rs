@@ -24,8 +24,8 @@
 
 pub mod imposition;
 
-use std::collections::{HashMap, HashSet};
-use std::num::NonZeroU16;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::num::{NonZeroU16, NonZeroU32};
 use std::sync::Arc;
 
 use craft_metafile::{Picture, PlacedItem};
@@ -42,7 +42,9 @@ use krilla::outline::{Outline, OutlineNode};
 use krilla::page::PageSettings;
 use krilla::paint::{Fill, FillRule, LineCap, LineJoin, Stroke, StrokeDash};
 use krilla::surface::Surface;
-use krilla::tagging::{Artifact, ArtifactType, ContentTag, Identifier, Node, SpanTag, Tag, TagGroup, TagKind, TagTree};
+use krilla::tagging::{
+    Artifact, ArtifactType, ContentTag, Identifier, ListNumbering, Node, SpanTag, TableHeaderScope, Tag, TagGroup, TagKind, TagTree,
+};
 use krilla::text::{Font, GlyphId, KrillaGlyph};
 use wordcraft_doc::graphic::GraphicKind;
 use wordcraft_doc::para::{InlineObject, ShapeKind};
