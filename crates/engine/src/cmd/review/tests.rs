@@ -549,6 +549,135 @@ fn selected(s: &Session) -> (usize, usize) {
     (a.off, b.off)
 }
 
+/// Two edits an hour apart in the repeated hour as daylight saving time ends are two changes,
+/// though both were made at 01:30 local time: each keeps its UTC time (#6851). Rejecting one at
+/// the caret leaves the other pending. Saved as DOCX or Word XML, both are dated 01:30, as Word
+/// dates them, with their UTC times beside it (`w16du:dateUtc`), so they reopen as two changes,
+/// and a second save writes them as read.
+#[test]
+fn edits_in_the_repeated_hour_stay_separate_changes() {
+    use crate::cmd::{TEST_NOW, TEST_ZONE};
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TEST_NOW.with(|c| c.set(None));
+            TEST_ZONE.with(|z| z.set(None));
+        }
+    }
+    let _reset = Reset;
+    TEST_ZONE.with(|z| z.set(Some(crate::io_ext::tests::new_york)));
+
+    let mut s = Session::new(Document::new());
+    s.view.proofing = false;
+    s.run("document.setText", &json!({"text": "Draft."})).unwrap();
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    // 1 November 2026, 01:30 EDT (05:30 UTC) and then 01:30 EST (06:30 UTC).
+    for (now, text) in [(1_793_511_000, " One"), (1_793_514_600, " Two")] {
+        TEST_NOW.with(|c| c.set(Some(now)));
+        s.run("text.insert", &json!({"text": text})).unwrap();
+    }
+    assert_eq!(change_spans(&mut s), [("insert".into(), 6, 10), ("insert".into(), 10, 14)]);
+    let utc = ["2026-11-01T05:30:00Z", "2026-11-01T06:30:00Z"];
+    let instants = |d: &Document| d.revisions.iter().map(|r| r.instant().to_string()).collect::<Vec<_>>();
+    assert_eq!(instants(&s.doc), utc);
+    let listed = s.run("review.changes", &json!({})).unwrap();
+    assert_eq!(listed.as_array().map(|l| l.iter().map(|c| c["date"].clone()).collect::<Vec<_>>()), Some(vec![json!(utc[0]), json!(utc[1])]));
+
+    let local = |d: &Document| d.revisions.iter().map(|r| r.date.clone()).collect::<Vec<_>>();
+    for name in ["repeated.docx", "repeated.xml"] {
+        let bytes = crate::io::save_bytes(name, &s.doc).unwrap();
+        let read = |bytes: &[u8]| if name.ends_with(".xml") { wordcraft_docx::read_xml(bytes) } else { wordcraft_docx::read(bytes) }.unwrap();
+        let written = read(&bytes);
+        assert_eq!(local(&written), ["2026-11-01T01:30:00Z"; 2], "{name}");
+        assert_eq!(instants(&written), utc, "{name}");
+
+        let mut opened = Session::new(crate::io::open_bytes(name, &bytes).unwrap());
+        opened.view.proofing = false;
+        assert_eq!(change_spans(&mut opened), [("insert".into(), 6, 10), ("insert".into(), 10, 14)], "{name}");
+        // Saved again, the changes are written as read: their local time doesn't move.
+        let again = read(&crate::io::save_bytes(name, &opened.doc).unwrap());
+        assert_eq!((local(&again), instants(&again)), (local(&written), instants(&written)), "{name}");
+
+        opened.run("caret.set", &json!({"pos": {"block": 0, "off": 12}})).unwrap();
+        opened.run("review.reject", &json!({})).unwrap();
+        assert_eq!(opened.doc.plain_text(wordcraft_doc::StoryRef::Body), "Draft. One", "{name}");
+        assert_eq!(change_spans(&mut opened), [("insert".into(), 6, 10)], "{name}: the earlier insertion is still pending");
+    }
+    assert_eq!(instants(&s.doc), utc, "saving leaves the session's changes as they were");
+
+    s.run("caret.set", &json!({"pos": {"block": 0, "off": 12}})).unwrap();
+    s.run("review.reject", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body), "Draft. One");
+    assert_eq!(change_spans(&mut s), [("insert".into(), 6, 10)], "the earlier insertion is still pending");
+}
+
+/// A change made at 08:33 UTC at UTC+8 is dated 16:33 in a Word file, as Word dates it, and 08:33
+/// UTC in an OpenDocument file, whose `dc:date` is an instant (#6851).
+#[test]
+fn a_new_change_is_dated_in_utc_in_opendocument() {
+    use crate::cmd::{TEST_NOW, TEST_ZONE};
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TEST_NOW.with(|c| c.set(None));
+            TEST_ZONE.with(|z| z.set(None));
+        }
+    }
+    let _reset = Reset;
+    TEST_ZONE.with(|z| z.set(Some(|_| 8 * 3600)));
+    TEST_NOW.with(|c| c.set(Some(1_794_818_004)));
+
+    let mut s = Session::new(Document::new());
+    s.view.proofing = false;
+    s.run("document.setText", &json!({"text": "Draft."})).unwrap();
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": " One"})).unwrap();
+    let utc = "2026-11-16T08:33:24Z";
+    let dates = |d: &Document| d.revisions.iter().map(|r| r.date.clone()).collect::<Vec<_>>();
+    for (name, date) in [("new.odt", utc), ("new.fodt", utc), ("new.docx", "2026-11-16T16:33:24Z"), ("new.xml", "2026-11-16T16:33:24Z")] {
+        let opened = crate::io::open_bytes(name, &crate::io::save_bytes(name, &s.doc).unwrap()).unwrap();
+        assert_eq!(dates(&opened), [date], "{name}");
+        assert!(opened.revisions.iter().all(|r| r.instant() == utc), "{name}: {:?}", opened.revisions);
+    }
+}
+
+/// A tracked change read from a file keeps its `w:date` and `w16du:dateUtc` as read through open
+/// and save in another zone (#6851): one without a UTC time (an older Word, another program), whose
+/// zone WordCraft doesn't guess, and one written in UTC, where the two are the same.
+#[test]
+fn a_file_date_is_written_as_read() {
+    use crate::cmd::TEST_ZONE;
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TEST_ZONE.with(|z| z.set(None));
+        }
+    }
+    let _reset = Reset;
+    TEST_ZONE.with(|z| z.set(Some(|_| 8 * 3600)));
+
+    let date = "2026-11-16T08:33:24Z";
+    for utc in [None, Some(date)] {
+        let mut doc = Document::from_text("Draft.");
+        let mut rev = wordcraft_doc::Revision::new(wordcraft_doc::RevisionKind::Insert, "Ada", date);
+        rev.date_utc = utc.map(String::from);
+        doc.revisions.push(rev);
+        doc.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().mark.ins = Some(0);
+        let dates = |d: &Document| d.revisions.iter().map(|r| (r.date.clone(), r.date_utc.clone())).collect::<Vec<_>>();
+        let want = vec![(date.to_string(), utc.map(String::from))];
+        for name in ["file.docx", "file.xml"] {
+            let bytes = crate::io::save_bytes(name, &doc).unwrap();
+            let opened = crate::io::open_bytes(name, &bytes).unwrap();
+            assert_eq!(dates(&opened), want, "{name} {utc:?}: opened");
+            let saved = crate::io::save_bytes(name, &opened).unwrap();
+            let again = if name.ends_with(".xml") { wordcraft_docx::read_xml(&saved) } else { wordcraft_docx::read(&saved) }.unwrap();
+            assert_eq!(dates(&again), want, "{name} {utc:?}: saved again");
+        }
+    }
+}
+
 /// Accept and Move to Next, Reject and Move to Next: the change at the caret is resolved and
 /// the next one is selected; without `next` the caret stays where the change was.
 #[test]

@@ -2770,6 +2770,7 @@ fn compare_strips_source_revisions_from_adopted_notes() {
         author: "Other".into(),
         date: "2026-01-01T00:00:00Z".into(),
         move_name: None,
+        date_utc: None,
     });
     for part in rev.doc.parts.values_mut() {
         if part.kind == wordcraft_doc::PartKind::Footnote

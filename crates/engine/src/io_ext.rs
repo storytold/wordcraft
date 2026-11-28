@@ -98,6 +98,15 @@ pub fn save(ext: &str, doc: &Document, opts: &crate::io::ExportOptions) -> Optio
     }
 }
 
+/// A UTC date and time (a `Z` or an offset) as Word writes `w:date`: the wall-clock time in the
+/// zone `zone` gives for an instant (seconds east of UTC), with a `Z` Word writes but doesn't
+/// mean. Word read the UTC dates WordCraft wrote as local time, shifted by the user's offset from
+/// UTC (#6851). None for anything else (no zone or no time of day, before 1970, unreadable).
+pub(crate) fn word_date(date: &str, zone: impl Fn(u64) -> i64) -> Option<String> {
+    let utc = u64::try_from(chrono::DateTime::parse_from_rfc3339(date.trim()).ok()?.timestamp()).ok()?;
+    Some(crate::cmd::iso_from_unix_secs(utc.checked_add_signed(zone(utc))?))
+}
+
 /// How a page image is drawn: the printed page, headers and footers at full strength, tracked
 /// changes marked as Track Changes Options mark them. One place for `file.exportPng`,
 /// `file.strictReport`'s page check and a downloaded page image.
@@ -134,8 +143,44 @@ pub fn render_png(doc: &Document, page: usize, scale: f32, opts: &crate::io::Exp
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// New York in 2026: daylight saving time from 8 March 07:00 UTC to 1 November 06:00 UTC.
+    pub(crate) fn new_york(t: u64) -> i64 {
+        if (1_772_953_200..1_793_512_800).contains(&t) { -4 * 3600 } else { -5 * 3600 }
+    }
+
+    /// Word dates `w:date` in local wall-clock time with a `Z`; the change keeps UTC (#6851).
+    #[test]
+    fn word_dates_tracked_changes_in_local_time() {
+        let plus8 = |_| 8 * 3600;
+        // The issue's edit: 08:33:24 UTC at UTC+8, which Word showed as 8:33 AM.
+        assert_eq!(word_date("2026-11-16T08:33:24Z", plus8).as_deref(), Some("2026-11-16T16:33:24Z"));
+        // A date naming its offset is that instant, whatever the zone.
+        assert_eq!(word_date("2026-11-16T16:33:24+08:00", plus8).as_deref(), Some("2026-11-16T16:33:24Z"));
+        // West of UTC, the date can go back a day.
+        assert_eq!(word_date("2026-01-01T03:00:00Z", new_york).as_deref(), Some("2025-12-31T22:00:00Z"));
+
+        // The repeated hour: 05:30 and 06:30 UTC are both 01:30 in New York; `dateUtc` keeps them
+        // apart. Either side of a change of offset takes the offset at that instant.
+        assert_eq!(word_date("2026-11-01T05:30:00Z", new_york).as_deref(), Some("2026-11-01T01:30:00Z"));
+        assert_eq!(word_date("2026-11-01T06:30:00Z", new_york).as_deref(), Some("2026-11-01T01:30:00Z"));
+        assert_eq!(word_date("2026-11-01T04:30:00Z", new_york).as_deref(), Some("2026-11-01T00:30:00Z"));
+        assert_eq!(word_date("2026-11-01T07:30:00Z", new_york).as_deref(), Some("2026-11-01T02:30:00Z"));
+        assert_eq!(word_date("2026-03-08T06:30:00Z", new_york).as_deref(), Some("2026-03-08T01:30:00Z"));
+        assert_eq!(word_date("2026-03-08T07:30:00Z", new_york).as_deref(), Some("2026-03-08T03:30:00Z"));
+
+        // Anything else is left as it is: no zone, no time of day, before 1970, not a date.
+        for date in ["", "2026-11-16T08:33:24", "2026-11-16", "1969-12-31T23:00:00Z", "yesterday", "2026-13-01T00:00:00Z"] {
+            assert_eq!(word_date(date, plus8), None, "{date:?}");
+        }
+        // A hostile zone or a far date doesn't overflow.
+        for zone in [i64::MAX, i64::MIN] {
+            let _ = word_date("2026-11-16T08:33:24Z", |_| zone);
+        }
+        assert!(word_date("9999-12-31T23:59:59Z", plus8).is_some());
+    }
 
     /// A page image is the printed page: headers and footers draw at full strength (#6267).
     #[test]

@@ -53,11 +53,11 @@ impl Recorder<'_> {
         if let Some(r) = self.rid {
             return r;
         }
-        let found = self.revisions.iter().rposition(|r| r.kind == RevisionKind::Format && r.author == self.author && r.date == self.date);
+        let found = self.revisions.iter().rposition(|r| r.kind == RevisionKind::Format && r.author == self.author && r.instant() == self.date);
         let r = match found {
             Some(i) => i as u32,
             None => {
-                self.revisions.push(Revision { kind: RevisionKind::Format, author: self.author.clone(), date: self.date.clone(), move_name: None });
+                self.revisions.push(crate::cmd::made_revision(RevisionKind::Format, self.author.clone(), self.date.clone()));
                 self.revisions.len().saturating_sub(1) as u32
             }
         };

@@ -30,17 +30,27 @@ pub fn import_flat_on(bytes: &[u8], page: &SectionProps) -> Result<Document, Str
     wordcraft_docx::from_shared_model(shared).map_err(|e| e.to_string())
 }
 
+/// The shared model an OpenDocument file is written from. ODF's `dc:date` is an instant (a `Z`
+/// means UTC), so a tracked change is dated by its UTC time where it is known: its `date` is the
+/// local wall-clock time Word writes in `w:date` (#6851).
+fn odf_model(doc: &Document) -> Result<craft_wordmodel::Document, String> {
+    let mut shared = wordcraft_docx::to_shared_model(doc).map_err(|e| e.to_string())?;
+    for r in &mut shared.revisions {
+        if let Some(utc) = &r.date_utc {
+            r.date = utc.clone();
+        }
+    }
+    Ok(shared)
+}
+
 pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
-    let shared = wordcraft_docx::to_shared_model(doc).map_err(|e| e.to_string())?;
-    craft_odf::text::export(&shared)
+    craft_odf::text::export(&odf_model(doc)?)
 }
 
 pub fn export_template(doc: &Document) -> Result<Vec<u8>, String> {
-    let shared = wordcraft_docx::to_shared_model(doc).map_err(|e| e.to_string())?;
-    craft_odf::text::export_template(&shared)
+    craft_odf::text::export_template(&odf_model(doc)?)
 }
 
 pub fn export_flat(doc: &Document) -> Result<Vec<u8>, String> {
-    let shared = wordcraft_docx::to_shared_model(doc).map_err(|e| e.to_string())?;
-    craft_odf::text::export_flat(&shared)
+    craft_odf::text::export_flat(&odf_model(doc)?)
 }

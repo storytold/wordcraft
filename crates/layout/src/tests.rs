@@ -2104,6 +2104,7 @@ fn a_deleted_list_items_number_is_drawn_as_deleted_text() {
         author: "Ana".into(),
         date: String::new(),
         move_name: None,
+        date_utc: None,
     });
     let id = std::sync::Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     d.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 3), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
@@ -3866,6 +3867,7 @@ fn a_tracked_paragraph_mark_shows_in_its_authors_colour() {
         author: "Ana".into(),
         date: String::new(),
         move_name: None,
+        date_utc: None,
     });
     d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().mark.ins = Some(0);
     let l = lay(&d);

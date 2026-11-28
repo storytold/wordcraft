@@ -210,12 +210,19 @@ pub fn new_revision(s: &mut Session, kind: RevisionKind) -> u32 {
         .iter()
         .enumerate()
         .rev()
-        .find(|(i, r)| r.kind == kind && r.author == s.author && r.date == date && r.move_name.is_none() && held != Some(*i as u32))
+        .find(|(i, r)| r.kind == kind && r.author == s.author && r.instant() == date && r.move_name.is_none() && held != Some(*i as u32))
     {
         return i as u32;
     }
-    s.doc.revisions.push(Revision { kind, author: s.author.clone(), date, move_name: None });
+    s.doc.revisions.push(made_revision(kind, s.author.clone(), date));
     (s.doc.revisions.len() - 1) as u32
+}
+
+/// A revision record for a change made at `utc` (ISO 8601, UTC): dated in local wall-clock time,
+/// as Word writes `w:date`, with the UTC time beside it, so a save writes it as it is (#6851).
+pub fn made_revision(kind: RevisionKind, author: String, utc: String) -> Revision {
+    let date = crate::io_ext::word_date(&utc, local_offset_secs).unwrap_or_else(|| utc.clone());
+    Revision::made_at(kind, author, date, utc)
 }
 
 /// Whether the paragraph at `path` is followed by another paragraph in the same container (so
@@ -556,6 +563,10 @@ pub fn iso_from_unix_secs(secs: u64) -> String {
 
 /// Seconds since the Unix epoch (UTC): the system clock, or the browser's on the web.
 pub fn now_unix() -> u64 {
+    #[cfg(test)]
+    if let Some(now) = TEST_NOW.with(std::cell::Cell::get) {
+        return now;
+    }
     #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     {
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
@@ -577,7 +588,21 @@ pub fn now_iso() -> String {
 /// The local time zone's offset from UTC in seconds (east positive) at `unix`, daylight saving
 /// included: the system's zone, or the browser's on the web. 0 (UTC) when it can't be found.
 pub fn local_offset_secs(unix: u64) -> i64 {
+    #[cfg(test)]
+    if let Some(zone) = TEST_ZONE.with(std::cell::Cell::get) {
+        return zone(unix);
+    }
     system_offset_secs(unix).clamp(-26 * 3600, 26 * 3600)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The clock [`now_unix`] reads on this thread in place of the system's, so a test can make
+    /// edits at the instants it needs.
+    pub static TEST_NOW: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+    /// The zone [`local_offset_secs`] gives on this thread in place of the system's. CI runs on
+    /// UTC, where local time is UTC, so a test sets a zone that isn't to tell them apart.
+    pub static TEST_ZONE: std::cell::Cell<Option<fn(u64) -> i64>> = const { std::cell::Cell::new(None) };
 }
 
 #[cfg(not(target_arch = "wasm32"))]
