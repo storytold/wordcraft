@@ -117,7 +117,7 @@ fn arg_text(s: &str) -> String {
                 }
                 // A switch: its letters, then an optional (signed) number.
                 Some(_) => {
-                    while it.next_if(|n| n.is_ascii_alphabetic()).is_some() {}
+                    while it.next_if(char::is_ascii_alphabetic).is_some() {}
                     while it.next_if(|n| *n == ' ').is_some() {}
                     while it.next_if(|n| n.is_ascii_digit() || *n == '-' || *n == '.').is_some() {}
                 }

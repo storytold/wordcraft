@@ -24,12 +24,12 @@ pub const DEFAULT_H: f32 = 252.0;
 
 const LAYOUTS: &str = "basicList|process|cycle|hierarchy|pyramid|radial|matrix|venn";
 const COLORS: &str = "accent1|accent2|accent3|accent4|accent5|accent6|colorful";
-const ITEMS: &str = r#"[string | {"text": string, "level"?: 0-7}] (a string's leading tabs are its level)"#;
+const ITEMS: &str = r#"[string | {"text": string, "level"?: 0-7, "color"?: RRGGBB}] (a string's leading tabs are its level)"#;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("insert.smartArt", "SmartArt", "Insert › Illustrations", insert).params(
-            r#"{"layout"?: "basicList|process|cycle|hierarchy|pyramid|radial|matrix|venn", "items"?: [string | {"text": string, "level"?: 0-7}], "colors"?: "accent1…accent6|colorful", "width"?: pt, "height"?: pt} (no items: sample items for the layout)"#,
+        CommandSpec::new("insert.smartArt", "Diagram", "Insert › Illustrations", insert).params(
+            r#"{"layout"?: "basicList|process|cycle|hierarchy|pyramid|radial|matrix|venn", "items"?: [string | {"text": string, "level"?: 0-7, "color"?: RRGGBB}], "colors"?: "accent1…accent6|colorful", "width"?: pt, "height"?: pt} (no items: sample items for the layout)"#,
         ),
         CommandSpec::new("smartArt.items", "Edit Items", "SmartArt Design › Create Graphic", |s, v| {
             let items = items_of(v.get("items").ok_or_else(|| CmdError::Params(format!("`items` is required: {ITEMS}")))?)?;
@@ -38,7 +38,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(())
             })
         })
-        .params(r#"{"items": [string | {"text": string, "level"?: 0-7}]} (replaces the outline)"#)
+        .params(r#"{"items": [string | {"text": string, "level"?: 0-7, "color"?: RRGGBB}]} (replaces the outline)"#)
         .when(has_smart_art),
         CommandSpec::new("smartArt.textPane", "Text Pane", "SmartArt Design › Create Graphic", |s, v| {
             let on = p::bool(v, "value").unwrap_or(!s.view.smart_art_pane);
@@ -53,7 +53,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let below = p::bool(v, "below").unwrap_or(false);
             edit(s, move |g| {
                 if g.items.len() >= MAX_ITEMS {
-                    return Err(CmdError::Failed(format!("a SmartArt graphic holds at most {MAX_ITEMS} items")));
+                    return Err(CmdError::Failed(format!("a diagram holds at most {MAX_ITEMS} items")));
                 }
                 let Some(last) = g.items.len().checked_sub(1) else {
                     g.items.push(SmartArtItem::new(text.clone(), 0));
@@ -120,18 +120,40 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"layout": "basicList|process|cycle|hierarchy|pyramid|radial|matrix|venn"}"#)
         .when(has_smart_art),
-        CommandSpec::new("smartArt.colors", "Change Colors", "SmartArt Design › SmartArt Styles", |s, v| {
+        CommandSpec::new("smartArt.colors", "Change Colors", "SmartArt Design › Diagram Styles", |s, v| {
             let colors = colors_of(v)?.ok_or_else(|| CmdError::Params(format!("`variant` is required: {COLORS}")))?;
             edit(s, move |g| {
                 g.colors = colors;
+                g.clear_custom_colors();
                 Ok(())
             })
         })
-        .params(r#"{"variant": "accent1|accent2|accent3|accent4|accent5|accent6|colorful"}"#)
+        .params(r#"{"variant": "accent1|accent2|accent3|accent4|accent5|accent6|colorful"} (the items' own colours are dropped)"#)
+        .when(has_smart_art),
+        CommandSpec::new("smartArt.itemColor", "Item Color", "SmartArt Design › Diagram Styles", |s, v| {
+            let i = index(v, "index")?;
+            let color = match v.get("color") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(c)) => Some(Rgb::parse(c).ok_or_else(|| CmdError::Params("`color`: RRGGBB".into()))?),
+                Some(_) => return Err(CmdError::Params("`color`: RRGGBB or null".into())),
+            };
+            edit(s, move |g| {
+                let i = item_at(g, i)?;
+                if g.style_accent(i).is_none() {
+                    return Err(CmdError::Failed("this item has no shape of its own: it is text in another item's shape".into()));
+                }
+                if let Some(it) = g.items.get_mut(i) {
+                    it.color = color;
+                }
+                Ok(())
+            })
+        })
+        .params(r#"{"index"?: item index (default: the last), "color"?: "RRGGBB" (none: the style's colour)}"#)
         .when(has_smart_art),
         CommandSpec::new("smartArt.reset", "Reset Graphic", "SmartArt Design › Reset", |s, _| {
             edit(s, |g| {
                 g.colors = SmartArtColors::default();
+                g.clear_custom_colors();
                 Ok(())
             })
         })
@@ -152,9 +174,9 @@ fn has_smart_art(s: &Session) -> Option<&'static str> {
     match selected(s) {
         Some((_, InlineObject::Graphic { graphic, .. })) if graphic.smart_art.is_some() => None,
         Some((_, InlineObject::Graphic { graphic, .. })) if graphic.kind == GraphicKind::Diagram => {
-            Some("this SmartArt was made in another program: WordCraft shows it but can't edit it")
+            Some("this diagram was made in another program: WordCraft shows it but can't edit it")
         }
-        _ => Some("select a SmartArt graphic first"),
+        _ => Some("select a diagram first"),
     }
 }
 
@@ -235,7 +257,13 @@ fn items_of(v: &Value) -> Result<Vec<SmartArtItem>, CmdError> {
                     Some(other) => clean_text(&other.to_string()),
                 };
                 let level = p::u64(it, "level").unwrap_or(0).min(u64::from(MAX_LEVEL));
-                Ok(SmartArtItem::new(text, u8::try_from(level).unwrap_or(MAX_LEVEL)))
+                let mut item = SmartArtItem::new(text, u8::try_from(level).unwrap_or(MAX_LEVEL));
+                item.color = match it.get("color") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(c)) => Some(Rgb::parse(c).ok_or_else(|| CmdError::Params("`color`: RRGGBB".into()))?),
+                    Some(_) => return Err(CmdError::Params("`color`: RRGGBB or null".into())),
+                };
+                Ok(item)
             }
             _ => Err(CmdError::Params(format!("`items`: {ITEMS}"))),
         })
@@ -271,9 +299,9 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
 
 /// Change the selected graphic's model with `f`, then lay it out again at its size.
 fn edit(s: &mut Session, f: impl Fn(&mut SmartArtSpec) -> Result<(), CmdError>) -> CmdResult {
-    let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("select a SmartArt graphic first".into()))?;
-    let InlineObject::Graphic { w, h, graphic, .. } = obj else { return Err(CmdError::Disabled("select a SmartArt graphic first".into())) };
-    let mut spec = graphic.smart_art.as_deref().cloned().ok_or_else(|| CmdError::Disabled("this SmartArt graphic can't be edited".into()))?;
+    let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("select a diagram first".into()))?;
+    let InlineObject::Graphic { w, h, graphic, .. } = obj else { return Err(CmdError::Disabled("select a diagram first".into())) };
+    let mut spec = graphic.smart_art.as_deref().cloned().ok_or_else(|| CmdError::Disabled("this diagram can't be edited".into()))?;
     f(&mut spec)?;
     let next = Arc::new(smart_art_graphic(spec, &s.doc.settings.theme_colors, w, h));
     let out = json!({"smartArt": next.smart_art.as_deref()});
