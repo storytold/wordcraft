@@ -105,10 +105,15 @@ fn instantiate(template: &Template, args: Option<TokenStream>) -> Check<TokenStr
             if !matches!(token, TokenTree::Ident(_) | TokenTree::Punct(_)) {
                 return Err("unsupported macro matcher token".into());
             }
-            if let Some(ref mut args) = input
-                && args.next().as_ref().map(tokens) != Some(tokens(token))
-            {
-                return Err("macro argument mismatch".into());
+            if let Some(ref mut args) = input {
+                let found = args.next().as_ref().map(tokens);
+                if found.as_deref() != Some(tokens(token).as_str()) {
+                    return Err(format!(
+                        "macro argument mismatch: expected `{}`, found `{}`",
+                        tokens(token),
+                        found.as_deref().unwrap_or("<end of arguments>")
+                    ));
+                }
             }
         }
     }
@@ -168,6 +173,9 @@ struct Audit {
     collection_fields: Vec<String>,
     readers: Vec<Value>,
     derive_context: bool,
+    field_context: bool,
+    attr_item: String,
+    pat_context: &'static str,
     scope: Vec<String>,
     modules: Vec<String>,
     templates: HashMap<String, Template>,
@@ -219,6 +227,11 @@ impl Audit {
         self.visit_type(ty);
         self.visit_expr(expr);
         self.in_unit -= 1;
+    }
+    fn pattern_in(&mut self, context: &'static str, pat: &Pat) {
+        let old = std::mem::replace(&mut self.pat_context, context);
+        self.visit_pat(pat);
+        self.pat_context = old;
     }
     fn expanded_items(&mut self, stream: TokenStream) {
         if self.depth >= 32 {
@@ -291,14 +304,23 @@ impl<'ast> Visit<'ast> for Audit {
             self.collection_fields.push(ident(name));
         }
         let old = std::mem::replace(&mut self.derive_context, false);
+        let old_field = std::mem::replace(&mut self.field_context, true);
         visit::visit_field(self, field);
+        self.field_context = old_field;
         self.derive_context = old;
     }
     fn visit_attribute(&mut self, attr: &'ast Attribute) {
         // Attribute macros/cfg_attr may replace bodies and are outside this grammar.
         let name = tokens(attr.path());
         if !matches!(name.as_str(), "doc" | "derive" | "default" | "allow" | "deny" | "forbid" | "cfg" | "inline" | "cold") {
-            self.fail(bad("attribute", attr));
+            let kind = if self.field_context {
+                "field attribute".to_owned()
+            } else if self.attr_item.is_empty() {
+                "attribute".to_owned()
+            } else {
+                format!("attribute on {}", self.attr_item)
+            };
+            self.fail(bad(&kind, attr));
         }
         if name == "inline" {
             let valid = match &attr.meta {
@@ -330,15 +352,26 @@ impl<'ast> Visit<'ast> for Audit {
     }
     fn visit_item(&mut self, item: &'ast Item) {
         if let Item::Macro(m) = item {
+            // The attribute policy is shared, but a definition, an invocation and a plain function
+            // reach it through different branches; the rejection records which one it came from.
+            let path = tokens(&m.mac.path);
+            let context = match (&m.ident, path.as_str()) {
+                (Some(name), "macro_rules") => format!("macro definition {}", ident(name)),
+                _ => format!("macro invocation {path}"),
+            };
+            let old = std::mem::replace(&mut self.attr_item, context);
             for attr in &m.attrs {
                 self.visit_attribute(attr);
             }
+            self.attr_item = old;
         }
         match item {
             Item::Fn(f) => {
+                let old = std::mem::replace(&mut self.attr_item, format!("function {}", ident(&f.sig.ident)));
                 for a in &f.attrs {
                     self.visit_attribute(a);
                 }
+                self.attr_item = old;
                 self.function(&f.sig, &f.block);
             }
             Item::Const(c) => {
@@ -465,6 +498,58 @@ impl<'ast> Visit<'ast> for Audit {
         visit::visit_variant(self, variant);
         self.derive_context = old;
     }
+    fn visit_expr_closure(&mut self, closure: &'ast ExprClosure) {
+        for attr in &closure.attrs {
+            self.visit_attribute(attr);
+        }
+        if let Some(lifetimes) = &closure.lifetimes {
+            self.visit_bound_lifetimes(lifetimes);
+        }
+        for input in &closure.inputs {
+            self.pattern_in("closure parameter pattern", input);
+        }
+        self.visit_return_type(&closure.output);
+        self.visit_expr(&closure.body);
+    }
+    fn visit_local(&mut self, local: &'ast Local) {
+        for attr in &local.attrs {
+            self.visit_attribute(attr);
+        }
+        self.pattern_in("let binding pattern", &local.pat);
+        if let Some(init) = &local.init {
+            self.visit_local_init(init);
+        }
+    }
+    fn visit_arm(&mut self, arm: &'ast Arm) {
+        for attr in &arm.attrs {
+            self.visit_attribute(attr);
+        }
+        self.pattern_in("match arm pattern", &arm.pat);
+        if let Some((_, guard)) = &arm.guard {
+            self.visit_expr(guard);
+        }
+        self.visit_expr(&arm.body);
+    }
+    fn visit_expr_for_loop(&mut self, node: &'ast ExprForLoop) {
+        for attr in &node.attrs {
+            self.visit_attribute(attr);
+        }
+        self.pattern_in("for loop pattern", &node.pat);
+        self.visit_expr(&node.expr);
+        self.visit_block(&node.body);
+    }
+    fn visit_fn_arg(&mut self, arg: &'ast FnArg) {
+        match arg {
+            FnArg::Typed(typed) => {
+                for attr in &typed.attrs {
+                    self.visit_attribute(attr);
+                }
+                self.pattern_in("function parameter pattern", &typed.pat);
+                self.visit_type(&typed.ty);
+            }
+            FnArg::Receiver(_) => visit::visit_fn_arg(self, arg),
+        }
+    }
     fn visit_pat(&mut self, pat: &'ast Pat) {
         match pat {
             Pat::Ident(_)
@@ -480,7 +565,7 @@ impl<'ast> Visit<'ast> for Audit {
             | Pat::TupleStruct(_)
             | Pat::Type(_)
             | Pat::Wild(_) => visit::visit_pat(self, pat),
-            _ => self.fail(bad("pattern", pat)),
+            _ => self.fail(bad(self.pat_context, pat)),
         }
     }
     fn visit_type(&mut self, ty: &'ast Type) {
@@ -652,6 +737,9 @@ fn audit(name: &str, source: &str, templates: HashMap<String, Template>) -> Chec
         collection_fields: vec![],
         readers: vec![],
         derive_context: false,
+        field_context: false,
+        attr_item: String::new(),
+        pat_context: "pattern",
         scope: vec![],
         modules: vec![],
         templates,

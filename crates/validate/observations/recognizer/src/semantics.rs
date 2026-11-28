@@ -97,6 +97,7 @@ fn raw_type(text: &str) -> bool {
 #[derive(Clone, Default)]
 struct Origin {
     callable: Option<String>,
+    source: Option<String>,
     outcome: bool,
     raw: bool,
     limits: bool,
@@ -124,6 +125,7 @@ pub(crate) fn analyze(sig: &Signature, block: &Block, names: &Names, file: &str,
         scopes: vec![],
         issues: vec![],
         calls: vec![],
+        call_paths: vec![],
         file: file.into(),
         returns_absence: absence_return(&sig.output, names, self_type),
         function: ident(&sig.ident),
@@ -157,7 +159,7 @@ pub(crate) fn analyze(sig: &Signature, block: &Block, names: &Names, file: &str,
         }
     }
     audit.visit_block(block);
-    json!({"issues":audit.issues,"lookups":audit.calls,"state_predicates":audit.state_predicates,"accessors":audit.accessors,"scrub_paths":audit.scrub_paths,"positive_membership":audit.positive_membership,"scalar_reads":audit.scalar_reads})
+    json!({"issues":audit.issues,"lookups":audit.calls,"call_paths":audit.call_paths,"state_predicates":audit.state_predicates,"accessors":audit.accessors,"scrub_paths":audit.scrub_paths,"positive_membership":audit.positive_membership,"scalar_reads":audit.scalar_reads})
 }
 #[derive(Clone)]
 struct Flow {
@@ -166,6 +168,7 @@ struct Flow {
     scopes: Vec<HashMap<String, Option<Origin>>>,
     issues: Vec<String>,
     calls: Vec<String>,
+    call_paths: Vec<String>,
     file: String,
     function: String,
     returns_absence: bool,
@@ -243,6 +246,7 @@ impl Flow {
                 Origin {
                     callable: (lookup(name) || (accessor(name) && (path.contains("::") || p.qself.is_some())) || name == "canonical")
                         .then(|| name.into()),
+                    source: Some(tokens(p)),
                     ..Origin::default()
                 }
             }
@@ -457,11 +461,24 @@ impl<'ast> Visit<'ast> for Flow {
                 }
                 if let Some(name) = self.origin(&c.func).callable {
                     if lookup(&name) {
+                        // Record how the callee was reached (call spelling, local binding source,
+                        // resolved import path) so an indirect call is not confused with a direct one.
+                        let spelled = tokens(&c.func);
+                        let mut chain = vec![spelled.clone()];
+                        let mut reached = spelled.clone();
+                        if self.bindings.contains_key(&spelled)
+                            && let Some(source) = self.origin(&c.func).source
+                        {
+                            chain.push(format!("local binding of {source}"));
+                            reached = source;
+                        }
+                        chain.push(format!("resolves to {}", self.names.resolve(&reached)));
+                        self.call_paths.push(format!("{name}: {}", chain.join(" -> ")));
                         self.calls.push(name);
                     } else if accessor(&name) {
                         self.accessors.push(name);
                     } else if name == "canonical"
-                        && !(self.file == "package.rs" && matches!(self.function.as_str(), "load" | "glossary_part" | "canonical_entry"))
+                        && !(self.file == "package.rs" && matches!(self.function.as_str(), "load_archive" | "glossary_part" | "canonical_entry"))
                     {
                         self.issue("canonical is an internal presence-only helper; calls outside the contracted package lookup/assembly implementations are forbidden");
                     }
@@ -469,7 +486,7 @@ impl<'ast> Visit<'ast> for Flow {
                 if let Expr::Path(p) = c.func.as_ref()
                     && last(&self.path(p)) == "discovered"
                 {
-                    if (self.file != "package.rs" || self.function != "load")
+                    if (self.file != "package.rs" || self.function != "load_archive")
                         && matches!(c.args.iter().nth(1), Some(Expr::Lit(ExprLit {lit: Lit::Bool(b), ..})) if b.value)
                     {
                         self.issue("literal true is not package completeness evidence");

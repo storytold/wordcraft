@@ -2,6 +2,7 @@
 mod common;
 
 mod ambiguous_sources;
+mod cr7924;
 mod entry_point_profiles;
 mod owner_roles;
 mod partial_glossary_discovery;
@@ -13,6 +14,7 @@ mod round21;
 mod round21_recording;
 mod round22;
 mod round23;
+mod round24;
 mod selected_sources;
 mod validate;
 mod whole_surface;

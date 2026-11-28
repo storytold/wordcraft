@@ -93,6 +93,12 @@ pub(crate) struct ContentTypes {
     overrides: HashMap<String, String>,
     /// Later declarations were not examined; absence and Default fallbacks are unestablished.
     pub incomplete: bool,
+    /// The part is not a certifiable OPC inventory (a second root, a bad declaration, ...). Diagnostics
+    /// still use the declarations it delivered, but it cannot certify a standalone package.
+    pub inventory_invalid: bool,
+    /// An `Override` without `PartName` or a `Default` without `Extension` was declared. Single-archive
+    /// diagnostics still use the lenient key; only certifying a standalone slice refuses it.
+    pub malformed_declaration: bool,
     defaults: HashMap<String, String>,
     /// Extensions with more than one Default entry (lowercased).
     pub dup_defaults: BTreeSet<String>,
@@ -159,6 +165,8 @@ pub(crate) struct Rel {
     /// Resolved package path for internal targets; `None` for external ones.
     pub target_abs: Option<String>,
     pub external: bool,
+    /// The original internal target names a location within its source part.
+    pub fragment_only: bool,
 }
 
 /// Bind lexical relationship IDs consistently: the first declaration in XML order wins.
@@ -255,9 +263,20 @@ pub(crate) struct Package {
     pub identity_incomplete: bool,
 }
 
-/// Load a zip into the package model. Returns `None` only when the input is not a readable zip
-/// (after a `PKG-NOT-ZIP` finding): every other problem becomes a finding or a coverage note.
+/// Load a zip into the package model, recording unreadable or disputed archives in the report.
 pub(crate) fn load(bytes: &[u8], acc: &mut Acc) -> Option<Package> {
+    load_archive(bytes, acc, None)
+}
+
+fn open_archive<'a>(bytes: &'a [u8], inspect_boundary: bool, acc: &mut Acc) -> zip::result::ZipResult<zip::ZipArchive<Cursor<&'a [u8]>>> {
+    let archive = zip::ZipArchive::new(Cursor::new(bytes));
+    if inspect_boundary {
+        check_concatenated_archives(bytes, archive.is_ok(), acc);
+    }
+    archive
+}
+
+fn load_archive(bytes: &[u8], acc: &mut Acc, expected_footer: Option<usize>) -> Option<Package> {
     observation_contract! {
         rules: "PKG-NO-CONTENT-TYPES,PKG-NO-MAIN,PKG-NOT-ZIP";
         collections: "field.bytes*1,field.entries*6,field.incomplete*5,field.rels*1,parser.parse_content_types*1,type.Vec*2";
@@ -268,7 +287,7 @@ pub(crate) fn load(bytes: &[u8], acc: &mut Acc) -> Option<Package> {
     }
 
     acc.ran("PKG-NOT-ZIP");
-    let Ok(mut zip) = zip::ZipArchive::new(Cursor::new(bytes)) else {
+    let Ok(mut zip) = open_archive(bytes, expected_footer.is_none(), acc) else {
         acc.add("PKG-NOT-ZIP", None, "the input is not a readable zip archive".to_string());
         return None;
     };
@@ -366,7 +385,7 @@ pub(crate) fn load(bytes: &[u8], acc: &mut Acc) -> Option<Package> {
         }
     }
 
-    let (cd, directory_disagreement) = reader_checked_directory(bytes, &zip, acc.limits.entries, acc);
+    let (cd, directory_disagreement) = reader_checked_directory(bytes, &zip, acc.limits.entries, expected_footer, acc);
     unknown_unreadable |= directory_disagreement;
     if directory_disagreement {
         // The reader may have retained an arbitrary decoded-name twin. Even a
@@ -946,17 +965,17 @@ const CP437_HIGH: [char; 128] = [
 
 /// Read an unsigned 16-bit little-endian integer at byte offset `i`.
 fn u16_at(b: &[u8], i: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(b.get(i..i + 2)?.try_into().ok()?))
+    Some(u16::from_le_bytes(b.get(i..i.checked_add(2)?)?.try_into().ok()?))
 }
 
 /// Read an unsigned 32-bit little-endian integer at byte offset `i`.
 fn u32_at(b: &[u8], i: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(b.get(i..i + 4)?.try_into().ok()?))
+    Some(u32::from_le_bytes(b.get(i..i.checked_add(4)?)?.try_into().ok()?))
 }
 
 /// Read an unsigned 64-bit little-endian integer at byte offset `i`.
 fn u64_at(b: &[u8], i: usize) -> Option<u64> {
-    Some(u64::from_le_bytes(b.get(i..i + 8)?.try_into().ok()?))
+    Some(u64::from_le_bytes(b.get(i..i.checked_add(8)?)?.try_into().ok()?))
 }
 
 /// The parsed zip central directory: the raw records examined within the entry budget, and
@@ -964,6 +983,8 @@ fn u64_at(b: &[u8], i: usize) -> Option<u64> {
 struct CentralDirectory<'a> {
     /// Absolute byte offset actually used by the bounded parser (archive offset zero).
     start: u64,
+    /// End of the walked directory records. Isolated archive proof requires it to precede the footer.
+    end: usize,
     /// The selected footer's disk and count fields are consistent.
     consistent: bool,
     /// The raw entry names examined, in stored order, including duplicate names.
@@ -977,17 +998,625 @@ struct CentralDirectory<'a> {
     truncated: bool,
 }
 
+/// Look for an EOCD whose comment ends immediately before another local header.
+fn check_concatenated_archives(bytes: &[u8], readable: bool, acc: &mut Acc) {
+    observation_contract! {
+        rules: "PKG-CONCATENATED";
+        collections: "field.entries*4,field.first*1";
+        scope: "input-budgeted EOCD scan respecting declared comments and at most two candidate archive splits";
+        loss: "split budget, an unsupported boundary layout, or incomplete isolated package loading";
+        fallback: "report incomplete coverage for unresolved candidate boundaries";
+        package_loss: "independent";
+    }
+
+    const CANDIDATE_LIMIT: usize = 2;
+    let exact_ends = exact_end_footers(bytes);
+    if readable {
+        acc.ran("PKG-CONCATENATED");
+    } else if exact_ends.is_empty() {
+        return;
+    }
+    let mut remaining = CANDIDATE_LIMIT;
+    let mut unresolved = false;
+    let mut comment_end = 0;
+    let mut walks = FooterWalks::new(acc.limits.entries);
+    for (footer, byte) in bytes.iter().enumerate() {
+        if footer < comment_end || *byte != b'P' || u32_at(bytes, footer) != Some(0x0605_4B50) {
+            continue;
+        }
+        let Some(comment) = u16_at(bytes, footer + 20) else {
+            continue;
+        };
+        let boundary = footer + 22 + usize::from(comment);
+        // A trailing archive normally starts with a local header; a supported stub prefix puts other bytes first,
+        // so a later footer-like record that ends the input keeps the boundary in play, as for the first archive.
+        let header_follows = u32_at(bytes, boundary) == Some(0x0403_4B50);
+        let stub_candidate = !header_follows && boundary < bytes.len() && exact_ends.first().is_some_and(|&last| last >= boundary);
+        // Without a comment the footer cannot anchor anything, and its walk only matters when something follows.
+        if comment == 0 && !header_follows && !stub_candidate {
+            continue;
+        }
+        // Only a footer verified as an archive's own may anchor its declared comment. A record stored in
+        // entry data can pass the cheap preflight and must not hide a later real footer.
+        let first_count = match walks.footer(bytes, footer, acc.limits.entries) {
+            Footer::Verified(count) => {
+                if comment != 0 && boundary <= bytes.len() {
+                    comment_end = boundary;
+                }
+                Some(count)
+            }
+            Footer::Undecided(count) => {
+                // Too large to walk within the entry budget: neither trusted nor dismissed.
+                unresolved |= comment != 0 && boundary <= bytes.len();
+                Some(count)
+            }
+            Footer::Unanchored(count) => Some(count),
+            Footer::Rejected => None,
+        };
+        if !header_follows && !stub_candidate {
+            continue;
+        }
+        let (first, second) = bytes.split_at(boundary);
+        // The second archive's own footer is among the exact-end records whose directory is plausible in the
+        // second slice. A lookalike inside its comment can be plausible too, so every plausible candidate is
+        // tried in decreasing offset order, each attempt charged to the shared budget; the first one before the
+        // boundary ends the list.
+        let plausible = |from: usize, walks: &mut FooterWalks| {
+            exact_ends[from..]
+                .iter()
+                .enumerate()
+                .map_while(|(at, &last)| last.checked_sub(boundary).map(|last| (from + at, last)))
+                .take_while(|_| walks.charge(1))
+                .find_map(|(at, last)| archive_count_at(second, last).map(|count| (at, last, count)))
+        };
+        let mut next = plausible(0, &mut walks);
+        if (first_count.is_none() || !header_follows) && next.is_none() {
+            continue;
+        }
+        if remaining == 0 {
+            unresolved = true;
+            break;
+        }
+        if !readable && remaining == CANDIDATE_LIMIT {
+            acc.ran("PKG-CONCATENATED");
+        }
+        remaining -= 1;
+        let first_rels =
+            if first_count.is_some_and(|count| count <= acc.limits.entries as u64) { standalone_opc(first, footer, acc.limits) } else { None };
+        if first_rels.is_none() {
+            unresolved = true;
+            continue;
+        }
+        // An attempt is fully charged and completed before any successor is searched for: the lookahead runs
+        // only when another attempt is actually needed, so it cannot spend the budget the attempt in hand needs.
+        while let Some((at, last, count)) = next {
+            if count > acc.limits.entries as u64 {
+                next = plausible(at + 1, &mut walks);
+                continue;
+            }
+            // The claim is that the second archive is complete, so its package relationships must have been read
+            // cleanly whichever way it was loaded. Identical slices share one load.
+            let second_rels = if first == second { first_rels } else { standalone_trailing(second, last, acc.limits, &mut walks) };
+            if second_rels == Some(true) {
+                acc.add("PKG-CONCATENATED", None, format!("a second complete OPC archive starts at byte {boundary}"));
+                return;
+            }
+            // Identical slices were just loaded; a refused charge is reported through the spent flag below.
+            if first == second {
+                break;
+            }
+            next = plausible(at + 1, &mut walks);
+        }
+        unresolved = true;
+    }
+    unresolved |= walks.spent;
+    if unresolved {
+        acc.note("concatenated archive checking could not resolve a candidate boundary within the ZIP layout and examination limits".to_string());
+        acc.set_incomplete();
+    }
+}
+
+/// Package loads of trailing slices one scan may perform: a bounded view and a whole-slice fallback for each
+/// of the two candidate splits. Further attempts are refused, never silently passed.
+const TRAILING_LOADS: usize = 4;
+
+/// Scan-wide accounting for central-record walks. Every walk of a directory is charged its declared record
+/// count against one budget, and a walk already done for the same directory is reused, so many footer-like
+/// records aimed at one directory cost one walk. Two archives at the entry limit, each with its footer, fit
+/// the budget with room for lookalikes inside entry data.
+struct FooterWalks {
+    budget: usize,
+    /// A walk was refused because the budget ran out; the scan must report incomplete coverage.
+    spent: bool,
+    /// Whole or bounded package loads of a trailing slice still allowed in this scan. Loads are the expensive
+    /// work (extraction and XML), so they share one aggregate allowance across every candidate attempt.
+    loads_left: usize,
+    /// Package loads of a trailing slice performed so far in this scan.
+    loads: usize,
+    /// (directory start, record count) -> the footer position walked from and its outcome. A walk that
+    /// found the directory consistent holds for any later footer, since a later footer only adds room.
+    done: HashMap<(usize, u64), (usize, Footer)>,
+}
+
+impl FooterWalks {
+    fn new(entries: usize) -> Self {
+        observation_contract! {
+            rules: "-";
+            collections: "type.HashMap*1";
+            scope: "empty per-scan memo of walked directories, filled at most once per charged walk";
+            loss: "none; an empty memo only forgoes reuse";
+            fallback: "walk the directory again, charged against the scan-wide budget";
+            package_loss: "independent";
+        }
+
+        Self { budget: entries.saturating_mul(4), spent: false, loads_left: TRAILING_LOADS, loads: 0, done: HashMap::new() }
+    }
+
+    /// Spend `cost` units of the scan-wide budget; false (and `spent`) when it is exhausted.
+    fn charge(&mut self, cost: usize) -> bool {
+        match self.budget.checked_sub(cost) {
+            Some(rest) => {
+                self.budget = rest;
+                true
+            }
+            None => {
+                self.spent = true;
+                false
+            }
+        }
+    }
+
+    /// Spend one trailing-slice package load; false (and `spent`) when the scan's load allowance is used up.
+    fn charge_load(&mut self) -> bool {
+        match self.loads_left.checked_sub(1) {
+            Some(rest) => {
+                self.loads_left = rest;
+                self.loads += 1;
+                true
+            }
+            None => {
+                self.spent = true;
+                false
+            }
+        }
+    }
+
+    /// Load a trailing slice in isolation, charged to the scan's shared load allowance. A refused charge
+    /// reports no archive and leaves `spent` set, so the scan keeps its incomplete-coverage note.
+    fn load(&mut self, bytes: &[u8], footer: usize, limits: crate::Limits) -> Option<bool> {
+        if self.charge_load() { standalone_opc(bytes, footer, limits) } else { None }
+    }
+
+    fn footer(&mut self, bytes: &[u8], footer: usize, limit: usize) -> Footer {
+        observation_contract! {
+            rules: "-";
+            collections: "field.done*2";
+            scope: "memo lookup and insert keyed by directory start and count, one insert per budget-charged walk";
+            loss: "a refused walk (budget spent), or a cached rejected walk, which is never reused";
+            fallback: "a refused charge reports the footer unanchored so the scan records incomplete coverage; a cached rejection is charged again and, when the charge succeeds, verified afresh under the new footer's upper bound, returning that result";
+            package_loss: "independent";
+        }
+
+        let Some((start, count)) = directory_at(bytes, footer) else {
+            return Footer::Rejected;
+        };
+        // Checked before the memo: a consistent footer's walk must not vouch for an inconsistent one.
+        if zip32_inconsistent(bytes, footer) {
+            return Footer::Rejected;
+        }
+        if count > limit as u64 {
+            return Footer::Undecided(count);
+        }
+        if let Some(&(walked_from, outcome)) = self.done.get(&(start, count))
+            && footer >= walked_from
+            && !matches!(outcome, Footer::Rejected)
+        {
+            return outcome;
+        }
+        if !self.charge(usize::try_from(count).unwrap_or(usize::MAX)) {
+            return Footer::Unanchored(count);
+        }
+        let outcome = verify_footer(bytes, footer, limit);
+        self.done.insert((start, count), (footer, outcome));
+        outcome
+    }
+}
+
+/// Every EOCD-like record with a comment ending exactly at EOF, within its 16-bit comment window, last first.
+fn exact_end_footers(bytes: &[u8]) -> Vec<usize> {
+    observation_contract! {
+        rules: "-";
+        collections: "type.Vec*2";
+        scope: "footer-like records inside the last 16-bit comment window of the input, at most one per byte offset";
+        loss: "input shorter than a footer, or no record whose comment ends at the end of the input";
+        fallback: "an empty list: no exact-end candidate, so the scan reports nothing for an unreadable input";
+        package_loss: "independent";
+    }
+
+    let Some(last) = bytes.len().checked_sub(22) else {
+        return Vec::new();
+    };
+    (last.saturating_sub(0xFFFF)..=last)
+        .rev()
+        .filter(|&footer| {
+            u32_at(bytes, footer) == Some(0x0605_4B50)
+                && u16_at(bytes, footer + 20).is_some_and(|comment| footer + 22 + usize::from(comment) == bytes.len())
+        })
+        .collect()
+}
+
+/// The outcome of checking whether an EOCD-like record is the footer of an archive starting at byte zero.
+#[derive(Clone, Copy)]
+enum Footer {
+    Verified(u64),
+    /// The directory passes the preflight but is larger than the entry budget, so it was not walked.
+    Undecided(u64),
+    /// The records are consistent with the bytes but do not prove the archive's extent (a prepended stub,
+    /// unresolved ZIP64 fields). It can warrant an isolated-load attempt but never skips input.
+    Unanchored(u64),
+    Rejected,
+}
+
+/// Walk the directory the record declares and require it to describe the bytes before it as an archive
+/// that starts at byte zero: each record's name and size agree with the local header it points at, and the
+/// entries abut from offset zero to the directory (a data descriptor may follow an entry). A record copied
+/// into entry data cannot satisfy this without being a consistent archive of its own.
+fn verify_footer(bytes: &[u8], footer: usize, limit: usize) -> Footer {
+    observation_contract! {
+        rules: "-";
+        collections: "type.Vec*2";
+        scope: "entry-budgeted central records of one candidate footer";
+        loss: "a directory larger than the entry budget, or records that do not describe the preceding bytes";
+        fallback: "reject the footer, or leave it undecided so the caller records incomplete coverage";
+        package_loss: "independent";
+    }
+
+    let Some((start, count)) = directory_at(bytes, footer) else {
+        return Footer::Rejected;
+    };
+    // The reader refuses a ZIP32 footer whose disks or counts disagree, so it cannot anchor its comment.
+    if zip32_inconsistent(bytes, footer) {
+        return Footer::Rejected;
+    }
+    if count > limit as u64 {
+        return Footer::Undecided(count);
+    }
+    // (local offset, end of entry data, descriptor lengths proven to follow it as a bit set, bit n for n bytes; zero when none)
+    let mut spans: Vec<(usize, usize, u32)> = Vec::new();
+    // Every record's identity was established: its ZIP64 fields (central and local) resolved and compared.
+    let mut identified = true;
+    let mut at = start;
+    for _ in 0..count {
+        let walked = (|| {
+            if u32_at(bytes, at)? != 0x0201_4B50 {
+                return None;
+            }
+            let flags = u16_at(bytes, at + 8)?;
+            let compressed = u32_at(bytes, at + 20)?;
+            let uncompressed = u32_at(bytes, at + 24)?;
+            let name_len = usize::from(u16_at(bytes, at + 28)?);
+            let extra_len = usize::from(u16_at(bytes, at + 30)?);
+            let lengths = name_len + extra_len + usize::from(u16_at(bytes, at + 32)?);
+            let offset = u32_at(bytes, at + 42)?;
+            let next = at.checked_add(46)?.checked_add(lengths)?;
+            if name_len == 0 || next > footer {
+                return None;
+            }
+            let extra = bytes.get(at + 46 + name_len..at + 46 + name_len + extra_len)?;
+            // A ZIP64 record keeps its sizes or offset in the extra field; without them it proves nothing.
+            let Some((size, full_size, local)) = central_fields(extra, uncompressed, compressed, offset) else {
+                return Some((next, false));
+            };
+            let local = usize::try_from(local).ok()?;
+            if local >= start || u32_at(bytes, local)? != 0x0403_4B50 || usize::from(u16_at(bytes, local + 26)?) != name_len {
+                return None;
+            }
+            if bytes.get(local + 30..local + 30 + name_len)? != bytes.get(at + 46..at + 46 + name_len)? {
+                return None;
+            }
+            let local_extra_len = usize::from(u16_at(bytes, local + 28)?);
+            let local_extra = bytes.get(local + 30 + name_len..local + 30 + name_len + local_extra_len)?;
+            // The local header may use a different size representation than the directory; compare resolved values.
+            let Some(local_size) = local_compressed(local_extra, u32_at(bytes, local + 22)?, u32_at(bytes, local + 18)?) else {
+                return Some((next, false));
+            };
+            // Descriptor status needs both records to agree; the directory alone never establishes it.
+            let descriptor = flags & 0x8 != 0;
+            if (u16_at(bytes, local + 6)? & 0x8 != 0) != descriptor {
+                return Some((next, false));
+            }
+            if descriptor {
+                // A streamed local header carries no sizes (or the same ones); anything else contradicts the directory.
+                if local_size != 0 && local_size != size {
+                    return Some((next, false));
+                }
+            } else if local_size != size {
+                return None;
+            }
+            let end = local.checked_add(30 + name_len + local_extra_len)?.checked_add(usize::try_from(size).ok()?)?;
+            let lengths = if descriptor {
+                // The descriptor must sit at the end of the data and repeat the directory's checksum and sizes.
+                let found = descriptor_lengths(bytes, end, u32_at(bytes, at + 16)?, size, full_size);
+                if found == 0 {
+                    return Some((next, false));
+                }
+                found
+            } else {
+                0
+            };
+            spans.push((local, end, lengths));
+            Some((next, true))
+        })();
+        match walked {
+            Some((next, known)) => {
+                identified &= known;
+                at = next;
+            }
+            None => return Footer::Rejected,
+        }
+    }
+    // Entries must abut from offset zero to the directory. Otherwise the records are consistent but the
+    // archive's extent is unproven (a prepended stub, or ZIP64 fields that could not be resolved).
+    if identified {
+        spans.sort_unstable();
+        let (mut cursor, mut lengths) = (0, 0u32);
+        for (local, end, next_lengths) in spans {
+            // The gap is empty, or exactly one validated descriptor.
+            if local < cursor || (local != cursor && !descriptor_fits(lengths, local - cursor)) {
+                return Footer::Unanchored(count);
+            }
+            cursor = end;
+            lengths = next_lengths;
+        }
+        if start < cursor || (start != cursor && !descriptor_fits(lengths, start - cursor)) {
+            return Footer::Unanchored(count);
+        }
+        Footer::Verified(count)
+    } else {
+        Footer::Unanchored(count)
+    }
+}
+
+/// The ZIP64 extended-information body (header id 1) of an extra field, when the field is well formed.
+fn zip64_body(extra: &[u8]) -> Option<&[u8]> {
+    let mut at = 0;
+    while at + 4 <= extra.len() {
+        let id = u16_at(extra, at)?;
+        let len = usize::from(u16_at(extra, at + 2)?);
+        let body = extra.get(at + 4..at + 4 + len)?;
+        if id == 1 {
+            return Some(body);
+        }
+        at += 4 + len;
+    }
+    None
+}
+
+/// Resolve a central record's compressed size and local header offset, reading each saturated field from
+/// the ZIP64 extra in the order uncompressed size, compressed size, offset.
+fn central_fields(extra: &[u8], uncompressed: u32, compressed: u32, offset: u32) -> Option<(u64, u64, u64)> {
+    if uncompressed != u32::MAX && compressed != u32::MAX && offset != u32::MAX {
+        return Some((u64::from(compressed), u64::from(uncompressed), u64::from(offset)));
+    }
+    let body = zip64_body(extra)?;
+    let mut cursor = 0;
+    let mut take = |saturated: u32| -> Option<u64> {
+        if saturated != u32::MAX {
+            return Some(u64::from(saturated));
+        }
+        let value = u64_at(body, cursor)?;
+        cursor += 8;
+        Some(value)
+    };
+    let uncompressed = take(uncompressed)?;
+    let compressed = take(compressed)?;
+    let offset = take(offset)?;
+    Some((compressed, uncompressed, offset))
+}
+
+/// Whether a gap of `gap` bytes is exactly one of the descriptor lengths in the bit set.
+fn descriptor_fits(lengths: u32, gap: usize) -> bool {
+    gap < 32 && lengths & (1 << gap) != 0
+}
+
+/// The byte lengths (as a bit set) a data descriptor at `at` may have, keeping only layouts whose checksum
+/// and sizes equal the central record's. Covers 32- and 64-bit sizes, each with and without the signature.
+fn descriptor_lengths(bytes: &[u8], at: usize, crc: u32, compressed: u64, uncompressed: u64) -> u32 {
+    let mut found = 0;
+    // `at` can lie anywhere a hostile directory's sizes point, so every offset is computed checked.
+    for signed in [true, false] {
+        let body = if signed {
+            if u32_at(bytes, at) != Some(0x0807_4B50) {
+                continue;
+            }
+            let Some(body) = at.checked_add(4) else {
+                continue;
+            };
+            body
+        } else {
+            at
+        };
+        if u32_at(bytes, body) != Some(crc) {
+            continue;
+        }
+        let field = |offset: usize| body.checked_add(offset);
+        let narrow = field(4)
+            .zip(field(8))
+            .and_then(|(c, u)| u32_at(bytes, c).zip(u32_at(bytes, u)))
+            .is_some_and(|(c, u)| u64::from(c) == compressed && u64::from(u) == uncompressed);
+        let wide = field(4)
+            .zip(field(12))
+            .and_then(|(c, u)| u64_at(bytes, c).zip(u64_at(bytes, u)))
+            .is_some_and(|(c, u)| c == compressed && u == uncompressed);
+        let head = body - at + 4;
+        if narrow {
+            found |= 1 << (head + 8);
+        }
+        if wide {
+            found |= 1 << (head + 16);
+        }
+    }
+    found
+}
+
+/// Resolve a local header's compressed size independently of the directory's representation. A local
+/// ZIP64 extra carries the uncompressed then the compressed size.
+fn local_compressed(extra: &[u8], uncompressed: u32, compressed: u32) -> Option<u64> {
+    if uncompressed != u32::MAX && compressed != u32::MAX {
+        return Some(u64::from(compressed));
+    }
+    let body = zip64_body(extra)?;
+    if body.len() >= 16 {
+        return u64_at(body, 8);
+    }
+    // A short body holds only the saturated fields, uncompressed first.
+    let compressed_at = if uncompressed == u32::MAX { 8 } else { 0 };
+    if compressed == u32::MAX { u64_at(body, compressed_at) } else { Some(u64::from(compressed)) }
+}
+
+/// Preflight relative directory offsets before asking the package loader to verify a split.
+/// Size is deliberately ignored, matching the existing directory walk's count-driven policy.
+fn archive_count_at(bytes: &[u8], footer: usize) -> Option<u64> {
+    directory_at(bytes, footer).map(|(_, count)| count)
+}
+
+/// True when the footer is a ZIP32 record whose this-disk count differs from its total or whose disk numbers
+/// differ: the consistency rule `find_eocd` applies. A footer resolved through a ZIP64 locator keeps its own path.
+fn zip32_inconsistent(bytes: &[u8], footer: usize) -> bool {
+    let (Some(total), Some(start)) = (u16_at(bytes, footer + 10), u32_at(bytes, footer + 16)) else {
+        return false;
+    };
+    if (total == u16::MAX || start == u32::MAX) && footer.checked_sub(20).and_then(|locator| u32_at(bytes, locator)) == Some(0x0706_4B50) {
+        return false;
+    }
+    u16_at(bytes, footer + 8) != Some(total) || u16_at(bytes, footer + 4) != u16_at(bytes, footer + 6)
+}
+
+/// The directory start and record count a footer declares, when the start holds a central header.
+fn directory_at(bytes: &[u8], footer: usize) -> Option<(usize, u64)> {
+    let count = u16_at(bytes, footer + 10)?;
+    let start = u32_at(bytes, footer + 16)?;
+    let (start, count) =
+        if (count == u16::MAX || start == u32::MAX) && footer.checked_sub(20).and_then(|locator| u32_at(bytes, locator)) == Some(0x0706_4B50) {
+            let directory = zip64_directory(bytes, footer)?;
+            (directory.start, directory.count)
+        } else {
+            (u64::from(start), u64::from(count))
+        };
+    let start = usize::try_from(start).ok()?;
+    if count == 0 || start >= footer || count > ((footer - start) / 46) as u64 || u32_at(bytes, start) != Some(0x0201_4B50) {
+        return None;
+    }
+    Some((start, count))
+}
+
+/// Load the trailing slice of a split. A footer proven to be the archive's own (its directory, every local
+/// extent and its comment are verified) is read through a view that ends at that footer with an empty comment,
+/// so a record copied into the comment cannot compete with it. Without that proof, or when that view does not
+/// certify, the slice is read whole; either load certifying is enough.
+fn standalone_trailing(bytes: &[u8], footer: usize, limits: crate::Limits, walks: &mut FooterWalks) -> Option<bool> {
+    observation_contract! {
+        rules: "-";
+        collections: "-";
+        scope: "one copy of the proven trailing archive, bounded by the input, with a zeroed comment length";
+        loss: "an unverified footer, a directory larger than the entry budget, an exhausted walk budget, or a proven-footer view that does not certify";
+        fallback: "the ordinary whole-slice loader decides whether the slice qualifies and can certify it; this happens on budget refusal, on unsuccessful footer verification, and when the proven-footer view does not certify, so certification is either view certifying and is withheld only when both withhold";
+        package_loss: "independent";
+    }
+
+    let comment = u16_at(bytes, footer + 20).unwrap_or(0);
+    let proven = comment != 0
+        && directory_at(bytes, footer).is_some_and(|(_, count)| usize::try_from(count).is_ok_and(|count| walks.charge(count)))
+        && matches!(verify_footer(bytes, footer, limits.entries), Footer::Verified(_));
+    if !proven {
+        return walks.load(bytes, footer, limits);
+    }
+    let mut view = bytes.get(..footer + 22)?.to_vec();
+    view.get_mut(footer + 20..footer + 22)?.fill(0);
+    // Shortening moves find_eocd's scan window, so the bounded view is not a strict superset of what the whole
+    // slice accepts: a view that does not certify defers to the whole-slice load.
+    match walks.load(&view, footer, limits) {
+        Some(true) => Some(true),
+        _ => walks.load(bytes, footer, limits),
+    }
+}
+
+/// Isolated loading reuses the normal entry, decompression and XML budgets. `None` when the slice is not a
+/// complete OPC archive; otherwise whether its package-level relationships part was read cleanly.
+fn standalone_opc(bytes: &[u8], footer: usize, limits: crate::Limits) -> Option<bool> {
+    observation_contract! {
+        rules: "-";
+        collections: "field.content_types*3,field.incomplete*2,field.rels*1";
+        scope: "isolated ZIP slice with its own directory and loadable Word main";
+        loss: "unreadable package or incomplete package loading";
+        fallback: "do not infer a complete OPC archive";
+        package_loss: "independent";
+    }
+
+    let mut probe = Acc::with_limits(limits);
+    let pkg = load_archive(bytes, &mut probe, Some(footer))?;
+    if probe.incomplete || !pkg.content_types_present || pkg.content_types.inventory_invalid || pkg.content_types.malformed_declaration {
+        return None;
+    }
+    // A malformed or partly read package-level relationships part does not make the slice incomplete, but it
+    // cannot certify an archive as the complete one.
+    let rels_clean = !pkg.rels.iter().any(|part| part.name.eq_ignore_ascii_case("_rels/.rels") && (part.incomplete || !part.inventory_complete));
+    match &pkg.main {
+        Resolution::One(main) => {
+            (pkg.content_types.of(main).is_some_and(is_main_content_type) && main_xml_loadable(&pkg, main, &mut probe)).then_some(rels_clean)
+        }
+        Resolution::Absent | Resolution::Unknown(_) | Resolution::Ambiguous(_) => None,
+    }
+}
+
+/// Apply the standalone XML scanner and prolog grading to the isolated main part.
+fn main_xml_loadable(pkg: &Package, main: &str, probe: &mut Acc) -> bool {
+    observation_contract! {
+        rules: "XML-DOCTYPE";
+        collections: "field.findings*1,field.incomplete*1,field.unknown_prefixes*1,lookup.entry_by_name*1";
+        scope: "resolved main entry and its bounded XML scan";
+        loss: "unsupported profile, unreadable XML, syntax errors, or exhausted scan budget";
+        fallback: "leave independent document loadability undecided";
+        package_loss: "independent";
+    }
+
+    if !matches!(entry_point_profile(pkg), Resolution::One(EntryPointProfile::Transitional)) || !crate::owner_roots_supported(pkg, probe) {
+        return false;
+    }
+    let Resolution::One(entry) = entry_by_name(pkg, main) else {
+        return false;
+    };
+    let Some(text) = entry.decoded.as_deref() else {
+        return false;
+    };
+    crate::check_doctypes(pkg, probe);
+    let scan = crate::scan::scan_part(&entry.name, text, crate::scan::PartRole::Main, probe);
+    scan.syntax_complete
+        && scan.unknown_prefixes.is_empty()
+        && crate::scan::invalid_literal_char(text).is_none()
+        && !probe.incomplete
+        && !probe.findings.iter().any(|finding| {
+            finding.part.as_deref() == Some(entry.name.as_str())
+                && (finding.severity == crate::Severity::Corrupt || (finding.rule == "XML-DOCTYPE" && finding.severity == crate::Severity::Error))
+        })
+}
+
 /// Reject disputed directory identities before deriving duplicates or absence from them.
 fn reader_checked_directory<'a>(
     bytes: &'a [u8],
     zip: &zip::ZipArchive<Cursor<&[u8]>>,
     limit: usize,
+    expected_footer: Option<usize>,
     acc: &mut Acc,
 ) -> (Option<CentralDirectory<'a>>, bool) {
     let selection = find_eocd(bytes);
     let cd = selection.as_ref().and_then(|selected| central_directory(bytes, limit, selected));
     let structural_disagreement = selection.as_ref().is_some_and(|selected| {
         selected.disputed
+            // The reader can select a later copy of the footer inside the comment.
+            // An undisputed selection still has to describe a directory before the
+            // comment-owning footer of the isolated slice.
+            || expected_footer.is_some_and(|footer| selected.footer < footer || cd.as_ref().is_none_or(|dir| dir.end > footer))
             || (cd.is_none()
                 && selected
                     .directory
@@ -1091,7 +1720,7 @@ fn central_directory<'a>(bytes: &'a [u8], limit: usize, selected: &EocdSelection
     // Only the declared count selects records: directory size and bytes before the
     // footer do not bound the reader's walk. A capped prefix keeps its duplicate policy.
     let consistent = directory.footer_consistent && (truncated || u64::try_from(names.len()).ok()? == count);
-    Some(CentralDirectory { start: cd_off, consistent, names, decoded_names, total: count, truncated })
+    Some(CentralDirectory { start: cd_off, end: i, consistent, names, decoded_names, total: count, truncated })
 }
 
 /// A footer's count-driven directory selection. Size is not a reader selection parameter.
@@ -1108,6 +1737,7 @@ impl DirectoryView {
 }
 
 struct EocdSelection {
+    footer: usize,
     directory: Option<DirectoryView>,
     disputed: bool,
 }
@@ -1199,7 +1829,7 @@ fn find_eocd(bytes: &[u8]) -> Option<EocdSelection> {
                 first.disputed = true;
             }
         } else {
-            selected = Some(EocdSelection { directory, disputed: false });
+            selected = Some(EocdSelection { footer: i, directory, disputed: false });
         }
     }
     if exact_end { selected } else { None }
@@ -1629,7 +2259,7 @@ fn parse_content_types(text: &str, ct: &mut ContentTypes, cap: usize, guard: &mu
 
     let mut count = 0usize;
     let mut capped = false;
-    let (complete, _) = parse_opc_children(text, b"Types", b"http://schemas.openxmlformats.org/package/2006/content-types", guard, |e| {
+    let (complete, valid) = parse_opc_children(text, b"Types", b"http://schemas.openxmlformats.org/package/2006/content-types", guard, |e| {
         if !matches!(e.local_name().as_ref(), b"Default" | b"Override") {
             return true;
         }
@@ -1642,6 +2272,7 @@ fn parse_content_types(text: &str, ct: &mut ContentTypes, cap: usize, guard: &mu
         !capped
     });
     ct.incomplete |= capped || !complete;
+    ct.inventory_invalid = !valid;
     capped
 }
 
@@ -1910,6 +2541,13 @@ fn record_content_type(e: &BytesStart, ct: &mut ContentTypes) {
         return;
     }
     let key = attr_plain(e, b"PartName").or_else(|| attr_plain(e, b"Extension"));
+    // A declaration keyed by the other element's attribute stores the wrong key: a `Default` carrying `PartName` is read by
+    // `PartName` above, so it is flagged for the certification path only.
+    ct.malformed_declaration |= if l == b"Override" {
+        attr_plain(e, b"PartName").is_none()
+    } else {
+        attr_plain(e, b"Extension").is_none() || attr_plain(e, b"PartName").is_some()
+    };
     let Some(key) = key else { return };
     let Some(value) = attr_plain(e, b"ContentType") else { return };
     let key = key.trim_start_matches('/').to_ascii_lowercase();
@@ -1990,7 +2628,8 @@ fn parse_rel(dir: &str, e: &BytesStart) -> Option<(Rel, bool)> {
     let complete = !id.is_empty() && !kind.is_empty() && !target.is_empty();
     let external = attr_plain(e, b"TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("External"));
     let target_abs = (!external).then(|| resolve(dir, &target));
-    Some((Rel { id: id.into(), role: RelationKind::parse(&kind), kind, target_abs, external }, complete))
+    let fragment_only = !external && target.starts_with('#');
+    Some((Rel { id: id.into(), role: RelationKind::parse(&kind), kind, target_abs, external, fragment_only }, complete))
 }
 
 /// An unqualified OPC attribute; foreign qualified lookalikes never declare OPC metadata.

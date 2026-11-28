@@ -6,6 +6,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+use crate::relationship_use::{Scope, Uses};
 use crate::xml::XmlReader;
 use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, Event};
@@ -388,6 +389,7 @@ impl StoryFacts {
 
 /// The result of scanning one XML or `.rels` part.
 pub(crate) struct PartScan {
+    pub usage: Uses,
     pub malformed: Option<String>,
     pub unknown_prefixes: Vec<String>,
     /// Every `r:id`/`r:embed`/`r:link` value in the part, with element identity.
@@ -641,6 +643,7 @@ enum TcEnd {
 }
 
 struct Frame {
+    usage_scope: Scope,
     /// Which ancestor roles this frame could play if its namespace is unresolved (`U_*`): decided by its LOCAL name,
     /// so an unresolved `q:vendor` is no unknown ancestor of anything (see `unresolved_roles`).
     unresolved: u8,
@@ -1049,7 +1052,7 @@ fn decode_utf16_strict(bytes: &[u8], little_endian: bool) -> Result<String, Deco
 pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -> PartScan {
     observation_contract! {
         rules: "STRUCT-TC-NO-P";
-        collections: "access.into_complete_set*2,access.invalidate*2,field.alt_stack*2,field.content_part_exemptions*2,field.content_parts*2,field.declared*8,field.frames*10,field.note_listings*1,field.note_listings_e*1,field.note_listings_f*1,field.para_ids*1,field.special_notes*2,field.unknown_prefixes*2,parser.parse_doctype_entities*1,type.BTreeMap*1,type.HashMap*1,type.HashSet*1,type.Observed*1,type.Vec*9";
+        collections: "access.into_complete_set*2,access.invalidate*2,field.alt_stack*2,field.content_part_exemptions*2,field.content_parts*2,field.declared*8,field.frames*14,field.note_listings*1,field.note_listings_e*1,field.note_listings_f*1,field.para_ids*1,field.special_notes*2,field.unknown_prefixes*2,parser.parse_doctype_entities*1,type.BTreeMap*1,type.HashMap*1,type.HashSet*1,type.Observed*1,type.Vec*9";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -1061,6 +1064,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
     let mut state = State { fact_cap: acc.limits.facts, ..State::default() };
     let mut out = PartScan {
         malformed: None,
+        usage: Uses::default(),
         unknown_prefixes: Vec::new(),
         refs: Vec::new(),
         drawing_refs_complete: true,
@@ -1137,6 +1141,14 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                 let branch_prev = assign_alt_branch(&mut state, &id);
                 push_unknown_prefix(&mut out, &state.declared, &[], id.unknown.as_deref());
                 check_prefixes(&state.declared, &attrs, reader.resolver(), (&[], complete_entities.as_ref().map(|_| &entity_decls)), &mut out);
+                let parent = state.frames.last().map_or_else(Scope::default, |frame| frame.usage_scope);
+                let usage_scope = out.usage.open(
+                    parent,
+                    (id.ns, &id.local, state.frames.is_empty(), id.unresolved || id.unknown.is_some()),
+                    &attrs,
+                    reader.resolver(),
+                    acc.limits.facts,
+                );
                 collect_ink_content_part(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts);
                 if !was_suppressed {
                     collect_refs(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts, &mut state.refs_capped);
@@ -1155,7 +1167,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                     );
                     check_para_ids(&mut state, &id, &attrs, reader.resolver(), role, part, acc);
                 }
-                let frame = Frame { alt: is_alt, suppressed: was_suppressed, alt_branch_prev: branch_prev, ..frame_for(&id) };
+                let frame = Frame { usage_scope, alt: is_alt, suppressed: was_suppressed, alt_branch_prev: branch_prev, ..frame_for(&id) };
                 state.frames.push(frame);
             }
             Ok(Event::Empty(e)) => {
@@ -1179,6 +1191,14 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                 let branch_prev = assign_alt_branch(&mut state, &id);
                 push_unknown_prefix(&mut out, &state.declared, &decls, id.unknown.as_deref());
                 check_prefixes(&state.declared, &attrs, reader.resolver(), (&decls, complete_entities.as_ref().map(|_| &entity_decls)), &mut out);
+                let parent = state.frames.last().map_or_else(Scope::default, |frame| frame.usage_scope);
+                out.usage.open(
+                    parent,
+                    (id.ns, &id.local, state.frames.is_empty(), id.unresolved || id.unknown.is_some()),
+                    &attrs,
+                    reader.resolver(),
+                    acc.limits.facts,
+                );
                 collect_ink_content_part(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts);
                 if !was_suppressed {
                     collect_refs(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts, &mut state.refs_capped);
@@ -1466,6 +1486,7 @@ fn frame_for(id: &ElemId) -> Frame {
     let w = id.w();
     let local = id.local.as_str();
     Frame {
+        usage_scope: Scope::default(),
         unresolved: unresolved_roles(id),
         is_tc: w && local == "tc",
         is_p: w && local == "p",
@@ -3415,7 +3436,7 @@ fn namespace_unresolved(id: &ElemId, declared: &[Vec<String>], extra: &[String])
 }
 
 /// Find an attribute with the given namespace URI and local name, returning its normalized value.
-fn attr_ns(attrs: &[Attribute], res: &NamespaceResolver, uri: &str, name: &[u8]) -> Option<String> {
+pub(crate) fn attr_ns(attrs: &[Attribute], res: &NamespaceResolver, uri: &str, name: &[u8]) -> Option<String> {
     attrs
         .iter()
         .find(|a| ns_matches(res.resolve_attribute(a.key).0, uri) && a.key.local_name().as_ref() == name)
@@ -3428,7 +3449,7 @@ fn ns_matches(r: ResolveResult<'_>, uri: &str) -> bool {
 }
 
 /// Find an unprefixed attribute by exact name, returning its normalized value.
-fn attr_plain(attrs: &[Attribute], name: &[u8]) -> Option<String> {
+pub(crate) fn attr_plain(attrs: &[Attribute], name: &[u8]) -> Option<String> {
     attrs
         .iter()
         .find(|a| {

@@ -272,7 +272,10 @@ def unit_audit(name, func, header, body, semantic_json, fields, enum_variants,
     if state_predicates:
         seen_entry_loss[state_key] = state_predicates
     if state_predicates != entry_loss.get(state_key, []):
-        errors.append(f'{state_key}: entry-loss predicate differs from its named conservative/lookup contract')
+        expected_predicates = entry_loss.get(state_key, [])
+        unexpected = list((Counter(state_predicates) - Counter(expected_predicates)).elements())
+        missing = list((Counter(expected_predicates) - Counter(state_predicates)).elements())
+        errors.append(f'{state_key}: entry-loss predicate differs from its named conservative/lookup contract: unexpected={unexpected} missing={missing}')
     lookup_uses = [f'lookup.{k}*{v}' for k,v in sorted(Counter(semantic.get('lookups', [])).items())]
     uses = sorted(consumption(header+code, semantic=semantic) + lookup_uses)
     bounded_uses = consumption(header+code, enum_variants, semantic) + lookup_uses
@@ -289,8 +292,14 @@ def unit_audit(name, func, header, body, semantic_json, fields, enum_variants,
         # The private implementation has explicit build-time contracts too.
         # No function, initializer or consuming body can escape by file name.
         footprint = representation_footprint(header, code, semantic)
-        if providers.get(func) != dict(header=header, collections=footprint) or provider_seen:
-            errors.append(f'{name}::{func}: representation contract differs or is missing')
+        pinned = providers.get(func)
+        if pinned is None:
+            errors.append(f'{name}::{func}: representation contract is missing for this provider; footprint={footprint}')
+        elif provider_seen:
+            errors.append(f'{name}::{func}: representation provider is duplicated')
+        elif pinned != dict(header=header, collections=footprint):
+            errors.append(f'{name}::{func}: representation contract differs: footprint={footprint}, pinned={pinned["collections"]}'
+                          + ('' if pinned['header'] == header else '; header differs'))
         seen_providers.add(func)
         rows.append(dict(helper=f'{name}::{func}', rules='-', collections=','.join(footprint) or '-',
             scope='private Observed/CompleteSet representation provider; signature and footprint pinned in observations/representation-contracts.json',
@@ -304,6 +313,13 @@ def unit_audit(name, func, header, body, semantic_json, fields, enum_variants,
         ('lib.rs', 'absence_suppressed', 'PACKAGE_ABSENCE_RULES'),
         ('lib.rs', 'check_note_pr', 'reverse_ok'),
         ('lib.rs', 'report_malformed', 'pkg.reachable'),
+        # Positive indices for custom XML and relationship use; the unused store verdict
+        # still requires CompleteSet::missing on the complete exclusion collection.
+        ('lib.rs', 'from_document', 'ids'),
+        ('lib.rs', 'bound_item', 'self.bound'),
+        ('lib.rs', 'bound_properties', 'self.bound_properties'),
+        ('lib.rs', 'unused_item', 'self.items'),
+        ('relationship_use.rs', 'uses', 'self.sites'),
         ('lib.rs', 'check_typed_content', 'non_main_owner_rels'),
         ('lib.rs', 'report_unreferenced_comments', 'incomplete_owners'),
         ('lib.rs', 'supporting_part', 'acc.coverage'),
@@ -313,7 +329,7 @@ def unit_audit(name, func, header, body, semantic_json, fields, enum_variants,
         ('scan.rs', 'check_para_ids', 'state.para_ids'),
         ('scan.rs', 'attr_plain', 'k'),
         ('package.rs', 'is_main_content_type', 'MAIN_CONTENT_TYPES'),
-        ('package.rs', 'load', 'xml_parts'),
+        ('package.rs', 'load_archive', 'xml_parts'),
         ('package.rs', 'classified_xml_parts', 'role_targets'),
         ('package.rs', 'is_xml_part', 'pkg.xml_parts'),
         ('ownership.rs', 'with_budget', 'roots'),
@@ -328,7 +344,8 @@ def unit_audit(name, func, header, body, semantic_json, fields, enum_variants,
     if not bounded_uses and not decl and not re.search(r'\bacc\s*\.\s*(?:add|add_graded|ran)\s*\(', code):
         return record()
     if not decl:
-        errors.append(f'{name}::{func}: bounded consumption has no observation contract: {uses}')
+        paths = sorted(semantic.get('call_paths', []))
+        errors.append(f'{name}::{func}: bounded consumption has no observation contract: {uses}' + (f'; call paths: {paths}' if paths else ''))
         return record()
     data=dict(re.findall(r'(\w+)\s*:\s*"((?:\\.|[^"\\])*)"\s*;',declaration))
     required={'rules','collections','scope','loss','fallback','package_loss'}
@@ -337,7 +354,9 @@ def unit_audit(name, func, header, body, semantic_json, fields, enum_variants,
         return record()
     declared=[] if data['collections']=='-' else sorted(data['collections'].split(','))
     if declared!=uses:
-        errors.append(f'{name}::{func}: declared collections differ from bounded accesses: declared={declared}, used={uses}')
+        added = list((Counter(uses) - Counter(declared)).elements())
+        removed = list((Counter(declared) - Counter(uses)).elements())
+        errors.append(f'{name}::{func}: declared collections differ from bounded accesses: added={added} removed={removed}; declared={declared}, used={uses}')
     declared_rules=set(data['rules'].split(',')) - {'-'}
     called_rules=set(re.findall(r'"([A-Z0-9-]+)"',body)) & known_rules
     if not called_rules <= declared_rules:
@@ -372,7 +391,19 @@ def declarations(sources):
     actual_readers = Counter(json.dumps(r, sort_keys=True) for f in recognized.values() for r in f['readers'])
     for record in actual_readers - allowed_readers:
         reader = json.loads(record)
-        errors.append(f"{reader['type']}: unauthorized reader derive {reader['derive']} or changed representation/DTO field shape")
+        if any(json.loads(a)['type'] == reader['type'] and json.loads(a)['derive'] == reader['derive'] for a in allowed_readers):
+            def fields(r):
+                shape = r['shape']
+                rows = shape.get('struct') if isinstance(shape, dict) and 'struct' in shape else [{'name': v['variant'], 'type': json.dumps(v['fields'], sort_keys=True, separators=(',', ':')), 'attributes': []} for v in shape.get('enum', [])]
+                return Counter(json.dumps(f, sort_keys=True) for f in rows)
+            allowed_fields = sum((fields(json.loads(a)) for a in allowed_readers if json.loads(a)['type'] == reader['type'] and json.loads(a)['derive'] == reader['derive']), Counter())
+            added = [json.loads(f) for f in (fields(reader) - allowed_fields).elements()]
+            dropped = [json.loads(f) for f in (allowed_fields - fields(reader)).elements()]
+            detail = ''.join(f"; unexpected field {f['name']}: {f['type']}" + (f" attributes {f['attributes']}" if f['attributes'] else '') for f in added)
+            detail += ''.join(f"; missing field {f['name']}: {f['type']}" for f in dropped)
+            errors.append(f"{reader['type']}: changed representation/DTO field shape under the allowed reader derive {reader['derive']}{detail}")
+        else:
+            errors.append(f"{reader['type']}: unauthorized reader derive {reader['derive']}")
     FIELDS.update(f for file in recognized.values() for f in file['collection_fields'])
     enum_variants = [v for file in recognized.values() for v in file['enum_variants']]
     field_key=frozenset(FIELDS); variant_key=tuple(enum_variants); rule_key=tuple(sorted(known_rules))
@@ -483,8 +514,11 @@ fn unregistered_registry(graph: &PartGraph) -> bool {
     mutations.update({
       'delta16 destructuring assignment': ('lib.rs', lambda s:s+'\nfn unregistered_read(pkg: Package) -> usize { let items; Package { entries: items, .. } = pkg; items.len() }'),
       'delta16 parenthesized destructuring assignment': ('lib.rs', lambda s:s+'\nfn unregistered_read(pkg: Package) -> usize { let items; (Package { entries: items, .. }) = pkg; items.len() }'),
+      # The definition must itself be accepted (see the 'macro definition alone' control), so the
+      # rejection comes from the closure-parameter pattern macro at the use site. A definition whose
+      # body is a Package pattern is rejected at the definition, before any use site is examined.
       'delta16 macro-produced closure pattern': ('lib.rs', lambda s:s+'''
-macro_rules! package_pattern { ($items:ident) => { Package { entries: $items, .. } }; }
+macro_rules! package_pattern { ($items:ident) => { fn $items() {} }; }
 fn unregistered_read(pkg: &Package) -> usize { (|package_pattern!(items): &Package| items.len())(pkg) }
 '''),
       'delta16 raw field read': ('lib.rs', lambda s:s+'\nfn unregistered_read(pkg: &Package) -> usize { pkg.r#entries.len() }'),
@@ -514,7 +548,7 @@ fn unregistered_read(pkg: &Package) -> usize { (|package_pattern!(items): &Packa
       'type-level constant body': ('lib.rs', lambda s:s+'\ntype Hidden = [u8; (|pkg: &Package| pkg.entries.len())(PKG)];'),
       'macro-generated consumer': ('lib.rs', lambda s:s+'\nmacro_rules! hidden { ($f:ident) => { fn $f(pkg: &Package) -> usize { pkg.entries.len() } }; } hidden!(read);'),
       'macro-captured collection field': ('lib.rs', lambda s:s+'\nmacro_rules! hidden { ($f:ident) => { struct Hidden { $f: Vec<u8> } fn read(p: &Hidden) -> usize { p.$f.len() } }; } hidden!(brand_new);'),
-      'contract macro starts emitting code': ('lib.rs', lambda s:s.replace('package_loss:literal;) => {};', 'package_loss:literal;) => { let _ = pkg.entries; };', 1)),
+      'contract macro starts emitting code': ('lib.rs', lambda s:s.replace('package_loss:literal;) => {};', 'package_loss:literal;) => { fn emitted() {} };', 1)),
     })
     mutations.update({
       'contract text in literal is not a declaration': ('lib.rs', lambda s:s+'\nfn invented(pkg: &Package) { let text = r#"observation_contract! { rules: \"-\"; collections: \"field.entries*1\"; scope: \"x\"; loss: \"x\"; fallback: \"x\"; package_loss: \"independent\"; }"#; pkg.entries.len(); }'),
@@ -540,14 +574,20 @@ fn unregistered_read(pkg: &Package) -> usize { (|package_pattern!(items): &Packa
       'R18 raw slice alias': ('package.rs', lambda s: s+'\ntype HiddenEntries = [Entry]; fn unregistered_absence(entries: &HiddenEntries, name: &str) -> bool { !entries.iter().any(|entry| entry.name == name) }'),
       'R18 fabricated absence': ('package.rs', lambda s: s+'\nfn invented() -> Resolution<()> { Resolution::Absent }'),
       'R18 fabricated completeness': ('package.rs', lambda s: s.replace('Resolution::discovered(canonical(&pkg.entries, name), !pkg.entries_truncated && !pkg.identity_incomplete)', 'Resolution::discovered(canonical(&pkg.entries, name), true)', 1)),
-      'R18 Unknown-or-Absent': ('lib.rs', lambda s: s.replace('Resolution::Absent => true,\n                Resolution::Unknown(_) => false,', 'Resolution::Absent | Resolution::Unknown(_) => true,', 1)),
-      'R18 missing Unknown': ('lib.rs', lambda s: s.replace('                Resolution::Unknown(_) => false,\n', '', 1)),
+      'R18 Unknown-or-Absent': ('lib.rs', lambda s: s.replace(
+          'Resolution::Absent => true,\n                Resolution::One(_) | Resolution::Unknown(_) | Resolution::Ambiguous(_) => false,',
+          'Resolution::Absent | Resolution::Unknown(_) => true,\n                Resolution::One(_) | Resolution::Ambiguous(_) => false,', 1),
+          'lib.rs::check_typed_targets: absence polarity: package lookup Unknown must have an explicit separate unguarded arm; catch-all/Absent collapse is forbidden'),
+      'R18 missing Unknown': ('lib.rs', lambda s: s.replace(
+          'Resolution::One(_) | Resolution::Unknown(_) | Resolution::Ambiguous(_) => false,',
+          'Resolution::One(_) | Resolution::Ambiguous(_) => false,', 1),
+          'lib.rs::check_typed_targets: package Resolution match must explicitly cover One, Absent, Unknown and Ambiguous'),
       'R18 direct state deletion': ('lib.rs', lambda s: s.replace('pkg.entries_truncated || pkg.identity_incomplete', 'pkg.identity_incomplete', 1)),
       'R18 direct state negation': ('lib.rs', lambda s: s.replace('pkg.entries_truncated || pkg.identity_incomplete', '!pkg.entries_truncated || pkg.identity_incomplete', 1)),
       'R18 discovery complete deletion': ('lib.rs', lambda s: s.replace('!pkg.entries_truncated\n        && !pkg.identity_incomplete', '!pkg.identity_incomplete', 1)),
       'R18 discovery complete negation': ('lib.rs', lambda s: s.replace('!pkg.entries_truncated\n        && !pkg.identity_incomplete', 'pkg.entries_truncated\n        && !pkg.identity_incomplete', 1)),
       'R18 reader assembly limit inversion': ('package.rs', lambda s: s.replace('zip.len() > limits.entries', 'zip.len() < limits.entries', 1)),
-      'R18 canonical external call': ('package.rs', lambda s: s+'\nfn invented(entries: &[Entry], name: &str) -> bool { canonical(entries, name).is_none() }'),
+      'R18 canonical external call': ('package.rs', lambda s: s+'\nfn invented(entries: &[Entry], name: &str) { let _ = canonical(entries, name); }'),
     })
     for helper in ['canonical_entry', 'entry_by_name', 'content_unavailable']:
         for binding in ['hidden_lookup', 'package::'+helper]:
@@ -579,7 +619,7 @@ fn unregistered_read(pkg: &Package) -> usize { (|package_pattern!(items): &Packa
     mutations['R18 qualified consuming macro arguments'] = ('lib.rs', lambda s: s+'\nfn unregistered_read(pkg: &Package) -> String { std::format!("{}", pkg.entries.len()) }')
     mutations['R18 standard namespace import shadow'] = ('lib.rs', lambda s: s+'\nuse external as std;')
     mutations['R18 derive outside type context'] = ('lib.rs', lambda s: s+'\n#[derive(Debug)] fn unregistered() {}')
-    mutations['R18 serde field attribute outside policy'] = ('lib.rs', lambda s: s+'\n#[serde(skip)] fn unregistered() {}')
+    mutations['R18 serde field attribute outside policy'] = ('lib.rs', lambda s: s.replace('    pub severity: Severity,\n', '    #[serde(skip)]\n    pub severity: Severity,\n', 1))
     mutations['R18 inline outside closed options'] = ('lib.rs', lambda s: s+'\n#[inline(sometimes)] fn unregistered() {}')
     getter_contract = 'observation_contract! { rules: "-"; collections: "access.prefix*1"; scope: "prefix presence control"; loss: "incomplete observed map"; fallback: "only presence is established"; package_loss: "independent"; }'
     mutations['R18 contracted retained get equality absence'] = ('lib.rs', lambda s: s+'\nimpl Observed<HashMap<String, String>> { fn unregistered_absence(&self, key: &String) -> bool { '+getter_contract+' Self::prefix(self).get(key) == None } }')
@@ -588,10 +628,21 @@ fn unregistered_read(pkg: &Package) -> usize { (|package_pattern!(items): &Packa
         mutations['R18 Resolution parameter collapse '+ty] = ('lib.rs', lambda s,t=ty: s+'\ntype HiddenResolution = Resolution<String>; fn unregistered_resolution_absence(value: '+t+') -> bool { match value { Resolution::One(_) => false, Resolution::Absent | Resolution::Unknown(_) => true, Resolution::Ambiguous(_) => false } }')
     mutations['R18 Resolution Self collapse'] = ('resolution.rs', lambda s: s+'\nimpl<T> Resolution<T> { fn unregistered_resolution_absence(&self) -> bool { match self { Self::One(_) => false, Self::Absent | Self::Unknown(_) => true, Self::Ambiguous(_) => false } } }')
     mutations['R18 aliased bool cannot launder raw absence'] = ('package.rs', lambda s: s+'\ntype HiddenVerdict = (bool); fn unregistered_return_alias(entries: &[Entry], name: &str) -> HiddenVerdict { observation_contract! { rules: "-"; collections: "-"; scope: "raw absence control"; loss: "entry prefix"; fallback: "skip unknown"; package_loss: "independent"; } !entries.iter().any(|entry| entry.name == name) }')
-    mutations['R18 opaque function cannot collapse package Resolution'] = ('lib.rs', lambda s: re.sub(r'if match package::canonical_entry\(pkg, target\) \{.*?\n            \} \{', 'if opaque_verdict(package::canonical_entry(pkg, target)) {', s, count=1, flags=re.S)+'\nfn opaque_verdict<T>(_value: T) -> bool { true }')
+    mutations['R18 opaque function cannot collapse package Resolution'] = ('lib.rs', lambda s: s+'\nfn opaque_verdict<T>(_value: T) -> bool { true }\nfn unregistered_opaque(pkg: &Package, target: &str) -> bool { opaque_verdict(package::canonical_entry(pkg, target)) }')
     # The new-accessor mutation must introduce a different access kind to test exact declaration matching.
     mutations['new undeclared accessor']=('lib.rs', lambda s:s.replace('acc.ran("CUSTOMXML-SCHEMA");','acc.ran("CUSTOMXML-SCHEMA"); let _ = new_collection.retain_budget(n, cap);',1))
-    return mutations
+    return declare_rejections(mutations)
+
+
+def declare_rejections(mutations):
+    # Every fixture must name the diagnostic it is rejected for. Inline third
+    # elements win; the rest come from mutation-reasons.json. A fixture with
+    # neither stays undeclared, and reject_mutation refuses to run it.
+    table=json.loads((Path(__file__).parent/'mutation-reasons.json').read_text())
+    stale=sorted(set(table)-mutations.keys())
+    if stale: raise ValueError('mutation-reasons.json names unknown fixtures: '+', '.join(stale))
+    return {label: case if len(case) > 2 or label not in table else (*case, table[label])
+            for label, case in mutations.items()}
 
 
 def positive_cases(sources):
@@ -640,6 +691,10 @@ def positive_cases(sources):
             return '#[derive('+', '.join(paths)+')]'
         changed[name] = re.sub(r'#\[derive\(([^)]*)\)\]', qualified_derives, changed[name])
         add('reader/'+name, changed)
+    # The definition used by 'delta16 macro-produced closure pattern', without the use site.
+    changed = dict(sources)
+    changed['lib.rs'] += '\nmacro_rules! package_pattern { ($items:ident) => { fn $items() {} }; }\n'
+    add('macro definition alone', changed)
     changed = dict(sources)
     getter_contract = 'observation_contract! { rules: "-"; collections: "access.prefix*1"; scope: "prefix presence control"; loss: "incomplete observed map"; fallback: "only presence is established"; package_loss: "independent"; }'
     changed['lib.rs'] += '\nimpl Observed<HashMap<String, String>> { fn declared_presence(&self, key: &String) -> bool { '+getter_contract+' Self::prefix(self).get(key).is_some() } }'
@@ -828,6 +883,7 @@ POSITIVE_INVENTORY = (
     'reader/resolution.rs',
     'reader/scan.rs',
     'declared-presence row',
+    'macro definition alone',
 )
 
 def inventory_check(actual, expected, kind):
@@ -852,7 +908,15 @@ def checked_mutations():
 
 
 def reject_mutation(sources, label, case):
-    name, mutation = case
+    name, mutation, *declared = case
+    if not declared or not declared[0]:
+        raise ValueError('mutation fixture declares no expected diagnostic: '+label)
+    # A string must occur in the first diagnostic line. A list names the first-line text
+    # first, then further text the whole message must also carry (a later line proving the
+    # intended check also fired); a fixture whose first line is a definition-time rejection
+    # uses this to pin the use-site diagnostic too.
+    needed = [declared[0]] if isinstance(declared[0], str) else list(declared[0])
+    expected = needed[0]
     changed=dict(sources); changed[name]=mutation(changed[name])
     if changed[name] == sources[name]:
         raise ValueError('mutation did not change source: '+label)
@@ -862,6 +926,11 @@ def reject_mutation(sources, label, case):
         message = str(error).splitlines()[0] if str(error) else ''
         if not message.strip():
             raise ValueError('mutation has no rejection message: '+label)
+        if expected not in message:
+            raise ValueError('mutation rejected for the wrong reason: '+label+': expected '+repr(expected)+', got '+repr(message))
+        for extra in needed[1:]:
+            if extra not in str(error):
+                raise ValueError('mutation rejection omits the intended diagnostic: '+label+': expected '+repr(extra)+', got '+repr(str(error)))
         return dict(label=label, message=message)
     raise ValueError('audit accepted mutation: '+label)
 
@@ -884,7 +953,7 @@ def check_controls(controls, rows):
 def checked_controls(sources):
     controls=positive_cases(sources)
     inventory_check(controls, POSITIVE_INVENTORY, 'positive control')
-    if len(POSITIVE_INVENTORY) != 32:
+    if len(POSITIVE_INVENTORY) != 33:
         raise ValueError('pinned round-18 positive-control count changed')
     return controls
 
@@ -996,9 +1065,60 @@ def self_test(sources, rows, jobs=1, timings=False):
     except ValueError: print('rejected: generated register drift (exact byte comparison)')
     else: raise ValueError('audit accepted generated drift')
 
+    reject_mutation_contract(sources, mutations)
+    substitution_controls(sources, mutations)
     assert declarations(sources)==rows, 'mutation audit contaminated the original sources'
     if timings:
         print(f'inventory: {len(mutations)} mutations; sha256={inventory_digest()}; {len(controls)} positive controls', file=sys.stderr)
+
+
+def substitution_controls(sources, mutations):
+    # A fixture's pin must record the context that separates its intended failure from a
+    # different one reaching the same check. Each substitution below keeps the check but
+    # drops that context, so the pinned fixture must refuse it as a wrong-reason rejection.
+    def helper(source):
+        return source + '\nfn unregistered_absence(pkg: &Package, name: &str) -> bool { let _ = package::canonical_entry(pkg, name); false }'
+    wrong_reason = (
+        ('R18 registry fields added to allowed DTO', 'lib.rs',
+         lambda s: s.replace('pub struct Finding {', 'pub struct Finding { ordinary: u32,', 1)),
+        ('attribute macro on definition', 'scan.rs', lambda s: s + '\n#[hidden] fn ordinary() {}'),
+        ('attribute macro on item invocation', 'scan.rs', lambda s: s + '\n#[hidden] fn ordinary() {}'),
+        ('R18 helper alias/value canonical_entry/hidden_lookup', 'lib.rs', helper),
+        ('R18 helper alias/value canonical_entry/package::canonical_entry', 'lib.rs', helper),
+    )
+    for label, name, substitute in wrong_reason:
+        _, _, *declared = mutations[label]
+        try: reject_mutation(sources, label, (name, substitute, *declared))
+        except ValueError as error:
+            if 'rejected for the wrong reason' not in str(error):
+                raise ValueError('substitution control failed for another reason: '+label+': '+str(error))
+        else: raise ValueError('substitution control was accepted as the intended rejection: '+label)
+    # An imported alias or local function value that is never called consumes nothing, so the
+    # fixture's claim (an indirect call reaches an uncontracted lookup) does not cover it: the
+    # audit has no consumption to attribute and accepts it, as it accepts the pristine source.
+    unused = {
+        'unused import': 'use package::canonical_entry as hidden_lookup; fn unregistered_absence(pkg: &Package, name: &str) -> bool { false }',
+        'unused alias binding': 'use package::canonical_entry as hidden_lookup; fn unregistered_absence(pkg: &Package, name: &str) -> bool { let lookup = hidden_lookup; false }',
+        'unused path binding': 'fn unregistered_absence(pkg: &Package, name: &str) -> bool { let lookup = package::canonical_entry; false }',
+    }
+    for label, text in unused.items():
+        changed = dict(sources); changed['lib.rs'] = sources['lib.rs'] + '\n' + text
+        if declarations(changed) != declarations(sources):
+            raise ValueError('unused helper control changed the audit: '+label)
+
+
+def reject_mutation_contract(sources, mutations):
+    # The harness itself must refuse an undeclared fixture and a wrong expectation.
+    label='R18 raw slice alias'
+    name, mutation, expected = mutations[label]
+    for case, reason in (((name, mutation), 'declares no expected diagnostic'),
+                         ((name, mutation, 'no such diagnostic'), 'wrong reason'),
+                         ((name, mutation, [expected, 'no such later diagnostic']), 'omits the intended diagnostic')):
+        try: reject_mutation(sources, label, case)
+        except ValueError as error:
+            if reason not in str(error): raise ValueError('harness failed for the wrong reason: '+str(error))
+        else: raise ValueError('harness accepted a fixture with '+reason)
+    print('rejected: undeclared and wrong-expectation R18 fixtures (harness error)')
 
 
 def shard_value(value):

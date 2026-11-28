@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use crate::common::{
     CT_CHART, CT_COMMENTS, CT_COMMENTS_EXT, CT_COMMENTS_IDS, CT_CUSTOM_PROPS, CT_CUSTOMXML_PROPS, CT_ENDNOTES, CT_FONT_TABLE, CT_FOOTER,
     CT_FOOTNOTES, CT_GLOSSARY, CT_HEADER, CT_MACRO_MAIN, CT_MACRO_TEMPLATE_MAIN, CT_MAIN, CT_NUMBERING, CT_PEOPLE, CT_SETTINGS, CT_STYLES,
-    CT_TEMPLATE_MAIN, CT_WEB_SETTINGS, Doc, add_header, claim_entry_method, content_types_xml, corrupt_entry_data, document_xml, ns, rels_xml,
+    CT_TEMPLATE_MAIN, CT_WEB_SETTINGS, Doc, NS, add_header, claim_entry_method, content_types_xml, corrupt_entry_data, document_xml, ns, rels_xml,
     replace_all, rich_content_types, utf16_le_with_bom,
 };
 use wordcraft_validate::{Evidence, Finding, Report, Severity, Verdict, validate_bytes, validate_path};
@@ -20,10 +20,11 @@ const W15_NS: &str = "http://schemas.microsoft.com/office/word/2012/wordml";
 const W16CID_NS: &str = "http://schemas.microsoft.com/office/word/2016/wordml/cid";
 const DS_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/customXml";
 
-/// Every rule id a minimal, fully checkable package runs, in the documented order.
+/// Every rule id a minimal, fully checkable in-memory package runs, in the documented order.
 /// `COMMENTEX-LINK` is absent: it only runs when commentsExtended.xml exists.
 const ALL_CHECKS: &[&str] = &[
     "PKG-NOT-ZIP",
+    "PKG-CONCATENATED",
     "PKG-DUP-ENTRY",
     "PKG-CASE-COLLISION",
     "PKG-NO-CONTENT-TYPES",
@@ -280,12 +281,133 @@ fn ct_main_type() {
     assert_finding(&report, "CT-MAIN-TYPE", Some("word/document.xml"));
 }
 
+#[test]
+fn complete_archives_concatenated_at_eof() {
+    let ordinary = Doc::minimal().build();
+    let mut repeated = Doc::minimal();
+    repeated.set_document(&"<w:p><w:r><w:t>Repeated paragraph</w:t></w:r></w:p>".repeat(200));
+    let repeated = repeated.build();
+
+    for single in [&ordinary, &repeated] {
+        assert_eq!(validate_bytes(single).verdict, Verdict::Pass);
+    }
+    for second in [&ordinary, &repeated] {
+        let report = validate_bytes(&[ordinary.as_slice(), second.as_slice()].concat());
+        assert_eq!(report.verdict, Verdict::Fail);
+        assert_finding(&report, "PKG-CONCATENATED", None);
+    }
+}
+
+#[test]
+fn archive_comment_is_part_of_the_archive_boundary() {
+    let ordinary = Doc::minimal().build();
+    let mut commented = ordinary.clone();
+    let footer = commented.len() - 22;
+    let comment = b"PK\x03\x04 ZIP signature inside a comment";
+    commented[footer + 20..].copy_from_slice(&(comment.len() as u16).to_le_bytes());
+    commented.extend_from_slice(comment);
+    assert_eq!(validate_bytes(&commented).verdict, Verdict::Pass);
+
+    for payload in [ordinary.clone(), [ordinary[footer..].to_vec(), ordinary.clone()].concat()] {
+        let mut zip_in_comment = ordinary.clone();
+        zip_in_comment[footer + 20..].copy_from_slice(&(payload.len() as u16).to_le_bytes());
+        zip_in_comment.extend_from_slice(&payload);
+        let report = validate_bytes(&zip_in_comment);
+        assert_eq!(report.verdict, Verdict::Pass, "{report:?}");
+        assert!(!has(&report, "PKG-CONCATENATED"));
+
+        let report = validate_bytes(&[zip_in_comment.as_slice(), ordinary.as_slice()].concat());
+        assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
+        assert_finding(&report, "PKG-CONCATENATED", None);
+    }
+
+    for (first, second) in [(&commented, &ordinary), (&ordinary, &commented)] {
+        let report = validate_bytes(&[first.as_slice(), second.as_slice()].concat());
+        assert_eq!(report.verdict, Verdict::Fail);
+        assert_finding(&report, "PKG-CONCATENATED", None);
+    }
+}
+
+#[test]
+fn concatenation_requires_loadable_main_parts() {
+    let ordinary = Doc::minimal().build();
+    for xml in ["<", "<!-- no document element -->", "<root/>", ""] {
+        let mut bad = Doc::minimal();
+        bad.set("word/document.xml", xml);
+        let bad = bad.build();
+        let report = validate_bytes(&bad);
+        assert_ne!(report.verdict, Verdict::Pass, "{xml:?}: {report:?}");
+        if xml != "<root/>" {
+            assert_finding(&report, "XML-MALFORMED", Some("word/document.xml"));
+        }
+
+        for (first, second) in [(&ordinary, &bad), (&bad, &ordinary), (&bad, &bad)] {
+            let report = validate_bytes(&[first.as_slice(), second.as_slice()].concat());
+            assert!(!has(&report, "PKG-CONCATENATED"), "{xml:?}: {report:?}");
+            assert!(report.coverage_notes.iter().any(|note| note.contains("could not resolve a candidate boundary")), "{report:?}");
+            if first == &ordinary {
+                assert_eq!(report.verdict, Verdict::Incomplete, "{report:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn supplied_filename_agrees_with_main_type() {
+    for (main_type, extension) in [(CT_MAIN, "docx"), (CT_TEMPLATE_MAIN, "dotx"), (CT_MACRO_MAIN, "docm")] {
+        let bytes = doc_typed_as(main_type).build();
+        let in_memory = validate_bytes(&bytes);
+        assert_eq!(in_memory.verdict, Verdict::Pass);
+        assert!(!has(&in_memory, "CT-FILENAME-MAIN-TYPE"));
+        assert!(!in_memory.checks_run.contains(&"CT-FILENAME-MAIN-TYPE"));
+
+        for ext in [extension, "docx", "DOCX"] {
+            let report = validate_with_filename(&bytes, extension, ext);
+            let docx = ext.eq_ignore_ascii_case("docx");
+            if docx && matches!(main_type, CT_TEMPLATE_MAIN | CT_MACRO_MAIN) {
+                assert_eq!(report.verdict, Verdict::Fail, "{extension} bytes with .{ext} name");
+                assert_eq!(report.findings.len(), 1);
+                assert_finding(&report, "CT-FILENAME-MAIN-TYPE", Some("word/document.xml"));
+            } else {
+                assert_eq!(report.verdict, Verdict::Pass);
+            }
+            if main_type != CT_MAIN {
+                assert_eq!(report.checks_run.contains(&"CT-FILENAME-MAIN-TYPE"), docx);
+            }
+        }
+    }
+}
+
+/// Filename coverage for the macro-enabled template main type is unmeasured and deferred.
+/// Preserve the current verdict for these paths while CT-MAIN-TYPE is tested independently.
+#[test]
+fn macro_enabled_template_filename_coverage_is_deferred() {
+    let bytes = doc_typed_as(CT_MACRO_TEMPLATE_MAIN).build();
+    for ext in ["dotm", "docx", "DOCX"] {
+        let report = validate_with_filename(&bytes, "dotm", ext);
+        assert_eq!(report.verdict, Verdict::Pass);
+        assert!(!has(&report, "CT-FILENAME-MAIN-TYPE"));
+    }
+}
+
+fn validate_with_filename(bytes: &[u8], kind: &str, ext: &str) -> Report {
+    let path = std::env::temp_dir().join(format!("wordcraft-validate-filename-{}-{kind}.{ext}", std::process::id()));
+    std::fs::write(&path, bytes).unwrap();
+    let result = validate_path(&path);
+    std::fs::remove_file(path).unwrap();
+    result.unwrap()
+}
+
 /// A minimal package whose main part carries `main_ct` instead of the ordinary document type.
-fn main_typed_as(main_ct: &str) -> Report {
+fn doc_typed_as(main_ct: &str) -> Doc {
     let mut d = Doc::minimal();
     let ct = String::from_utf8(content_types_xml(&[], &[])).unwrap().replace(CT_MAIN, main_ct);
     d.set("[Content_Types].xml", ct);
-    validate(&d)
+    d
+}
+
+fn main_typed_as(main_ct: &str) -> Report {
+    validate(&doc_typed_as(main_ct))
 }
 
 /// A template (`.dotx`) is a valid package: its main part's template content type is one of the
@@ -307,7 +429,7 @@ fn ct_main_type_accepts_macro_enabled_document() {
     assert_clean(&report);
 }
 
-/// A macro-enabled template (`.dotm`) is a valid package.
+/// CT-MAIN-TYPE recognizes the macro-enabled template main-part content type.
 #[test]
 fn ct_main_type_accepts_macro_enabled_template() {
     let report = main_typed_as(CT_MACRO_TEMPLATE_MAIN);
@@ -397,13 +519,18 @@ fn xml_doctype_relationships_and_other_xml_parts_distinguish_evidence() {
     let finding = assert_finding(&report, "XML-DOCTYPE", Some(unprobed_part));
     assert_eq!((finding.severity, finding.evidence), (Severity::Warning, Evidence::ByConstruction));
 
-    for (declaration, severity, evidence) in [
-        (r#"<!DOCTYPE Relationships [<!ATTLIST Relationship TargetMode CDATA "External">]>"#, Severity::Warning, Evidence::ByConstruction),
-        (r#"<!DOCTYPE Relationships [<!ENTITY greeting "hello">]>"#, Severity::Error, Evidence::Observed),
+    for (declaration, verdict, severity, evidence) in [
+        (
+            r#"<!DOCTYPE Relationships [<!ATTLIST Relationship TargetMode CDATA "External">]>"#,
+            Verdict::Incomplete,
+            Severity::Warning,
+            Evidence::ByConstruction,
+        ),
+        (r#"<!DOCTYPE Relationships [<!ENTITY greeting "hello">]>"#, Verdict::Fail, Severity::Error, Evidence::Observed),
     ] {
         doc.set(part, with_doctype(rels_xml(rel), declaration));
         let report = validate(&doc);
-        assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
+        assert_eq!(report.verdict, verdict, "{report:?}");
         let finding = assert_finding(&report, "XML-DOCTYPE", Some(part));
         assert_eq!((finding.severity, finding.evidence), (severity, evidence));
         let finding = assert_finding(&report, "XML-DOCTYPE", Some(unprobed_part));
@@ -740,15 +867,149 @@ fn the_same_id_in_two_rels_parts_is_not_a_duplicate() {
 }
 
 #[test]
-fn rel_dangling() {
+fn rel_dangling_image_requires_a_picture_and_warns_when_it_is_missing() {
     let mut d = Doc::minimal();
     d.set_doc_rels(
-        r#"<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/missing.png"/>"#,
+        r#"<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/missing"/>"#,
     );
+    assert!(!has(&validate(&d), "REL-DANGLING"));
+    d.set_document(r#"<w:p><a:blip xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" r:embed="rId9"/></w:p>"#);
     let report = validate(&d);
-    assert_eq!(report.verdict, Verdict::Fail);
+    assert_eq!(report.verdict, Verdict::Pass, "{report:?}");
     let f = assert_finding(&report, "REL-DANGLING", Some("word/_rels/document.xml.rels"));
-    assert!(f.message.contains("missing"), "message should say the content is missing: {}", f.message);
+    assert_eq!(f.severity, Severity::Warning);
+    assert!(!has(&report, "REL-TYPED"), "{report:?}");
+}
+
+#[test]
+fn only_a_part_bearing_link_or_used_metadata_relationship_dangles() {
+    let mut d = Doc::minimal();
+    d.set_doc_rels(concat!(
+        r##"<Relationship Id="fragment" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="#absent"/>"##,
+        r#"<Relationship Id="path" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="absent.xml#anchor"/>"#,
+        r#"<Relationship Id="metadata" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail" Target="missing.png"/>"#,
+    ));
+    d.set_document(r#"<w:p><w:hyperlink r:id="fragment"/><w:hyperlink r:id="path"/></w:p>"#);
+    let report = validate(&d);
+    let dangling: Vec<_> = report.findings.iter().filter(|f| f.rule == "REL-DANGLING").collect();
+    assert_eq!(dangling.len(), 1, "{report:?}");
+    assert!(dangling[0].message.contains("absent.xml"));
+    d.set_document(r#"<w:p><w:hyperlink r:id="metadata"/></w:p>"#);
+    let report = validate(&d);
+    let finding = assert_finding(&report, "REL-DANGLING", Some("word/_rels/document.xml.rels"));
+    assert!(finding.message.contains("missing.png"));
+    assert_eq!(finding.severity, Severity::Error);
+}
+
+fn picture_substitution_fixture() -> Doc {
+    let mut d = Doc::minimal();
+    d.set_doc_rels(concat!(
+        r#"<Relationship Id="choice" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="choice.bin"/>"#,
+        r#"<Relationship Id="fallback" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="fallback.png"/>"#,
+    ));
+    d.add_with_override("word/choice.bin", "application/octet-stream", b"choice".to_vec());
+    let mut png = Vec::new();
+    let mut encoder = png::Encoder::new(&mut png, 1, 1);
+    encoder.set_color(png::ColorType::Grayscale);
+    encoder.write_header().unwrap().write_image_data(&[0]).unwrap();
+    d.add_with_override("word/fallback.png", "image/png", png);
+    d
+}
+
+#[test]
+fn compatible_picture_substitution_requires_a_renderable_fallback_for_every_picture() {
+    let mut d = picture_substitution_fixture();
+    let image = r#"<a:blip xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" r:embed="choice"/>"#;
+    let fallback = r#"<v:imagedata xmlns:v="urn:schemas-microsoft-com:vml" r:id="fallback"/>"#;
+    let content = |choices: &str, fallback: &str, active: &str| {
+        format!(
+            r#"<w:p><mc:AlternateContent xmlns:x="urn:example:drawing"><mc:Choice Requires="x">{choices}</mc:Choice><mc:Fallback>{fallback}</mc:Fallback></mc:AlternateContent>{active}</w:p>"#
+        )
+    };
+    for (choice, alternate, active, typed) in [
+        (image.to_string(), fallback, "", false),
+        (format!("{image}{image}"), fallback, "", true),
+        (image.to_string(), "", "", true),
+        (image.to_string(), fallback, image, true),
+    ] {
+        d.set_document(&content(&choice, alternate, active));
+        assert_eq!(has(&validate(&d), "REL-TYPED"), typed);
+    }
+    d.set_document(&content(image, fallback, ""));
+    d.set("word/fallback.png", b"\x89PNG\r\n\x1a\n".to_vec());
+    assert!(has(&validate(&d), "REL-TYPED"), "a signature alone cannot prove substitution");
+}
+
+#[test]
+fn choice_after_fallback_prevents_picture_substitution_in_the_block() {
+    let mut d = picture_substitution_fixture();
+    d.set_document(concat!(
+        r#"<w:p><mc:AlternateContent xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">"#,
+        r#"<mc:Choice Requires="a"><a:blip r:embed="choice"/></mc:Choice>"#,
+        r#"<mc:Fallback><a:blip r:embed="fallback"/></mc:Fallback>"#,
+        r#"<mc:Choice Requires="a"/></mc:AlternateContent></w:p>"#,
+    ));
+    let report = validate(&d);
+    let finding = assert_finding(&report, "REL-TYPED", Some("word/_rels/document.xml.rels"));
+    assert_eq!(finding.severity, Severity::Error);
+    assert!(finding.message.contains("choice.bin"), "{finding:?}");
+}
+
+#[test]
+fn unresolved_namespace_in_fallback_withholds_picture_substitution() {
+    let mut d = picture_substitution_fixture();
+    let body = concat!(
+        r#"<w:p><mc:AlternateContent xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">"#,
+        r#"<mc:Choice Requires="a"><a:blip r:embed="choice"/></mc:Choice>"#,
+        r#"<mc:Fallback><a:blip r:embed="fallback"/><x:blip xmlns:x="&drawing;"/></mc:Fallback>"#,
+        r#"</mc:AlternateContent></w:p>"#,
+    );
+    let doctype = r#"<!DOCTYPE w:document [<!ENTITY drawing "http://schemas.openxmlformats.org/drawingml/2006/main">]>"#;
+    // The fallback holds an element whose picture-slot nature is unresolved: substitution is not approved,
+    // exactly as when the namespace is written out and the fallback has an extra slot.
+    d.set("word/document.xml", with_doctype(document_xml(body), doctype));
+    assert!(has(&validate(&d), "REL-TYPED"));
+
+    d.set_document(&body.replace("&drawing;", "http://schemas.openxmlformats.org/drawingml/2006/main"));
+    assert!(has(&validate(&d), "REL-TYPED"));
+
+    // The same holds when the unresolved element sits in the Choice, where it hides a slot from the count.
+    let in_choice = body
+        .replace(r#"<a:blip r:embed="choice"/>"#, r#"<a:blip r:embed="choice"/><x:blip xmlns:x="&drawing;"/>"#)
+        .replace(r#"<x:blip xmlns:x="&drawing;"/></mc:Fallback>"#, "</mc:Fallback>");
+    d.set("word/document.xml", with_doctype(document_xml(&in_choice), doctype));
+    assert!(has(&validate(&d), "REL-TYPED"));
+
+    // Control: a fully resolved single-slot fallback still substitutes.
+    d.set_document(&body.replace(r#"<x:blip xmlns:x="&drawing;"/>"#, ""));
+    assert!(!has(&validate(&d), "REL-TYPED"));
+}
+
+#[test]
+fn unresolved_alternate_content_in_fallback_is_a_nested_block() {
+    let mut d = picture_substitution_fixture();
+    let wrap = |fallback: &str| {
+        format!(
+            r#"<w:p><mc:AlternateContent xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><mc:Choice Requires="a"><a:blip r:embed="choice"/></mc:Choice><mc:Fallback>{fallback}</mc:Fallback></mc:AlternateContent></w:p>"#
+        )
+    };
+    let nested_blip = r#"<a:blip r:embed="fallback"/>"#;
+    // Control: the fallback holding the picture directly substitutes.
+    d.set_document(&wrap(nested_blip));
+    assert!(!has(&validate(&d), "REL-TYPED"));
+    for inner in [
+        format!(r#"<mc:AlternateContent><mc:Choice Requires="a">{nested_blip}</mc:Choice></mc:AlternateContent>"#),
+        format!(r#"<q:AlternateContent><mc:Choice Requires="a">{nested_blip}</mc:Choice></q:AlternateContent>"#),
+        format!(r#"<q:AlternateContent><q:Choice Requires="a">{nested_blip}</q:Choice></q:AlternateContent>"#),
+    ] {
+        d.set_document(&wrap(&inner));
+        assert!(has(&validate(&d), "REL-TYPED"), "{inner}");
+    }
+    // An alternate whose namespace is a DOCTYPE entity that cannot be expanded is the same nested block.
+    let doctype = r#"<!DOCTYPE w:document [<!ENTITY compat "http://schemas.openxmlformats.org/markup-compatibility/2006">]>"#;
+    let inner = format!(r#"<x:AlternateContent xmlns:x="&compat;"><x:Choice Requires="a">{nested_blip}</x:Choice></x:AlternateContent>"#);
+    d.set("word/document.xml", with_doctype(document_xml(&wrap(&inner)), doctype));
+    assert!(has(&validate(&d), "REL-TYPED"));
 }
 
 #[test]
@@ -895,6 +1156,8 @@ fn ct_mismatch_chart_typed_as_image() {
         r#"<Relationship Id="rCh" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="charts/chart1.xml"/>"#,
     );
     d.set("word/charts/chart1.xml", r#"<?xml version="1.0"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"/>"#);
+    assert!(!has(&validate(&d), "CT-MISMATCH"));
+    d.set_document(r#"<w:p><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rCh"/></w:p>"#);
     let report = validate(&d);
     assert_eq!(report.verdict, Verdict::Fail);
     assert_finding(&report, "CT-MISMATCH", Some("word/charts/chart1.xml"));
@@ -1092,7 +1355,7 @@ fn ct_mismatch_glossary_owned_header_typed_as_xml() {
             r#"<Relationship Id="rH" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="headerGloss.xml"/>"#,
         ),
     );
-    d.set("word/glossary.xml", format!(r#"<?xml version="1.0"?><w:glossaryDocument xmlns:w="{W_NS}"><w:docParts/></w:glossaryDocument>"#));
+    d.set("word/glossary.xml", format!(r#"<?xml version="1.0"?><w:glossaryDocument {NS}><w:docParts><w:docPart><w:docPartBody><w:p/><w:sectPr><w:headerReference w:type="default" r:id="rH"/></w:sectPr></w:docPartBody></w:docPart></w:docParts></w:glossaryDocument>"#));
     d.set("word/headerGloss.xml", format!(r#"<?xml version="1.0"?><w:hdr xmlns:w="{W_NS}"><w:p/></w:hdr>"#));
     let report = validate(&d);
     assert_eq!(report.verdict, Verdict::Fail);
@@ -1115,7 +1378,7 @@ fn ct_mismatch_glossary_owned_footer_typed_as_settings() {
             r#"<Relationship Id="rF" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footerGloss.xml"/>"#,
         ),
     );
-    d.set("word/glossary.xml", format!(r#"<?xml version="1.0"?><w:glossaryDocument xmlns:w="{W_NS}"><w:docParts/></w:glossaryDocument>"#));
+    d.set("word/glossary.xml", format!(r#"<?xml version="1.0"?><w:glossaryDocument {NS}><w:docParts><w:docPart><w:docPartBody><w:p/><w:sectPr><w:footerReference w:type="default" r:id="rF"/></w:sectPr></w:docPartBody></w:docPart></w:docParts></w:glossaryDocument>"#));
     d.set("word/footerGloss.xml", format!(r#"<?xml version="1.0"?><w:ftr xmlns:w="{W_NS}"><w:p/></w:ftr>"#));
     let report = validate(&d);
     assert_eq!(report.verdict, Verdict::Fail);
@@ -2577,42 +2840,34 @@ fn note_pr_listing_in_sectpr_does_not_satisfy() {
     assert_eq!(report.findings.iter().filter(|f| f.rule == "NOTE-PR-LISTING").count(), 2, "{:?}", report.findings);
 }
 
-/// §17.11.9 grades non-conformance on the note being "required by the
-/// document content", and batch b6 tested exactly this shape — a
-/// referenced ordinary footnote with unlisted separators: Word for the
-/// web opened it clean and rendered the footnote with its separator.
-/// Batch Mac-2 then ran the same shape in Word for Mac: the file
-/// rendered a screenful and wedged Word unresponsive. Verdicts combine
-/// by union across consumers, so every case is an Error now; necessity
-/// never graded severity.
+/// Report the unlisted separators at Warning even when an ordinary note is referenced.
 #[test]
-fn note_pr_listing_error_even_when_required() {
+fn note_pr_listing_warns_even_when_required() {
     let mut d = special_footnotes_doc();
     d.set_document(r#"<w:p><w:r><w:footnoteReference w:id="2"/></w:r></w:p>"#);
     d.set_doc_rels(r#"<Relationship Id="rfootnotes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/>"#);
     let report = validate(&d);
     let sep = report.findings.iter().find(|f| f.rule == "NOTE-PR-LISTING" && f.message.contains("type separator")).expect("separator finding");
-    assert_eq!(sep.severity, Severity::Error, "{:?}", report.findings);
+    assert_eq!(sep.severity, Severity::Warning, "{:?}", report.findings);
     let cont =
         report.findings.iter().find(|f| f.rule == "NOTE-PR-LISTING" && f.message.contains("continuationSeparator")).expect("continuation finding");
-    assert_eq!(cont.severity, Severity::Error, "{:?}", report.findings);
+    assert_eq!(cont.severity, Severity::Warning, "{:?}", report.findings);
 }
 
 /// An ordinary definition nobody references does not make the
 /// separator required either: unreferenced content renders nothing.
 #[test]
-fn note_pr_listing_error_when_ordinary_unreferenced() {
+fn note_pr_listing_warns_when_ordinary_unreferenced() {
     let mut d = special_footnotes_doc();
     d.set_doc_rels(r#"<Relationship Id="rfootnotes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/>"#);
     let report = validate(&d);
     let f = assert_finding(&report, "NOTE-PR-LISTING", Some("word/footnotes.xml"));
-    assert_eq!(f.severity, Severity::Error, "{:?}", report.findings);
+    assert_eq!(f.severity, Severity::Warning, "{:?}", report.findings);
 }
 
-/// The same unlisted special note with NO ordinary note of its kind —
-/// nothing requires it — is an Error under the same union verdict.
+/// The same severity applies to an unlisted continuation notice.
 #[test]
-fn note_pr_listing_error_when_unused() {
+fn note_pr_listing_warns_when_unused() {
     let mut d = Doc::minimal();
     d.add_with_override(
         "word/footnotes.xml",
@@ -2624,7 +2879,7 @@ fn note_pr_listing_error_when_unused() {
     d.set_doc_rels(r#"<Relationship Id="rfootnotes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/>"#);
     let report = validate(&d);
     let f = assert_finding(&report, "NOTE-PR-LISTING", Some("word/footnotes.xml"));
-    assert_eq!(f.severity, Severity::Error);
+    assert_eq!(f.severity, Severity::Warning);
 }
 
 /// A malformed notes part leaves the definition side unknown: the
@@ -4363,9 +4618,8 @@ fn custom_xml_schemas_are_checked_per_owner() {
             d.entries.reverse();
         }
         let report = validate(&d);
-        assert_eq!(report.verdict, Verdict::Fail, "reverse {reverse}: {report:?}");
-        assert_eq!(report.findings.len(), 1, "{report:?}");
-        assert_finding(&report, "CT-MISMATCH", Some("customXml/itemPropsGloss.xml"));
+        assert_eq!(report.verdict, Verdict::Pass, "reverse {reverse}: {report:?}");
+        assert!(!has(&report, "CT-MISMATCH"), "{report:?}");
         for part in ["customXml/itemPropsMain.xml", "customXml/itemPropsGloss.xml"] {
             assert!(unattached_schema_notes(&report).any(|note| note.starts_with(&format!("custom XML part {part} "))), "{report:?}");
         }
@@ -4798,39 +5052,53 @@ fn ct_mismatch_contentpart_image_target_reports_contentpart_only() {
 }
 
 #[test]
-fn ct_mismatch_customxml_not_consumed_still_fires() {
-    // No contentPart anywhere: a customXml relationship reaching a
-    // text/xml part keeps the application/xml expectation.
+fn ct_mismatch_unused_xml_store_and_properties_are_ignored() {
     let mut d = Doc::minimal();
-    d.add_with_override("word/customXml/item1.xml", "text/xml", b"<root/>".to_vec());
+    d.add_with_override("data/item.xml", "text/xml", b"<root/>".to_vec());
+    d.set("data/props.xml", format!(r#"<ds:datastoreItem xmlns:ds="{DS_NS}" ds:itemID="{{BEAF0000-0000-0000-0000-000000000001}}"/>"#));
+    d.set("data/_rels/item.xml.rels", rels_xml(
+        r#"<Relationship Id="props" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps" Target="props.xml"/>"#,
+    ));
     d.set_doc_rels(
-        r#"<Relationship Id="rIdX" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="customXml/item1.xml"/>"#,
+        r#"<Relationship Id="store" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="../data/item.xml"/>"#,
     );
+    let binding = |id: &str| {
+        format!(r#"<w:sdt><w:sdtPr><w:dataBinding w:storeItemID="{{{id}}}" w:xpath="/root"/></w:sdtPr><w:sdtContent><w:p/></w:sdtContent></w:sdt>"#)
+    };
+    d.set_document(&binding("BEAF0000-0000-0000-0000-000000000002"));
+    assert!(!has(&validate(&d), "CT-MISMATCH"));
+    d.set("data/item.xml", []);
+    assert!(!has(&validate(&d), "XML-MALFORMED"));
+    d.set("data/item.xml", b"<root");
+    assert!(has(&validate(&d), "XML-MALFORMED"));
+    d.set("data/item.xml", []);
+    d.set_document(&binding("beaf0000-0000-0000-0000-000000000001"));
     let report = validate(&d);
-    assert_finding(&report, "CT-MISMATCH", Some("word/customXml/item1.xml"));
+    for part in ["data/item.xml", "data/props.xml"] {
+        assert_eq!(assert_finding(&report, "CT-MISMATCH", Some(part)).severity, Severity::Error);
+    }
+    assert_eq!(assert_finding(&report, "XML-MALFORMED", Some("data/item.xml")).severity, Severity::Error);
 }
 
 #[test]
-fn ct_mismatch_duplicate_id_exemption_follows_the_resolved_relationship() {
-    // The id is duplicated: the first relationship (the one
-    // CONTENTPART-TYPE resolves for the contentPart) reaches a
-    // text/xml part and is exempt; the duplicate reaches an image
-    // part and is NOT the consumed relationship, so the pairing
-    // applies to it. REL-DUP-ID fires on the duplication itself.
+fn ct_mismatch_duplicate_id_consumption_follows_the_first_relationship() {
     let mut d = Doc::minimal();
-    d.set_document(&one_content_part("rIdCP"));
-    d.set(
-        "word/_rels/document.xml.rels",
-        rels_xml(
-            r#"<Relationship Id="rIdCP" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="customXml/item1.xml"/><Relationship Id="rIdCP" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="media/pic.png"/>"#,
-        ),
+    d.set_document(
+        r#"<w:p><mc:AlternateContent><mc:Choice Requires="w"><w:contentPart r:id="rIdCP"/></mc:Choice><mc:Fallback/></mc:AlternateContent></w:p>"#,
     );
+    let first = r#"<Relationship Id="rIdCP" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="customXml/item1.xml"/>"#;
+    let second =
+        r#"<Relationship Id="rIdCP" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="media/pic.png"/>"#;
     d.add_with_override("word/customXml/item1.xml", "text/xml", b"<root/>".to_vec());
-    d.add_with_override("word/media/pic.png", "image/png", b"PNG".to_vec());
+    d.add_with_override("word/media/pic.png", "image/png", b"\x89PNG".to_vec());
+    d.set_doc_rels(&format!("{first}{second}"));
     let report = validate(&d);
     assert_finding(&report, "REL-DUP-ID", Some("word/_rels/document.xml.rels"));
+    assert!(!has(&report, "CT-MISMATCH"), "{report:?}");
+    d.set_doc_rels(&format!("{second}{first}"));
+    let report = validate(&d);
     assert_finding(&report, "CT-MISMATCH", Some("word/media/pic.png"));
-    assert!(!has(&report, "CONTENTPART-TYPE"), "findings: {:?}", report.findings);
+    assert!(!has(&report, "CONTENTPART-TYPE"), "{report:?}");
 }
 
 /// Skipped text/xml references exempt the customXml pairing; application/xml needs no exemption.
@@ -4927,7 +5195,7 @@ fn ct_mismatch_native_ink_contentpart_is_exemption_only() {
     }
 }
 
-/// Neither an unused InkML part, an unrelated namespace, nor a non-InkML target gains the native exemption.
+/// An unconsumed InkML part has no pairing obligation. An explicit foreign consumer and a mistyped native consumer still do.
 #[test]
 fn ct_mismatch_native_ink_exemption_stays_scoped() {
     let native = format!(r#"<w:p><w:r><w14:contentPart xmlns:w14="{W14_NS}" r:id="rIdCP"/></w:r></w:p>"#);
@@ -4940,7 +5208,11 @@ fn ct_mismatch_native_ink_exemption_stays_scoped() {
             ct,
         );
         let report = validate(&d);
-        assert_finding(&report, "CT-MISMATCH", Some("word/data.xml"));
+        if markup == "<w:p/>" {
+            assert!(!has(&report, "CT-MISMATCH"), "{report:?}");
+        } else {
+            assert_finding(&report, "CT-MISMATCH", Some("word/data.xml"));
+        }
         assert!(!has(&report, "CONTENTPART-TYPE"), "{:?}", report.findings);
     }
     // The brief's literal w:contentPart remains governed by its existing text/xml rule.
@@ -5307,7 +5579,7 @@ fn round2_check_note_pr(kind: &str, ct: &str, dangling: bool) {
         if !dangling {
             let part = if reverse { format!("word/gloss-{kind}s.xml") } else { format!("word/{kind}s.xml") };
             assert_finding(&report, rule, Some(&part));
-            assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
+            assert_eq!(report.verdict, Verdict::Pass, "{report:?}");
         }
     }
 }
@@ -5390,7 +5662,7 @@ fn round2_unreadable_note_listing_is_local() {
         assert_eq!(incomplete.verdict, Verdict::Incomplete, "{incomplete:?}");
         assert!(!has(&incomplete, "NOTE-PR-LISTING"), "{incomplete:?}");
         let retained = validate_bytes(&corrupt_entry_data(&d.build(), "word/gloss-settings.xml"));
-        assert_eq!(retained.verdict, Verdict::Fail, "{retained:?}");
+        assert_eq!(retained.verdict, Verdict::Incomplete, "{retained:?}");
         assert_finding(&retained, "NOTE-PR-LISTING", Some(&format!("word/{kind}s.xml")));
         assert!(retained.coverage_notes.iter().any(|n| n.contains("footnotePr/endnotePr")), "{retained:?}");
     }
@@ -5478,20 +5750,20 @@ fn round3_unknown_settings(kind: &str, ct: &str) {
         let partial = validate_bytes(&d.build());
         assert!(has(&partial, rule), "{kind}, dangling {dangling}: {partial:?}");
         if !dangling {
-            assert_eq!(partial.verdict, Verdict::Fail, "{partial:?}");
+            assert_eq!(partial.verdict, Verdict::Incomplete, "{partial:?}");
             assert_finding(&partial, rule, Some(&format!("word/{kind}s.xml")));
         }
         assert!(partial.coverage_notes.iter().any(|n| n.contains("footnotePr/endnotePr") && n.contains("glossary")), "{partial:?}");
     }
 }
 
-/// Round 3 item 2: footnote joins retain known main errors under partial glossary discovery.
+/// Round 3 item 2: footnote joins retain known main findings under partial glossary discovery.
 #[test]
 fn round3_unknown_footnote_settings() {
     round3_unknown_settings("footnote", CT_FOOTNOTES);
 }
 
-/// Round 3 item 2: endnote joins retain known main errors under partial glossary discovery.
+/// Round 3 item 2: endnote joins retain known main findings under partial glossary discovery.
 #[test]
 fn round3_unknown_endnote_settings() {
     round3_unknown_settings("endnote", CT_ENDNOTES);
@@ -5595,7 +5867,7 @@ fn round4_shared_special_note_joins() {
         let rels = rels.replace("shared-placeholder.xml", &format!("{kind}s.xml"));
         d.set("word/_rels/glossary.xml.rels", rels);
         let shared = validate_bytes(&d.build());
-        assert_eq!(shared.verdict, Verdict::Fail, "{kind}: {shared:?}");
+        assert_eq!(shared.verdict, Verdict::Pass, "{kind}: {shared:?}");
         assert_eq!(shared.findings.iter().filter(|f| f.rule == "NOTE-PR-LISTING").count(), 1, "{shared:?}");
         assert_finding(&shared, "NOTE-PR-LISTING", Some(&format!("word/{kind}s.xml")));
         d.set("word/gloss-settings.xml", format!(r#"<w:settings xmlns:w="{W_NS}"><w:{kind}Pr><w:{kind} w:id="-1"/></w:{kind}Pr></w:settings>"#));
