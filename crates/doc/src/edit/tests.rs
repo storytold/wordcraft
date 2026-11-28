@@ -1192,6 +1192,61 @@ fn insert_fragment_remaps_conflicting_media_keys() {
     assert_eq!(remapped, other_key);
 }
 
+#[test]
+fn adopt_fragment_copies_and_remaps_conflicting_media_in_blocks_and_text_boxes() {
+    let mut d = doc(&["destination"]);
+    d.media.insert("image1.png".into(), Arc::new(vec![1, 1, 1]));
+
+    let mut frag_media = std::collections::BTreeMap::new();
+    frag_media.insert("image1.png".into(), Arc::new(vec![2, 2, 2]));
+    frag_media.insert("missing.png".into(), Arc::new(vec![3, 3, 3]));
+
+    let img = |key: &str| InlineObject::Image {
+        media: key.into(),
+        w: 10.0,
+        h: 10.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
+
+    let mut tb_para = Paragraph::with_text(&crate::para::OBJ.to_string(), CharProps::default());
+    tb_para.objects.push(img("image1.png"));
+    let mut parts = std::collections::BTreeMap::new();
+    parts.insert(7, Part { kind: PartKind::TextBox, blocks: vec![para_block(tb_para)], body: Default::default() });
+
+    let mut top_para = Paragraph::with_text(&format!("{}{}", crate::para::OBJ, crate::para::OBJ), CharProps::default());
+    top_para.objects.push(img("missing.png"));
+    top_para.objects.push(InlineObject::Shape {
+        kind: crate::para::ShapeKind::TextBox,
+        w: 40.0,
+        h: 40.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: Default::default(),
+        story: Some(7),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    });
+    let frag = Fragment { blocks: vec![Block::Para(top_para)], parts, media: frag_media };
+
+    let adopted = d.adopt_fragment(&frag);
+    assert_eq!(d.media["image1.png"].as_slice(), &[1, 1, 1]);
+    assert_eq!(d.media["missing.png"].as_slice(), &[3, 3, 3]);
+    let remapped_key = d.media.keys().find(|k| k.as_str() != "image1.png" && k.as_str() != "missing.png").unwrap();
+    assert_eq!(d.media[remapped_key].as_slice(), &[2, 2, 2]);
+
+    let adopted_para = adopted[0].as_para().unwrap();
+    assert!(matches!(&adopted_para.objects[0], InlineObject::Image { media, .. } if media == "missing.png"));
+    let adopted_tb_id = adopted_para.objects[1].text_box().unwrap();
+    let adopted_tb_para = d.parts[&adopted_tb_id].blocks[0].as_para().unwrap();
+    assert!(matches!(&adopted_tb_para.objects[0], InlineObject::Image { media, .. } if media == remapped_key));
+}
+
 /// #6788: splitting a paragraph after its first letters leaves the drop cap on the first
 /// paragraph only; the new one (also when it is empty) is plain. A split at offset 0 is unchanged.
 #[test]

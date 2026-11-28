@@ -155,13 +155,14 @@ fn markup_key(app: &WordApp) -> MarkupKey {
 
 /// What the preview's layout is made from besides the document's text: the document id, the
 /// revision, Print Markup and Track Changes Options, the file name and path FILENAME fields show
-/// (#6282: Save As and Rename change them without an edit), and the font database generation the
-/// app has seen (#6283: `WordApp::watch_fonts` moves it when fonts are added or removed).
-type LayoutKey = (u64, u64, MarkupKey, (String, String), u64);
+/// (#6282: Save As and Rename change them without an edit), the numeral mode (#6265: it changes
+/// the display without an edit or a revision), and the font database generation the app has seen
+/// (#6283: `WordApp::watch_fonts` moves it when fonts are added or removed).
+type LayoutKey = (u64, u64, MarkupKey, wordcraft_layout::NumeralMode, (String, String), u64);
 
 /// The [`LayoutKey`] now.
 fn layout_key(app: &WordApp) -> LayoutKey {
-    (app.session.document_id(), app.session.rev(), markup_key(app), app.session.resolved_filenames(), app.font_generation)
+    (app.session.document_id(), app.session.rev(), markup_key(app), app.session.view.numeral, app.session.resolved_filenames(), app.font_generation)
 }
 
 /// The output layout, kept in `cache` while what it is made from ([`LayoutKey`]) is unchanged.
@@ -493,6 +494,30 @@ mod tests {
             previous = Some((layout, revision));
             assert_eq!(app.session.rev(), rev);
             assert_eq!(app.session.dirty, dirty);
+        }
+    }
+
+    /// Numeral display changes layout and pixels without changing the document revision
+    /// (#6265): the preview must not reuse either cache.
+    #[test]
+    fn preview_refreshes_layout_and_texture_when_the_numeral_mode_changes() {
+        let session = Session::new(wordcraft_doc::Document::from_text("2026 Report"));
+        let mut app = WordApp::new(session, Services::default());
+        let mut cache = None;
+        let rev = app.session.rev();
+        let mut previous = None;
+        for mode in ["arabic", "hindi", "arabic"] {
+            app.session.run("view.numeral", &json!({ "value": mode })).unwrap();
+            let layout = layout_of(&app, &mut cache);
+            assert!(Arc::ptr_eq(&layout, &layout_of(&app, &mut cache)), "unchanged layout is reused");
+            let revision = preview::inputs(&app);
+            assert_eq!(revision, preview::inputs(&app));
+            if let Some((old_layout, old_revision)) = previous.take() {
+                assert!(!Arc::ptr_eq(&layout, &old_layout));
+                assert_ne!(revision, old_revision, "the sheet is drawn again");
+            }
+            previous = Some((layout, revision));
+            assert_eq!(app.session.rev(), rev);
         }
     }
 
