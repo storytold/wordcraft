@@ -504,6 +504,29 @@ fn xml_doctype_internal_entity_in_diagram_definitions_warns() {
 }
 
 #[test]
+fn xml_doctype_in_settings_grades_the_same_whatever_the_content_type_casing() {
+    // #7736 K3/K4: Windows Word refuses both packages; the grade must not depend on the Override's casing.
+    let exact = "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml";
+    let varied = "application/vnd.openxmlformats-officedocument.Wordprocessingml.Settings+XML";
+    let grade = |content_type: &str| {
+        let mut doc = Doc::minimal();
+        doc.set_doc_rels(
+            r#"<Relationship Id="rSet" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>"#,
+        );
+        doc.add_with_override(
+            "word/settings.xml",
+            content_type,
+            r#"<!DOCTYPE w:settings [<!ENTITY greeting "hello">]><w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>"#,
+        );
+        let report = validate(&doc);
+        let finding = assert_finding(&report, "XML-DOCTYPE", Some("word/settings.xml"));
+        (finding.severity, finding.evidence)
+    };
+    assert_eq!(grade(exact), (Severity::Error, Evidence::Observed));
+    assert_eq!(grade(varied), grade(exact));
+}
+
+#[test]
 fn xml_doctype_attlist_in_diagram_layout_warns() {
     let mut doc = Doc::minimal();
     let part = "word/diagrams/layout1.xml";

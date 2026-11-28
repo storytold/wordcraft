@@ -922,10 +922,13 @@ fn check_doctypes(pkg: &Package, acc: &mut Acc) {
 
 /// The adverse non-relationships roles in the isolated, closure, and forms probe series.
 fn is_measured_adverse_doctype(form: scan::DoctypeForm, content_type: Option<&str>) -> bool {
+    // Windows Word refuses a settings part with a DOCTYPE however its content type is cased (#7736 K3/K4).
+    if content_type.is_some_and(|ct| ct.eq_ignore_ascii_case(package::SETTINGS_CONTENT_TYPE)) {
+        return true;
+    }
     match content_type {
         Some(
             package::STYLES_CONTENT_TYPE
-            | package::SETTINGS_CONTENT_TYPE
             | package::FONT_TABLE_CONTENT_TYPE
             | package::THEME_CONTENT_TYPE
             | package::NUMBERING_CONTENT_TYPE
