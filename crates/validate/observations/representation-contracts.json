@@ -1,0 +1,88 @@
+{
+  "default": {
+    "header": "fn default () -> Self",
+    "collections": []
+  },
+  "complete": {
+    "header": "fn complete (value : T) -> Self",
+    "collections": [
+      "repr.observed_status*1",
+      "repr.observed_value*1"
+    ]
+  },
+  "with_status": {
+    "header": "fn with_status (value : T , completeness : Completeness) -> Self",
+    "collections": [
+      "repr.observed_status*1",
+      "repr.observed_value*1"
+    ]
+  },
+  "prefix": {
+    "header": "fn prefix (& self) -> & T",
+    "collections": [
+      "repr.observed_value*1"
+    ]
+  },
+  "is_complete": {
+    "header": "fn is_complete (& self) -> bool",
+    "collections": [
+      "repr.observed_status*1"
+    ]
+  },
+  "invalidate": {
+    "header": "fn invalidate (& mut self , reason : Reason)",
+    "collections": [
+      "repr.observed_status*1"
+    ]
+  },
+  "project": {
+    "header": "fn project < U > (& self , map : impl FnOnce (& T) -> U) -> Observed < U >",
+    "collections": [
+      "repr.observed_status*2",
+      "repr.observed_value*2",
+      "type.Observed*2"
+    ]
+  },
+  "push_bounded": {
+    "header": "fn push_bounded (& mut self , value : T , cap : usize) -> bool",
+    "collections": [
+      "access.invalidate*1",
+      "repr.observed_value*2"
+    ]
+  },
+  "retain_budget": {
+    "header": "fn retain_budget (& mut self , held : & mut usize , cap : usize) -> bool",
+    "collections": [
+      "access.invalidate*1",
+      "repr.observed_value*3"
+    ]
+  },
+  "append": {
+    "header": "fn append (& mut self , from : & Self) where T : Clone ,",
+    "collections": [
+      "access.is_complete*1",
+      "repr.observed_status*2",
+      "repr.observed_value*2"
+    ]
+  },
+  "len": {
+    "header": "fn len (& self) -> usize",
+    "collections": [
+      "repr.observed_value*1"
+    ]
+  },
+  "into_complete_set": {
+    "header": "fn into_complete_set (self) -> Option < CompleteSet < K > >",
+    "collections": [
+      "access.is_complete*1",
+      "repr.observed_value*1",
+      "type.CompleteSet*2"
+    ]
+  },
+  "missing": {
+    "header": "fn missing (& self , key : & K) -> bool",
+    "collections": [
+      "membership.self.0*1"
+    ]
+  }
+}

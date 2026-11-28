@@ -1,9 +1,7 @@
-use craft::behavior::IconId;
 use craft::ui::buttons::{Button, IconButton};
 use craft::ui::contract::{Props, Show, ShowContainer};
 use craft::ui::display::{Shade, Text};
 use craft::ui::layout_components::{Row, Stack};
-use craft::ui::primitives::IconSpec;
 use craft::ui::sections::GroupBox;
 use egui::Ui;
 use serde_json::{Value, json};
@@ -79,7 +77,7 @@ fn level_row(ui: &mut Ui, caption: &str, value: &str, none: bool, tip: &str, not
         Text::new(tl!(caption).to_owned()).shade(Shade::Muted).show(ui);
         Row::new().show(ui, |ui, _| {
             Text::new(value.to_owned()).shade(if none { Shade::Faint } else { Shade::Normal }).show(ui);
-            let clear = IconButton::new(IconSpec::svg(IconId::new("clear"))).label(tl!(tip).to_owned()).enabled(!nothing_to_clear).show(ui);
+            let clear = IconButton::new(crate::icons::spec("clear")).label(tl!(tip).to_owned()).enabled(!nothing_to_clear).show(ui);
             clicked = clear.clicked();
         });
     });

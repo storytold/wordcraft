@@ -20,6 +20,8 @@ mod build_flavor;
 mod control_server;
 mod default_apps;
 mod launch_profile;
+#[cfg(target_os = "macos")]
+mod native_menu;
 mod nightly_session;
 mod prefs;
 mod process_identity;
@@ -38,7 +40,7 @@ use craft::platform::appearance::SystemReader;
 use craft::platform::clipboard::{Clipboard, ClipboardImage, SystemClipboard};
 use craft::platform::default_app::{DefaultApp, DefaultAppError};
 use craft::platform::logs::{self, LogNames, crash};
-use craft::platform::open::{DropTarget, DroppedFile, FileIntake, IntakeSender};
+use craft::platform::open::{DroppedFile, FileIntake, IntakeSender};
 use craft::print::spool::Spool;
 use craft::settings::SharedSettings;
 use craft::ui::InstallSpec;
@@ -54,6 +56,8 @@ use wordcraft_ui_egui::{Services, WordApp, prefs::Prefs};
 /// exit, the print spool it waits for at exit and the control server it stops at exit.
 struct App {
     app: WordApp,
+    #[cfg(target_os = "macos")]
+    native_menu: Option<craft::menu::NativeMenu>,
     /// The native panels behind the file service the app reaches through `Host::files`.
     panels: FilePanels,
     /// Feeds the files dropped on the window into the app's intake (`Services::intake`), the one
@@ -71,10 +75,22 @@ struct App {
 }
 
 impl App {
+    fn before_input(&mut self, ctx: &egui::Context) {
+        #[cfg(target_os = "macos")]
+        if let Some(menu) = &mut self.native_menu {
+            menu.poll(ctx);
+        }
+        embed::before_input(ctx, |out| self.app.frame_input(out));
+    }
+
     /// One frame's logic: what the OS asked, the app, its file dialogs, then the root window's close
     /// path. Without `frame` (a test over no window) the dialogs have no parent window.
     fn logic_pass(&mut self, ctx: &egui::Context, frame: Option<&eframe::Frame>) {
         self.app.logic(ctx);
+        #[cfg(target_os = "macos")]
+        if let Some(menu) = &mut self.native_menu {
+            native_menu::update(menu, &mut self.app, ctx);
+        }
         self.panels.pump_with(self.app.dialog_host_mut(), frame);
         // A quit that waits for nothing (the documents are answered for) closes the root window.
         if self.app.quit_requested && !self.app.printing.busy() {
@@ -121,9 +137,9 @@ impl eframe::App for App {
         // Once per frame, before any pass; the files stay in `raw` for the runtime's own reading.
         let files = dropped_files(raw);
         if !files.is_empty() {
-            self.drops.dropped(files, DropTarget::Elsewhere);
+            self.drops.dropped(files);
         }
-        embed::before_input(ctx, |out| self.app.frame_input(out));
+        self.before_input(ctx);
     }
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.logic_pass(ctx, Some(frame));
@@ -273,6 +289,30 @@ fn build_sha() -> &'static str {
     option_env!("WORDCRAFT_BUILD_SHA").map(|s| s.get(..8).unwrap_or(s)).unwrap_or("dev")
 }
 
+/// Split the command line at its first `--`: the options before it, the documents after it. The
+/// Launcher's nightly hand-off arrives as `--` followed by the file names (`launch_profile::parse`
+/// puts that separator first), so it is dropped here rather than opened as a document.
+fn split_at_delimiter(args: Vec<String>) -> (Vec<String>, Vec<String>) {
+    match args.iter().position(|a| a == "--") {
+        Some(i) => {
+            let mut options = args;
+            let files = options.split_off(i + 1);
+            options.pop();
+            (options, files)
+        }
+        None => (args, Vec::new()),
+    }
+}
+
+/// The documents to open, in the order the command line gave them: the words before `--` that the flag
+/// loop kept, then the ones after it. The separator moves no document, and the Launcher, which sends
+/// none before it, opens just its own file names in order.
+fn documents_to_open(before: Vec<String>, after: Vec<String>) -> Vec<String> {
+    let mut documents = before;
+    documents.extend(after);
+    documents
+}
+
 /// The arguments as text, and apart the files whose names aren't valid Unicode, such as a Latin-1
 /// one (#1440). A `--control` port, a token or a token file that isn't is an error.
 fn text_args(arguments: Vec<std::ffi::OsString>) -> (Vec<String>, Vec<std::path::PathBuf>) {
@@ -345,14 +385,24 @@ fn initialize_nightly_process_identity() -> Result<(), process_identity::Identit
     )
 }
 
-/// Tell the person why a Launcher launch was refused, with a native message box on a desktop
-/// session (a Launcher start has no terminal to read standard error from).
+/// Whether a refusal may also open a native message box. Standard error always carries the reason;
+/// this only adds a box where one renders without the app's event loop. Never on macOS: rfd's alert
+/// there needs the AppKit run loop this start has not reached, so a refused nightly launch hung in
+/// an invisible modal instead of exiting (GridCraft Mac smoke, 2026-11-26).
+fn refusal_dialog(flavor: build_flavor::BuildFlavor, desktop_session: bool, macos: bool) -> bool {
+    build_flavor::needs_native_error(flavor, desktop_session) && !macos
+}
+
+/// Tell the person why a Launcher launch was refused: on standard error always, and with a native
+/// message box on a desktop session whose modal renders without the app's run loop (Windows,
+/// X11/Wayland) — a Launcher start has no terminal to read standard error from, and on macOS a modal
+/// before the event loop never appears.
 fn report_launch_profile_error(error: &str) {
     complain(format_args!("launch profile: {error}"));
     let desktop_session = cfg!(windows)
         || cfg!(target_os = "macos")
         || (cfg!(target_os = "linux") && ["DISPLAY", "WAYLAND_DISPLAY"].into_iter().any(|key| std::env::var_os(key).is_some_and(|v| !v.is_empty())));
-    if build_flavor::needs_native_error(build_flavor::COMPILED, desktop_session) {
+    if refusal_dialog(build_flavor::COMPILED, desktop_session, cfg!(target_os = "macos")) {
         if let Err(identity) = initialize_nightly_process_identity() {
             complain(format_args!("launch profile: {identity}"));
             return;
@@ -448,11 +498,16 @@ fn main() -> eframe::Result {
         log::error!("couldn't start again without another program's AppImage variables, so the self-update is off in this window: {e}");
     }
     let mut flags = ControlOptions::default();
-    let mut files = Vec::new();
     let mut sample = false;
     let (args, other_files) = text_args(arguments);
-    // Only macOS (Finder / LaunchServices) adds these; elsewhere `-NS…` could be a real file name.
+    // The Launcher's own hand-off: `--` ends the options, so nothing after it is read as one and
+    // the separator itself never becomes a document.
+    let (args, after_separator) = split_at_delimiter(args);
+    // Only macOS (Finder / LaunchServices) adds these, and only to the options: a Finder launch carries
+    // no separator for them to sit after, and the Launcher starts the app itself, so a document whose
+    // name merely looks like one of these (`-NSNotes.docx`) is still opened (#7849 review).
     let args = if cfg!(target_os = "macos") { without_launch_args(args) } else { args };
+    let mut documents: Vec<String> = Vec::new();
     let mut bad_control: Option<Option<String>> = None;
     let mut missing_value: Option<&'static str> = None;
     let mut args = args.into_iter().peekable();
@@ -495,9 +550,12 @@ fn main() -> eframe::Result {
                 let _ = std::io::Write::write_all(&mut std::io::stdout(), USAGE.as_bytes());
                 return Ok(());
             }
-            _ => files.push(a),
+            _ => documents.push(a),
         }
     }
+    // After the loop, so a document before `--` opens before the ones after it (a stable launch's
+    // `a.docx -- b.docx` used to be reversed when the Launcher's list was the one collected first).
+    let files = documents_to_open(documents, after_separator);
     // After the loop, so `--version` later on the line still wins.
     if let Some(port) = bad_control {
         let got = port.map(|p| format!(", got {p:?}")).unwrap_or_default();
@@ -759,6 +817,8 @@ fn main() -> eframe::Result {
                 noticed_in_window.store(true, std::sync::atomic::Ordering::Relaxed);
             }
             Ok(Box::new(App {
+                #[cfg(target_os = "macos")]
+                native_menu: native_menu::install(&ctx, &app),
                 app,
                 panels,
                 drops,
@@ -975,14 +1035,29 @@ mod smoke {
             let drops = intake.sender();
             let session = Session::new(wordcraft_doc::Document::new());
             let app = WordApp::new(session, services(spool.clone(), intake, false)).with_host(host).with_settings(settings.clone());
-            Run { app: App { app, panels, drops, settings, spool, control: None, exit: None }, frames, ctx, sender }
+            Run {
+                app: App {
+                    #[cfg(target_os = "macos")]
+                    native_menu: None,
+                    app,
+                    panels,
+                    drops,
+                    settings,
+                    spool,
+                    control: None,
+                    exit: None,
+                },
+                frames,
+                ctx,
+                sender,
+            }
         }
 
         /// One frame as eframe runs it: the input hook once, the logic once, the UI per pass.
         /// Returns whether the frame sent a close command.
         fn step(&mut self, events: Vec<egui::Event>) -> bool {
             let Run { app, frames, ctx, .. } = self;
-            embed::before_input(ctx, |out| app.app.frame_input(out));
+            app.before_input(ctx);
             let mut first = true;
             frames.frame_without_input(events, |ui| {
                 if std::mem::take(&mut first) {
@@ -1005,7 +1080,7 @@ mod smoke {
         /// cancelling the close.
         fn close_request_is_let_through(&mut self) -> bool {
             let Run { app, ctx, .. } = self;
-            embed::before_input(ctx, |out| app.app.frame_input(out));
+            app.before_input(ctx);
             let mut input =
                 egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 920.0))), ..Default::default() };
             input.viewports.insert(egui::ViewportId::ROOT, egui::ViewportInfo { events: vec![egui::ViewportEvent::Close], ..Default::default() });
@@ -1039,7 +1114,7 @@ mod smoke {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("dropped.txt");
         std::fs::write(&path, "Dropped words").unwrap();
-        run.sender.dropped(vec![DroppedFile { path: Some(path), name: "dropped.txt".into(), bytes: None }], DropTarget::Elsewhere);
+        run.sender.dropped(vec![DroppedFile { path: Some(path), name: "dropped.txt".into(), bytes: None }]);
         run.settle();
         assert!(run.app.app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Dropped words"), "the dropped file opened");
         let _ = std::fs::remove_dir_all(dir);
@@ -1078,5 +1153,114 @@ mod smoke {
         } else {
             assert!(closed, "Don't Save lets the close through");
         }
+    }
+
+    /// A native menu selection reaches the hosted About dialog, including its credits, and Escape
+    /// dismisses it without changing the document. The fake backend supplies the OS selection.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_about_shows_credits_and_closes_with_escape() {
+        use craft::menu::{Backend, Dispatch, Event, ItemRole, MenuBar, NativeMenu};
+
+        struct Selection(Vec<Event>);
+        impl Backend for Selection {
+            fn sync(&mut self, _: &MenuBar) {}
+            fn attach(&mut self, _: Dispatch) {}
+            fn drain(&mut self) -> Vec<Event> {
+                std::mem::take(&mut self.0)
+            }
+        }
+
+        let mut run = Run::new();
+        run.app.app.start_screen();
+        run.settle();
+        let before = run.app.app.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        let layout = native_menu::layout(&str::to_owned);
+        let about = layout.bar.items().into_iter().find(|item| item.role == Some(ItemRole::About)).unwrap().command.clone();
+        run.app.native_menu = Some(NativeMenu::new(Box::new(Selection(vec![Event::Click(about)]))));
+        run.settle();
+        assert!(run.app.app.dialog_host_mut().shows_modal());
+        let tree = run.frames.tree();
+        for label in ["WordCraft", "Contributors", "Models", "Language data"] {
+            assert!(tree.keys().into_iter().any(|key| craft::ui::testing::access::name(&tree, key) == Some(label)), "About exposes {label}");
+        }
+        run.step(vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        run.settle();
+        assert!(run.app.app.dialog_host_mut().is_empty(), "Escape dismisses About");
+        assert_eq!(run.app.app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), before);
+    }
+}
+
+#[cfg(test)]
+mod command_line_tests {
+    use super::{documents_to_open, split_at_delimiter};
+
+    /// The argv the Launcher starts a nightly with, as `prepare_launch` hands it on. The root is the one this
+    /// platform would pass: `/nightly-data/...` has no drive prefix, so on Windows `parse` rightly refuses it.
+    fn launcher_argv(tail: &[&str]) -> Vec<String> {
+        let mut argv: Vec<std::ffi::OsString> = ["--launch-profile", "nightly-v1", "--profile-root", super::launch_profile::launcher_root(), "--"]
+            .iter()
+            .map(std::ffi::OsString::from)
+            .collect();
+        argv.extend(tail.iter().map(std::ffi::OsString::from));
+        super::launch_profile::parse(argv).unwrap().args.iter().map(|a| a.to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn the_launchers_separator_is_never_a_document() {
+        let (options, files) = split_at_delimiter(launcher_argv(&[]));
+        assert!(options.is_empty(), "{options:?}");
+        assert!(files.is_empty(), "the separator must not reach the documents: {files:?}");
+    }
+
+    #[test]
+    fn documents_after_the_separator_are_kept_in_order() {
+        let (options, files) = split_at_delimiter(launcher_argv(&["a.file"]));
+        assert!(options.is_empty(), "{options:?}");
+        assert_eq!(files, ["a.file"]);
+        let (_, files) = split_at_delimiter(launcher_argv(&["a.file", "--version", "--sample"]));
+        assert_eq!(files, ["a.file", "--version", "--sample"], "after -- every word is a document");
+        // A real document path, as Windows hands one on: kept whole, in order, backslashes and spaces intact.
+        let (_, files) = split_at_delimiter(launcher_argv(&[r"C:\Users\user\Holiday letter.docx", "a.file"]));
+        assert_eq!(files, [r"C:\Users\user\Holiday letter.docx", "a.file"], "a real path after -- stays a document, in order");
+    }
+
+    /// A document whose name looks like a LaunchServices option is one only after the separator: the strip
+    /// for macOS runs on the options, after the split, so `-- -NSNotes.docx report.docx` opens both.
+    #[test]
+    fn a_document_named_like_a_launch_argument_survives_the_separator() {
+        let (options, after) = split_at_delimiter(["-psn_0_12345", "--", "-NSNotes.docx", "report.docx"].map(String::from).to_vec());
+        assert!(super::without_launch_args(options).is_empty(), "the option before the separator goes");
+        let hazard: Vec<String> = ["-NSNotes.docx", "report.docx"].map(String::from).to_vec();
+        assert!(super::without_launch_args(hazard).is_empty(), "before the split the strip takes the document and the one after it");
+        assert_eq!(documents_to_open(Vec::new(), after), ["-NSNotes.docx", "report.docx"], "what follows the separator is opened, in order");
+    }
+
+    /// A stable line that carries its own separator: `a.file` before `--` opens before `b.file` after it.
+    /// The flag loop keeps `a.file` (its `_` arm, one push) and `documents_to_open` puts the two lists
+    /// back in command-line order; the reverse, appending the loop's list to the separator's, opened them
+    /// backwards (found in review of #7849).
+    #[test]
+    fn documents_before_the_separator_keep_their_place_before_the_ones_after_it() {
+        let (options, after) = split_at_delimiter(["--sample", "a.file", "--", "b.file"].map(String::from).to_vec());
+        assert_eq!(options, ["--sample", "a.file"], "--sample is a switch and a.file is left for the loop");
+        assert_eq!(documents_to_open(vec!["a.file".into()], after), ["a.file", "b.file"]);
+        let (_, after) = split_at_delimiter(launcher_argv(&["b.file"]));
+        assert_eq!(documents_to_open(Vec::new(), after), ["b.file"], "the Launcher sends nothing before the separator");
+    }
+
+    #[test]
+    fn a_refusal_never_blocks_on_a_modal_before_the_event_loop_on_macos() {
+        use crate::build_flavor::BuildFlavor;
+        assert!(super::refusal_dialog(BuildFlavor::NightlyV1, true, false), "a desktop refusal still shows the box where one renders");
+        assert!(!super::refusal_dialog(BuildFlavor::NightlyV1, true, true), "macOS has no run loop yet: the modal would hang");
+        assert!(!super::refusal_dialog(BuildFlavor::NightlyV1, false, false), "a headless session has no box");
+        assert!(!super::refusal_dialog(BuildFlavor::Stable, true, false), "only a nightly refusal explains itself in a box");
     }
 }

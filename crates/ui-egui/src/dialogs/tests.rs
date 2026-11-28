@@ -113,6 +113,12 @@ fn confirm(h: &mut egui_kittest::Harness<'_, WordApp>, id: DialogId) {
     h.run_steps(3);
 }
 
+fn cancel(h: &mut egui_kittest::Harness<'_, WordApp>, id: DialogId) {
+    let ctx = h.ctx.clone();
+    h.state_mut().dialog_host.cancel_by_id(&ctx, id);
+    h.run_steps(3);
+}
+
 /// Opens the Paragraph dialog, edits what it shows through its fields, as automation does, and answers OK.
 fn apply_paragraph(h: &mut egui_kittest::Harness<'_, WordApp>, edit: impl FnOnce(&mut ParagraphFormat)) {
     let id = open_named(h, "paragraph", json!({}));
@@ -786,6 +792,26 @@ fn font_dialog_sets_the_asian_and_latin_fonts_separately() {
     assert_ne!(fonts(h.state()).0.as_deref(), Some("Georgia"));
 }
 
+/// #3859: the page's context menu closes when a modal dialog opens (Ctrl+D),
+/// while modeless dialogs (Find/Replace) leave it open.
+#[test]
+fn a_modal_dialog_closes_the_context_menu() {
+    let mut h = app_harness(WordApp::new(Session::new(wordcraft_doc::Document::from_text("Kilns")), crate::Services::default()));
+    h.run_steps(6);
+
+    let find_id = open_named(&mut h, "find", json!({}));
+    h.run_steps(2);
+    h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+    h.run_steps(2);
+    assert!(h.state().canvas.context_menu_open, "a modeless dialog keeps the context menu open");
+    cancel(&mut h, find_id);
+
+    let id = open_named(&mut h, "font", json!({}));
+    h.run_steps(2);
+    assert!(!h.state().canvas.context_menu_open, "the modal dialog closed it");
+    cancel(&mut h, id);
+}
+
 #[test]
 fn font_dialog_ok_keeps_what_the_user_left_alone() {
     // Issue #466: OK sent every field, clearing small caps, spacing and double underline
@@ -898,8 +924,8 @@ fn replace_all_with_regex_groups_from_the_dialog() {
         h.run_steps(2);
         h.state_mut().run("ui.dialog", json!({"name": "replace"})).unwrap();
         h.run_steps(2);
-        set_field(&mut h, "find", "query", json!(r"(?<last>\w+), (\w+)")); // PLAN: assumed key `find` for the Find and Replace dialog
-        set_field(&mut h, "find", "with", json!(with));
+        set_field(&mut h, "find", "find", json!(r"(?<last>\w+), (\w+)")); // PLAN: assumed key `find` for the Find and Replace dialog
+        set_field(&mut h, "find", "replace", json!(with));
         set_field(&mut h, "find", "regex", json!(true));
         h.get_by_label("Replace All").click();
         h.run_steps(2);

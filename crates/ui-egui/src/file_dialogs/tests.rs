@@ -455,7 +455,7 @@ fn failed_web_saves_restore_the_save_stamps() {
             assert_eq!(a.session.path, path_before, "{id}: {name}");
         }
         // The browser takes the download: the scripted host files its bytes under the name it answers with.
-        let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![PathBuf::from("draft.docx")])]).in_browser());
+        let files = Arc::new(ScriptedFiles::answering([Picked::Saved { path: PathBuf::from("draft.docx"), file_type: None }]).in_browser());
         let mut a = app_over(&files, wordcraft_doc::Document::from_text(UNSAVED));
         a.session.dirty = true;
         let revision_before = a.session.doc.core.revision;
@@ -488,7 +488,7 @@ fn web_pdf_export_keeps_an_existing_suffix_in_any_case() {
         ("Report", "Report.pdf"),
     ] {
         // The browser takes the download: the scripted host files its bytes under the name it answers with.
-        files.queue(Picked::Paths(vec![PathBuf::from(expected)]));
+        files.queue(Picked::Saved { path: PathBuf::from(expected), file_type: None });
         let result = a.execute("file.exportPdf", json!({"path": name})).unwrap();
         assert_eq!(result["downloaded"], expected, "{name}");
         assert!(files.file(std::path::Path::new(expected)).is_some_and(|b| b.starts_with(b"%PDF")), "{name}");

@@ -501,7 +501,7 @@ fn symbol_body(
                 &mut |t, _| Tab::new(word(if *t == 0 { "Symbols" } else { "Special Characters" })),
             );
             for event in out.response.events {
-                if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                     && let Some(t) = keys.last()
                 {
                     form.tab = *t;
@@ -570,7 +570,7 @@ fn special_table(ui: &mut Ui, form: &mut SymbolForm) -> bool {
     let mut activated = false;
     for event in events {
         match event {
-            CollectionEvent::Selection(SelectionChange::Set(set)) => {
+            CollectionEvent::Selection { change: SelectionChange::Set(set), .. } => {
                 if let Some(at) = set.last() {
                     form.special = *at;
                 }
@@ -655,7 +655,7 @@ fn recent_row(ui: &mut Ui, form: &mut SymbolForm, dark: bool) {
             .events
     };
     for event in events {
-        if let CollectionEvent::Selection(SelectionChange::Set(rows)) = event
+        if let CollectionEvent::Selection { change: SelectionChange::Set(rows), .. } = event
             && let Some(r) = rows.last().and_then(|i| form.recent.get(*i)).cloned()
             && let Some(c) = r.ch.chars().next()
         {
@@ -702,7 +702,7 @@ fn glyph_grid(ui: &mut Ui, form: &mut SymbolForm, dark: bool) -> bool {
     let (mut picked, mut activated) = (None, false);
     for event in events {
         match event {
-            CollectionEvent::Selection(SelectionChange::Set(rows)) => picked = rows.last().copied().or(picked),
+            CollectionEvent::Selection { change: SelectionChange::Set(rows), .. } => picked = rows.last().copied().or(picked),
             CollectionEvent::Activate(row) => {
                 picked = Some(row);
                 activated = true;

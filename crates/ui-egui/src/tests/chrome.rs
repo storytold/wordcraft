@@ -793,8 +793,16 @@ fn alt_q_opens_search_and_typing_goes_there() {
     let Some(open) = chord_event(&chord) else {
         panic!("the chord {chord} names a key egui knows");
     };
+    let release = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers };
+    let open_release = chord_event(&chord).map(|e| match e {
+        egui::Event::Key { key, physical_key, modifiers, .. } => egui::Event::Key { key, physical_key, pressed: false, repeat: false, modifiers },
+        other => other,
+    });
     // Both in one frame's input, as the platform sends them: kittest's `event` runs a frame for each queued event.
     h.input_mut().events.extend([open.clone(), egui::Event::Text("q".into())]);
+    if let Some(rel) = open_release.clone() {
+        h.input_mut().events.push(rel);
+    }
     h.step();
     // The chord fires the command in that pass; the app runs it before the next pass (`raw_input_hook`).
     h.step();
@@ -808,30 +816,64 @@ fn alt_q_opens_search_and_typing_goes_there() {
     h.step();
     assert_eq!(search_text(&h).as_deref(), Some("bold"), "typing goes into the search box");
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Kilns");
-    h.event(key(egui::Key::Escape, egui::Modifiers::NONE));
+    h.key_press(egui::Key::Escape);
     h.step();
     h.step();
     // The framework gives Escape to a field holding a draft first (`overlay/dismissal.rs`): the typed "bold" takes the
     // first one, and the second closes Search. The old app closed on one.
-    h.event(key(egui::Key::Escape, egui::Modifiers::NONE));
+    h.key_press(egui::Key::Escape);
     h.step();
     h.step();
     assert!(!crate::chrome::search::is_open(h.state()), "Escape closes Search");
     assert!(!h.state().session.view.full_screen_view);
     // Words that name no command: Enter finds them in the document, in the Navigation pane.
     h.event(open);
+    if let Some(rel) = open_release {
+        h.event(rel);
+    }
     h.step();
     h.step();
     // Typing sends each key's press before its text.
     h.event(key(egui::Key::K, egui::Modifiers::SHIFT));
     h.event(egui::Event::Text("Kilns".into()));
+    h.event(release(egui::Key::K, egui::Modifiers::SHIFT));
     h.step();
     h.event(key(egui::Key::Enter, egui::Modifiers::NONE));
+    h.event(release(egui::Key::Enter, egui::Modifiers::NONE));
     h.step();
     h.step();
     assert!(!crate::chrome::search::is_open(h.state()), "Enter ran the search");
     assert!(h.state().session.view.nav_pane, "the Navigation pane shows the results");
     assert_eq!(h.state().session.find.results.len(), 1);
+}
+
+/// #5398 (review): Tab / Down arrow moves from the Search box to its results, and Enter / Tab runs the command.
+#[test]
+fn tab_moves_to_a_search_result_and_enter_runs_it() {
+    let mut h = harness(app());
+    h.run_steps(6);
+    let key = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+    let _ = h.state_mut().run("ui.dialog", json!({"name": "commands"}));
+    h.step();
+    h.step();
+    assert!(crate::chrome::search::is_open(h.state()), "Search is open");
+
+    h.event(egui::Event::Text("word count".into()));
+    h.step();
+    h.step();
+    assert_eq!(search_text(&h).as_deref(), Some("word count"));
+    let edit = h.ctx.memory(|m| m.focused());
+    assert!(edit.is_some(), "the box has the keys");
+
+    // In the craft-libs CommandPalette architecture, a text opener driving a popup list accepts/activates
+    // the lead match on Tab or Enter:
+    h.event(key(egui::Key::Tab));
+    h.run_steps(4);
+    assert!(!crate::chrome::search::is_open(h.state()), "Tab activates the match and closes Search");
+    assert!(
+        h.state().dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("wordCount")),
+        "its dialog is open, not closed by the activation key"
+    );
 }
 
 /// #5398 (review): Focus hides the Search box, so Search there is the dialog, even on the frame
