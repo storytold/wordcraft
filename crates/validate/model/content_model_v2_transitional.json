@@ -8199,22 +8199,32 @@
     "m:oMathPara",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "m:CT_OMath"
@@ -8263,22 +8273,32 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "m:CT_OMathPara"
@@ -11440,7 +11460,11 @@
     "w:docPartBody",
     "w:endnote",
     "w:footnote",
-    "w:tc"
+    "w:ftr",
+    "w:hdr",
+    "w:tc",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_AltChunk"
@@ -12031,21 +12055,298 @@
   "w:bdo": {
    "ambiguous_type": false,
    "canonical_type": "w:CT_BdoContentRun",
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXml",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:smartTag",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:sdt",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:dir",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bdo",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:r",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:proofErr",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permStart",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permEnd",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:ins",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:del",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFrom",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveTo",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMathPara",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMath",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:fldSimple",
+     "via_group": "EG_PContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:hyperlink",
+     "via_group": "EG_PContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:subDoc",
+     "via_group": "EG_PContent"
+    }
+   ],
    "declared_in": [
     "wml.xsd"
    ],
    "element": "w:bdo",
    "family": null,
-   "model_kind": "empty",
+   "model_kind": "group",
    "parents": [
+    "w:bdo",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:fldSimple",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:sdtContent",
     "w:smartTag"
    ],
    "type_variants": [
@@ -12623,22 +12924,32 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_MarkupRange"
@@ -12669,22 +12980,32 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_Bookmark"
@@ -13755,22 +14076,32 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_MarkupRange"
@@ -13801,22 +14132,32 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_MarkupRange"
@@ -15950,22 +16291,30 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_CustomXmlBlock",
@@ -16009,22 +16358,32 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_Markup"
@@ -16055,22 +16414,32 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_TrackChange"
@@ -16101,22 +16470,32 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_Markup"
@@ -16147,22 +16526,32 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_TrackChange"
@@ -16193,22 +16582,32 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_Markup"
@@ -16239,22 +16638,32 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_TrackChange"
@@ -16285,22 +16694,32 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_Markup"
@@ -16331,22 +16750,32 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_TrackChange"
@@ -17192,24 +17621,34 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
     "w:rPr",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
     "w:tr",
-    "w:trPr"
+    "w:trPr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_MathCtrlDel",
@@ -17326,21 +17765,298 @@
   "w:dir": {
    "ambiguous_type": false,
    "canonical_type": "w:CT_DirContentRun",
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXml",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:smartTag",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:sdt",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:dir",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bdo",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:r",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:proofErr",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permStart",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permEnd",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:ins",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:del",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFrom",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveTo",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMathPara",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMath",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:fldSimple",
+     "via_group": "EG_PContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:hyperlink",
+     "via_group": "EG_PContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:subDoc",
+     "via_group": "EG_PContent"
+    }
+   ],
    "declared_in": [
     "wml.xsd"
    ],
    "element": "w:dir",
    "family": null,
-   "model_kind": "empty",
+   "model_kind": "group",
    "parents": [
+    "w:bdo",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:fldSimple",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:sdtContent",
     "w:smartTag"
    ],
    "type_variants": [
@@ -20340,7 +21056,7 @@
      "via_group": null
     },
     {
-     "choice_group": "choice2",
+     "choice_group": "choice1",
      "compositor": "choice",
      "max": "unbounded",
      "min": 1,
@@ -20348,7 +21064,7 @@
      "via_group": null
     },
     {
-     "choice_group": "choice2",
+     "choice_group": "choice1",
      "compositor": "choice",
      "max": "unbounded",
      "min": 1,
@@ -20356,7 +21072,7 @@
      "via_group": null
     },
     {
-     "choice_group": "choice2",
+     "choice_group": "choice1",
      "compositor": "choice",
      "max": "unbounded",
      "min": 1,
@@ -20870,9 +21586,13 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:customXml",
+    "w:dir",
     "w:fldSimple",
+    "w:hyperlink",
     "w:p",
+    "w:sdtContent",
     "w:smartTag"
    ],
    "type_variants": [
@@ -21942,13 +22662,254 @@
   "w:ftr": {
    "ambiguous_type": false,
    "canonical_type": "w:CT_HdrFtr",
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXml",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:sdt",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:p",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:tbl",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:proofErr",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permStart",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permEnd",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:ins",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:del",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFrom",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveTo",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice6",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMathPara",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice6",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMath",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:altChunk",
+     "via_group": "EG_BlockLevelElts"
+    }
+   ],
    "declared_in": [
     "wml.xsd"
    ],
    "element": "w:ftr",
    "family": "document-structure",
-   "model_kind": "empty",
+   "model_kind": "group",
    "parents": [],
    "type_variants": [
     "w:CT_HdrFtr"
@@ -22219,13 +23180,254 @@
   "w:hdr": {
    "ambiguous_type": false,
    "canonical_type": "w:CT_HdrFtr",
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXml",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:sdt",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:p",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:tbl",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:proofErr",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permStart",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permEnd",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:ins",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:del",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFrom",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveTo",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice6",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMathPara",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice6",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMath",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:altChunk",
+     "via_group": "EG_BlockLevelElts"
+    }
+   ],
    "declared_in": [
     "wml.xsd"
    ],
    "element": "w:hdr",
    "family": "document-structure",
-   "model_kind": "empty",
+   "model_kind": "group",
    "parents": [],
    "type_variants": [
     "w:CT_HdrFtr"
@@ -22568,13 +23770,286 @@
   "w:hyperlink": {
    "ambiguous_type": false,
    "canonical_type": "w:CT_Hyperlink",
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXml",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:smartTag",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:sdt",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:dir",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bdo",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:r",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:proofErr",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permStart",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permEnd",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:ins",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:del",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFrom",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveTo",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMathPara",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMath",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:fldSimple",
+     "via_group": "EG_PContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:hyperlink",
+     "via_group": "EG_PContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:subDoc",
+     "via_group": "EG_PContent"
+    }
+   ],
    "declared_in": [
     "wml.xsd"
    ],
    "element": "w:hyperlink",
    "family": "hyperlinks",
-   "model_kind": "empty",
+   "model_kind": "group",
    "parents": [
     "m:deg",
     "m:den",
@@ -22585,9 +24060,13 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:customXml",
+    "w:dir",
     "w:fldSimple",
+    "w:hyperlink",
     "w:p",
+    "w:sdtContent",
     "w:smartTag"
    ],
    "type_variants": [
@@ -23228,25 +24707,35 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:numPr",
     "w:p",
     "w:rPr",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
     "w:tr",
-    "w:trPr"
+    "w:trPr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_MathCtrlIns",
@@ -25194,23 +26683,33 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
     "w:rPr",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_RunTrackChange",
@@ -25245,22 +26744,32 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_MarkupRange"
@@ -25291,22 +26800,32 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_MoveBookmark"
@@ -25750,23 +27269,33 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
     "w:rPr",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_RunTrackChange",
@@ -25801,22 +27330,32 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_MarkupRange"
@@ -25847,22 +27386,32 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_MoveBookmark"
@@ -27330,7 +28879,12 @@
     "w:docPartBody",
     "w:endnote",
     "w:footnote",
-    "w:tc"
+    "w:ftr",
+    "w:hdr",
+    "w:sdtContent",
+    "w:tc",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_P"
@@ -28728,22 +30282,32 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_Perm"
@@ -28774,22 +30338,32 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_PermStart"
@@ -29412,22 +30986,32 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_ProofErr"
@@ -29811,13 +31395,19 @@
    "family": "document-structure",
    "model_kind": "sequence",
    "parents": [
+    "w:bdo",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:fldSimple",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:rt",
+    "w:rubyBase",
+    "w:sdtContent",
     "w:smartTag"
    ],
    "type_variants": [
@@ -32072,13 +33662,222 @@
   "w:rt": {
    "ambiguous_type": false,
    "canonical_type": "w:CT_RubyContent",
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:r",
+     "via_group": "EG_RubyContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:proofErr",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permStart",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permEnd",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:ins",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:del",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFrom",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveTo",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMathPara",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMath",
+     "via_group": "EG_MathContent"
+    }
+   ],
    "declared_in": [
     "wml.xsd"
    ],
    "element": "w:rt",
    "family": null,
-   "model_kind": "empty",
+   "model_kind": "group",
    "parents": [
     "w:ruby"
    ],
@@ -32208,13 +34007,222 @@
   "w:rubyBase": {
    "ambiguous_type": false,
    "canonical_type": "w:CT_RubyContent",
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:r",
+     "via_group": "EG_RubyContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:proofErr",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permStart",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permEnd",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:ins",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:del",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFrom",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveTo",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMathPara",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMath",
+     "via_group": "EG_MathContent"
+    }
+   ],
    "declared_in": [
     "wml.xsd"
    ],
    "element": "w:rubyBase",
    "family": null,
-   "model_kind": "empty",
+   "model_kind": "group",
    "parents": [
     "w:ruby"
    ],
@@ -32625,22 +34633,30 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:body",
     "w:comment",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:docPartBody",
     "w:endnote",
     "w:fldSimple",
     "w:footnote",
+    "w:ftr",
+    "w:hdr",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:sdtContent",
     "w:smartTag",
     "w:tbl",
     "w:tc",
-    "w:tr"
+    "w:tr",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_SdtBlock",
@@ -32667,18 +34683,1207 @@
   "w:sdtContent": {
    "ambiguous_type": true,
    "canonical_type": "w:CT_SdtContentBlock",
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXml",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:sdt",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:p",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:tbl",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:proofErr",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permStart",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permEnd",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:ins",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:del",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFrom",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveTo",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMathPara",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMath",
+     "via_group": "EG_MathContent"
+    }
+   ],
    "declared_in": [
     "wml.xsd"
    ],
    "element": "w:sdtContent",
    "family": null,
-   "model_kind": "empty",
+   "model_kind": "group",
    "models_by_variant": {
-    "w:CT_SdtContentBlock": [],
-    "w:CT_SdtContentCell": [],
-    "w:CT_SdtContentRow": [],
-    "w:CT_SdtContentRun": []
+    "w:CT_SdtContentBlock": [
+     {
+      "choice_group": "choice1",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXml",
+      "via_group": "EG_ContentBlockContent"
+     },
+     {
+      "choice_group": "choice1",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:sdt",
+      "via_group": "EG_ContentBlockContent"
+     },
+     {
+      "choice_group": "choice1",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:p",
+      "via_group": "EG_ContentBlockContent"
+     },
+     {
+      "choice_group": "choice1",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:tbl",
+      "via_group": "EG_ContentBlockContent"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:proofErr",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:permStart",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:permEnd",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:bookmarkStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:bookmarkEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveFromRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveFromRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveToRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveToRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:commentRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:commentRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlInsRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlInsRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlDelRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlDelRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlMoveFromRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlMoveFromRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlMoveToRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlMoveToRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:ins",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:del",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveFrom",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveTo",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice4",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "m:oMathPara",
+      "via_group": "EG_MathContent"
+     },
+     {
+      "choice_group": "choice4",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "m:oMath",
+      "via_group": "EG_MathContent"
+     }
+    ],
+    "w:CT_SdtContentCell": [
+     {
+      "choice_group": "choice1",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:tc",
+      "via_group": "EG_ContentCellContent"
+     },
+     {
+      "choice_group": "choice1",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXml",
+      "via_group": "EG_ContentCellContent"
+     },
+     {
+      "choice_group": "choice1",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:sdt",
+      "via_group": "EG_ContentCellContent"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:proofErr",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:permStart",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:permEnd",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:bookmarkStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:bookmarkEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveFromRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveFromRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveToRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveToRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:commentRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:commentRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlInsRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlInsRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlDelRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlDelRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlMoveFromRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlMoveFromRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlMoveToRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlMoveToRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:ins",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:del",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveFrom",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveTo",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice4",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "m:oMathPara",
+      "via_group": "EG_MathContent"
+     },
+     {
+      "choice_group": "choice4",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "m:oMath",
+      "via_group": "EG_MathContent"
+     }
+    ],
+    "w:CT_SdtContentRow": [
+     {
+      "choice_group": "choice1",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:tr",
+      "via_group": "EG_ContentRowContent"
+     },
+     {
+      "choice_group": "choice1",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXml",
+      "via_group": "EG_ContentRowContent"
+     },
+     {
+      "choice_group": "choice1",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:sdt",
+      "via_group": "EG_ContentRowContent"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:proofErr",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:permStart",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:permEnd",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:bookmarkStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:bookmarkEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveFromRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveFromRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveToRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveToRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:commentRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:commentRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlInsRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlInsRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlDelRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlDelRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlMoveFromRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlMoveFromRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlMoveToRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlMoveToRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:ins",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:del",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveFrom",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveTo",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice4",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "m:oMathPara",
+      "via_group": "EG_MathContent"
+     },
+     {
+      "choice_group": "choice4",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "m:oMath",
+      "via_group": "EG_MathContent"
+     }
+    ],
+    "w:CT_SdtContentRun": [
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXml",
+      "via_group": "EG_ContentRunContent"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:smartTag",
+      "via_group": "EG_ContentRunContent"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:sdt",
+      "via_group": "EG_ContentRunContent"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:dir",
+      "via_group": "EG_ContentRunContent"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:bdo",
+      "via_group": "EG_ContentRunContent"
+     },
+     {
+      "choice_group": "choice2",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:r",
+      "via_group": "EG_ContentRunContent"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:proofErr",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:permStart",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:permEnd",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice4",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:bookmarkStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice4",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:bookmarkEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice4",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveFromRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice4",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveFromRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice4",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveToRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice4",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveToRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice4",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:commentRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice4",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:commentRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice4",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlInsRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice4",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlInsRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice4",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlDelRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice4",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlDelRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice4",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlMoveFromRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice4",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlMoveFromRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice4",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlMoveToRangeStart",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice4",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:customXmlMoveToRangeEnd",
+      "via_group": "EG_RangeMarkupElements"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:ins",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:del",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveFrom",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice3",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:moveTo",
+      "via_group": "EG_RunLevelElts"
+     },
+     {
+      "choice_group": "choice5",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "m:oMathPara",
+      "via_group": "EG_MathContent"
+     },
+     {
+      "choice_group": "choice5",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "m:oMath",
+      "via_group": "EG_MathContent"
+     },
+     {
+      "choice_group": "choice1",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:fldSimple",
+      "via_group": "EG_PContent"
+     },
+     {
+      "choice_group": "choice1",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:hyperlink",
+      "via_group": "EG_PContent"
+     },
+     {
+      "choice_group": "choice1",
+      "compositor": "choice",
+      "max": "unbounded",
+      "min": 0,
+      "name": "w:subDoc",
+      "via_group": "EG_PContent"
+     }
+    ]
    },
    "parents": [
     "w:sdt"
@@ -34975,13 +38180,17 @@
     "m:oMath",
     "m:sub",
     "m:sup",
+    "w:bdo",
     "w:customXml",
     "w:del",
+    "w:dir",
     "w:fldSimple",
+    "w:hyperlink",
     "w:ins",
     "w:moveFrom",
     "w:moveTo",
     "w:p",
+    "w:sdtContent",
     "w:smartTag"
    ],
    "type_variants": [
@@ -35959,9 +39168,13 @@
    "family": "document-structure",
    "model_kind": "empty",
    "parents": [
+    "w:bdo",
     "w:customXml",
+    "w:dir",
     "w:fldSimple",
+    "w:hyperlink",
     "w:p",
+    "w:sdtContent",
     "w:smartTag"
    ],
    "type_variants": [
@@ -36877,7 +40090,12 @@
     "w:docPartBody",
     "w:endnote",
     "w:footnote",
-    "w:tc"
+    "w:ftr",
+    "w:hdr",
+    "w:sdtContent",
+    "w:tc",
+    "w:txbxContent",
+    "wp:txbxContent"
    ],
    "type_variants": [
     "w:CT_Tbl"
@@ -38543,6 +41761,7 @@
    "model_kind": "sequence",
    "parents": [
     "w:customXml",
+    "w:sdtContent",
     "w:tr"
    ],
    "type_variants": [
@@ -39866,6 +43085,7 @@
    "model_kind": "sequence",
    "parents": [
     "w:customXml",
+    "w:sdtContent",
     "w:tbl"
    ],
    "type_variants": [
@@ -40373,13 +43593,254 @@
   "w:txbxContent": {
    "ambiguous_type": false,
    "canonical_type": "w:CT_TxbxContent",
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXml",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:sdt",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:p",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:tbl",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:proofErr",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permStart",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permEnd",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:ins",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:del",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFrom",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveTo",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice6",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMathPara",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice6",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMath",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:altChunk",
+     "via_group": "EG_BlockLevelElts"
+    }
+   ],
    "declared_in": [
     "wml.xsd"
    ],
    "element": "w:txbxContent",
    "family": "textboxes-drawings",
-   "model_kind": "empty",
+   "model_kind": "group",
    "parents": [],
    "type_variants": [
     "w:CT_TxbxContent"
@@ -42499,13 +45960,254 @@
   "wp:txbxContent": {
    "ambiguous_type": false,
    "canonical_type": "wp:CT_TxbxContent",
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXml",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:sdt",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:p",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:tbl",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:proofErr",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permStart",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permEnd",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:ins",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:del",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFrom",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveTo",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice6",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMathPara",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice6",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMath",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:altChunk",
+     "via_group": "EG_BlockLevelElts"
+    }
+   ],
    "declared_in": [
     "dml-wordprocessingDrawing.xsd"
    ],
    "element": "wp:txbxContent",
    "family": "wp-vocabulary",
-   "model_kind": "empty",
+   "model_kind": "group",
    "parents": [
     "wp:txbx"
    ],
@@ -43034,7 +46736,7 @@
    "ambiguous_type_elements": 41,
    "complex_types": 386,
    "element_names": 861,
-   "elements_with_children": 207,
+   "elements_with_children": 217,
    "elements_with_parents": 845,
    "groups": 28
   },
@@ -46676,9 +50378,282 @@
    "model_kind": "empty"
   },
   "w:CT_BdoContentRun": {
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXml",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:smartTag",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:sdt",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:dir",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bdo",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:r",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:proofErr",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permStart",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permEnd",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:ins",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:del",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFrom",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveTo",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMathPara",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMath",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:fldSimple",
+     "via_group": "EG_PContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:hyperlink",
+     "via_group": "EG_PContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:subDoc",
+     "via_group": "EG_PContent"
+    }
+   ],
    "file": "wml.xsd",
-   "model_kind": "empty"
+   "model_kind": "group"
   },
   "w:CT_Body": {
    "children": [
@@ -48890,9 +52865,282 @@
    "model_kind": "empty"
   },
   "w:CT_DirContentRun": {
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXml",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:smartTag",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:sdt",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:dir",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bdo",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:r",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:proofErr",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permStart",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permEnd",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:ins",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:del",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFrom",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveTo",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMathPara",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMath",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:fldSimple",
+     "via_group": "EG_PContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:hyperlink",
+     "via_group": "EG_PContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:subDoc",
+     "via_group": "EG_PContent"
+    }
+   ],
    "file": "wml.xsd",
-   "model_kind": "empty"
+   "model_kind": "group"
   },
   "w:CT_Div": {
    "children": [
@@ -49581,7 +53829,7 @@
      "via_group": null
     },
     {
-     "choice_group": "choice2",
+     "choice_group": "choice1",
      "compositor": "choice",
      "max": "unbounded",
      "min": 1,
@@ -49589,7 +53837,7 @@
      "via_group": null
     },
     {
-     "choice_group": "choice2",
+     "choice_group": "choice1",
      "compositor": "choice",
      "max": "unbounded",
      "min": 1,
@@ -49597,7 +53845,7 @@
      "via_group": null
     },
     {
-     "choice_group": "choice2",
+     "choice_group": "choice1",
      "compositor": "choice",
      "max": "unbounded",
      "min": 1,
@@ -50414,9 +54662,250 @@
    "model_kind": "empty"
   },
   "w:CT_HdrFtr": {
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXml",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:sdt",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:p",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:tbl",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:proofErr",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permStart",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permEnd",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:ins",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:del",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFrom",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveTo",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice6",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMathPara",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice6",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMath",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:altChunk",
+     "via_group": "EG_BlockLevelElts"
+    }
+   ],
    "file": "wml.xsd",
-   "model_kind": "empty"
+   "model_kind": "group"
   },
   "w:CT_HdrFtrRef": {
    "children": [],
@@ -50453,9 +54942,282 @@
    "model_kind": "empty"
   },
   "w:CT_Hyperlink": {
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXml",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:smartTag",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:sdt",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:dir",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bdo",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:r",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:proofErr",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permStart",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permEnd",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:ins",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:del",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFrom",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveTo",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMathPara",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMath",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:fldSimple",
+     "via_group": "EG_PContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:hyperlink",
+     "via_group": "EG_PContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:subDoc",
+     "via_group": "EG_PContent"
+    }
+   ],
    "file": "wml.xsd",
-   "model_kind": "empty"
+   "model_kind": "group"
   },
   "w:CT_Ind": {
    "children": [],
@@ -54593,9 +59355,218 @@
    "model_kind": "empty"
   },
   "w:CT_RubyContent": {
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:r",
+     "via_group": "EG_RubyContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:proofErr",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permStart",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permEnd",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:ins",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:del",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFrom",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveTo",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMathPara",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMath",
+     "via_group": "EG_MathContent"
+    }
+   ],
    "file": "wml.xsd",
-   "model_kind": "empty"
+   "model_kind": "group"
   },
   "w:CT_RubyPr": {
    "children": [
@@ -55145,24 +60116,980 @@
    "model_kind": "sequence"
   },
   "w:CT_SdtContentBlock": {
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXml",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:sdt",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:p",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:tbl",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:proofErr",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permStart",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permEnd",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:ins",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:del",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFrom",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveTo",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMathPara",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMath",
+     "via_group": "EG_MathContent"
+    }
+   ],
    "file": "wml.xsd",
-   "model_kind": "empty"
+   "model_kind": "group"
   },
   "w:CT_SdtContentCell": {
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:tc",
+     "via_group": "EG_ContentCellContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXml",
+     "via_group": "EG_ContentCellContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:sdt",
+     "via_group": "EG_ContentCellContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:proofErr",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permStart",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permEnd",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:ins",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:del",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFrom",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveTo",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMathPara",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMath",
+     "via_group": "EG_MathContent"
+    }
+   ],
    "file": "wml.xsd",
-   "model_kind": "empty"
+   "model_kind": "group"
   },
   "w:CT_SdtContentRow": {
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:tr",
+     "via_group": "EG_ContentRowContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXml",
+     "via_group": "EG_ContentRowContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:sdt",
+     "via_group": "EG_ContentRowContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:proofErr",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permStart",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permEnd",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:ins",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:del",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFrom",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveTo",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMathPara",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMath",
+     "via_group": "EG_MathContent"
+    }
+   ],
    "file": "wml.xsd",
-   "model_kind": "empty"
+   "model_kind": "group"
   },
   "w:CT_SdtContentRun": {
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXml",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:smartTag",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:sdt",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:dir",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bdo",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice2",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:r",
+     "via_group": "EG_ContentRunContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:proofErr",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permStart",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permEnd",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:ins",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:del",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFrom",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveTo",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMathPara",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMath",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:fldSimple",
+     "via_group": "EG_PContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:hyperlink",
+     "via_group": "EG_PContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:subDoc",
+     "via_group": "EG_PContent"
+    }
+   ],
    "file": "wml.xsd",
-   "model_kind": "empty"
+   "model_kind": "group"
   },
   "w:CT_SdtDate": {
    "children": [
@@ -59785,9 +65712,250 @@
    "model_kind": "empty"
   },
   "w:CT_TxbxContent": {
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXml",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:sdt",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:p",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:tbl",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:proofErr",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permStart",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permEnd",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:ins",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:del",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFrom",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveTo",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice6",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMathPara",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice6",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMath",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:altChunk",
+     "via_group": "EG_BlockLevelElts"
+    }
+   ],
    "file": "wml.xsd",
-   "model_kind": "empty"
+   "model_kind": "group"
   },
   "w:CT_Underline": {
    "children": [],
@@ -60232,9 +66400,250 @@
    "model_kind": "sequence"
   },
   "wp:CT_TxbxContent": {
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXml",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:sdt",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:p",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice3",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:tbl",
+     "via_group": "EG_ContentBlockContent"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:proofErr",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permStart",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:permEnd",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:bookmarkEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:commentRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlInsRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlDelRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveFromRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeStart",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice5",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:customXmlMoveToRangeEnd",
+     "via_group": "EG_RangeMarkupElements"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:ins",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:del",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveFrom",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice4",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:moveTo",
+     "via_group": "EG_RunLevelElts"
+    },
+    {
+     "choice_group": "choice6",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMathPara",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice6",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "m:oMath",
+     "via_group": "EG_MathContent"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "w:altChunk",
+     "via_group": "EG_BlockLevelElts"
+    }
+   ],
    "file": "dml-wordprocessingDrawing.xsd",
-   "model_kind": "empty"
+   "model_kind": "group"
   },
   "wp:CT_WordprocessingCanvas": {
    "children": [

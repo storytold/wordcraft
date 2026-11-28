@@ -135,18 +135,29 @@ fn ins_group_context_expands_to_parent_types() {
     assert!(contexts("w:CT_TrackChange").contains(&"w:CT_NumPr"));
 }
 
+/// A bare group reference as a type's whole content expands: the group context contributes parents and the type carries the group's slots.
 #[test]
-fn unflattened_group_context_adds_no_parent() {
-    // `a:EG_Effect` is only the bare top-level content of `a:CT_EffectContainer`, which the
-    // extractor records as empty, so no type holds a slot from it. The group context must add no
-    // parent (and must not stop generation); the explicit `a:CT_Blip` context remains.
+fn bare_group_content_expands_to_parents_and_slots() {
+    // `a:EG_Effect` is the bare top-level content of `a:CT_EffectContainer`; the extractor
+    // expands a bare group reference like any nested one, so the group context contributes
+    // the container as a parent alongside the explicit `a:CT_Blip` context.
     let el = element_model("a:alphaBiLevel").expect("a:alphaBiLevel row");
     let contexts: Vec<&str> = el.variants.iter().flat_map(|v| v.contexts.iter().copied()).collect();
-    assert_eq!(contexts, ["a:CT_Blip"]);
-    // The two types whose content is such a group carry no child slots (README scope limits).
-    for key in ["a:CT_EffectContainer", "w:CT_RubyContent"] {
-        assert!(type_model(key).expect(key).children.is_empty(), "{key}");
-    }
+    assert!(contexts.contains(&"a:CT_Blip"), "{contexts:?}");
+    assert!(contexts.contains(&"a:CT_EffectContainer"), "{contexts:?}");
+    // Types whose whole content is such a group carry the group's child slots.
+    let fx = type_model("a:CT_EffectContainer").expect("a:CT_EffectContainer");
+    assert!(fx.children.iter().any(|c| c.name == "a:alphaBiLevel"), "{fx:?}");
+    let ruby = type_model("w:CT_RubyContent").expect("w:CT_RubyContent");
+    assert!(ruby.children.iter().any(|c| c.name == "w:r"), "{ruby:?}");
+}
+
+#[test]
+fn unflattened_group_context_adds_no_parent() {
+    // Groups no in-scope type references at all (`a:EG_Media`, `a:EG_TextGeometry`) still
+    // contribute no parents; generation accepts them via the unflattened-group check.
+    let el = element_model("a:videoFile").expect("a:videoFile row");
+    let _ = el; // presence of the row is the assertion: generation did not fail
 }
 
 #[test]

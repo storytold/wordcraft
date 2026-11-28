@@ -226,7 +226,7 @@ class Schema:
     # namespace, a prefixed name/ref resolves through that file's xmlns
     # map, and a group reference switches the context to the group's
     # defining file for its own children.
-    def expand_particle(self, node, file_ctx, outer=(1, 1), choice_id=None, counter=None, depth=0):
+    def expand_particle(self, node, file_ctx, outer=(1, 1), choice_id=None, counter=None, depth=0, parent_is_choice=False):
         if counter is None:
             counter = [0]
         items = []
@@ -271,11 +271,16 @@ class Schema:
             return items
         if kind in ("sequence", "choice", "all"):
             cid = choice_id
-            if kind == "choice":
+            if kind == "choice" and not (parent_is_choice and choice_id is not None):
+                # A choice directly inside a choice contributes its
+                # branches to the enclosing choice (XSD: the nested
+                # choice is one alternative of the outer one), so it
+                # reuses the enclosing group id instead of minting a
+                # separate, seemingly independent group.
                 counter[0] += 1
                 cid = f"choice{counter[0]}"
             for child in node:
-                for it in self.expand_particle(child, file_ctx, occ, cid, counter, depth + 1):
+                for it in self.expand_particle(child, file_ctx, occ, cid, counter, depth + 1, parent_is_choice=(kind == "choice")):
                     if it["compositor"] is None:
                         it["compositor"] = kind
                     items.append(it)
@@ -286,7 +291,7 @@ class Schema:
         """Expand the compositor children of a complexType-like node."""
         items, kind = [], "empty"
         for child in node:
-            if local(child.tag) in ("sequence", "choice", "all"):
+            if local(child.tag) in ("sequence", "choice", "all", "group"):
                 items = self.expand_particle(child, file_ctx)
                 kind = local(child.tag)
         return items, kind
@@ -304,7 +309,13 @@ class Schema:
         items, kind = [], "empty"
         for child in node:
             ck = local(child.tag)
-            if ck in ("sequence", "choice", "all"):
+            if ck in ("sequence", "choice", "all", "group"):
+                # A bare group reference as the whole content model
+                # (e.g. CT_SdtContentBlock, CT_RubyContent,
+                # CT_EffectContainer) expands through the group, like
+                # a group nested in a compositor; without this the
+                # type was recorded empty and every real child of such
+                # an element looked disallowed.
                 items, kind = self.expand_particle(child, file_ctx), ck
             elif ck == "complexContent":
                 for cc in child:

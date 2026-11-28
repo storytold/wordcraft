@@ -30,13 +30,13 @@ SHA-256 of the checked-in files:
 
 | File | SHA-256 |
 |---|---|
-| `extract_content_model.py` | `2e4e0ce8a564074fe31c52852b15c1a25f43fe0025fbc7b1a526e00d83ebb53e` |
-| `generate_model.py` | `0732c987ce12378365e9a36c88690fb0bde757830d027af7706bbbe23a55f1fe` |
-| `content_model_v2.json` | `f36a42e324bae4cf4d6ce03ebbfb53e2e5729d76ae5f4929332a272d02545978` |
-| `content_model_v2_transitional.json` | `92c433577c914785908f42553718cc41b4f12161125596383ab6836ac3c54fbf` |
-| `content_model_dml_v2.json` | `9a3e58c9bc70d3b2fa9718a02666b51d2f4822e66ff61e212cdea63e3e569549` |
-| `content_model_dml_v2_transitional.json` | `81290399fb8f89aa287d275172b7214378449a54fd3783e42a8f899958dae127` |
-| `../src/model.rs` | `2b9afc35bb5d65fa829e17c1a80a661df326f06f00e9b7ccce0723c3ae513d0b` |
+| `extract_content_model.py` | `0029627206d37a5635764a0526d75ae5bbf85e14805a27cf86ebd2b9e6b41684` |
+| `generate_model.py` | `29e631ab2a7396186ce25eef516c2cd14c027898fb855d9ff48235d8cfa34969` |
+| `content_model_v2.json` | `72b60bbd5204d213d7ba80a71836a5b4944643eb9f139e2b5aa273425b7ed6f3` |
+| `content_model_v2_transitional.json` | `7a564d9940abf151bab97bc615ecca14814faa7a424bc4a9a77b0c67dc08076e` |
+| `content_model_dml_v2.json` | `04ed5e7b8a794de38395521d76900c53dbf84c4b28f4fc2d1bdc67439cc1be80` |
+| `content_model_dml_v2_transitional.json` | `84a91ddd00c2b7aa956f035c1ac7102c11dae2a9dc1c5f7c6ee1bbb62b89d29b` |
+| `../src/model.rs` | `77fe86f35b866b9d93a56307bb153cb5502f69054193dfa9824b301bcb3a3158` |
 
 ## Line endings and regeneration
 
@@ -117,11 +117,13 @@ loudly if any file was edited without regenerating.
   in-scope complex type that references it is an empty row (see below);
 - an in-scope schema file the extractor reads is missing from `--xsd-dir`.
 
-Four group contexts are flattened into no type, and contribute no parent types. `a:EG_Media` and
-`a:EG_TextGeometry` are referenced by no in-scope complex type. `w:EG_RubyContent` and `a:EG_Effect`
-are the whole content of `w:CT_RubyContent` and `a:CT_EffectContainer`, as a bare top-level
-`xsd:group ref`. The extractor does not flatten that shape and records both types as `empty`. The
-generator confirms each case against the `xsd:group ref` sites in the seven in-scope schema files
+Two group contexts are flattened into no type, and contribute no parent types: `a:EG_Media` and
+`a:EG_TextGeometry` are referenced by no in-scope complex type. A group that is a type's whole
+content as a bare top-level `xsd:group ref` (`w:EG_RubyContent` in `w:CT_RubyContent`,
+`a:EG_Effect` in `a:CT_EffectContainer`, the `EG_Content*` groups in the sdt/header/textbox
+types) is expanded by the extractor like any nested group reference, so those types carry the
+group's slots. The generator confirms each unflattened case against the `xsd:group ref` sites
+in the seven in-scope schema files
 (`wml.xsd`, `shared-math.xsd`, `shared-bibliography.xsd`, `dml-wordprocessingDrawing.xsd`,
 `dml-picture.xsd`, `dml-main.xsd`, `dml-chart.xsd`) and lists them in the `model.rs` header.
 
@@ -145,9 +147,6 @@ generator confirms each case against the `xsd:group ref` sites in the seven in-s
 
 ## Scope limits
 
-- `w:CT_RubyContent` (`w:rt`, `w:rubyBase`) and `a:CT_EffectContainer` (`a:cont`, `a:effectDag`)
-  have an empty child list in `TYPES`, but the schema allows content there (see above). A grammar
-  check must treat these two types as unmodelled, not as "no children allowed".
 - Attribute models and simple-type facets are not extracted, apart from `ST_NumberFormat`.
 - An element with no row is not checked internally: an unresolved type, `<any>` content such as
   `a:graphicData`, a Transitional-only name, or `w14:`/`w15:`/`mc:` (no ECMA XSD exists for

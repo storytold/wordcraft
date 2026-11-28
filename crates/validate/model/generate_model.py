@@ -221,15 +221,15 @@ def check_unflattened_group(ctx, types, refs):
     """Accept a group context that no type in the tables flattens, or fail.
 
     The extractor flattens a group into a type only when the group sits inside
-    the type's ``sequence``/``choice``. Two shapes leave a group with no slot
+    the type's ``sequence``/``choice``. One shape leaves a group with no slot
     in any type: the group is never referenced by a complex type (DML
-    ``EG_Media``, ``EG_TextGeometry``), or the group is the type's whole
-    content model as a bare top-level particle, which the extractor records
-    as an ``empty`` type (``w:CT_RubyContent`` over ``EG_RubyContent``,
-    ``a:CT_EffectContainer`` over ``EG_Effect``). In both shapes the context
-    names no parent type that the tables hold a slot for, so it contributes
-    no parents. Anything else (a referencing type with children, or an
-    unknown type) is a real inconsistency and fails.
+    ``EG_Media``, ``EG_TextGeometry``). (A group that IS a type's whole
+    content model as a bare top-level particle is expanded by the extractor
+    like any nested group reference, so it flattens normally.) For the
+    never-referenced shape the context names no parent type that the tables
+    hold a slot for, so it contributes no parents. Anything else (a
+    referencing type with children, or an unknown type) is a real
+    inconsistency and fails.
 
     Returns the sorted qualified keys of the empty types whose content is the
     group (the tables do not carry their content).

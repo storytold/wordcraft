@@ -565,7 +565,9 @@
    "family": "drawingml-main",
    "model_kind": "empty",
    "parents": [
-    "a:blip"
+    "a:blip",
+    "a:cont",
+    "a:effectDag"
    ],
    "type_variants": [
     "a:CT_AlphaBiLevelEffect"
@@ -588,7 +590,9 @@
    "family": "drawingml-main",
    "model_kind": "empty",
    "parents": [
-    "a:blip"
+    "a:blip",
+    "a:cont",
+    "a:effectDag"
    ],
    "type_variants": [
     "a:CT_AlphaCeilingEffect"
@@ -611,7 +615,9 @@
    "family": "drawingml-main",
    "model_kind": "empty",
    "parents": [
-    "a:blip"
+    "a:blip",
+    "a:cont",
+    "a:effectDag"
    ],
    "type_variants": [
     "a:CT_AlphaFloorEffect"
@@ -683,7 +689,9 @@
    "family": "drawingml-main",
    "model_kind": "sequence",
    "parents": [
-    "a:blip"
+    "a:blip",
+    "a:cont",
+    "a:effectDag"
    ],
    "type_variants": [
     "a:CT_AlphaInverseEffect"
@@ -729,6 +737,8 @@
    },
    "parents": [
     "a:blip",
+    "a:cont",
+    "a:effectDag",
     "a:hslClr",
     "a:prstClr",
     "a:schemeClr",
@@ -761,7 +771,9 @@
    "family": "drawingml-main",
    "model_kind": "empty",
    "parents": [
-    "a:blip"
+    "a:blip",
+    "a:cont",
+    "a:effectDag"
    ],
    "type_variants": [
     "a:CT_AlphaModulateFixedEffect"
@@ -810,7 +822,10 @@
    "element": "a:alphaOutset",
    "family": "drawingml-main",
    "model_kind": "empty",
-   "parents": [],
+   "parents": [
+    "a:cont",
+    "a:effectDag"
+   ],
    "type_variants": [
     "a:CT_AlphaOutsetEffect"
    ],
@@ -831,7 +846,9 @@
    "family": "drawingml-main",
    "model_kind": "empty",
    "parents": [
-    "a:blip"
+    "a:blip",
+    "a:cont",
+    "a:effectDag"
    ],
    "type_variants": [
     "a:CT_AlphaReplaceEffect"
@@ -1446,7 +1463,9 @@
    "family": "drawingml-main",
    "model_kind": "empty",
    "parents": [
-    "a:blip"
+    "a:blip",
+    "a:cont",
+    "a:effectDag"
    ],
    "type_variants": [
     "a:CT_BiLevelEffect"
@@ -1517,7 +1536,10 @@
    "element": "a:blend",
    "family": "drawingml-main",
    "model_kind": "sequence",
-   "parents": [],
+   "parents": [
+    "a:cont",
+    "a:effectDag"
+   ],
    "type_variants": [
     "a:CT_BlendEffect"
    ],
@@ -1753,6 +1775,7 @@
     "a:spPr",
     "a:tblPr",
     "a:tcPr",
+    "a:uFill",
     "c:spPr"
    ],
    "type_variants": [
@@ -1858,6 +1881,8 @@
    "model_kind": "empty",
    "parents": [
     "a:blip",
+    "a:cont",
+    "a:effectDag",
     "a:effectLst"
    ],
    "type_variants": [
@@ -2904,7 +2929,9 @@
    "family": "drawingml-main",
    "model_kind": "sequence",
    "parents": [
-    "a:blip"
+    "a:blip",
+    "a:cont",
+    "a:effectDag"
    ],
    "type_variants": [
     "a:CT_ColorChangeEffect"
@@ -3079,7 +3106,9 @@
    "family": "drawingml-main",
    "model_kind": "sequence",
    "parents": [
-    "a:blip"
+    "a:blip",
+    "a:cont",
+    "a:effectDag"
    ],
    "type_variants": [
     "a:CT_ColorReplaceEffect"
@@ -3323,16 +3352,259 @@
   "a:cont": {
    "ambiguous_type": false,
    "canonical_type": "a:CT_EffectContainer",
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:cont",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:effect",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaBiLevel",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaCeiling",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaFloor",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaInv",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaMod",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaModFix",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaOutset",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaRepl",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:biLevel",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:blend",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:blur",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:clrChange",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:clrRepl",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:duotone",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:fill",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:fillOverlay",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:glow",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:grayscl",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:hsl",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:innerShdw",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:lum",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:outerShdw",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:prstShdw",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:reflection",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:relOff",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:softEdge",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:tint",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:xfrm",
+     "via_group": "EG_Effect"
+    }
+   ],
    "declared_in": [
     "dml-main.xsd"
    ],
    "element": "a:cont",
    "family": "drawingml-main",
-   "model_kind": "empty",
+   "model_kind": "group",
    "parents": [
     "a:alphaMod",
-    "a:blend"
+    "a:blend",
+    "a:cont",
+    "a:effectDag"
    ],
    "type_variants": [
     "a:CT_EffectContainer"
@@ -4477,7 +4749,9 @@
    "family": "drawingml-main",
    "model_kind": "sequence",
    "parents": [
-    "a:blip"
+    "a:blip",
+    "a:cont",
+    "a:effectDag"
    ],
    "type_variants": [
     "a:CT_DuotoneEffect"
@@ -4549,6 +4823,8 @@
     "a:CT_EffectReference": []
    },
    "parents": [
+    "a:cont",
+    "a:effectDag",
     "a:tblBg"
    ],
    "type_variants": [
@@ -4567,13 +4843,254 @@
   "a:effectDag": {
    "ambiguous_type": false,
    "canonical_type": "a:CT_EffectContainer",
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:cont",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:effect",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaBiLevel",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaCeiling",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaFloor",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaInv",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaMod",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaModFix",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaOutset",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaRepl",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:biLevel",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:blend",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:blur",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:clrChange",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:clrRepl",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:duotone",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:fill",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:fillOverlay",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:glow",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:grayscl",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:hsl",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:innerShdw",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:lum",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:outerShdw",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:prstShdw",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:reflection",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:relOff",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:softEdge",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:tint",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:xfrm",
+     "via_group": "EG_Effect"
+    }
+   ],
    "declared_in": [
     "dml-main.xsd"
    ],
    "element": "a:effectDag",
    "family": "drawingml-main",
-   "model_kind": "empty",
+   "model_kind": "group",
    "parents": [
     "a:defRPr",
     "a:effect",
@@ -5668,6 +6185,8 @@
     ]
    },
    "parents": [
+    "a:cont",
+    "a:effectDag",
     "a:tblBg",
     "a:tcStyle"
    ],
@@ -5745,6 +6264,8 @@
    "model_kind": "sequence",
    "parents": [
     "a:blip",
+    "a:cont",
+    "a:effectDag",
     "a:effectLst"
    ],
    "type_variants": [
@@ -6561,6 +7082,8 @@
    "family": "drawingml-main",
    "model_kind": "sequence",
    "parents": [
+    "a:cont",
+    "a:effectDag",
     "a:effectLst"
    ],
    "type_variants": [
@@ -6635,6 +7158,7 @@
     "a:spPr",
     "a:tblPr",
     "a:tcPr",
+    "a:uFill",
     "a:uLn",
     "c:spPr"
    ],
@@ -6835,7 +7359,9 @@
    "family": "drawingml-main",
    "model_kind": "empty",
    "parents": [
-    "a:blip"
+    "a:blip",
+    "a:cont",
+    "a:effectDag"
    ],
    "type_variants": [
     "a:CT_GrayscaleEffect"
@@ -6981,6 +7507,7 @@
     "a:spPr",
     "a:tblPr",
     "a:tcPr",
+    "a:uFill",
     "c:spPr"
    ],
    "type_variants": [
@@ -7691,7 +8218,9 @@
    "family": "drawingml-main",
    "model_kind": "empty",
    "parents": [
-    "a:blip"
+    "a:blip",
+    "a:cont",
+    "a:effectDag"
    ],
    "type_variants": [
     "a:CT_HSLEffect"
@@ -8125,6 +8654,8 @@
    "family": "drawingml-main",
    "model_kind": "sequence",
    "parents": [
+    "a:cont",
+    "a:effectDag",
     "a:effectLst"
    ],
    "type_variants": [
@@ -9850,6 +10381,8 @@
    },
    "parents": [
     "a:blip",
+    "a:cont",
+    "a:effectDag",
     "a:hslClr",
     "a:prstClr",
     "a:schemeClr",
@@ -11653,6 +12186,7 @@
     "a:spPr",
     "a:tblPr",
     "a:tcPr",
+    "a:uFill",
     "a:uLn",
     "c:spPr"
    ],
@@ -12083,6 +12617,8 @@
    "family": "drawingml-main",
    "model_kind": "sequence",
    "parents": [
+    "a:cont",
+    "a:effectDag",
     "a:effectLst"
    ],
    "type_variants": [
@@ -12525,6 +13061,7 @@
     "a:spPr",
     "a:tblPr",
     "a:tcPr",
+    "a:uFill",
     "a:uLn",
     "c:spPr"
    ],
@@ -13060,6 +13597,8 @@
    "family": "drawingml-main",
    "model_kind": "sequence",
    "parents": [
+    "a:cont",
+    "a:effectDag",
     "a:effectLst"
    ],
    "type_variants": [
@@ -13548,6 +14087,8 @@
    "family": "drawingml-main",
    "model_kind": "empty",
    "parents": [
+    "a:cont",
+    "a:effectDag",
     "a:effectLst"
    ],
    "type_variants": [
@@ -13570,7 +14111,10 @@
    "element": "a:relOff",
    "family": "drawingml-main",
    "model_kind": "empty",
-   "parents": [],
+   "parents": [
+    "a:cont",
+    "a:effectDag"
+   ],
    "type_variants": [
     "a:CT_RelativeOffsetEffect"
    ],
@@ -14503,6 +15047,8 @@
    "family": "drawingml-main",
    "model_kind": "empty",
    "parents": [
+    "a:cont",
+    "a:effectDag",
     "a:effectLst"
    ],
    "type_variants": [
@@ -14593,6 +15139,7 @@
     "a:spPr",
     "a:tblPr",
     "a:tcPr",
+    "a:uFill",
     "a:uLn",
     "c:spPr"
    ],
@@ -17373,6 +17920,8 @@
    },
    "parents": [
     "a:blip",
+    "a:cont",
+    "a:effectDag",
     "a:hslClr",
     "a:prstClr",
     "a:schemeClr",
@@ -17722,13 +18271,62 @@
   "a:uFill": {
    "ambiguous_type": false,
    "canonical_type": "a:CT_TextUnderlineFillGroupWrapper",
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": 1,
+     "min": 1,
+     "name": "a:noFill",
+     "via_group": "EG_FillProperties"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": 1,
+     "min": 1,
+     "name": "a:solidFill",
+     "via_group": "EG_FillProperties"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": 1,
+     "min": 1,
+     "name": "a:gradFill",
+     "via_group": "EG_FillProperties"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": 1,
+     "min": 1,
+     "name": "a:blipFill",
+     "via_group": "EG_FillProperties"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": 1,
+     "min": 1,
+     "name": "a:pattFill",
+     "via_group": "EG_FillProperties"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": 1,
+     "min": 1,
+     "name": "a:grpFill",
+     "via_group": "EG_FillProperties"
+    }
+   ],
    "declared_in": [
     "dml-main.xsd"
    ],
    "element": "a:uFill",
    "family": "drawingml-main",
-   "model_kind": "empty",
+   "model_kind": "group",
    "parents": [
     "a:defRPr",
     "a:endParaRPr",
@@ -18129,6 +18727,8 @@
     "a:CT_TransformEffect": []
    },
    "parents": [
+    "a:cont",
+    "a:effectDag",
     "a:graphicFrame",
     "a:grpSpPr",
     "a:spPr",
@@ -28912,8 +29512,8 @@
    "ambiguous_type_elements": 20,
    "complex_types": 367,
    "element_names": 542,
-   "elements_with_children": 292,
-   "elements_with_parents": 519,
+   "elements_with_children": 295,
+   "elements_with_parents": 522,
    "groups": 37
   },
   "file_sha256": {
@@ -30370,9 +30970,250 @@
    "model_kind": "sequence"
   },
   "a:CT_EffectContainer": {
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:cont",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:effect",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaBiLevel",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaCeiling",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaFloor",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaInv",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaMod",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaModFix",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaOutset",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:alphaRepl",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:biLevel",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:blend",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:blur",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:clrChange",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:clrRepl",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:duotone",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:fill",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:fillOverlay",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:glow",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:grayscl",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:hsl",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:innerShdw",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:lum",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:outerShdw",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:prstShdw",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:reflection",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:relOff",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:softEdge",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:tint",
+     "via_group": "EG_Effect"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": "unbounded",
+     "min": 0,
+     "name": "a:xfrm",
+     "via_group": "EG_Effect"
+    }
+   ],
    "file": "dml-main.xsd",
-   "model_kind": "empty"
+   "model_kind": "group"
   },
   "a:CT_EffectList": {
    "children": [
@@ -35974,9 +36815,58 @@
    "model_kind": "empty"
   },
   "a:CT_TextUnderlineFillGroupWrapper": {
-   "children": [],
+   "children": [
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": 1,
+     "min": 1,
+     "name": "a:noFill",
+     "via_group": "EG_FillProperties"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": 1,
+     "min": 1,
+     "name": "a:solidFill",
+     "via_group": "EG_FillProperties"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": 1,
+     "min": 1,
+     "name": "a:gradFill",
+     "via_group": "EG_FillProperties"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": 1,
+     "min": 1,
+     "name": "a:blipFill",
+     "via_group": "EG_FillProperties"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": 1,
+     "min": 1,
+     "name": "a:pattFill",
+     "via_group": "EG_FillProperties"
+    },
+    {
+     "choice_group": "choice1",
+     "compositor": "choice",
+     "max": 1,
+     "min": 1,
+     "name": "a:grpFill",
+     "via_group": "EG_FillProperties"
+    }
+   ],
    "file": "dml-main.xsd",
-   "model_kind": "empty"
+   "model_kind": "group"
   },
   "a:CT_TextUnderlineLineFollowText": {
    "children": [],
