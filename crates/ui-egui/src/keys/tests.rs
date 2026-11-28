@@ -382,15 +382,28 @@ fn mod_v_released_mod_first_pastes_the_clipboard_picture() {
     assert_eq!(body(h.state()), "external");
     assert!(is_bold(&mut h), "Mod+V keeps the HTML's formatting");
 
-    let mut h = picture_app();
+    let mut h = alt_frame_app();
+    let before = h.state().session.doc.clone();
+    let url = "https://example.test/picture.png";
+    offer(
+        &h,
+        vec![
+            ClipItem::Image(std::sync::Arc::new(egui::ColorImage::from_rgba_unmultiplied([4, 4], &[200u8; 4 * 4 * 4]))),
+            ClipItem::Html(format!(r#"<img src="{url}">"#).into()),
+            ClipItem::Text(url.into()),
+        ],
+    );
     mods_frame(&mut h, ctrl, vec![key_event(Key::ControlLeft, true, ctrl), key_event(Key::V, true, ctrl)]);
     mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::ControlLeft, false, Modifiers::NONE)]);
     mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
     assert_eq!(pictures(h.state_mut()), 1);
+    run(&mut h, "edit.undo", json!({}));
+    assert!(before.same_content(&h.state().session.doc), "one Undo restores the document before paste");
+    assert_eq!(pictures(h.state_mut()), 0);
     // A plain V afterwards is not a paste.
     mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, true, Modifiers::NONE)]);
     mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
-    assert_eq!(pictures(h.state_mut()), 1);
+    assert_eq!(pictures(h.state_mut()), 0);
 }
 
 /// #5859: Mod+V admits a rich-only clipboard (HTML or RTF with no plain-text or picture flavor)

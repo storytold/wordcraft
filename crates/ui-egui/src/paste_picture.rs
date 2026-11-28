@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 // PLAN(app-hub): the `craft` facade dependency of ui-egui (`craft::platform` = craft-platform), as in system_clipboard.rs
 use craft::platform::clipboard::ClipboardError;
+use craft::ui::runtime::commands::ClipboardHandle;
 use serde_json::{Value, json};
 
 use crate::{WordApp, system_clipboard};
@@ -83,21 +84,10 @@ pub(crate) fn paste(app: &mut WordApp) -> Option<Result<Value, String>> {
     let clip = system_clipboard::handle(app)?;
     let r = match clip.read_files().ok().flatten().filter(|f| !f.is_empty()) {
         Some(files) => paste_files(app, files)?,
-        None => match clip.read_image() {
+        None => match bitmap_png(&clip) {
+            Ok(Some(png)) => return Some(insert_bitmap(app, &png)),
             Ok(None) => return None,
-            Ok(Some(image)) => match png_from_rgba(image.width as usize, image.height as usize, image.rgba) {
-                Ok(png) => app.execute("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&png)})),
-                Err(e) => {
-                    log::warn!("clipboard picture: {e}");
-                    app.status(e.clone());
-                    Err(e)
-                }
-            },
             Err(e) => {
-                let e = match e {
-                    ClipboardError::TooLarge { .. } => "the clipboard picture is too large to paste".to_string(),
-                    e => crate::i18n::fmt(tl!("The picture on the clipboard couldn't be read: {error}"), &[("error", &e.to_string())]),
-                };
                 log::warn!("clipboard picture: {e}");
                 app.status(e.clone());
                 Err(e)
@@ -107,6 +97,21 @@ pub(crate) fn paste(app: &mut WordApp) -> Option<Result<Value, String>> {
     // Selected once, after the last picture: a selected picture is replaced by the next insert.
     app.select_inserted_picture(&r);
     Some(r)
+}
+
+/// Encode the bounded native bitmap through the same path for ordinary and mixed clipboard pastes.
+pub(crate) fn bitmap_png(clip: &ClipboardHandle) -> Result<Option<Vec<u8>>, String> {
+    let image = clip.read_image().map_err(|e| match e {
+        ClipboardError::TooLarge { .. } => "the clipboard picture is too large to paste".to_string(),
+        e => crate::i18n::fmt(tl!("The picture on the clipboard couldn't be read: {error}"), &[("error", &e.to_string())]),
+    })?;
+    image.map(|image| png_from_rgba(image.width as usize, image.height as usize, image.rgba)).transpose()
+}
+
+pub(crate) fn insert_bitmap(app: &mut WordApp, png: &[u8]) -> Result<Value, String> {
+    let r = app.execute("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(png)}));
+    app.select_inserted_picture(&r);
+    r
 }
 
 /// The picture on the system clipboard as PNG (or the first copied picture file's bytes), for
@@ -125,12 +130,6 @@ pub(crate) fn clipboard_png(app: &WordApp) -> Option<Vec<u8>> {
 /// is larger is refused before any of it is read.
 fn read_picture_file(path: &Path, limit: u64) -> Option<Vec<u8>> {
     wordcraft_engine::io::read_regular_file_within(path, limit)
-}
-
-/// Paste text naming copied picture files: insert the pictures when the clipboard holds those
-/// files. False leaves the text to the usual paste.
-pub(crate) fn paste_named_files(app: &mut WordApp, text: &str) -> bool {
-    names_picture_files(text) && paste(app).is_some()
 }
 
 #[cfg(test)]
@@ -189,6 +188,16 @@ mod tests {
         assert!(!names_picture_files("see /tmp/b.png") && !names_picture_files("notes.txt") && !names_picture_files(""));
     }
 
+    #[test]
+    fn bitmap_only_paste_inserts_a_picture_during_equation_editing() {
+        let mut app = app_holding(&[rgba8(4, 4, 200)]);
+        app.run("insert.equation", json!({"linear": "abc"})).unwrap();
+        assert!(app.session.math.is_some());
+        app.run("edit.paste", json!({})).unwrap();
+        let objects = app.session.run("arrange.selectionPane", &json!({})).unwrap();
+        assert!(objects.as_array().is_some_and(|objects| objects.iter().any(|object| object["kind"] == "picture")));
+    }
+
     /// Text on the clipboard wins over a picture beside it (#584).
     #[test]
     fn paste_without_text_reads_the_system_clipboard() {
@@ -201,6 +210,67 @@ mod tests {
         assert_eq!(a.session.doc.para_at(&focus).map(|p| p.text.clone()), Some("outside".repeat(3)));
         let r = a.run("edit.pasteSpecial", json!({})).unwrap();
         assert!(r["formats"].as_array().is_some_and(|f| f.iter().any(|x| x["id"] == "text")), "{r}");
+    }
+
+    #[test]
+    fn ordinary_paste_prefers_pixels_for_a_single_image_offer() {
+        use craft::platform::clipboard::HTML;
+
+        let url = "https://example.test/picture.png";
+        let html = format!(r#"<meta http-equiv="content-type" content="text/html; charset=utf-8"><img src="{url}" alt="A &amp; B">"#);
+        let url_and_alt = format!("{url}\r\nA & B");
+        for text in [url, "A & B", &url_and_alt] {
+            let mut app = app_holding(&[Flavor::text(text), Flavor::new(HTML, html.as_bytes().to_vec()), rgba8(4, 4, 200)]);
+            app.run("edit.paste", json!({})).unwrap();
+            assert_eq!(pictures(&mut app), 1);
+            assert!(!app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains(text));
+            app.run("edit.undo", json!({})).unwrap();
+            assert_eq!(pictures(&mut app), 0);
+        }
+    }
+
+    #[test]
+    fn single_image_offer_with_rtf_prefers_readable_pixels() {
+        use craft::platform::clipboard::{HTML, RGBA8, RTF};
+
+        let url = "https://example.test/picture.png";
+        let html = Flavor::new(HTML, format!(r#"<img src="{url}">"#).into_bytes());
+        let rtf = Flavor::new(RTF, br"{\rtf1\ansi Image fallback}".to_vec());
+        let malformed = Flavor::new(RGBA8, vec![1, 0, 0, 0, 1, 0, 0, 0]);
+        let paste = |bitmap| {
+            let mut app = app_holding(&[Flavor::text(url), html.clone(), rtf.clone(), bitmap]);
+            app.run("edit.paste", json!({})).unwrap();
+            app
+        };
+
+        assert_eq!(pictures(&mut paste(rgba8(4, 4, 200))), 1);
+
+        let mut app = paste(malformed);
+        assert_eq!(pictures(&mut app), 0);
+        assert_eq!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Image fallback");
+    }
+
+    #[test]
+    fn ordinary_paste_preserves_urls_rich_selections_and_unreadable_images() {
+        use craft::platform::clipboard::{HTML, RGBA8};
+
+        let url = "https://example.test/picture.png";
+        let img = format!(r#"<img src="{url}">"#);
+        let rich = format!("<p><strong>Caption</strong>{img}</p>");
+        let good = rgba8(4, 4, 200);
+        let bad = Flavor::new(RGBA8, vec![1, 0, 0, 0, 1, 0, 0, 0]);
+        for (markup, bitmap, text, expected) in
+            [(None, good.clone(), url, url), (Some(rich.as_str()), good, "Caption", "Caption"), (Some(img.as_str()), bad, url, url)]
+        {
+            let mut flavors = vec![Flavor::text(text), bitmap];
+            if let Some(markup) = markup {
+                flavors.push(Flavor::new(HTML, markup.as_bytes().to_vec()));
+            }
+            let mut app = app_holding(&flavors);
+            app.run("edit.paste", json!({})).unwrap();
+            assert_eq!(pictures(&mut app), 0);
+            assert_eq!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), expected);
+        }
     }
 
     /// Copied picture files insert as pictures, not as their paths; a folder entry and a
