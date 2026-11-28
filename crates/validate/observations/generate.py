@@ -344,7 +344,8 @@ def unit_audit(name, func, header, body, semantic_json, fields, enum_variants,
     if not bounded_uses and not decl and not re.search(r'\bacc\s*\.\s*(?:add|add_graded|ran)\s*\(', code):
         return record()
     if not decl:
-        errors.append(f'{name}::{func}: bounded consumption has no observation contract: {uses}')
+        paths = sorted(semantic.get('call_paths', []))
+        errors.append(f'{name}::{func}: bounded consumption has no observation contract: {uses}' + (f'; call paths: {paths}' if paths else ''))
         return record()
     data=dict(re.findall(r'(\w+)\s*:\s*"((?:\\.|[^"\\])*)"\s*;',declaration))
     required={'rules','collections','scope','loss','fallback','package_loss'}
@@ -391,7 +392,16 @@ def declarations(sources):
     for record in actual_readers - allowed_readers:
         reader = json.loads(record)
         if any(json.loads(a)['type'] == reader['type'] and json.loads(a)['derive'] == reader['derive'] for a in allowed_readers):
-            errors.append(f"{reader['type']}: changed representation/DTO field shape under the allowed reader derive {reader['derive']}")
+            def fields(r):
+                shape = r['shape']
+                rows = shape.get('struct') if isinstance(shape, dict) and 'struct' in shape else [{'name': v['variant'], 'type': json.dumps(v['fields'], sort_keys=True, separators=(',', ':')), 'attributes': []} for v in shape.get('enum', [])]
+                return Counter(json.dumps(f, sort_keys=True) for f in rows)
+            allowed_fields = sum((fields(json.loads(a)) for a in allowed_readers if json.loads(a)['type'] == reader['type'] and json.loads(a)['derive'] == reader['derive']), Counter())
+            added = [json.loads(f) for f in (fields(reader) - allowed_fields).elements()]
+            dropped = [json.loads(f) for f in (allowed_fields - fields(reader)).elements()]
+            detail = ''.join(f"; unexpected field {f['name']}: {f['type']}" + (f" attributes {f['attributes']}" if f['attributes'] else '') for f in added)
+            detail += ''.join(f"; missing field {f['name']}: {f['type']}" for f in dropped)
+            errors.append(f"{reader['type']}: changed representation/DTO field shape under the allowed reader derive {reader['derive']}{detail}")
         else:
             errors.append(f"{reader['type']}: unauthorized reader derive {reader['derive']}")
     FIELDS.update(f for file in recognized.values() for f in file['collection_fields'])
@@ -1056,9 +1066,45 @@ def self_test(sources, rows, jobs=1, timings=False):
     else: raise ValueError('audit accepted generated drift')
 
     reject_mutation_contract(sources, mutations)
+    substitution_controls(sources, mutations)
     assert declarations(sources)==rows, 'mutation audit contaminated the original sources'
     if timings:
         print(f'inventory: {len(mutations)} mutations; sha256={inventory_digest()}; {len(controls)} positive controls', file=sys.stderr)
+
+
+def substitution_controls(sources, mutations):
+    # A fixture's pin must record the context that separates its intended failure from a
+    # different one reaching the same check. Each substitution below keeps the check but
+    # drops that context, so the pinned fixture must refuse it as a wrong-reason rejection.
+    def helper(source):
+        return source + '\nfn unregistered_absence(pkg: &Package, name: &str) -> bool { let _ = package::canonical_entry(pkg, name); false }'
+    wrong_reason = (
+        ('R18 registry fields added to allowed DTO', 'lib.rs',
+         lambda s: s.replace('pub struct Finding {', 'pub struct Finding { ordinary: u32,', 1)),
+        ('attribute macro on definition', 'scan.rs', lambda s: s + '\n#[hidden] fn ordinary() {}'),
+        ('attribute macro on item invocation', 'scan.rs', lambda s: s + '\n#[hidden] fn ordinary() {}'),
+        ('R18 helper alias/value canonical_entry/hidden_lookup', 'lib.rs', helper),
+        ('R18 helper alias/value canonical_entry/package::canonical_entry', 'lib.rs', helper),
+    )
+    for label, name, substitute in wrong_reason:
+        _, _, *declared = mutations[label]
+        try: reject_mutation(sources, label, (name, substitute, *declared))
+        except ValueError as error:
+            if 'rejected for the wrong reason' not in str(error):
+                raise ValueError('substitution control failed for another reason: '+label+': '+str(error))
+        else: raise ValueError('substitution control was accepted as the intended rejection: '+label)
+    # An imported alias or local function value that is never called consumes nothing, so the
+    # fixture's claim (an indirect call reaches an uncontracted lookup) does not cover it: the
+    # audit has no consumption to attribute and accepts it, as it accepts the pristine source.
+    unused = {
+        'unused import': 'use package::canonical_entry as hidden_lookup; fn unregistered_absence(pkg: &Package, name: &str) -> bool { false }',
+        'unused alias binding': 'use package::canonical_entry as hidden_lookup; fn unregistered_absence(pkg: &Package, name: &str) -> bool { let lookup = hidden_lookup; false }',
+        'unused path binding': 'fn unregistered_absence(pkg: &Package, name: &str) -> bool { let lookup = package::canonical_entry; false }',
+    }
+    for label, text in unused.items():
+        changed = dict(sources); changed['lib.rs'] = sources['lib.rs'] + '\n' + text
+        if declarations(changed) != declarations(sources):
+            raise ValueError('unused helper control changed the audit: '+label)
 
 
 def reject_mutation_contract(sources, mutations):

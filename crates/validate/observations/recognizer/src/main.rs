@@ -174,6 +174,7 @@ struct Audit {
     readers: Vec<Value>,
     derive_context: bool,
     field_context: bool,
+    attr_item: String,
     pat_context: &'static str,
     scope: Vec<String>,
     modules: Vec<String>,
@@ -312,7 +313,14 @@ impl<'ast> Visit<'ast> for Audit {
         // Attribute macros/cfg_attr may replace bodies and are outside this grammar.
         let name = tokens(attr.path());
         if !matches!(name.as_str(), "doc" | "derive" | "default" | "allow" | "deny" | "forbid" | "cfg" | "inline" | "cold") {
-            self.fail(bad(if self.field_context { "field attribute" } else { "attribute" }, attr));
+            let kind = if self.field_context {
+                "field attribute".to_owned()
+            } else if self.attr_item.is_empty() {
+                "attribute".to_owned()
+            } else {
+                format!("attribute on {}", self.attr_item)
+            };
+            self.fail(bad(&kind, attr));
         }
         if name == "inline" {
             let valid = match &attr.meta {
@@ -344,15 +352,26 @@ impl<'ast> Visit<'ast> for Audit {
     }
     fn visit_item(&mut self, item: &'ast Item) {
         if let Item::Macro(m) = item {
+            // The attribute policy is shared, but a definition, an invocation and a plain function
+            // reach it through different branches; the rejection records which one it came from.
+            let path = tokens(&m.mac.path);
+            let context = match (&m.ident, path.as_str()) {
+                (Some(name), "macro_rules") => format!("macro definition {}", ident(name)),
+                _ => format!("macro invocation {path}"),
+            };
+            let old = std::mem::replace(&mut self.attr_item, context);
             for attr in &m.attrs {
                 self.visit_attribute(attr);
             }
+            self.attr_item = old;
         }
         match item {
             Item::Fn(f) => {
+                let old = std::mem::replace(&mut self.attr_item, format!("function {}", ident(&f.sig.ident)));
                 for a in &f.attrs {
                     self.visit_attribute(a);
                 }
+                self.attr_item = old;
                 self.function(&f.sig, &f.block);
             }
             Item::Const(c) => {
@@ -719,6 +738,7 @@ fn audit(name: &str, source: &str, templates: HashMap<String, Template>) -> Chec
         readers: vec![],
         derive_context: false,
         field_context: false,
+        attr_item: String::new(),
         pat_context: "pattern",
         scope: vec![],
         modules: vec![],
