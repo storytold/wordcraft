@@ -2321,3 +2321,22 @@ fn captions_are_not_drawn_twice() {
         assert!(drawn <= 1, "{dialog} draws \"{caption}\" {drawn} times");
     }
 }
+
+/// #7977: a preview picture is drawn at a sample size, not at the icon side it takes by default.
+#[test]
+fn dialog_previews_are_drawn_larger_than_a_control() {
+    use egui::accesskit::Role;
+    for dialog in ["enclose", "defineBullet"] {
+        let mut h = app_harness(app_with("Lanterns"));
+        h.state_mut().run("ui.dialog", json!({"name": dialog})).unwrap();
+        h.run_steps(6);
+        let preview = h.get_by_role_and_label(Role::Image, "Preview").rect();
+        let button = h.get_by_role_and_label(Role::Button, "Cancel").rect();
+        assert!(
+            preview.height() > 2.0 * button.height(),
+            "{dialog}: the preview is {}pt high beside a {}pt button",
+            preview.height(),
+            button.height()
+        );
+    }
+}

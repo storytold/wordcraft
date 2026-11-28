@@ -6,9 +6,9 @@ use craft::ui::buttons::Button;
 use craft::ui::choice::{Radio, RadioGroup};
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, clicked};
 use craft::ui::dialog::DialogId;
-use craft::ui::display::{Picture, Text};
+use craft::ui::display::{Picture, PictureSize, Text};
 use craft::ui::layout_components::Row;
-use craft::ui::list::ThumbAspect;
+use craft::ui::list::{ThumbAspect, ThumbSize};
 use craft::ui::patterns::form_dialogs::FormCx;
 use craft::ui::primitives::{ContentPainterCx, TextureCache};
 use craft::ui::runtime::env::Label;
@@ -182,6 +182,7 @@ impl DefineBulletForm {
                 }
             },
         )
+        .extent(PictureSize::Sample(ThumbSize::Large))
     }
 }
 

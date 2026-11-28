@@ -8,7 +8,7 @@ use craft::ui::contract::{
     Bind, CollectionEvent, ColumnSpec, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, TooltipSpec, clicked,
 };
 use craft::ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
-use craft::ui::display::{Picture, Shade, Text};
+use craft::ui::display::{Picture, PictureSize, Shade, Text};
 use craft::ui::form::Field;
 use craft::ui::list::{List, ListRow};
 use craft::ui::pickers::Select;
@@ -183,7 +183,7 @@ impl ManageStylesDialog {
         if let Some((key, image)) = &self.preview {
             let image = image.clone();
             let make = move || image.clone();
-            Picture::new(label(tl!("Preview")), self.made, &make).revision(key.styles).show(ui);
+            Picture::new(label(tl!("Preview")), self.made, &make).revision(key.styles).extent(PictureSize::DevicePixels).show(ui);
         }
         Text::new(label(describe(&cur))).shade(Shade::Muted).show(ui);
         let style = self.selected.clone();

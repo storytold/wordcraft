@@ -4,10 +4,10 @@
 use craft::ui::choice::{Radio, RadioGroup};
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft::ui::dialog::DialogId;
-use craft::ui::display::Picture;
+use craft::ui::display::{Picture, PictureSize};
 use craft::ui::form::{Field, FieldGroup};
 use craft::ui::layout_components::{Row, Stack};
-use craft::ui::list::ThumbAspect;
+use craft::ui::list::{ThumbAspect, ThumbSize};
 use craft::ui::patterns::form_dialogs::FormCx;
 use craft::ui::primitives::{ContentPainterCx, HAlign, PaintShape, StrokeColor, StrokeWidth, TextRun};
 use craft::ui::runtime::env::Label;
@@ -81,6 +81,7 @@ impl EncloseForm {
                 d.text(line, &TextRun::new(text.as_str()).role(role).align(HAlign::Center));
             });
         })
+        .extent(PictureSize::Sample(ThumbSize::Large))
     }
 }
 
