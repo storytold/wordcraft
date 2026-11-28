@@ -25,7 +25,11 @@ pub(crate) fn help_entries(app: &WordApp) -> Vec<HelpEntry> {
         .map(|c| {
             let command =
                 if c.id == "view.paperColor" { CommandRef::with_params("file.options", json!({"pane": "general"})) } else { CommandRef::new(c.id) };
-            HelpEntry::new(command, tl!(c.label).to_string()).with_english(c.label.to_string())
+            let entry = HelpEntry::new(command, tl!(c.label).to_string()).with_english(c.label.to_string());
+            match crate::app::command_board::location_path(c.location) {
+                Some(path) => entry.with_path(path.into_iter().map(|part| tl!(part).to_string())),
+                None => entry,
+            }
         })
         .collect()
 }
@@ -80,4 +84,18 @@ pub(super) fn show(app: &mut WordApp, ui: &mut Ui, compact: bool) -> egui::Rect 
         crate::dialogs::find_in_navigation_pane(app, ui.ctx(), &text);
     }
     rect
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Services, WordApp};
+
+    /// #7983: a search result names the ribbon place of its command.
+    #[test]
+    fn search_entries_show_the_ribbon_location() {
+        let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+        let entries = super::help_entries(&app);
+        let bold = entries.iter().find(|e| e.command().id == "format.bold").expect("format.bold is searchable");
+        assert!(!bold.path().is_empty(), "the entry has a path");
+    }
 }

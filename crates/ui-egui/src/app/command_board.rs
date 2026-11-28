@@ -147,6 +147,12 @@ const LINKED_EDIT: [craft::ui::runtime::commands::EditCommands; 5] = {
     [Cut, Copy, Paste, Undo, Redo]
 };
 
+/// The English parts of a registry `location` (`Home › Font`, split as `i18n::location` does); `None` for no place.
+pub(crate) fn location_path(location: &str) -> Option<Vec<&str>> {
+    let path: Vec<&str> = location.split(" › ").filter(|part| !part.is_empty()).collect();
+    (!path.is_empty()).then_some(path)
+}
+
 impl WordApp {
     /// The app's commands as the keymap knows them: every engine command with its default
     /// chords, then the interface commands. The interface commands come last because a tie in the
@@ -183,6 +189,11 @@ impl WordApp {
             // warned about), so their chords go in as the set's replaced defaults (the `LINKED_EDIT` fold below).
             for spec in registry.all().iter().filter(|spec| seen.insert(spec.id) && !LINKED_EDIT.iter().any(|c| c.id() == spec.id)) {
                 let mut def = CommandDef::new(CommandRef::new(spec.id), tl!(spec.label), Scope::app());
+                // Its ribbon place is its menu path, in English: Customize Keyboard files it under the tab by name,
+                // and the framework translates each segment where it shows it.
+                if let Some(path) = location_path(spec.location) {
+                    def = def.with_path(path.into_iter().map(str::to_owned).collect());
+                }
                 for binding in default_bindings(spec.shortcut) {
                     def = def.with_default(binding);
                 }

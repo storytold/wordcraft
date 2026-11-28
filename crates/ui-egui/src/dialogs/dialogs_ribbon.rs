@@ -20,7 +20,7 @@ use craft::ui::contract::{
 };
 use craft::ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, PromptChoice, StackDialog, StandardPrompt, dialog_id};
 use craft::ui::display::Text;
-use craft::ui::layout_components::{Row, Stack};
+use craft::ui::layout_components::{Grid, Row, Stack};
 use craft::ui::list::{List, ListRow, ToggleCell, ToggleState};
 use craft::ui::notices::Notice;
 use craft::ui::runtime::env::Label;
@@ -51,6 +51,8 @@ pub struct TreeItem {
     pub command: Option<String>,
 }
 
+/// The body's panes: the command pickers, the Add and Remove buttons, then the ribbon or toolbar list.
+const PANES: [ColumnWidth; 3] = [ColumnWidth::fill(1.0), ColumnWidth::Content, ColumnWidth::fill(1.0)];
 /// The column of show boxes in the ribbon tree.
 const SHOWN: ColumnKey = ColumnKey::new("shown");
 
@@ -143,10 +145,10 @@ impl RibbonDialog {
     fn body(&mut self, ui: &mut Ui) {
         self.page_tabs(ui);
         search(ui, &mut self.filter);
-        Row::new().show(ui, |ui, _| {
-            Stack::new().show(ui, |ui, _| {
+        Grid::new(&PANES).fill_width().show(ui, |ui, _| {
+            Stack::new().fill_width().show(ui, |ui, _| {
                 Text::new(word("Choose a command")).show(ui);
-                Row::new().show(ui, |ui, _| {
+                Row::new().fill_width().show(ui, |ui, _| {
                     if let Some(category) = pick(ui, "rb_categories", "Categories:", &self.categories, &self.category) {
                         self.category = category;
                         self.filter.clear();
@@ -219,9 +221,9 @@ impl RibbonDialog {
                 self.file("remove", Value::Object(address(&sel)));
             }
         });
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().fill_width().show(ui, |ui, _| {
             Text::new(word("Ribbon tabs")).show(ui);
-            Row::new().show(ui, |ui, _| {
+            Row::new().fill_width().show(ui, |ui, _| {
                 self.tree(ui);
                 Stack::new().show(ui, |ui, _| {
                     for (text, by) in [("Up", -1), ("Down", 1)] {
@@ -309,9 +311,9 @@ impl RibbonDialog {
                 self.file("qatRemove", json!(self.qat_selected));
             }
         });
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().fill_width().show(ui, |ui, _| {
             Text::new(word("Quick Access Toolbar")).show(ui);
-            Row::new().show(ui, |ui, _| {
+            Row::new().fill_width().show(ui, |ui, _| {
                 if let Some(id) = pick(ui, "rb_qat", "Quick Access Toolbar", &self.qat, &self.qat_selected) {
                     self.qat_selected = id;
                 }
