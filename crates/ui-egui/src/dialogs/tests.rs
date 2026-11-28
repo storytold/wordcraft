@@ -2340,3 +2340,15 @@ fn dialog_previews_are_drawn_larger_than_a_control() {
         );
     }
 }
+/// #7982: Custom Properties' hint wraps inside the dialog instead of running under the Cancel button.
+#[test]
+fn custom_properties_hint_does_not_run_under_the_buttons() {
+    use egui::accesskit::Role;
+    let mut h = app_harness(app_with("Lanterns"));
+    h.state_mut().run("ui.dialog", json!({"name": "customProperties"})).unwrap();
+    h.run_steps(6);
+    let hint = h.get_by_label_contains("Text properties only").rect();
+    let cancel = h.get_by_role_and_label(Role::Button, "Cancel").rect();
+    let value = h.get_by_role_and_label(Role::TextInput, "Value:").rect();
+    assert!(!hint.intersects(cancel) && !value.intersects(cancel), "the hint {hint:?} or Value {value:?} overlaps Cancel {cancel:?}");
+}

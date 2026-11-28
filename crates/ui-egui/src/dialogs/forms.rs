@@ -242,14 +242,21 @@ impl WordForm for CustomPropertiesForm {
         let rows: Vec<String> = self.props.iter().map(|p| format!("{} = {}", p.name, p.value)).collect();
         let positions: Vec<usize> = (0..rows.len()).collect();
         let mut selection = if self.selected < rows.len() { Selection::single(self.selected) } else { Selection::default() };
-        List::new(Label::from(tl!("Properties").to_string()))
-            .id_salt("props")
-            .max_rows(6)
-            .select(SelectMode::Single)
-            .allow_empty(true)
-            .empty(Label::from(tl!("This document has no custom properties.").to_string()))
-            .selection(Bind::bound(&mut selection))
-            .show_items(ui, &keyed(&positions, |at| *at), &mut |at, _| ListRow::new(rows.get(*at).cloned().unwrap_or_default()));
+        if rows.is_empty() {
+            // lean: craft's `List` measures its `.empty()` text shorter than it draws it, so the dialog is a row short and
+            // its footer is drawn over the last row (#7982). Show the text ourselves; drop this once craft-libs fixes
+            // `List`. The same latent overlap may hit the other `.empty()` users: bookmarks.rs:112/268, macros.rs:71,
+            // dialogs_refs/cross_ref.rs:165, dialogs_refs/sources.rs:311 and dialogs_review.rs:423.
+            Text::new(Label::from(tl!("This document has no custom properties.").to_string())).shade(Shade::Muted).show(ui);
+        } else {
+            List::new(Label::from(tl!("Properties").to_string()))
+                .id_salt("props")
+                .max_rows(6)
+                .select(SelectMode::Single)
+                .allow_empty(true)
+                .selection(Bind::bound(&mut selection))
+                .show_items(ui, &keyed(&positions, |at| *at), &mut |at, _| ListRow::new(rows.get(*at).cloned().unwrap_or_default()));
+        }
         if let Some(at) = selection.items.first().copied()
             && at != self.selected
         {

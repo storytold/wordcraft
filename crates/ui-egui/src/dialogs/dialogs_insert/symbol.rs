@@ -546,7 +546,7 @@ fn special_table(ui: &mut Ui, form: &mut SymbolForm) -> bool {
     let columns = vec![
         ColumnSpec::new(glyph.clone(), Label::Empty, ColumnWidth::fill(0.5)),
         ColumnSpec::new(name.clone(), word("Special Characters"), ColumnWidth::fill(2.0)),
-        ColumnSpec::new(keys.clone(), word("Shortcut key:"), ColumnWidth::fill(1.0)),
+        ColumnSpec::new(keys.clone(), word("Shortcut key:"), ColumnWidth::Controls(5.5)),
     ];
     let positions: Vec<usize> = (0..SPECIAL.len()).collect();
     let source = keyed(&positions, |at: &usize| *at);

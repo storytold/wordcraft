@@ -394,7 +394,7 @@ fn recipient_body(ui: &mut egui::Ui, d: &mut RecipientDraft, editing: &mut bool,
     let columns = fields
         .iter()
         .enumerate()
-        .map(|(j, f)| ColumnSpec::new(ColumnKey::index(j as u32), f.clone(), ColumnWidth::fill(1.0)).removable(tl!("Remove field"), can_remove))
+        .map(|(j, f)| ColumnSpec::new(ColumnKey::index(j as u32), f.clone(), ColumnWidth::Controls(6.0)).removable(tl!("Remove field"), can_remove))
         .collect();
     // The dialog body scrolls, and a collection owns its own scroll: the grid shows this many records and scrolls
     // the rest itself.
