@@ -5,10 +5,11 @@
 //! through `tools.customizeKeyboard`, so agents get the same result without the dialog.
 
 use craft::keymap::{Binding, CommandDef, Keymap, Overrides};
-use craft::menu::shortcuts::{DialogState, Layout, Options, Outcome, ShortcutsDialog};
+use craft::menu::shortcuts::{Area, DialogState, Layout, Options, Outcome, ShortcutsDialog};
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
 use egui::{Context, Ui};
 use serde_json::{Value, json};
+use wordcraft_engine::ribbon::{CONTEXTUAL_TABS, TABS};
 
 use super::host::{DialogHooks, Settle, open_with};
 use crate::WordApp;
@@ -49,11 +50,61 @@ fn assignable(binding: &Binding) -> bool {
     chord.mods.cmd || chord.mods.ctrl || chord.mods.alt || chord.is_function_key()
 }
 
+/// The ribbon tab a command lives on, in English (the first part of its path).
+fn tab(def: &CommandDef) -> &str {
+    def.paths.first().and_then(|path| path.first()).map_or("", String::as_str)
+}
+
+/// Tabs that come up with the selection or a view, besides the engine's contextual ones; they share one Categories entry.
+const EXTRA_CONTEXT_TABS: [&str; 3] = ["Header & Footer", "Outlining", "Reading"];
+
+fn in_tab<const N: usize>(def: &CommandDef) -> bool {
+    tab(def) == TABS[N]
+}
+
+fn in_context_tab(def: &CommandDef) -> bool {
+    CONTEXTUAL_TABS.contains(&tab(def)) || EXTRA_CONTEXT_TABS.contains(&tab(def))
+}
+
+fn in_no_tab(def: &CommandDef) -> bool {
+    !TABS.contains(&tab(def)) && !in_context_tab(def)
+}
+
+/// One filter per entry of `TABS` (the array's length makes the compiler check it).
+const TAB_FILTERS: [fn(&CommandDef) -> bool; TABS.len()] = [
+    in_tab::<0>,
+    in_tab::<1>,
+    in_tab::<2>,
+    in_tab::<3>,
+    in_tab::<4>,
+    in_tab::<5>,
+    in_tab::<6>,
+    in_tab::<7>,
+    in_tab::<8>,
+    in_tab::<9>,
+    in_tab::<10>,
+    in_tab::<11>,
+    in_tab::<12>,
+];
+
+/// Categories as Word lists them: the ribbon tabs (not the framework's menu and panel ids), the contextual tabs, the
+/// rest, then All Commands.
+fn areas() -> Vec<Area> {
+    let mut areas: Vec<Area> = TABS.iter().copied().zip(TAB_FILTERS).map(|(name, rows)| Area::new(name, tl!(name), rows)).collect();
+    areas.push(Area::new("Contextual Tabs", tl!("Contextual Tabs"), in_context_tab));
+    areas.push(Area::new("Other", tl!("Other"), in_no_tab));
+    areas.push(Area::new("All Commands", tl!("All Commands"), |_| true));
+    areas
+}
+
 /// The framework dialog's options: the command-list layout, sorted by label, with the assign rule above.
 fn options() -> Options {
     Options::default().with(|o| {
         o.layout = Layout::CommandLists;
         o.sort_by_label = true;
+        o.own_areas = true;
+        o.size = Some(egui::vec2(720.0, 700.0));
+        o.areas = areas();
         o.title = Some(tl!("Customize Keyboard").to_string());
         o.accept = Some(Box::new(|_: &CommandDef, binding: &Binding| {
             if assignable(binding) { Ok(()) } else { Err(tl!("Use a key combination with Ctrl, Alt or a function key.").to_string()) }
@@ -246,5 +297,54 @@ mod tests {
         select(&mut h, &unbound_id);
         let unbound_labels = keys_list_labels(&h);
         assert!(unbound_labels.iter().any(|t| t == "None"), "empty keys list says None: {unbound_labels:?}");
+    }
+
+    /// #7971: Categories are the ribbon tabs a command is on, not menu or panel ids; a command with no tab is under Other,
+    /// and every command is under All Commands.
+    #[test]
+    fn categories_are_ribbon_tabs() {
+        use craft::keymap::{CommandDef, Scope};
+        let on = |path: &[&str]| {
+            let mut def = CommandDef::new(CommandRef::new("x"), "X", Scope::app());
+            if !path.is_empty() {
+                def = def.with_path(path.iter().map(|part| part.to_string()).collect());
+            }
+            def
+        };
+        let areas = super::areas();
+        let listing = |def: &CommandDef| areas.iter().filter(|a| (a.rows)(def)).map(|a| a.id).collect::<Vec<_>>();
+        assert_eq!(listing(&on(&["Home", "Font"])), ["Home", "All Commands"]);
+        assert_eq!(listing(&on(&["Help", "Support"])), ["Help", "All Commands"], "every ribbon tab has its entry");
+        assert_eq!(listing(&on(&["Table Design", "Styles"])), ["Contextual Tabs", "All Commands"]);
+        assert_eq!(listing(&on(&[])), ["Other", "All Commands"]);
+        assert_eq!(areas.last().map(|a| a.id), Some("All Commands"), "All Commands comes last");
+    }
+
+    /// #7971: under another language, and for the SmartArt tab that shows as "Diagram Design", commands still land
+    /// under their tab (the catalog keeps English paths; only the display is translated).
+    #[test]
+    fn commands_stay_under_their_tab_in_another_language() {
+        let ctx = egui::Context::default();
+        crate::i18n::fixture_host(&ctx, "x-fixture", "\tHome\tHome-FX\n\tFont\tFont-FX\n\tDiagram Design\tDiagram-FX\n");
+        let mut a = app();
+        let catalog = a.catalog().expect("catalog");
+        let areas = super::areas();
+        let under = |id: &str, area: &str| {
+            let def = catalog.defs().iter().find(|def| def.command == CommandRef::new(id)).unwrap_or_else(|| panic!("{id} in catalog"));
+            areas.iter().any(|a| a.id == area && (a.rows)(def))
+        };
+        assert!(under("format.bold", "Home"), "Bold is under Home in a translated interface");
+        assert!(!under("format.bold", "Other"));
+        let smart = a.session.registry.all().iter().find(|spec| spec.location.starts_with("SmartArt Design")).expect("a SmartArt command");
+        assert!(under(smart.id, "Contextual Tabs") && !under(smart.id, "Other"), "{} is under the contextual tabs", smart.id);
+    }
+
+    /// #7971: the board's catalog files each engine command under its ribbon tab.
+    #[test]
+    fn catalog_paths_follow_the_ribbon_location() {
+        let mut a = app();
+        let catalog = a.catalog().expect("catalog");
+        let bold = catalog.defs().iter().find(|def| def.command == CommandRef::new("format.bold")).expect("format.bold");
+        assert_eq!(bold.paths.first().and_then(|p| p.first()).map(String::as_str), Some("Home"));
     }
 }
