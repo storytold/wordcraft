@@ -153,6 +153,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-28: Tab leaves the boxes of form dialogs such as Go To and New Label for the next control, and Shift+Tab comes back (#3172). Enter in Go To's page box keeping the keyboard, and the page box taking the keyboard when turning to that tab, still live in the shared Find and Replace dialog. Readiness unchanged.
 - 2026-11-24: Pasting a plain table over selected cells overwrites from the selection's top-left, even when the copy is wider than the selection (#6742).
 - 2026-11-21: Layout: strict column balancing measures a kept paragraph again in each candidate column, so a float in one column does not make the paragraph skip another where it fits (#6821). Readiness estimates unchanged.
 
@@ -981,6 +982,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-28 | trivial | Progress log: Tab leaves form-dialog boxes (#3172) |
 | 2026-11-18 | trivial | DOCX validation reports undeclared binary tombstones in coverage notes when relationship discovery establishes that no relationship targets the part. |
 | 2026-11-18 | trivial | DOCX validation excludes the content-type manifest from main-part cardinality and reports untargeted ordinary document parts in coverage when one ordinary main is established. |
 | 2026-11-18 | trivial | DOCX validation warns on an image signature mismatch when the image is unused or can be decoded in another raster format. Used, unusable images retain their error. |

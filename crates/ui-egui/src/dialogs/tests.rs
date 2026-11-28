@@ -2283,3 +2283,25 @@ fn modal_dialog_with_open_popup_does_not_shake_on_inside_click_but_shakes_on_out
     let key2 = chrome::nudge_id(&h.ctx, id2);
     assert!(h.ctx.data(|d| d.get_temp::<f64>(key2)).is_none(), "reopened dialog starts still");
 }
+
+/// #3172: Tab leaves a dialog's box for the next control, and Shift+Tab comes back. Form dialogs
+/// (Go To, New Label) already hand the keyboard on; this locks that in after the merge of main.
+#[test]
+fn tab_leaves_a_dialog_box_and_shift_tab_comes_back() {
+    let focused_id = |h: &egui_kittest::Harness<'static, WordApp>| h.ctx.memory(|m| m.focused());
+    for name in ["goto", "newLabel"] {
+        let mut h = app_harness(app_in_focus("Unchanged document"));
+        h.run_steps(2);
+        assert!(super::open(h.state_mut(), name, &json!({})).is_some(), "{name} opens");
+        h.run_steps(4);
+        let in_box = focused_id(&h);
+        assert!(in_box.is_some(), "{name}: the box has the keyboard");
+        h.event(egui::Event::Key { key: egui::Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(4);
+        let next = focused_id(&h);
+        assert!(next.is_some() && next != in_box, "{name}: Tab gives the keyboard to the next control");
+        h.event(egui::Event::Key { key: egui::Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::SHIFT });
+        h.run_steps(4);
+        assert_eq!(focused_id(&h), in_box, "{name}: Shift+Tab comes back to the box");
+    }
+}
