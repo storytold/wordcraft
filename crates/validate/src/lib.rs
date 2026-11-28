@@ -2706,7 +2706,7 @@ impl AmbiguousIdentities {
 fn check_typed_targets(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
     observation_contract! {
         rules: "REL-DANGLING,REL-TYPED";
-        collections: "field.content_types*1,field.entries*1,field.rels*3,lookup.canonical_entry*1,type.Vec*1";
+        collections: "field.content_types*1,field.entries*1,field.rels*3,lookup.canonical_entry*1,type.HashMap*1,type.Vec*1";
         scope: "Missing targets package-wide and declared header, footer and image types for the selected main story; first-bound XML references";
         loss: "Unknown archive identity, declaration cap, or incomplete picture substitution";
         fallback: "Only an established missing entry dangles; emit dangling Errors before bounded Warnings; suppress a choice image mismatch only with a usable local fallback";
@@ -2722,10 +2722,15 @@ fn check_typed_targets(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
     let ambiguous = AmbiguousIdentities::new(pkg);
     let mut images = FallbackImages::new(pkg, acc.limits);
     let mut warnings = Vec::new();
+    // First non-directory entry per ASCII-lowercased name, in `pkg.entries` order, so each owner lookup is one probe.
+    let mut entry_by_name = HashMap::new();
+    for entry in pkg.entries.iter().filter(|e| !e.is_dir) {
+        entry_by_name.entry(entry.name.to_ascii_lowercase()).or_insert(entry);
+    }
     for rp in &pkg.rels {
         let source = relationship_source(xml, rp);
         // The part whose scan decides use: a scanned owner, else an XML owner present but never scanned (undecodable).
-        let owner_entry = rels_owner_name(&rp.name).and_then(|owner| pkg.entries.iter().find(|e| !e.is_dir && e.name.eq_ignore_ascii_case(&owner)));
+        let owner_entry = rels_owner_name(&rp.name).and_then(|owner| entry_by_name.get(&owner.to_ascii_lowercase()).copied());
         let unscanned_owner = source.is_none() && owner_entry.is_some_and(|e| package::is_xml_part(pkg, &e.name));
         let owner_text = rels_owner_name(&rp.name);
         let owner_name =
