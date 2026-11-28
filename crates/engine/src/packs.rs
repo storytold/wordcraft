@@ -923,6 +923,40 @@ pub fn fetched() -> bool {
     FETCHED.load(Ordering::Relaxed)
 }
 
+/// What one proofing language found for its Hunspell dictionary: the file, none, or why the file
+/// could not be read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DictionaryFound {
+    /// The language.
+    pub lang: wordcraft_proof::ProofLang,
+    /// The dictionary file found for it.
+    pub file: Option<PathBuf>,
+    /// Why the file could not be read.
+    pub error: Option<String>,
+}
+
+/// The last report of [`dictionaries_found`], with the dictionary generation it was built for.
+static DICTIONARIES_FOUND: Mutex<Option<(u64, Arc<[DictionaryFound]>)>> = Mutex::new(None);
+
+/// The dictionary each language found (File › Options › Language). Finding one searches the disk, so
+/// the report is built once per dictionary generation and shared until the folder or an installed
+/// pack changes it.
+pub fn dictionaries_found() -> Arc<[DictionaryFound]> {
+    let generation = wordcraft_proof::dictionary_generation();
+    let mut slot = DICTIONARIES_FOUND.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((built, report)) = slot.as_ref()
+        && *built == generation
+    {
+        return Arc::clone(report);
+    }
+    let report: Arc<[DictionaryFound]> = wordcraft_proof::installed_dictionaries()
+        .into_iter()
+        .map(|(lang, file)| DictionaryFound { lang, file, error: wordcraft_proof::dictionary_load_error(lang) })
+        .collect();
+    *slot = Some((generation, Arc::clone(&report)));
+    report
+}
+
 /// The languages the document (or the caret) asks for while there is no list of packs yet (a
 /// fresh install, or a list cached for an older pin): proofable, not English, with no dictionary
 /// and no pack installed, one per proofing language, as the document tags them (`tr-TR`). The

@@ -1,5 +1,4 @@
-use super::navigation::{page_at, page_to_screen};
-use super::pages::{page_render_options, page_screen_scale};
+use super::pages::page_render_options;
 use super::story::dims_body;
 use super::{Color32, DocLayout, Hash, Hasher, Pos, Pos2, WordApp};
 
@@ -7,19 +6,16 @@ use super::{Color32, DocLayout, Hash, Hasher, Pos, Pos2, WordApp};
 pub fn caret_screen(app: &mut WordApp) -> Option<(Pos2, f32)> {
     let l = app.session.layout();
     let c = l.caret_on(&app.session.sel.focus, app.session.page_hint)?;
-    let p = page_to_screen(app, c.page, c.x, c.top)?;
-    let scale = app
-        .canvas
-        .page_rects
-        .get(c.page)
-        .and_then(|r| l.pages.get(c.page).map(|page| page_screen_scale(*r, page, app.canvas.scale)))
-        .unwrap_or(app.canvas.scale);
-    Some((p, c.height.max(c.width) * scale))
+    let placed = app.canvas.shown.pages.iter().find(|pl| pl.page == c.page)?;
+    let p = placed.to_screen(craft::behavior::kurbo::Point::new(f64::from(c.x), f64::from(c.top)));
+    Some((p, c.height.max(c.width) * placed.scale as f32))
 }
 
+/// The document position under screen point `p`, from the last pass's page placement.
 pub fn pos_from_screen(app: &mut WordApp, p: Pos2) -> Option<Pos> {
-    let layout = app.session.layout();
-    let (page, x, y) = page_at(&app.canvas.page_rects, &layout, app.canvas.scale, p)?;
+    let placed = app.canvas.shown.pages.iter().find(|pl| pl.rect.contains(p))?;
+    let at = placed.to_page(p);
+    let (page, x, y) = (placed.page, at.x as f32, at.y as f32);
     let story = app.session.sel.focus.story;
     app.session.layout().hit(page, x, y, story)
 }

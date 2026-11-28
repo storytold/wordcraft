@@ -1,56 +1,62 @@
+use craft::automation::control::ControlChannel;
+use craft::automation::screenshot::DocumentId;
+use craft::ui::runtime::motion::now;
+use craft::ui::runtime::windows::WindowHost;
+
 use super::WordApp;
 use crate::control;
 
 impl WordApp {
-    /// One callback command per admitted request, and the synthetic-input queue's final pass.
-    pub(super) fn flush_shot_and_synthetic(&mut self, ctx: &egui::Context) {
-        // This is in `ui` so the captured frame is the layout just drawn; a discarded pass is not
-        // a layout anyone will see. The shot's `issued` flag makes repeated final passes harmless.
-        if !ctx.will_discard() {
-            control::issue_screenshots(self, ctx);
-        }
-        // The raw input was consumed by this host frame's passes; only a final UI pass proves
-        // the step is done. A discarded pass keeps the queue for the next UI frame.
-        if self.synthetic_pending && !ctx.will_discard() {
-            let n = self.synthetic_injected.min(self.synthetic.len());
-            self.synthetic.drain(..n);
-            self.synthetic_pending = false;
-            self.synthetic_injected = 0;
-            if !self.synthetic.is_empty() {
-                ctx.request_repaint();
-            }
-        }
+    /// Answers the requests that arrive on `channel`: the control server's, or an example's or a test's own.
+    pub fn with_control(mut self, channel: ControlChannel) -> Self {
+        self.control = Some(channel);
+        self
     }
 
-    /// Make the capture geometry the active window's surface, viewport and document. The epoch is
-    /// monotonic: resizing back to an earlier size is still a new epoch.
-    pub(crate) fn refresh_capture_geometry(&mut self, ctx: &egui::Context) {
-        let (viewport, surface) = self.active_surface_geometry(ctx);
-        let geometry = surface.map(|surface| surface.with_target(viewport, self.session.document_id()));
-        if self.capture_geometry != geometry {
-            self.capture_geometry = geometry;
-            self.capture_epoch = self.capture_epoch.wrapping_add(1);
-        }
+    /// The active document as a screenshot sees it: its generation changes on every switch.
+    fn capture_document(&self) -> Option<DocumentId> {
+        Some(DocumentId::new(self.session.document_id(), self.session.rev()))
     }
 
-    /// Drains queued control requests, dispatches each through `control::handle`, sends its reply or
-    /// admits a screenshot, then puts the receiver back.
-    pub(super) fn drain_control(&mut self, ctx: &egui::Context) {
-        let Some(rx) = self.control_rx.take() else { return };
-        while let Ok(req) = rx.try_recv() {
-            let reply = req.reply.clone();
-            if !req.start() {
-                // The caller timed out while this waited in the queue and was told it did not run.
-                log::debug!("control request {} dropped: its caller gave up", req.method);
-                continue;
-            }
-            match control::handle(self, ctx, &req) {
-                control::Outcome::Done(v) => {
-                    let _ = reply.send(v);
-                }
-                control::Outcome::Screenshot { path } => control::admit_screenshot(self, ctx, path, reply),
+    /// The control channel's logic phase: finishes captures and input waiters, then, once the
+    /// fonts are warm, runs the queued requests and answers them.
+    pub(crate) fn control_logic(&mut self, ctx: &egui::Context) {
+        let Some(mut channel) = self.control.take() else { return };
+        let host = WindowHost::of(ctx);
+        let document = self.capture_document();
+        channel.captures.note_windows(&host, document);
+        let finished = channel.captures.drain(now(), document);
+        channel.finish_captures(finished, &mut |path, bytes| control::write_automation_file(path, bytes));
+        channel.poll_input(&host);
+        channel.poll_access_trees(ctx);
+        // A request run before the fonts are warm would see a layout with no usable atlas.
+        if self.fonts_frames >= 2 {
+            while let Some(req) = channel.next_request() {
+                let reply = control::handle(self, ctx, &req);
+                let document = self.capture_document();
+                channel.settle(req, reply, document, f64::from(ctx.global_style().animation_time) * 1000.0);
             }
         }
-        self.control_rx = Some(rx);
+        // The library does not wake the window for a queued capture or an access-tree wait; both
+        // need passes to settle (`Captures` leaves the repainting to the app).
+        if channel.waiting() > 0 || channel.captures.any_pending() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+        self.control = Some(channel);
+    }
+
+    /// The control channel's UI phase: issues the due screenshots from a pass that drew the
+    /// layout. A discarded pass is a layout nobody sees, so it neither counts nor issues.
+    pub(crate) fn control_ui(&mut self, ctx: &egui::Context) {
+        if ctx.will_discard() {
+            return;
+        }
+        let Some(mut channel) = self.control.take() else { return };
+        let host = WindowHost::of(ctx);
+        let document = self.capture_document();
+        channel.captures.note_pass();
+        let finished = channel.captures.issue(&host, now(), document);
+        channel.finish_captures(finished, &mut |path, bytes| control::write_automation_file(path, bytes));
+        self.control = Some(channel);
     }
 }

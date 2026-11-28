@@ -157,3 +157,26 @@ fn own_picture_fill_keeps_image() {
     assert_eq!((float.wrap, float.x, float.y), (Wrap::InFrontOfText, 72.0, 100.0));
     assert_eq!(doc.media[media].as_slice(), BLUE_PNG);
 }
+/// A shape drawn with DrawingML's `frame` preset opens as a frame with its own border width
+/// (`adj1`), and saving writes it back as one.
+#[test]
+fn frame_preset_opens_and_saves_as_a_frame() {
+    let xml = INLINE_XML
+        .replacen(
+            r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill>"#,
+            r#"<a:prstGeom prst="frame"><a:avLst><a:gd name="adj1" fmla="val 10000"/></a:avLst></a:prstGeom><a:solidFill>"#,
+            1,
+        )
+        .replacen(r#"<wps:cNvSpPr txBox="1"/>"#, "<wps:cNvSpPr/>", 1);
+    let start = xml.find("<wps:txbx>").unwrap();
+    let end = xml.find("</wps:txbx>").unwrap() + "</wps:txbx>".len();
+    let xml = format!("{}{}", &xml[..start], &xml[end..]);
+    let check = |doc: &Document| {
+        let objects = &doc.body[0].as_para().unwrap().objects;
+        let [InlineObject::Shape { kind, w, h, extra, .. }] = objects.as_slice() else { panic!("{objects:?}") };
+        assert_eq!((*kind, *w, *h, extra.corner), (ShapeKind::Frame, 180.0, 80.0, Some(10_000)));
+    };
+    let doc = wordcraft_docx::read(&package(&xml)).unwrap();
+    check(&doc);
+    check(&wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap());
+}

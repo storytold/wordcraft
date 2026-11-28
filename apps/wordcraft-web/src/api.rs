@@ -4,17 +4,17 @@
 //! The crate owns the JavaScript side (`request`, `execute`, `commands`, `docInspect`, `uiInspect`,
 //! `screenshot`, as promises with a timeout). This module is WordCraft's part: a [`Request`] that
 //! queues a [`ControlRequest`] for the app, which answers it on its next frame, and waits for the
-//! reply. WordCraft's control request has no abandon state, so a call the page gave up on still runs
-//! when the app reaches it, as it does for a desktop client that timed out.
+//! reply. A call the page gave up on still runs when the app reaches it, as it does for a desktop
+//! client that timed out.
 
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
-use craft_web_api::methods::Methods;
-use craft_web_api::page::{PageApi, Request};
+use craft::automation::control::ControlRequest;
+use craft::web_api::methods::Methods;
+use craft::web_api::page::{PageApi, Request};
 use serde_json::{Value, json};
 use wasm_bindgen_futures::JsFuture;
-use wordcraft_ui_egui::ControlRequest;
 
 /// The app id in `window.<app>`.
 const APP: &str = "wordcraft";
@@ -23,7 +23,7 @@ const APP: &str = "wordcraft";
 const POLL_MS: i32 = 16;
 
 /// Put `window.wordcraft` on the page and return the queue the app drains each frame (hand it to
-/// `WordApp::with_control`). An existing `window.wordcraft` keeps the functions it already has.
+/// `ControlChannel::new`). An existing `window.wordcraft` keeps the functions it already has.
 pub fn install(ctx: egui::Context) -> Receiver<ControlRequest> {
     let (queue, requests) = channel::<ControlRequest>();
     let request: Request = Rc::new(move |method, params| {
