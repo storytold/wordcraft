@@ -146,6 +146,7 @@ impl WordApp {
     pub(super) fn show_overlays(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, regions: &ShellRegions) {
         let window = self.windows.shown();
         let moved = |app: &WordApp| app.windows.shown() != window;
+        crate::case_picker::show(self, ctx);
         crate::font_download::tick(self);
         zotero::show_question(self);
         // PLAN: assumed `updates_ui::run(app: &mut WordApp)` (shell-w13, sh.A20) opens the updater's dialogs on the host.

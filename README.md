@@ -114,7 +114,7 @@ Every screenshot below is WordCraft itself, rendered offscreen by its own UI tes
 | Area | Highlights |
 |---|---|
 | **Writing** | Fast typing with IME, smart quotes, AutoCorrect, list autoformat (`* `, `1. `), dashes; word, sentence, paragraph selection; drag-select; clipboard with formatting; undo/redo; find and replace with regex |
-| **Formatting** | Fonts, sizes, bold/italic/underline styles, strike, sub/superscript, caps, highlight, colours, character spacing, Format Painter, Change Case, Clear Formatting |
+| **Formatting** | Fonts, sizes, bold/italic/underline styles, strike, sub/superscript, caps, highlight, colours, character spacing, Format Painter, Change Case picker (Original plus the five modes), Clear Formatting |
 | **Paragraphs** | Alignment, indents (draggable on the ruler), spacing, line spacing, tabs with leaders, borders, shading, keep with next, widow/orphan control |
 | **Styles** | Built-in style set, live gallery, Styles pane, create/modify/update styles, style sets, themes |
 | **Lists** | Bullets, numbering, multilevel, restart, set value, custom formats |

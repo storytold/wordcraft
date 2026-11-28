@@ -249,6 +249,9 @@ impl WordApp {
     /// (a late paste, the control channel) is in `logic`.
     pub fn frame_input(&mut self, out: FrameOutput) -> FrameInput {
         if let Some(ctx) = self.ctx.clone() {
+            // Steal Shift+F3 / picker keys before fired commands run, so a no-mode
+            // format.changeCase does not also cycle the text (#3483).
+            crate::case_picker::keys(self, &ctx);
             self.run_fired(&ctx, &out);
             self.canvas.take_focus_after_pass(&ctx);
             self.native_scale = theme::usable_scale(ctx.native_pixels_per_point().unwrap_or(1.0));
@@ -424,11 +427,14 @@ impl WordApp {
         let moved = |app: &WordApp| app.windows.shown() != window;
         let t0 = monotonic_ms();
         let ctx = ui.ctx().clone();
+        // The picker owns the keyboard before the canvas or keytips see it.
+        crate::case_picker::keys(self, &ctx);
         self.escape_free = self.dialog_host.is_empty()
             && !self.ui.backstage
             && !self.keytips_active
             && !craft::ui::runtime::overlay::any_open(&ctx, craft::ui::runtime::overlay::OpenFilter::Keys)
-            && !crate::chrome::search::is_open(self);
+            && !crate::chrome::search::is_open(self)
+            && self.canvas.case_picker.is_none();
         // A failed Recent open, or a failed Save As, is news only until File closes (#2938).
         if !self.ui.backstage {
             self.backstage_state.clear_errors();

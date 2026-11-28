@@ -31,6 +31,7 @@ pub mod a11y_pane;
 pub mod backstage;
 pub mod canvas;
 pub mod caret_glide;
+pub mod case_picker;
 pub mod chrome;
 // PLAN: the `colors` module line stays because `more_colors` (ribbon-w11, rb.A4) names `colors::Target`; the sheet's removal list assumed the dialog went with it.
 pub mod colors;
@@ -584,5 +585,8 @@ pub(crate) fn rust_sources(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 mod file_browser;
 #[cfg(test)]
 mod test_harness;
+#[cfg(test)]
+mod tests_change_case;
+
 #[cfg(test)]
 mod tests;

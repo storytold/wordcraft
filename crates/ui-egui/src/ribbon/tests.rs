@@ -876,7 +876,7 @@ fn home_font_and_paragraph_buttons_stay_icon_only_and_styles_shows_six_tiles() {
     let wide = tab_harness(app, "Home");
     let replace_w = button_width(&wide, "Replace");
 
-    let menu_buttons = ["Change Case", "Text Effects and Typography", "Line and Paragraph Spacing"];
+    let menu_buttons = ["Text Effects and Typography", "Line and Paragraph Spacing"];
     let menu_widths: Vec<(&str, f32)> = menu_buttons.iter().map(|&n| (n, button_width(&wide, n))).collect();
     let base_menu_w = menu_widths[0].1;
     for &(name, w) in &menu_widths {

@@ -162,6 +162,7 @@ fn rows(app: &mut WordApp, ui: &mut Ui) {
         });
     }
     item(ui, "Font…", "ui.dialog", json!({"name": "font"}));
+    item(ui, "Change Case", "ui.changeCase", json!({}));
     item(ui, "Paragraph…", "ui.dialog", json!({"name": "paragraph"}));
     item(ui, "Link…", "ui.dialog", json!({"name": "link"}));
     item(ui, "New Comment", "review.newComment", json!({}));

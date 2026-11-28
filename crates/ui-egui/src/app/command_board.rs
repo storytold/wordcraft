@@ -338,6 +338,12 @@ impl WordApp {
             let from_key = fired.source == FireSource::Key;
 
             let (id, params) = if id == "edit.pasteFormat" && from_key { self.paste_format_command(ctx, params) } else { (id, params) };
+            // The UI route for Change Case opens the picker (#3483); scripts and the no-mode
+            // engine command keep cycling as before.
+            if id == "format.changeCase" && from_key && params.get("mode").is_none() {
+                crate::case_picker::open(self);
+                continue;
+            }
             // An Undo or Redo that is not a focused field's own edit (S-L187 sends that one to the
             // field) first takes back the gesture under way and every running one (S-L364).
             if matches!(id, "edit.undo" | "edit.redo") {

@@ -606,6 +606,10 @@ impl WordApp {
                 json!({"pending": self.change_picture_target.is_some()})
             }
             // The page's context menu at the caret, as Shift+F10 or the Menu key opens it (#821).
+            "ui.changeCase" => {
+                crate::case_picker::open(self);
+                json!({"open": crate::case_picker::is_open(self)})
+            }
             "ui.contextMenu" => {
                 // PLAN(canvas-w16): `ContextAsk` lands in `canvas/context_menu.rs` (cv.A6, S-L131).
                 self.canvas.context_request = Some(crate::canvas::context_menu::ContextAsk::AtCaret);

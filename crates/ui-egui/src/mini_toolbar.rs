@@ -78,8 +78,8 @@ pub fn visible(app: &WordApp) -> bool {
     if app.modal_open() || app.ui.backstage {
         return false;
     }
-    // Never while the right-click context menu is open: it owns the pointer and would double up.
-    if app.canvas.context_menu_open {
+    // Never while the right-click context menu or the Change Case picker owns the selection.
+    if app.canvas.context_menu_open || app.canvas.case_picker.is_some() {
         return false;
     }
     // Never while a drag-select is in progress, in the text or a table's selection areas (Word
@@ -268,6 +268,10 @@ pub(crate) fn members(app: &mut WordApp, ui: &mut Ui, preview: bool) {
                     ] {
                         toggle(ui, app, id, icon, align == a, preview);
                     }
+                    let _ = Button::command(CommandRef::new("ui.changeCase"))
+                        .icon(crate::icons::spec("case"))
+                        .tooltip(tl!("Change Case").to_string())
+                        .show(ui);
                 });
             });
         },

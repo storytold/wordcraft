@@ -204,20 +204,10 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                             .tooltip(tl!(tip).to_string())
                             .show(ui);
                     }
-                    let face = Button::new(tl!("Change Case").to_string()).icon(crate::icons::spec("case")).tooltip(tl!("Change Case").to_string());
-                    menu_button(ui, face, tl!("Change Case").to_string(), Some("format.changeCase"), |ui, _| {
-                        for (label, mode) in [
-                            ("Sentence case.", "sentence"),
-                            ("lowercase", "lower"),
-                            ("UPPERCASE", "upper"),
-                            ("Capitalize Each Word", "title"),
-                            ("tOGGLE cASE", "toggle"),
-                        ] {
-                            MenuItem::command(CommandRef::with_params("format.changeCase", json!({"mode": mode})))
-                                .label(tl!(label).to_string())
-                                .show(ui);
-                        }
-                    });
+                    IconButton::command(crate::icons::spec("case"), CommandRef::new("ui.changeCase"))
+                        .label(tl!("Change Case").to_string())
+                        .tooltip(tl!("Change Case").to_string())
+                        .show(ui);
                     for (icon, tip, id) in [("clear", "Clear All Formatting", "format.clear"), ("phonetic", "Phonetic Guide", "format.phonetic")] {
                         IconButton::command(crate::icons::spec(icon), CommandRef::new(id))
                             .label(tl!(tip).to_string())

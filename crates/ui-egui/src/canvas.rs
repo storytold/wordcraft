@@ -196,6 +196,8 @@ pub struct CanvasState {
     /// The selection the mini toolbar was put away for by a click outside the document (the
     /// ribbon, a pane, the status bar); it comes back when the selection changes.
     pub mini_dismissed: Option<wordcraft_engine::Selection>,
+    /// The Change Case picker, open over the page (#3483).
+    pub(crate) case_picker: Option<crate::case_picker::Picker>,
     /// Crop mode (Picture Format › Crop) is on for the picture here (`crop`).
     pub(crate) crop: Option<wordcraft_doc::Pos>,
     /// An ink stroke being drawn with a pen (Draw tab).
@@ -430,6 +432,7 @@ impl Default for CanvasState {
             context_menu_at: None,
             mini_anchor: None,
             mini_dismissed: None,
+            case_picker: None,
             crop: None,
             ink: None,
             erasing: None,
