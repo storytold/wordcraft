@@ -3808,8 +3808,8 @@ fn a_link_in_a_repeated_header_row_is_one_link() {
     t.rows[0].props.header = true;
     t.rows[0].cells[0].blocks =
         vec![para_block(Paragraph::with_text("Source", CharProps { link: Some("https://example.com/".into()), ..Default::default() }))];
-    for r in 1..70 {
-        t.rows[r].cells[0].blocks = text_cell(&format!("Row {r}"));
+    for (r, row) in t.rows.iter_mut().enumerate().skip(1) {
+        row.cells[0].blocks = text_cell(&format!("Row {r}"));
     }
     d.body = vec![Arc::new(Block::Table(t))];
     let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
@@ -3835,8 +3835,8 @@ fn same_target_links_in_a_repeated_header_row_stay_apart() {
     let n = p.len();
     p.insert_text(n, "home again", &site).unwrap();
     t.rows[0].cells[0].blocks = vec![para_block(p)];
-    for r in 1..70 {
-        t.rows[r].cells[0].blocks = text_cell(&format!("Row {r}"));
+    for (r, row) in t.rows.iter_mut().enumerate().skip(1) {
+        row.cells[0].blocks = text_cell(&format!("Row {r}"));
     }
     d.body = vec![Arc::new(Block::Table(t))];
     let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
