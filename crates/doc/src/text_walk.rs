@@ -167,6 +167,143 @@ pub(crate) fn text_of(bl: &Blocks, out: &mut String, depth: usize, mode: TextMod
     }
 }
 
+/// The plain text [`text_of`] writes, less its last line break (as [`crate::Document::plain_text`]
+/// drops it) and every U+FFFC, keeping only its first `left` characters. Text is fed one character
+/// at a time, so a caller can stop reading its source once [`Self::cut`] is set.
+pub(crate) struct CappedText {
+    out: String,
+    left: usize,
+    /// Set when a character came after the last one kept.
+    pub(crate) cut: bool,
+    /// For each open table cell, the line breaks held back: [`text_of`] trims them from a cell's
+    /// end and writes the others as spaces.
+    held: Vec<usize>,
+    /// A line break held back at the top level, dropped if nothing follows it.
+    newline: bool,
+}
+
+impl CappedText {
+    pub(crate) fn new(max_chars: usize) -> Self {
+        Self { out: String::new(), left: max_chars, cut: false, held: Vec::new(), newline: false }
+    }
+
+    /// The text kept, and whether more followed it.
+    pub(crate) fn finish(self) -> (String, bool) {
+        (self.out, self.cut)
+    }
+
+    fn push(&mut self, c: char) {
+        self.push_at(self.held.len(), c);
+    }
+
+    /// `c` written inside the `level` innermost open cells.
+    fn push_at(&mut self, level: usize, c: char) {
+        if self.cut {
+            return;
+        }
+        let Some(l) = level.checked_sub(1) else {
+            self.emit(c);
+            return;
+        };
+        if c == '\n' {
+            if let Some(h) = self.held.get_mut(l) {
+                *h = h.saturating_add(1);
+            }
+            return;
+        }
+        let spaces = self.held.get_mut(l).map_or(0, std::mem::take);
+        for _ in 0..spaces {
+            if self.cut {
+                return;
+            }
+            self.push_at(l, ' ');
+        }
+        self.push_at(l, c);
+    }
+
+    fn emit(&mut self, c: char) {
+        if c == '\n' {
+            if std::mem::replace(&mut self.newline, true) {
+                self.keep('\n');
+            }
+            return;
+        }
+        if std::mem::take(&mut self.newline) {
+            self.keep('\n');
+        }
+        if c != para::OBJ {
+            self.keep(c);
+        }
+    }
+
+    fn keep(&mut self, c: char) {
+        if self.left == 0 {
+            self.cut = true;
+            return;
+        }
+        self.left -= 1;
+        self.out.push(c);
+    }
+
+    /// Bytes `from..to` of `p` as [`para::Paragraph::plain_text`] writes them, then a line break.
+    pub(crate) fn para(&mut self, p: &para::Paragraph, from: usize, to: usize) {
+        let mut k = 0usize;
+        for (i, c) in p.text.char_indices() {
+            if i >= to || self.cut {
+                break;
+            }
+            crate::work::steps(1);
+            if c == para::OBJ {
+                if i >= from
+                    && let Some(o) = p.objects.get(k)
+                {
+                    for oc in o.plain_text().chars() {
+                        if self.cut {
+                            break;
+                        }
+                        self.push(oc);
+                    }
+                }
+                k += 1;
+            } else if i >= from {
+                self.push(c);
+            }
+        }
+        self.push('\n');
+    }
+
+    /// `b` as [`text_of`] writes it at `depth`.
+    pub(crate) fn block(&mut self, b: &Block, depth: usize) {
+        if depth > 16 {
+            return;
+        }
+        match b {
+            Block::Para(p) => self.para(p, 0, p.len()),
+            Block::Table(t) => {
+                for row in &t.rows {
+                    for (j, c) in row.cells.iter().enumerate() {
+                        if self.cut {
+                            return;
+                        }
+                        if j > 0 {
+                            self.push('\t');
+                        }
+                        self.held.push(0);
+                        for cb in &c.blocks {
+                            if self.cut {
+                                break;
+                            }
+                            self.block(cb, depth + 1);
+                        }
+                        self.held.pop();
+                    }
+                    self.push('\n');
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn story_word_count_of(
     bl: &Blocks,
     numbering: &Numbering,
