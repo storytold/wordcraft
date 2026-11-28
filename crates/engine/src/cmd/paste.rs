@@ -8,7 +8,6 @@
 //! program's HTML or RTF; Merge Formatting keeps only its emphasis (#687).
 //! Plain text has no formatting to keep, so Paste inserts it as Keep Text Only does.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
@@ -38,7 +37,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("edit.pasteSpecial", "Paste Special", "Home › Clipboard › Paste", paste_special)
             .key("Mod+Alt+V")
-            .params(r#"{"as"?: "formatted"|"rtf"|"html"|"picture"|"text", "text"?: string, "html"?: string, "rtf"?: string, "picture"?: base64}"#),
+            .params(r#"{"as"?: "formatted"|"rtf"|"html"|"picture"|"text", "text"?: string, "html"?: string, "rtf"?: string, "picture"?: base64, "privateClipboard"?: bool}"#),
     ]
 }
 
@@ -50,27 +49,72 @@ fn clip_text(s: &Session, v: &Value) -> Option<String> {
     }
 }
 
+/// Whether the string starts with an RTF file header.
 fn looks_like_rtf(t: &str) -> bool {
     t.trim_start().starts_with("{\\rtf")
 }
 
+/// Whether the string looks like an HTML fragment.
 fn looks_like_html(t: &str) -> bool {
     let t = t.trim_start();
     t.starts_with('<') && (t.contains("</") || t.contains("/>"))
+}
+
+/// Whether the system clipboard still holds this window's copy. A front end that can check says
+/// so in `privateClipboard`; callers that cannot (an agent, the CLI) omit it, and the session's
+/// copy is used as before.
+fn owns_clipboard(v: &Value) -> bool {
+    p::bool(v, "privateClipboard").unwrap_or(true)
+}
+
+/// Accommodate macOS arboard wrapping: `<html><head>...</head><body>...</body></html>`.
+fn extract_body(html: &str) -> Option<&str> {
+    let lower = html.to_ascii_lowercase();
+    let body_start = lower.find("<body")?;
+    let after_body = html.get(body_start..)?;
+    let tag_end_rel = after_body.find('>')?;
+    let tag_end = body_start.checked_add(tag_end_rel)?.checked_add(1)?;
+    let end = lower.rfind("</body>")?;
+    if tag_end <= end { html.get(tag_end..end) } else { None }
+}
+
+/// Whether the supplied HTML string matches WordCraft's session clipboard HTML,
+/// accounting for macOS arboard wrapping.
+fn html_matches_clipboard(h: &str, clip: &str) -> bool {
+    if h == clip {
+        return true;
+    }
+    if clip.is_empty() {
+        return false;
+    }
+    extract_body(h).is_some_and(|body| body == clip || body.trim() == clip.trim())
+}
+
+/// Whether the clipboard payload matches WordCraft's session clipboard copy, so the session's
+/// formatted fragment can be used.
+pub(crate) fn matches_session_clipboard(s: &Session, v: &Value) -> bool {
+    let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
+    let html = p::str(v, "html");
+    let rtf = p::str(v, "rtf");
+    let has_rich = html.is_some_and(|h| !h.is_empty()) || rtf.is_some_and(|r| !r.is_empty());
+    let html_matches = html.is_none_or(|h| html_matches_clipboard(h, &s.clipboard_html));
+    let rtf_matches = rtf.is_none_or(|r| r == s.clipboard_rtf);
+
+    owns_clipboard(v)
+        && s.clipboard.as_ref().is_some_and(|f| {
+            text.as_ref().is_none_or(|t| f.clipboard_text() == *t || (t.is_empty() && has_rich))
+                && html_matches
+                && rtf_matches
+                && (text.is_some() || has_rich || (html.is_none() && rtf.is_none()))
+        })
 }
 
 /// The source for a format, if the clipboard has it.
 fn source(s: &Session, v: &Value, fmt: &str) -> Option<String> {
     let non_empty = |t: String| if t.is_empty() { None } else { Some(t) };
     match fmt {
-        "formatted" => {
-            let f = s.clipboard.as_ref()?;
-            // System clipboard text that isn't our own copy means someone else copied since.
-            match p::str(v, "text") {
-                Some(t) if f.clipboard_text() != t.replace("\r\n", "\n") => None,
-                _ => Some(String::new()),
-            }
-        }
+        "formatted" if matches_session_clipboard(s, v) => Some(String::new()),
+        "formatted" => None,
         "rtf" => p::str(v, "rtf").map(str::to_string).or_else(|| clip_text(s, v).filter(|t| looks_like_rtf(t))).and_then(non_empty),
         "html" => p::str(v, "html").map(str::to_string).or_else(|| clip_text(s, v).filter(|t| looks_like_html(t))).and_then(non_empty),
         "picture" => p::str(v, "picture").map(str::to_string).and_then(non_empty),
@@ -106,7 +150,13 @@ fn paste_special(s: &mut Session, v: &Value) -> CmdResult {
                 req[k] = json!(t);
             }
         }
-        s.ui_requests.push(req);
+        // Keep the ownership result so the dialog's list is the same as this one.
+        if let Some(own) = p::bool(v, "privateClipboard") {
+            req["privateClipboard"] = json!(own);
+        }
+        // Only the newest dialog request matters; older ones would pin their payloads.
+        s.ui_requests.retain(|r| r["open"] != "pasteSpecial");
+        s.push_ui_request(req);
         return Ok(json!({"formats": formats_json(&ids)}));
     };
     let fmt = match fmt.to_ascii_lowercase().as_str() {
@@ -264,18 +314,27 @@ pub enum Pasted {
 }
 
 /// What Paste inserts: WordCraft's own copy while the system clipboard still holds it, else
-/// another program's formatted copy (HTML, RTF), else the system clipboard's text.
+/// another program's formatted copy (HTML, RTF), else the system clipboard's text. A front end
+/// that knows another program owns the clipboard passes `privateClipboard: false`, which keeps
+/// the fragment out even when the text matches.
 pub fn paste_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
-    let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
-    if let Some(f) = &s.clipboard
-        && text.as_ref().is_none_or(|t| f.clipboard_text() == *t)
-        && (text.is_some() || (p::str(v, "html").is_none() && p::str(v, "rtf").is_none()))
+    let pasted = clipboard_content(s, v)?;
+    // Formatting Backspace carried over is for typing, not for what is pasted (#6518). An empty
+    // clipboard pastes nothing, so it stays.
+    s.forget_carried();
+    Ok(pasted)
+}
+
+fn clipboard_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
+    if matches_session_clipboard(s, v)
+        && let Some(f) = &s.clipboard
     {
         return Ok(Pasted::Fragment(f.clone()));
     }
     if let Some(f) = rich_fragment(s, v) {
         return Ok(Pasted::Fragment(f));
     }
+    let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
     match text {
         Some(t) if !t.is_empty() => Ok(Pasted::Text(t)),
         _ => Err(CmdError::Failed("the clipboard is empty".into())),
@@ -314,11 +373,16 @@ pub fn merge_formatting(s: &Session, frag: &mut Fragment) {
             p.props = para.clone();
             for run in &mut p.runs {
                 let src = std::mem::replace(&mut run.props, base.clone());
-                if src.bold == Some(true) {
+                // Emphasis in either script is kept for both, as the Bold and Italic buttons set
+                // it: text pasted into a run marked `w:cs` (Thai from a WPS or Word file) is drawn
+                // with the complex-script bold and italic.
+                if src.bold == Some(true) || src.bold_cs == Some(true) {
                     run.props.bold = Some(true);
+                    run.props.bold_cs = Some(true);
                 }
-                if src.italic == Some(true) {
+                if src.italic == Some(true) || src.italic_cs == Some(true) {
                     run.props.italic = Some(true);
+                    run.props.italic_cs = Some(true);
                 }
                 if src.underline.is_some_and(|u| u != wordcraft_doc::props::Underline::None) {
                     run.props.underline = src.underline;
@@ -336,8 +400,21 @@ pub fn merge_formatting(s: &Session, frag: &mut Fragment) {
     }
 }
 
-/// Replace the selection with `frag`, marking it as an insertion under Track Changes.
-pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
+/// Paste `frag` at the selection. A copied table pasted with the caret in a table cell goes the way
+/// Word's Paste does it (rows inserted or cells overwritten, #6739; see [`super::paste_cells`]);
+/// anything else is [`insert_as_is`].
+pub fn insert(s: &mut Session, frag: Fragment) -> Result<(), CmdError> {
+    if super::paste_cells::paste_cells(s, &frag)? {
+        return Ok(());
+    }
+    insert_as_is(s, frag)
+}
+
+/// Replace the selection with `frag`, marking it as an insertion under Track Changes. A table pasted
+/// with the caret in a cell nests in that cell (Word's Paste as Nested Table).
+pub fn insert_as_is(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
+    // The pasted text keeps its own formatting; what Backspace carried over is not for after it (#6518).
+    s.forget_carried();
     super::controls::prepare_edit(s)?;
     let at = delete_selection(s)?;
     let track = s.doc.settings.track_changes;
@@ -361,7 +438,11 @@ pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
             });
         }
     }
+    let before_props = track.then(|| s.doc.para_at(&at).map(|p| p.props.clone())).flatten();
     let end = s.doc.insert_fragment(&at, &frag)?;
+    if track && let Some(before) = before_props {
+        crate::cmd::fmt_revisions::record_para_props(s, at.story, &at.path, &before)?;
+    }
     // The paragraph marks the paste added are inserted too, so rejecting it joins the
     // paragraphs again. The last paragraph ends with the original mark and keeps it.
     if let Some(r) = rid
@@ -399,35 +480,6 @@ pub(crate) fn each_para(b: &mut Block, depth: usize, f: &mut dyn FnMut(&mut Para
     }
 }
 
-/// Point a tracked formatting change at its renumbered revision (dropped when it has none).
-fn remap_change<T>(c: &mut Option<Box<wordcraft_doc::props::PropChange<T>>>, rev: &dyn Fn(&mut Option<u32>)) {
-    let mut r = c.as_ref().map(|c| c.rev);
-    rev(&mut r);
-    match (r, c.as_mut()) {
-        (Some(v), Some(x)) => x.rev = v,
-        _ => *c = None,
-    }
-}
-
-/// [`remap_change`] for the table, row and cell formatting changes in `b` (bounded depth).
-fn remap_table_changes(b: &mut Block, depth: usize, rev: &dyn Fn(&mut Option<u32>)) {
-    if depth > MAX_DEPTH {
-        return;
-    }
-    if let Block::Table(t) = b {
-        remap_change(&mut t.props.fmt_change, rev);
-        for row in &mut t.rows {
-            remap_change(&mut row.props.fmt_change, rev);
-            for cell in &mut row.cells {
-                remap_change(&mut cell.props.fmt_change, rev);
-                for cb in &mut cell.blocks {
-                    remap_table_changes(Arc::make_mut(cb), depth + 1, rev);
-                }
-            }
-        }
-    }
-}
-
 /// Section breaks brought in from another document keep their page, but their header and
 /// footer ids are that document's: clear them (and the different first page that went with
 /// them) so the sections link to the previous section's headers and footers, as in Word.
@@ -446,81 +498,25 @@ pub(crate) fn unlink_sections(blocks: &mut [Block]) {
 /// Turn an imported document into a fragment of the session's document: bring over the media,
 /// lists and styles it refers to (renumbered so they can't collide with ours).
 fn adopt(s: &mut Session, src: Document) -> Fragment {
-    let mut media = BTreeMap::new();
-    for (key, data) in &src.media {
-        let ext = key.rsplit_once('.').map(|(_, e)| e).unwrap_or("png");
-        media.insert(key.clone(), s.doc.add_media(data.to_vec(), ext));
-    }
-    let next_abs = s.doc.numbering.abstracts.iter().map(|a| a.id.saturating_add(1)).max().unwrap_or(0);
-    let mut abs_map = BTreeMap::new();
-    for (i, a) in src.numbering.abstracts.iter().enumerate() {
-        let id = next_abs.saturating_add(i as u32);
-        abs_map.insert(a.id, id);
-        s.doc.numbering.abstracts.push(wordcraft_doc::numbering::AbstractNum { id, ..a.clone() });
-    }
-    let next_num = s.doc.numbering.nums.iter().map(|n| n.id.saturating_add(1)).max().unwrap_or(1).max(1);
-    let mut num_map = BTreeMap::new();
-    for (i, n) in src.numbering.nums.iter().enumerate() {
-        let id = next_num.saturating_add(i as u32);
-        num_map.insert(n.id, id);
-        let abstract_id = abs_map.get(&n.abstract_id).copied().unwrap_or(n.abstract_id);
-        s.doc.numbering.nums.push(wordcraft_doc::numbering::Num { id, abstract_id, ..n.clone() });
-    }
-    for st in &src.styles.styles {
-        if s.doc.styles.get(&st.id).is_none() {
-            s.doc.styles.upsert(st.clone());
-        }
-    }
-    // Tracked changes the source carries (RTF revisions) point at its own revisions: add them
-    // after ours and renumber.
-    let rev_base = u32::try_from(s.doc.revisions.len()).unwrap_or(u32::MAX);
-    let src_revs = src.revisions.len();
-    s.doc.revisions.extend(src.revisions.iter().cloned());
-    let rev = |i: &mut Option<u32>| {
-        *i = i.filter(|v| (*v as usize) < src_revs).and_then(|v| rev_base.checked_add(v));
-    };
-    let mut blocks: Vec<Block> = src.body.iter().map(|b| (**b).clone()).collect();
-    // Pasted pictures fit our text width, like Insert › Pictures (layout keeps their size).
-    let max_w = crate::io::text_width(&s.doc);
-    for b in &mut blocks {
-        crate::io::fit_block_pictures(b, max_w);
-    }
-    for b in &mut blocks {
+    let mut frag = s.doc.adopt(src);
+    // Pasted pictures fit the room where they go, like Insert › Pictures: the table cell, the
+    // column, its own section (#5428; layout keeps their size). Measured (a layout) only when
+    // the fragment holds an inline picture.
+    let mut has_picture = false;
+    for b in &mut frag.blocks {
         each_para(b, 0, &mut |p| {
-            if let Some(n) = p.props.numbering.as_mut()
-                && n.num != 0
-            {
-                n.num = num_map.get(&n.num).copied().unwrap_or(0);
-            }
-            for r in &mut p.runs {
-                rev(&mut r.props.ins);
-                rev(&mut r.props.del);
-                remap_change(&mut r.props.fmt_change, &rev);
-            }
-            rev(&mut p.mark.ins);
-            rev(&mut p.mark.del);
-            remap_change(&mut p.mark.fmt_change, &rev);
-            remap_change(&mut p.props.fmt_change, &rev);
-            let mut n = p.props.num_change.as_ref().map(|c| c.rev);
-            rev(&mut n);
-            match (n, p.props.num_change.as_mut()) {
-                (Some(v), Some(c)) => c.rev = v,
-                _ => p.props.num_change = None,
-            }
-            for o in &mut p.objects {
-                if let wordcraft_doc::InlineObject::Image { media: key, .. } = o
-                    && let Some(k) = media.get(key.as_str())
-                {
-                    *key = k.clone();
-                }
-            }
+            has_picture |= p
+                .objects
+                .iter()
+                .any(|o| matches!(o, wordcraft_doc::InlineObject::Image { float, .. } if float.wrap == wordcraft_doc::para::Wrap::Inline));
         });
     }
-    for b in &mut blocks {
-        remap_table_changes(b, 0, &rev);
+    if has_picture {
+        let max_w = s.room_at(&s.sel.ordered().0);
+        for b in &mut frag.blocks {
+            crate::io::fit_block_pictures(b, max_w);
+        }
     }
-    unlink_sections(&mut blocks);
-    // Text box stories the imported shapes show; pasting gives each a new story of its own.
-    let parts = src.parts.into_iter().filter(|(_, p)| p.kind == wordcraft_doc::PartKind::TextBox).collect();
-    Fragment { blocks, parts }
+    unlink_sections(&mut frag.blocks);
+    frag
 }

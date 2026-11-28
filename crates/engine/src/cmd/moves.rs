@@ -58,7 +58,7 @@ pub fn cut_tracked(s: &mut Session) -> Result<bool, CmdError> {
     }
     s.doc.revisions.push(Revision::new(RevisionKind::Delete, s.author.clone(), now_iso()));
     let rid = (s.doc.revisions.len() - 1) as u32;
-    let at = track_delete_as(s, &a, &b, rid)?;
+    let at = track_delete_as(s, &a, &b, rid)?.at;
     s.sel = Selection::caret(at);
     // Only the author's own insertions were cut: they are gone, not moved.
     if in_use(s, rid) {
