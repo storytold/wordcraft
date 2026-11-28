@@ -2208,6 +2208,26 @@ fn a_pictures_corrections_and_crop_change_its_page_key() {
     assert_ne!(plain, pages::page_content_key(&at([0.0; 4], PicFx::new(10_000, 0, 0))), "brightness");
 }
 
+/// A comment from the first page to the last shades the pages between, whose paragraphs it
+/// didn't touch: their fingerprint changes with it, so their cached pictures are drawn again.
+#[test]
+fn a_comment_across_pages_changes_the_pages_between() {
+    use wordcraft_doc::para::InlineObject;
+    use wordcraft_doc::props::CharProps;
+    use wordcraft_doc::{Comment, Document, Paragraph, PartKind, Pos, para_block};
+    let mut d = Document::from_text(&["Alpha paragraph one."; 150].join("\n"));
+    let mut cache = wordcraft_layout::LayoutCache::new();
+    let opts = wordcraft_layout::LayoutOptions::default();
+    let plain = wordcraft_layout::layout(&d, &mut cache, &opts);
+    assert!(plain.pages.len() >= 3, "{} pages", plain.pages.len());
+    let part = d.add_part(PartKind::Comment, vec![para_block(Paragraph::with_text("A note.", CharProps::default()))]);
+    d.comments.insert(0, Comment { author: "Reviewer".into(), part, ..Default::default() });
+    d.insert_object(&Pos::body(149, 5), InlineObject::CommentEnd { id: 0 }, &CharProps::default()).unwrap();
+    d.insert_object(&Pos::body(0, 0), InlineObject::CommentStart { id: 0 }, &CharProps::default()).unwrap();
+    let commented = wordcraft_layout::layout(&d, &mut cache, &opts);
+    assert_ne!(pages::page_content_key(&plain.pages[1]), pages::page_content_key(&commented.pages[1]));
+}
+
 /// #5267: a picture linked from its context menu (Link…) keeps the link, shows it on hover and
 /// follows it on Ctrl/⌘+click, in line with the text and floating over it.
 #[test]

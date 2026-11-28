@@ -320,6 +320,10 @@ pub struct Page {
     /// Width of the markup area on the right of `w` that holds comment balloons (Print Markup,
     /// [`LayoutOptions::comment_balloons`]); 0 without one. The document page is `w - markup` wide.
     pub markup: f32,
+    /// The paragraphs on this page that start inside a comment range begun in an earlier
+    /// paragraph ([`display::comment_carry`]), sorted by story and path: the shade over
+    /// commented text continues there.
+    pub comment_carry: Vec<(StoryRef, Path, display::CommentCarry)>,
     /// The top-level body tables placed on this page as floating tables (`w:tblpPr`): a click
     /// outside one doesn't land in its cells ([`DocLayout::hit`]).
     pub float_tables: Vec<Path>,

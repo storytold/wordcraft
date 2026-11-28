@@ -5,6 +5,8 @@ use super::{
 
 pub(super) fn new_comment(s: &mut Session, v: &Value) -> CmdResult {
     let text = p::str(v, "text").unwrap_or("").to_string();
+    let collapsed = s.sel.is_collapsed();
+    let backwards = s.sel.focus < s.sel.anchor;
     let (a, b) = s.sel.ordered();
     let (a, b) = if a == b {
         // Comment on the word at the caret.
@@ -15,6 +17,19 @@ pub(super) fn new_comment(s: &mut Session, v: &Value) -> CmdResult {
                 (Pos { off: x, ..a.clone() }, Pos { off: y, ..a })
             }
             _ => (a.clone(), a),
+        }
+    } else if b.off == 0 && b.path != a.path {
+        // A selection of whole paragraphs ends at the start of the next one: the range ends with
+        // the last selected paragraph, as in Word, not in the paragraph after it. A selection of
+        // only a paragraph mark keeps it, as Word comments on the mark: ending in the paragraph
+        // before would leave the range empty.
+        match s.doc.prev_para(b.story, &b.path) {
+            Some(path) => {
+                let off = s.doc.para(b.story, &path).map_or(0, Paragraph::len);
+                let end = Pos { path, off, ..b.clone() };
+                if end > a { (a, end) } else { (a, b) }
+            }
+            None => (a, b),
         }
     } else {
         (a, b)
@@ -37,8 +52,33 @@ pub(super) fn new_comment(s: &mut Session, v: &Value) -> CmdResult {
         },
     );
     let props = Default::default();
+    // Where a position is once the markers are in: after the start marker, before the end one.
+    let marker = wordcraft_doc::para::OBJ.len_utf8();
+    let moved = |p: &Pos| {
+        let same = |q: &Pos| q.story == p.story && q.path == p.path;
+        let mut off = p.off;
+        if same(&a) && a.off <= p.off {
+            off = off.saturating_add(marker);
+        }
+        if same(&b) && b.off < p.off {
+            off = off.saturating_add(marker);
+        }
+        Pos { off, ..p.clone() }
+    };
+    // The selection keeps to its text: a caret stays by its letter, and a selection becomes the
+    // commented text between the markers. It used to keep its old offsets and so took in the
+    // start marker: typing or Delete next removed it and left the comment's range half gone.
+    let sel = if collapsed {
+        let at = moved(&s.sel.focus);
+        Selection { anchor: at.clone(), focus: at }
+    } else if backwards {
+        Selection { anchor: moved(&b), focus: moved(&a) }
+    } else {
+        Selection { anchor: moved(&a), focus: moved(&b) }
+    };
     s.doc.insert_object(&b, InlineObject::CommentEnd { id }, &props)?;
     s.doc.insert_object(&a, InlineObject::CommentStart { id }, &props)?;
+    s.sel = sel;
     s.view.comments_pane = true;
     Ok(json!({"id": id, "story": part}))
 }

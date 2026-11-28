@@ -25,6 +25,7 @@ pub(super) struct LineRender<'a, 'authors, 'author_doc> {
     pub origin: (f32, f32),
     pub opts: &'a DisplayOptions,
     pub authors: &'authors Authors<'author_doc>,
+    pub carry: &'a [(StoryRef, Path, super::CommentCarry)],
     pub alpha: f32,
     pub down: bool,
 }
@@ -43,6 +44,7 @@ struct LineContext<'a, 'authors, 'author_doc> {
     bottom: f32,
     opts: &'a DisplayOptions,
     authors: &'authors Authors<'author_doc>,
+    carry: Option<&'a super::CommentCarry>,
     alpha: f32,
     down: bool,
     auto: Option<Rgb>,
@@ -58,7 +60,7 @@ impl LineContext<'_, '_, '_> {
 }
 
 pub(super) fn lines(input: LineRender<'_, '_, '_>, out: &mut Vec<Draw>) {
-    let LineRender { doc, story, path, pl, range, origin: (x, y), opts, authors, alpha, down } = input;
+    let LineRender { doc, story, path, pl, range, origin: (x, y), opts, authors, carry, alpha, down } = input;
     let (l0, l1) = (range.start, range.end);
     let Some(first) = pl.lines.get(l0) else { return };
     let para = doc.para(story, path);
@@ -72,7 +74,8 @@ pub(super) fn lines(input: LineRender<'_, '_, '_>, out: &mut Vec<Draw>) {
         let top = y + (line.top - first.top);
         let base = top + (line.baseline - line.top);
         let bottom = top + line.height;
-        let ctx = LineContext { doc, story, path, pl, para, line, li, x, top, base, bottom, opts, authors, alpha, down, auto };
+        let carry = super::carry::carry_of(carry, story, path);
+        let ctx = LineContext { doc, story, path, pl, para, line, li, x, top, base, bottom, opts, authors, carry, alpha, down, auto };
         comment_backgrounds(&ctx, out);
         character_backgrounds(&ctx, out);
         draw_label_and_hyphen(&ctx, out);
@@ -429,18 +432,7 @@ fn word_spans(pl: &ParaLayout, line: &crate::para::Line, (k0, k1): (usize, usize
 
 fn comment_backgrounds(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
     let Some(para) = ctx.para.filter(|_| ctx.opts.markup && ctx.opts.revisions.comments) else { return };
-    let mut open: Option<usize> = None;
-    let mut ranges = Vec::new();
-    for off in para.object_offsets() {
-        match para.object_at(off) {
-            Some(InlineObject::CommentStart { .. }) => open = open.or(Some(off)),
-            Some(InlineObject::CommentEnd { .. }) => ranges.push((open.take().unwrap_or(0), off)),
-            _ => {}
-        }
-    }
-    if let Some(start) = open {
-        ranges.push((start, para.len()));
-    }
+    let ranges = super::carry::commented_ranges(ctx.doc, para, ctx.carry);
     for (start, end) in ranges {
         if end <= ctx.line.start || start >= ctx.line.stop {
             continue;

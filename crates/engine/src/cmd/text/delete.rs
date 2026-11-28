@@ -1,8 +1,28 @@
+use wordcraft_doc::para::InlineObject;
+
 use super::enter_tab::tab_indent_on;
 use super::{
     Block, COLUMN_BREAK, CmdResult, NumRef, OBJ, PAGE_BREAK, Pos, Selection, Session, StoryRef, Value, delete_selection, delete_selection_effect,
     sel_result,
 };
+
+/// `off` moved past the comment markers beside it, forwards or backwards. The markers are
+/// invisible, so Delete and Backspace step over them, as in Word: a key that seemed to do nothing
+/// took one end of a comment's range away, and an empty range's markers sit side by side.
+fn past_comment_markers(para: &wordcraft_doc::Paragraph, mut off: usize, forward: bool) -> usize {
+    let w = OBJ.len_utf8();
+    let marker = |at: usize| matches!(para.object_at(at), Some(InlineObject::CommentStart { .. } | InlineObject::CommentEnd { .. }));
+    if forward {
+        while off < para.len() && marker(off) {
+            off += w;
+        }
+    } else {
+        while off >= w && marker(off - w) {
+            off -= w;
+        }
+    }
+    off
+}
 
 pub(super) fn backspace(s: &mut Session, v: &Value) -> CmdResult {
     let r = backspace_inner(s, v)?;
@@ -76,6 +96,7 @@ fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
     }
     let mut f = s.sel.focus.clone();
     let Some(para) = s.doc.para_at(&f) else { return sel_result(s) };
+    f.off = past_comment_markers(para, f.off, false);
     // Only floating objects before the caret: they are anchors, not characters, so this is the
     // paragraph start and the shape stays (Word).
     let before = para.text.get(..f.off).unwrap_or_default();
@@ -196,8 +217,9 @@ fn delete_inner(s: &mut Session, _: &Value) -> CmdResult {
         });
         return sel_result(s);
     }
-    let f = s.sel.focus.clone();
+    let mut f = s.sel.focus.clone();
     let Some(para) = s.doc.para_at(&f) else { return sel_result(s) };
+    f.off = past_comment_markers(para, f.off, true);
     if f.off < para.len() {
         let b = Pos { off: para.next_boundary(f.off), ..f.clone() };
         s.sel = Selection { anchor: f, focus: b };

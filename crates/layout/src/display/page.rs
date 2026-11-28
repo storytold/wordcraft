@@ -7,6 +7,7 @@ use super::{
     BezPath, Border, BorderStyle, ChangeBar, Document, Draw, HashMap, InlineObject, LineEnd, Page, Placed, Rect, Rgb, Spin, StoryRef, TextDirection,
     Underline,
 };
+use wordcraft_doc::Path;
 
 /// Colour of moved text (both ends of a tracked move).
 pub const MOVE_COLOR: Rgb = Rgb(0x1A, 0x7F, 0x37);
@@ -33,8 +34,9 @@ pub fn page_display(doc: &Document, page: &Page, opts: &DisplayOptions) -> Vec<D
     let mut out = Vec::new();
     let (ha, ba) = dimming(opts);
     let authors = Authors::new(doc);
-    stories_display(doc, &[&page.header[..], &page.footer[..]], None, opts, &authors, ha, &mut out);
-    stories_display(doc, &[&page.items[..]], None, opts, &authors, ba, &mut out);
+    let ctx = DrawCtx { opts, authors: &authors, carry: &page.comment_carry };
+    stories_display(doc, &[&page.header[..], &page.footer[..]], None, ctx, ha, &mut out);
+    stories_display(doc, &[&page.items[..]], None, ctx, ba, &mut out);
     body_change_bars(doc, page, &page.items, opts, ba, &mut out);
     out
 }
@@ -66,7 +68,8 @@ impl<'a> ItemDisplay<'a> {
         let mut out = Vec::new();
         let items = std::slice::from_ref(it);
         let (_, ba) = dimming(opts);
-        stories_display(self.doc, &[items], Some(&self.clips), opts, &self.authors, ba, &mut out);
+        let ctx = DrawCtx { opts, authors: &self.authors, carry: &self.page.comment_carry };
+        stories_display(self.doc, &[items], Some(&self.clips), ctx, ba, &mut out);
         // A line of a turned text box turns with it (as `stories_display` turns them on a page).
         if let Some((_, rect, spin)) = turned_frame(&self.turned, it).and_then(|k| self.turned.get(k)) {
             let mut turned = Vec::new();
@@ -85,8 +88,9 @@ pub fn page_layers(doc: &Document, page: &Page, opts: &DisplayOptions) -> [(f32,
     let (ha, ba) = dimming(opts);
     let (mut hf, mut body) = (Vec::new(), Vec::new());
     let authors = Authors::new(doc);
-    stories_display(doc, &[&page.header[..], &page.footer[..]], None, opts, &authors, 1.0, &mut hf);
-    stories_display(doc, &[&page.items[..]], None, opts, &authors, 1.0, &mut body);
+    let ctx = DrawCtx { opts, authors: &authors, carry: &page.comment_carry };
+    stories_display(doc, &[&page.header[..], &page.footer[..]], None, ctx, 1.0, &mut hf);
+    stories_display(doc, &[&page.items[..]], None, ctx, 1.0, &mut body);
     body_change_bars(doc, page, &page.items, opts, 1.0, &mut body);
     [(ha, hf), (ba, body)]
 }
@@ -103,17 +107,19 @@ fn body_change_bars(doc: &Document, page: &Page, items: &[Placed], opts: &Displa
     }
 }
 
+/// Markup options, revision-author colours, and comment ranges that continue from a previous
+/// page or paragraph: what every item on a page shares when it is drawn.
+#[derive(Clone, Copy)]
+struct DrawCtx<'a, 'd> {
+    opts: &'a DisplayOptions,
+    authors: &'a Authors<'d>,
+    carry: &'a [(StoryRef, Path, super::CommentCarry)],
+}
+
 /// Draw items for the placed items of `stories`, faded by `a`.
 /// `shared` gives the page's clipped cells when the caller worked them out already.
-fn stories_display(
-    doc: &Document,
-    stories: &[&[Placed]],
-    shared: Option<&Clips>,
-    opts: &DisplayOptions,
-    authors: &Authors,
-    a: f32,
-    out: &mut Vec<Draw>,
-) {
+fn stories_display(doc: &Document, stories: &[&[Placed]], shared: Option<&Clips>, ctx: DrawCtx<'_, '_>, a: f32, out: &mut Vec<Draw>) {
+    let DrawCtx { opts, authors, carry } = ctx;
     let hidden = opts.hide_object.as_ref().map(|p| Hidden::new(doc, p));
     for items in stories {
         let warps = warped_boxes(doc, items);
@@ -140,7 +146,7 @@ fn stories_display(
                 && turned_frame(&frames, it).is_none()
             {
                 let mut inner = Vec::new();
-                item(doc, it, opts, authors, a, &mut inner);
+                item(doc, it, ctx, a, &mut inner);
                 out.push(Draw::Clip { rect, items: inner });
                 continue;
             }
@@ -154,7 +160,7 @@ fn stories_display(
                     if let Some((_, rect, warp)) = warps.iter().find(|(w, ..)| w == id) {
                         let lines: Vec<&Placed> =
                             items.iter().filter(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if s == id)).collect();
-                        warped_text(WarpedText { doc, lines: &lines, rect: *rect, warp, opts, authors, alpha: a }, out);
+                        warped_text(WarpedText { doc, lines: &lines, rect: *rect, warp, opts, authors, carry, alpha: a }, out);
                     }
                 }
                 _ => match turned_frame(&frames, it) {
@@ -173,16 +179,16 @@ fn stories_display(
                                     && let Some(rect) = cell_clip(clips, *story, &path.0)
                                 {
                                     let mut clipped = Vec::new();
-                                    item(doc, line, opts, authors, a, &mut clipped);
+                                    item(doc, line, ctx, a, &mut clipped);
                                     inner.push(Draw::Clip { rect, items: clipped });
                                 } else {
-                                    item(doc, line, opts, authors, a, &mut inner);
+                                    item(doc, line, ctx, a, &mut inner);
                                 }
                             }
                             super::objects::spun(*spin, *rect, inner, out);
                         }
                     }
-                    None => item(doc, it, opts, authors, a, out),
+                    None => item(doc, it, ctx, a, out),
                 },
             }
         }
@@ -225,13 +231,15 @@ pub fn object_display(doc: &Document, page: &Page, o: &InlineObject, rect: Rect,
     object_draws(o, rect, Spin::default(), 1.0, opts, &mut out);
     let Some(id) = text_box else { return out };
     let authors = Authors::new(doc);
+    let ctx = DrawCtx { opts, authors: &authors, carry: &page.comment_carry };
     for items in [&page.items, &page.header, &page.footer] {
         let lines: Vec<&Placed> = items.iter().filter(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if *s == id)).collect();
         match warped_boxes(doc, items).into_iter().find(|(w, ..)| *w == id) {
-            Some((_, rect, warp)) if !lines.is_empty() => {
-                warped_text(WarpedText { doc, lines: &lines, rect, warp: &warp, opts, authors: &authors, alpha: 1.0 }, &mut out)
-            }
-            _ => lines.into_iter().for_each(|it| item(doc, it, opts, &authors, 1.0, &mut out)),
+            Some((_, rect, warp)) if !lines.is_empty() => warped_text(
+                WarpedText { doc, lines: &lines, rect, warp: &warp, opts: ctx.opts, authors: ctx.authors, carry: ctx.carry, alpha: 1.0 },
+                &mut out,
+            ),
+            _ => lines.into_iter().for_each(|it| item(doc, it, ctx, 1.0, &mut out)),
         }
     }
     out
@@ -318,14 +326,16 @@ struct WarpedText<'doc, 'opts, 'lines, 'placed, 'authors, 'author_doc> {
     warp: &'lines wordcraft_doc::wordart::TextWarp,
     opts: &'opts DisplayOptions,
     authors: &'authors Authors<'author_doc>,
+    carry: &'doc [(StoryRef, Path, super::CommentCarry)],
     alpha: f32,
 }
 
 fn warped_text(input: WarpedText<'_, '_, '_, '_, '_, '_>, out: &mut Vec<Draw>) {
-    let WarpedText { doc, lines, rect, warp, opts, authors, alpha } = input;
+    let WarpedText { doc, lines, rect, warp, opts, authors, carry, alpha } = input;
+    let ctx = DrawCtx { opts, authors, carry };
     let mut raw = Vec::new();
     for it in lines {
-        item(doc, it, opts, authors, alpha, &mut raw);
+        item(doc, it, ctx, alpha, &mut raw);
     }
     // The letters: runs with effects as they are, plain runs from their glyphs.
     let mut arts: Vec<(BezPath, Box<wordcraft_doc::wordart::TextEffects>, Rgb, f32)> = Vec::new();
@@ -444,13 +454,14 @@ pub(super) fn char_box(b: &Border, x0: f32, x1: f32, top: f32, bottom: f32, alph
     out.push(rule(r, top, r, bottom, b, alpha));
 }
 
-fn item(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors, alpha: f32, out: &mut Vec<Draw>) {
-    item_in(doc, it, opts, authors, alpha, Spin::default(), out)
+fn item(doc: &Document, it: &Placed, ctx: DrawCtx<'_, '_>, alpha: f32, out: &mut Vec<Draw>) {
+    item_in(doc, it, ctx, alpha, Spin::default(), out)
 }
 
 /// [`item`] drawn inside the turn `outer` (a turned Drawing Canvas's members): a shape's
 /// effects follow all the turns it is drawn inside.
-fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors, alpha: f32, outer: Spin, out: &mut Vec<Draw>) {
+fn item_in(doc: &Document, it: &Placed, ctx: DrawCtx<'_, '_>, alpha: f32, outer: Spin, out: &mut Vec<Draw>) {
+    let DrawCtx { opts, authors, carry } = ctx;
     match it {
         Placed::Fill { rect, color } => out.push(Draw::Fill { rect: *rect, color: *color, alpha, text_bg: false }),
         Placed::Rule { x0, y0, x1, y1, border } => out.push(rule(*x0, *y0, *x1, *y1, border, alpha)),
@@ -486,7 +497,7 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
         Placed::Clip { rect, spin, items } => {
             let mut inner = Vec::new();
             for it in items {
-                item_in(doc, it, opts, authors, alpha, spin.within(outer), &mut inner);
+                item_in(doc, it, ctx, alpha, spin.within(outer), &mut inner);
             }
             spun(*spin, *rect, vec![Draw::Clip { rect: *rect, items: inner }], out)
         }
@@ -503,6 +514,7 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
                     origin: (0.0, 0.0),
                     opts,
                     authors,
+                    carry,
                     alpha,
                     down: *turn == TextDirection::Down,
                 },
@@ -520,7 +532,7 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
             out.push(Draw::Turned { x: *x, y: *y, turn: *turn, items });
         }
         Placed::Lines { story, path, para, l0, l1, x, y, .. } => {
-            lines(LineRender { doc, story: *story, path, pl: para, range: *l0..*l1, origin: (*x, *y), opts, authors, alpha, down: false }, out)
+            lines(LineRender { doc, story: *story, path, pl: para, range: *l0..*l1, origin: (*x, *y), opts, authors, carry, alpha, down: false }, out)
         }
     }
 }

@@ -27,6 +27,8 @@ pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>) -> u
 pub(super) fn page_content_key(page: &Page) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     (page.w.to_bits(), page.h.to_bits()).hash(&mut h);
+    // A comment range from an earlier page shades this one: its paragraphs can be unchanged.
+    page.comment_carry.hash(&mut h);
     for list in [&page.items, &page.header, &page.footer] {
         list.len().hash(&mut h);
         for it in list.iter() {

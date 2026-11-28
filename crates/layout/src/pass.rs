@@ -639,6 +639,13 @@ pub(crate) fn layout_pass(
     if opts.comment_balloons && !mode.web {
         balloons::add(&mut ctx, &mut lay);
     }
+    // Comment ranges that run on from an earlier paragraph, for the pages that show them.
+    let carry = crate::display::comment_carry(doc);
+    if !carry.is_empty() {
+        for page in &mut lay.pages {
+            page.comment_carry = crate::display::page_carry(&carry, page);
+        }
+    }
     lay.text_boxes = ctx.boxes.total().saturating_sub(boxes_discarded);
     Pass::Done(lay)
 }

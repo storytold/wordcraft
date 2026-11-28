@@ -14,6 +14,7 @@ use crate::math::MItem;
 use crate::para::{ClKind, LineEnd, ParaLayout};
 use crate::{Page, Placed};
 
+mod carry;
 mod glyphs;
 mod lines;
 mod objects;
@@ -21,6 +22,8 @@ mod options;
 mod page;
 mod paint;
 
+pub(crate) use carry::page_carry;
+pub use carry::{CommentCarry, comment_carry};
 pub(crate) use glyphs::author_order;
 pub use glyphs::{CHECK_BOX_INSET, check_box, text_color, upright_in_vertical};
 #[cfg(test)]

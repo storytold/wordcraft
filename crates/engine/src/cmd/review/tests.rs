@@ -1206,3 +1206,155 @@ fn preexisting_table_with_redlined_cell_content_preserves_table_shell() {
         assert!(s_rt.run("review.changes", &json!({})).unwrap().as_array().unwrap().is_empty());
     }
 }
+
+/// A comment over several paragraphs, with empty ones between them, keeps every paragraph
+/// with its text and formatting, ends in the last paragraph selected (a selection of whole
+/// paragraphs ends at the start of the next one), leaves the commented text selected between
+/// its markers, and the page shades all of it, not only its first paragraph.
+#[test]
+fn a_comment_over_paragraphs_keeps_them_and_shades_them_all() {
+    use wordcraft_doc::para::InlineObject;
+    use wordcraft_doc::{Path, Pos, StoryRef};
+    for whole in [false, true] {
+        let text = "Alpha paragraph one.\n\nBeta paragraph two.\n\nGamma paragraph three.\nAfter the comment.";
+        let mut s = Session::new(Document::from_text(text));
+        s.view.proofing = false;
+        // Right-to-left paragraphs with spacing of their own.
+        for path in s.doc.para_paths(StoryRef::Body) {
+            let p = s.doc.para_mut(StoryRef::Body, &path).unwrap();
+            p.props.bidi = Some(true);
+            p.props.space_after = Some(6.0);
+            p.mark.rtl = Some(true);
+        }
+        let paras =
+            |s: &Session| s.doc.para_paths(StoryRef::Body).iter().map(|path| s.doc.para(StoryRef::Body, path).unwrap().clone()).collect::<Vec<_>>();
+        let before = paras(&s);
+        let (from, to) = if whole { ((0, 0), (5, 0)) } else { ((0, 6), (4, 5)) };
+        s.run("select.range", &json!({"anchor": {"block": from.0, "off": from.1}, "focus": {"block": to.0, "off": to.1}})).unwrap();
+        let id = s.run("review.newComment", &json!({"text": "A note."})).unwrap()["id"].as_u64().unwrap() as u32;
+        let after = paras(&s);
+        assert_eq!(after.len(), before.len(), "no paragraph is lost");
+        for (a, b) in after.iter().zip(&before) {
+            assert_eq!(a.text.replace('\u{FFFC}', ""), b.text, "only the markers are new");
+            assert_eq!((&a.props, &a.mark), (&b.props, &b.mark), "{:?}", b.text);
+        }
+        let end = if whole { (4, "Gamma paragraph three.".len()) } else { (4, 5) };
+        assert!(matches!(after[end.0].object_at(end.1), Some(InlineObject::CommentEnd { id: i }) if *i == id), "{:?}", after[end.0].text);
+        assert!(after[5].objects.is_empty(), "nothing in the paragraph after the range");
+        let (a, b) = s.sel.ordered();
+        assert_eq!((a.path, a.off, b.path, b.off), (Path::top(0), from.1 + 3, Path::top(end.0), end.1), "the commented text is selected");
+        let (d, _) = draws(&mut s);
+        let shades: Vec<_> = d
+            .iter()
+            .filter_map(|x| if let Draw::Fill { rect, color: wordcraft_doc::Rgb(0xEF, 0xE3, 0xF7), .. } = x { Some(*rect) } else { None })
+            .collect();
+        let l = s.layout();
+        let shaded = |k: usize| {
+            let c = l.caret(&Pos::body(k, 0)).unwrap();
+            let mid = c.top + c.height / 2.0;
+            shades.iter().any(|r| r.y <= mid && mid <= r.bottom())
+        };
+        for k in [0, 2, 4] {
+            assert!(shaded(k), "whole {whole}: paragraph {k} is shaded: {shades:?}");
+        }
+        assert!(!shaded(5), "whole {whole}: the paragraph after the range isn't");
+    }
+}
+
+/// Typing straight after New Comment (meant for the comment while the page kept the
+/// keyboard) replaced the selection the command left behind: it held the start marker but
+/// not the end of the text, so the comment lost its start and kept a stray end. The text
+/// typed now takes the commented text's place inside the range, and with no selection the
+/// caret stays by its letter.
+#[test]
+fn typing_after_new_comment_keeps_the_range_whole() {
+    use wordcraft_doc::para::InlineObject;
+    let mut s = Session::new(Document::from_text("Alpha paragraph one."));
+    s.view.proofing = false;
+    s.run("select.text", &json!({"text": "paragraph"})).unwrap();
+    let id = s.run("review.newComment", &json!({"text": "A note."})).unwrap()["id"].as_u64().unwrap() as u32;
+    s.run("text.insert", &json!({"text": "x"})).unwrap();
+    let p = body_para(&s);
+    assert_eq!(p.text.replace('\u{FFFC}', ""), "Alpha x one.");
+    let markers: Vec<_> = p
+        .object_offsets()
+        .into_iter()
+        .filter_map(|o| match p.object_at(o) {
+            Some(InlineObject::CommentStart { id }) => Some((true, *id)),
+            Some(InlineObject::CommentEnd { id }) => Some((false, *id)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(markers, [(true, id), (false, id)]);
+    let mut s = Session::new(Document::from_text("Alpha paragraph one."));
+    s.run("caret.set", &json!({"pos": {"story": "body", "path": [0], "off": 8}})).unwrap();
+    s.run("review.newComment", &json!({"text": "A note."})).unwrap();
+    assert!(s.sel.is_collapsed());
+    assert_eq!(body_para(&s).text.get(s.sel.focus.off..), Some("ragraph\u{FFFC} one."));
+}
+
+/// Every comment marker in the body: (paragraph, offset, a start, id).
+fn comment_markers(s: &Session) -> Vec<(usize, usize, bool, u32)> {
+    use wordcraft_doc::StoryRef;
+    use wordcraft_doc::para::InlineObject;
+    let mut v = Vec::new();
+    for (k, path) in s.doc.para_paths(StoryRef::Body).iter().enumerate() {
+        let p = s.doc.para(StoryRef::Body, path).unwrap();
+        for o in p.object_offsets() {
+            match p.object_at(o) {
+                Some(InlineObject::CommentStart { id }) => v.push((k, o, true, *id)),
+                Some(InlineObject::CommentEnd { id }) => v.push((k, o, false, *id)),
+                _ => {}
+            }
+        }
+    }
+    v
+}
+
+/// A selection of only a paragraph mark (from the end of one paragraph to the start of the
+/// next) keeps the mark as the comment's range, as Word comments on it. Ending the range in
+/// the first paragraph left it empty, its markers side by side with the caret between them,
+/// and the next Delete took the end marker alone.
+#[test]
+fn a_comment_on_a_paragraph_mark_keeps_its_range() {
+    let m = wordcraft_doc::para::OBJ.len_utf8();
+    let end = "Alpha one.".len();
+    let mut s = Session::new(Document::from_text("Alpha one.\nBeta two."));
+    s.view.proofing = false;
+    s.run("select.range", &json!({"anchor": {"block": 0, "off": end}, "focus": {"block": 1, "off": 0}})).unwrap();
+    let id = s.run("review.newComment", &json!({"text": "A note."})).unwrap()["id"].as_u64().unwrap() as u32;
+    assert_eq!(comment_markers(&s), [(0, end, true, id), (1, 0, false, id)], "the range holds the paragraph mark");
+    let (a, b) = s.sel.ordered();
+    assert_eq!((a.path.last(), a.off, b.path.last(), b.off), (0, end + m, 1, 0), "the mark is selected between the markers");
+    // Delete takes the selected mark, then the letter after the range, never a marker.
+    s.run("text.delete", &json!({})).unwrap();
+    assert_eq!(comment_markers(&s), [(0, end, true, id), (0, end + m, false, id)]);
+    s.run("text.delete", &json!({})).unwrap();
+    assert_eq!(comment_markers(&s), [(0, end, true, id), (0, end + m, false, id)]);
+    assert_eq!(body_para(&s).text.replace('\u{FFFC}', ""), "Alpha one.eta two.");
+}
+
+/// A comment made in an empty paragraph has no text: its markers sit side by side, the caret
+/// between them. Delete and Backspace step over comment markers, as in Word, so from any
+/// caret stop beside or between them they take the paragraph mark next to them and the
+/// comment keeps both ends.
+#[test]
+fn delete_and_backspace_keep_an_empty_comment_whole() {
+    let m = wordcraft_doc::para::OBJ.len_utf8();
+    let end = "Alpha one.".len();
+    for key in ["text.delete", "text.backspace"] {
+        for stop in 0..3 {
+            let mut s = Session::new(Document::from_text("Alpha one.\n\nBeta two."));
+            s.view.proofing = false;
+            s.run("caret.set", &json!({"pos": {"story": "body", "path": [1], "off": 0}})).unwrap();
+            let id = s.run("review.newComment", &json!({"text": "A note."})).unwrap()["id"].as_u64().unwrap() as u32;
+            assert_eq!(comment_markers(&s), [(1, 0, true, id), (1, m, false, id)]);
+            assert!(s.sel.is_collapsed() && s.sel.focus.off == m, "the caret is between the markers");
+            s.run("caret.set", &json!({"pos": {"story": "body", "path": [1], "off": stop * m}})).unwrap();
+            s.run(key, &json!({})).unwrap();
+            let (k, at) = if key == "text.delete" { (1, 0) } else { (0, end) };
+            assert_eq!(comment_markers(&s), [(k, at, true, id), (k, at + m, false, id)], "{key} from stop {stop}");
+            assert_eq!(s.doc.para_paths(wordcraft_doc::StoryRef::Body).len(), 2, "{key} from stop {stop}: the paragraphs joined");
+        }
+    }
+}
