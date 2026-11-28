@@ -76,16 +76,43 @@ fn new_app() -> WordApp {
     WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default())
 }
 
-/// A saved .docx (so AutoSave can cover it) in the harness.
-fn autosave_harness() -> (egui_kittest::Harness<'static, WordApp>, std::path::PathBuf) {
-    let dir = std::env::temp_dir().join(format!("wordcraft-ui-autosave-label-{}", std::process::id()));
+/// How [`autosave_harness`] has the saved file in its window.
+#[derive(Debug, PartialEq)]
+enum Reopen {
+    /// The window that saved it.
+    No,
+    /// Opened in a fresh window, read from disk.
+    FromDisk,
+    /// Opened in a fresh window from its bytes, which only names the file.
+    FromBytes,
+}
+
+/// A saved .docx (so AutoSave can cover it), or the same file opened in a fresh window as
+/// `reopen` says, with the title bar drawn over it. `files` answers a later Save As pick.
+fn autosave_harness(
+    reopen: Reopen,
+    files: &std::sync::Arc<craft::host::ScriptedFiles>,
+) -> (egui_kittest::Harness<'static, WordApp>, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!("wordcraft-ui-autosave-label-{}-{reopen:?}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("draft.docx");
-    let mut a = new_app();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default())
+        .with_host(std::sync::Arc::new(craft::host::Host::builder(crate::APP).files(files.clone()).build()));
     a.run("text.insert", json!({"text": "Hello"})).unwrap();
     a.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
     assert!(a.autosaves(), "a saved .docx is covered by AutoSave");
+    if reopen != Reopen::No {
+        a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default())
+            .with_host(std::sync::Arc::new(craft::host::Host::builder(crate::APP).files(files.clone()).build()));
+        if reopen == Reopen::FromBytes {
+            let data = wordcraft_engine::cmd::insert::base64_encode(&std::fs::read(&path).unwrap());
+            a.execute("file.open", json!({"path": path.to_string_lossy(), "data": data})).unwrap();
+        } else {
+            a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+        }
+        assert!(!a.autosaves(), "an opened file waits for the user's go-ahead");
+    }
     let h = harness(a);
     (h, dir)
 }
@@ -93,7 +120,8 @@ fn autosave_harness() -> (egui_kittest::Harness<'static, WordApp>, std::path::Pa
 /// #3370: clicking the AutoSave switch label toggles AutoSave on and off.
 #[test]
 fn clicking_the_autosave_label_toggles_autosave() {
-    let (mut h, dir) = autosave_harness();
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::new());
+    let (mut h, dir) = autosave_harness(Reopen::No, &files);
     assert!(h.state().autosaves());
     h.get_by_label("AutoSave").click();
     crate::test_harness::frames(&mut h, 2);
@@ -101,6 +129,35 @@ fn clicking_the_autosave_label_toggles_autosave() {
     h.get_by_label("AutoSave").click();
     crate::test_harness::frames(&mut h, 2);
     assert!(h.state().autosaves(), "and clicking it again turns it back on");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #3307: a file opened, not saved, in this window had the switch greyed out, and clicking it
+/// asked for Save As. Clicking it now turns AutoSave on for that file.
+#[test]
+fn clicking_autosave_on_an_opened_file_turns_it_on() {
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::new());
+    let (mut h, dir) = autosave_harness(Reopen::FromDisk, &files);
+    h.get_by_label("AutoSave").click();
+    crate::test_harness::frames(&mut h, 2);
+    assert!(h.state().autosaves(), "the switch turned AutoSave on");
+    assert!(h.state().dialog_host.is_empty() && h.state().file_dialog.is_none(), "without Save As");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A document opened from bytes only names its file, so the switch can't hand that file to
+/// AutoSave: it shows the block and clicking it asks for Save As, after which AutoSave is on.
+#[test]
+fn clicking_autosave_on_a_document_opened_from_bytes_asks_for_save_as() {
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::new());
+    let (mut h, dir) = autosave_harness(Reopen::FromBytes, &files);
+    assert_eq!(h.state().autosave_switch_block(), Some(crate::AutoSaveBlock::NotSavedHere));
+    let copy = dir.join("copy.docx");
+    files.queue(craft::host::Picked::Paths(vec![copy.clone()]));
+    h.get_by_label("AutoSave").click();
+    crate::test_harness::frames(&mut h, 2);
+    assert!(copy.is_file(), "Save As saved a copy");
+    assert!(h.state().autosaves(), "AutoSave covers the copy");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -104,7 +104,8 @@ fn leading(app: &mut WordApp, ui: &mut Ui) -> Option<egui::Rect> {
 /// The AutoSave switch: off and with the reason as its tooltip when AutoSave can't cover the document (#196,
 /// #176); a click then offers Save As where that helps. Returns the rect it took.
 fn autosave(app: &mut WordApp, ui: &mut Ui) -> egui::Rect {
-    let block = app.autosave_block();
+    // A file read from disk here is off, not blocked: the switch turns it on (#3307).
+    let block = app.autosave_switch_block();
     let on = app.autosaves() && block.is_none();
     let tip = block.as_ref().map_or_else(|| tl!("AutoSave saves every change to the file (needs a saved document)").to_string(), |b| b.reason());
     // The small switch, as the old title bar drew it.

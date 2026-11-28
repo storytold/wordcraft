@@ -130,7 +130,11 @@ impl WordApp {
             return Err(e.into());
         }
         if id == "file.autosave" {
-            return self.set_autosave(&params);
+            let r = self.set_autosave(&params);
+            if let Err(e) = &r {
+                self.status(e.clone());
+            }
+            return r;
         }
         if let Some(r) = table_pen::toggle(self, id, &params) {
             return r;
@@ -273,13 +277,8 @@ impl WordApp {
             self.recovery_seen = true;
             self.sync_document();
         }
-        // An explicit save to the document's own file lets AutoSave keep writing there.
-        if let Ok(v) = &r
-            && matches!(id, "file.save" | "file.saveAs")
-            && v.get("saved").and_then(Value::as_bool) == Some(true)
-            && v.get("path").and_then(Value::as_str).map(std::path::Path::new) == self.session.path.as_deref()
-        {
-            self.autosave_path = self.session.path.clone();
+        if let Ok(v) = &r {
+            self.note_file_on_disk(id, &params, v);
         }
         // A Markdown file edited in the formatted view was written out again, not kept as it was.
         if let Ok(v) = &r
@@ -295,6 +294,9 @@ impl WordApp {
         {
             if self.autosave_path.as_ref() == Some(&old) {
                 self.autosave_path = self.session.path.clone();
+            }
+            if self.read_from.as_ref() == Some(&old) {
+                self.read_from = self.session.path.clone();
             }
             let old = old.to_string_lossy();
             self.ui.recent.retain(|r| *r != old);
@@ -379,6 +381,25 @@ impl WordApp {
             self.ui.backstage = false;
         }
         r
+    }
+
+    /// Which file on disk the document is in, after `file.save`, `file.saveAs` or `file.open`.
+    fn note_file_on_disk(&mut self, id: &str, params: &Value, v: &Value) {
+        // An explicit save to the document's own file lets AutoSave keep writing there.
+        if matches!(id, "file.save" | "file.saveAs")
+            && v.get("saved").and_then(Value::as_bool) == Some(true)
+            && v.get("path").and_then(Value::as_str).map(std::path::Path::new) == self.session.path.as_deref()
+        {
+            self.autosave_path = self.session.path.clone();
+            self.read_from = self.session.path.clone();
+        }
+        // A file read from disk may have AutoSave turned on for it; one opened from bytes only
+        // names a file it never read.
+        // `file.open` without a path only asks for the picker, and `data` that isn't a string is
+        // ignored (the file is read from disk).
+        if id == "file.open" && params.get("path").and_then(Value::as_str).is_some() && v.get("alreadyOpen").and_then(Value::as_bool) == Some(false) {
+            self.read_from = if params.get("data").and_then(Value::as_str).is_some() { None } else { self.session.path.clone() };
+        }
     }
 
     fn after_command(&mut self, id: &str) {
