@@ -204,6 +204,14 @@ impl GFrame {
         self.capped
     }
 
+    /// Whether `name` is declared as a child of this frame's selected Strict
+    /// model or its Transitional override.
+    pub(crate) fn is_known_child(&self, name: &str) -> bool {
+        self.model.is_some_and(|m| {
+            m.children.iter().any(|c| c.name == name) || transitional_type_model(m.key).is_some_and(|o| o.children.iter().any(|c| c.name == name))
+        })
+    }
+
     /// Record one direct child, under its [`count_key`]. Returns `true` the
     /// first time this frame trips the unmodelled-name retention cap.
     pub(crate) fn observe(&mut self, name: &str) -> bool {
@@ -221,9 +229,7 @@ impl GFrame {
             *n = n.saturating_add(1);
             return false;
         }
-        let known = self.model.is_some_and(|m| {
-            m.children.iter().any(|c| c.name == name) || transitional_type_model(m.key).is_some_and(|o| o.children.iter().any(|c| c.name == name))
-        });
+        let known = self.is_known_child(name);
         if !known {
             if self.unknown >= UNKNOWN_CAP {
                 let was = self.capped;
@@ -356,10 +362,10 @@ pub(crate) fn child_frame(parent: &Parent<'_>, ns: Option<&[u8]>, local: &str, s
 /// keep pattern matching inside the closed observation syntax grammar.
 #[derive(PartialEq, Eq)]
 enum Violation {
-    /// A named child below its minimum occurrence count: `(child, min)`.
-    Missing(&'static str, u16),
-    /// No member of a choice group reached the group's required total: `(group, members, min)`.
-    MissingChoice(&'static str, Vec<&'static str>, u16),
+    /// A named child below its minimum occurrence count: `(child, observed, min)`.
+    Missing(&'static str, u32, u16),
+    /// A choice group whose member sum is below its required minimum: `(group, members, observed, min)`.
+    MissingChoice(&'static str, Vec<&'static str>, u32, u16),
 }
 
 /// The required-occurrence violations of `model` against the counts a closed
@@ -370,7 +376,7 @@ fn required_violations(model: &TypeModel, frame: &GFrame) -> Vec<Violation> {
         collections: "type.Vec*5";
         scope: "static ECMA-376 required-child clauses over one closed element's direct children";
         loss: "none within a complete closed element; incomplete/fallback frames are filtered by the caller";
-        fallback: "nullable choice branches never fire; returns exact missing clauses for Transitional veto";
+        fallback: "nullable choice branches never fire; returns exact missing clauses with observed counts for Transitional veto";
         package_loss: "independent";
     }
 
@@ -395,12 +401,9 @@ fn required_violations(model: &TypeModel, frame: &GFrame) -> Vec<Violation> {
         if c.min < 1 {
             continue;
         }
-        if c.name == "<any>" {
-            if frame.total < u32::from(c.min) {
-                out.push(Violation::Missing(c.name, c.min));
-            }
-        } else if frame.count(c.name) < u32::from(c.min) {
-            out.push(Violation::Missing(c.name, c.min));
+        let observed = if c.name == "<any>" { frame.total } else { frame.count(c.name) };
+        if observed < u32::from(c.min) {
+            out.push(Violation::Missing(c.name, observed, c.min));
         }
     }
     for (group, members, min, has_seq, seq_optional, single_optional) in groups {
@@ -409,7 +412,7 @@ fn required_violations(model: &TypeModel, frame: &GFrame) -> Vec<Violation> {
         }
         let sum: u32 = members.iter().map(|m| if *m == "<any>" { frame.total } else { frame.count(m) }).sum();
         if sum < u32::from(min) {
-            out.push(Violation::MissingChoice(group, members, min));
+            out.push(Violation::MissingChoice(group, members, sum, min));
         }
     }
     out
@@ -422,8 +425,8 @@ impl Violation {
     /// still matches when both profiles fail on an empty element.
     fn same_clause(&self, other: &Violation) -> bool {
         match (self, other) {
-            (Violation::Missing(a, x), Violation::Missing(b, y)) => a == b && x == y,
-            (Violation::MissingChoice(a, _, x), Violation::MissingChoice(b, _, y)) => a == b && x == y,
+            (Violation::Missing(a, _, x), Violation::Missing(b, _, y)) => a == b && x == y,
+            (Violation::MissingChoice(a, _, _, x), Violation::MissingChoice(b, _, _, y)) => a == b && x == y,
             _ => false,
         }
     }
@@ -446,22 +449,34 @@ fn judge(model: &TypeModel, over: Option<&TypeModel>, frame: &GFrame) -> Vec<Vio
     }
     if let Some(over) = over {
         let over_violations = required_violations(over, frame);
-        violations.retain(|v| over_violations.iter().any(|o| v.same_clause(o)));
+        violations.retain_mut(|v| {
+            let Some(o) = over_violations.iter().find(|o| v.same_clause(o)) else {
+                return false;
+            };
+            if let (Violation::MissingChoice(_, members, observed, _), Violation::MissingChoice(_, om, oo, _)) = (v, o)
+                && *oo > *observed
+            {
+                *members = om.clone();
+                *observed = *oo;
+            }
+            true
+        });
     }
     violations
 }
 
 /// Judge a closed element's required children (`GRAMMAR-REQUIRED-CHILD`).
 /// Runs at element close (prefix-established for the closed element). Fallback
-/// frames and frames with skipped `mc:AlternateContent` or unresolved-namespace
-/// direct children are skipped so required-child absence is never inferred from
-/// an incomplete child set.
+/// frames and frames whose direct-child set is incomplete (`mc:AlternateContent`,
+/// unresolved-namespace direct child, or unexpanded entity reference in element
+/// content) are skipped so required-child absence is never inferred from
+/// partial child evidence.
 pub(crate) fn close(frame: &GFrame, part: &str, path: &str, acc: &mut Acc) {
     observation_contract! {
         rules: "GRAMMAR-REQUIRED-CHILD";
         collections: "-";
         scope: "closed modelled element's direct children in a grammar-scoped XML part";
-        loss: "fallback selection, skipped mc:AlternateContent child, or unresolved-namespace direct child";
+        loss: "fallback selection, skipped mc:AlternateContent child, unresolved-namespace direct child, or unexpanded entity reference in element content";
         fallback: "skip required-child check when the element's child set is incomplete; emit Warning only and never set Incomplete";
         package_loss: "independent";
     }
@@ -476,17 +491,36 @@ pub(crate) fn close(frame: &GFrame, part: &str, path: &str, acc: &mut Acc) {
     }
     for v in violations {
         let message = match &v {
-            Violation::Missing(child, min) => {
+            Violation::Missing(child, observed, min) => {
                 let need = if *min == 1 { "at least one".to_string() } else { format!("at least {min}") };
+                let short = u32::from(*min).saturating_sub(*observed);
                 if *child == "<any>" {
-                    format!("{} at {path} in {part} has no child elements; {} requires {need}", frame.name, model.key)
-                } else {
+                    if *observed == 0 {
+                        format!("{} at {path} in {part} has no child elements; {} requires {need}", frame.name, model.key)
+                    } else {
+                        let noun = if *observed == 1 { "child element" } else { "child elements" };
+                        format!("{} at {path} in {part} has {observed} {noun} (short by {short}); {} requires {need}", frame.name, model.key)
+                    }
+                } else if *observed == 0 {
                     format!("{} at {path} in {part} has no {child} element; {} requires {need}", frame.name, model.key)
+                } else {
+                    let noun = if *observed == 1 { "element" } else { "elements" };
+                    format!("{} at {path} in {part} has {observed} {child} {noun} (short by {short}); {} requires {need}", frame.name, model.key)
                 }
             }
-            Violation::MissingChoice(_, members, min) => {
+            Violation::MissingChoice(_, members, observed, min) => {
                 let need = if *min == 1 { "at least one of them".to_string() } else { format!("at least {min} of them") };
-                format!("{} at {path} in {part} has none of {}; {} requires {need}", frame.name, members.join(", "), model.key)
+                let short = u32::from(*min).saturating_sub(*observed);
+                if *observed == 0 {
+                    format!("{} at {path} in {part} has none of {}; {} requires {need}", frame.name, members.join(", "), model.key)
+                } else {
+                    format!(
+                        "{} at {path} in {part} has {observed} of {} (short by {short}); {} requires {need}",
+                        frame.name,
+                        members.join(", "),
+                        model.key
+                    )
+                }
             }
         };
         acc.add_grammar("GRAMMAR-REQUIRED-CHILD", Some(part.to_string()), message);
@@ -632,25 +666,45 @@ fn judge_order(frame: &mut GFrame, model: &TypeModel, child: &str, part: &str, c
     }
 }
 
-/// Judge one `w:numFmt` format value (`GRAMMAR-NUMFMT-VALUE`).
-pub(crate) fn judge_num_fmt(val: Option<&str>, part: &str, path: &str, acc: &mut Acc) {
+/// Outcome of reading one XML attribute for grammar evaluation, preserving the
+/// distinction between a missing attribute, a present attribute whose
+/// XML-delivered value was resolved, and a present attribute whose value could
+/// not be delivered (or whose namespace prefix is unresolved).
+#[derive(PartialEq, Eq)]
+pub(crate) enum GrammarAttrValue {
+    /// The attribute is missing on this element.
+    Missing,
+    /// The attribute is present and its delivered value is known.
+    Present(String),
+    /// The attribute is present, but its value could not be delivered.
+    Unreadable,
+}
+
+/// Judge one `w:numFmt` format value (`GRAMMAR-NUMFMT-VALUE`). Returns `true`
+/// when the attribute was present but its value could not be delivered.
+pub(crate) fn judge_num_fmt(val: &GrammarAttrValue, part: &str, path: &str, acc: &mut Acc) -> bool {
     observation_contract! {
         rules: "GRAMMAR-NUMFMT-VALUE";
         collections: "-";
         scope: "w:numFmt/@w:val in Wml-scope parts against the 63-value ST_NumberFormat table";
-        loss: "missing w:val attribute carries no value to judge";
-        fallback: "exact case-sensitive membership check; missing attribute stays silent; Warning only";
+        loss: "missing w:val attribute carries no value; unreadable entity-bearing or namespace-unresolved w:val value cannot be delivered";
+        fallback: "exact case-sensitive membership check on delivered values; missing attribute stays silent; unreadable attribute is disclosed by grammar coverage note without false warning or Incomplete";
         package_loss: "independent";
     }
 
-    if let Some(v) = val
-        && !NUM_FMT_VALUES.contains(&v)
-    {
-        acc.add_grammar(
-            "GRAMMAR-NUMFMT-VALUE",
-            Some(part.to_string()),
-            format!("numFmt format \"{v}\" at {path} in {part} is not an ST_NumberFormat value"),
-        );
+    match val {
+        GrammarAttrValue::Missing => false,
+        GrammarAttrValue::Present(v) => {
+            if !NUM_FMT_VALUES.contains(&v.as_str()) {
+                acc.add_grammar(
+                    "GRAMMAR-NUMFMT-VALUE",
+                    Some(part.to_string()),
+                    format!("numFmt format \"{v}\" at {path} in {part} is not an ST_NumberFormat value"),
+                );
+            }
+            false
+        }
+        GrammarAttrValue::Unreadable => true,
     }
 }
 
@@ -661,13 +715,14 @@ pub(crate) struct ElementEvent<'a> {
     pub is_alt: bool,
     pub unresolved: bool,
     pub suppressed: bool,
-    pub numfmt_val: Option<&'a str>,
+    pub numfmt_val: &'a GrammarAttrValue,
 }
 
 /// One open XML element tracked by [`GrammarWalk`].
 struct WalkFrame {
     path: String,
-    child_counts: HashMap<String, u32>,
+    child_counts: HashMap<String, Option<u32>>,
+    unmodelled_path_names: usize,
     grammar: Option<GFrame>,
     suppressed: bool,
 }
@@ -679,6 +734,7 @@ pub(crate) struct GrammarWalk {
     frames: Vec<WalkFrame>,
     fallback_noted: HashSet<String>,
     cap_noted: bool,
+    unreadable_attr_noted: bool,
 }
 
 impl GrammarWalk {
@@ -693,18 +749,44 @@ impl GrammarWalk {
             package_loss: "independent";
         }
 
-        Self { scope, frames: Vec::new(), fallback_noted: HashSet::new(), cap_noted: false }
+        Self { scope, frames: Vec::new(), fallback_noted: HashSet::new(), cap_noted: false, unreadable_attr_noted: false }
+    }
+
+    /// Mark the currently open element's direct-child set as incomplete (for
+    /// example, after an unexpanded entity reference in element content) so
+    /// required-child absence is never inferred from partial child evidence.
+    pub(crate) fn mark_child_set_incomplete(&mut self) {
+        observation_contract! {
+            rules: "-";
+            collections: "field.frames*1";
+            scope: "currently open modelled element in a grammar-scoped XML part";
+            loss: "unexpanded entity reference in element content";
+            fallback: "suppresses GRAMMAR-REQUIRED-CHILD on the affected open element only; unaffected closed elements still run; never sets Incomplete";
+            package_loss: "independent";
+        }
+
+        if !self.scope.is_active() {
+            return;
+        }
+        if let Some(frame) = self.frames.last_mut()
+            && !frame.suppressed
+            && let Some(pg) = &mut frame.grammar
+        {
+            pg.child_set_incomplete = true;
+        }
     }
 
     /// Compute the 1-based occurrence path for an element about to open under
-    /// the current top frame.
+    /// the current top frame. Modelled (and parent-known) sibling names always
+    /// retain exact 1-based ordinals; unmodelled names beyond [`PATH_ORDINAL_CAP`]
+    /// render `[?]` instead of fabricating an ordinal.
     fn next_path(&mut self, ns: Option<&[u8]>, local: &str) -> String {
         observation_contract! {
             rules: "-";
             collections: "field.child_counts*3,field.frames*1";
             scope: "1-based sibling occurrence path from the part root for grammar findings";
-            loss: "distinct sibling names capped at 1024 per parent frame";
-            fallback: "elements beyond the distinct-name cap keep ordinal 1 without growing memory";
+            loss: "distinct unmodelled sibling names capped at 1024 per parent frame; modelled sibling names are never capped";
+            fallback: "modelled sibling names retain exact 1-based ordinals; unmodelled sibling names past the cap render [?] instead of fabricating an ordinal";
             package_loss: "independent";
         }
 
@@ -712,16 +794,27 @@ impl GrammarWalk {
         match self.frames.last_mut() {
             None => display,
             Some(parent) => {
-                let ordinal = if let Some(c) = parent.child_counts.get_mut(&display) {
-                    *c = c.saturating_add(1);
-                    *c
-                } else if parent.child_counts.len() < PATH_ORDINAL_CAP {
-                    parent.child_counts.insert(display.clone(), 1);
-                    1
+                let ordinal = if let Some(slot) = parent.child_counts.get_mut(&display) {
+                    *slot = slot.and_then(|c| c.checked_add(1));
+                    *slot
                 } else {
-                    1
+                    let modelled = prefixed_name(ns, local).is_some_and(|p| is_modelled(&p))
+                        || parent.grammar.as_ref().is_some_and(|g| g.is_known_child(&display));
+                    if modelled {
+                        parent.child_counts.insert(display.clone(), Some(1));
+                        Some(1)
+                    } else if parent.unmodelled_path_names < PATH_ORDINAL_CAP {
+                        parent.unmodelled_path_names += 1;
+                        parent.child_counts.insert(display.clone(), Some(1));
+                        Some(1)
+                    } else {
+                        None
+                    }
                 };
-                format!("{}/{display}[{ordinal}]", parent.path)
+                match ordinal {
+                    Some(n) => format!("{}/{display}[{n}]", parent.path),
+                    None => format!("{}/{display}[?]", parent.path),
+                }
             }
         }
     }
@@ -733,16 +826,24 @@ impl GrammarWalk {
             rules: "-";
             collections: "field.fallback_noted*1,field.frames*2";
             scope: "streaming grammar evaluation for one XML start/empty event";
-            loss: "suppressed mc:AlternateContent subtrees, unresolved namespaces, or >32 unmodelled child names";
-            fallback: "records informational coverage notes only, never calls set_incomplete(), emits Warning only";
+            loss: "suppressed mc:AlternateContent subtrees, unresolved namespaces, unreadable grammar attributes, or >32 unmodelled child names";
+            fallback: "records isolated informational grammar notes only, never calls set_incomplete(), emits Warning only";
             package_loss: "independent";
         }
 
         if ev.suppressed {
             return None;
         }
-        if self.scope == GrammarScope::Wml && ev.ns == Some(NS_W.as_bytes()) && ev.local == "numFmt" {
-            judge_num_fmt(ev.numfmt_val, part, path, acc);
+        if self.scope == GrammarScope::Wml
+            && ev.ns == Some(NS_W.as_bytes())
+            && ev.local == "numFmt"
+            && judge_num_fmt(ev.numfmt_val, part, path, acc)
+            && !self.unreadable_attr_noted
+        {
+            self.unreadable_attr_noted = true;
+            acc.note_grammar(format!(
+                "{part} has a w:numFmt/@w:val attribute at {path} whose value could not be delivered; format value was not checked"
+            ));
         }
         let child = count_key(ev.ns, ev.local);
         if let Some(parent) = self.frames.last_mut()
@@ -798,7 +899,7 @@ impl GrammarWalk {
         }
         let path = self.next_path(ev.ns, ev.local);
         let grammar = self.enter_element(ev, part, &path, acc);
-        self.frames.push(WalkFrame { path, child_counts: HashMap::new(), grammar, suppressed: ev.suppressed });
+        self.frames.push(WalkFrame { path, child_counts: HashMap::new(), unmodelled_path_names: 0, grammar, suppressed: ev.suppressed });
     }
 
     /// Process an empty tag (`Event::Empty`): opens and closes immediately.
@@ -941,7 +1042,7 @@ mod tests {
         let mut f = opened.frame.expect("m:f is modelled");
         f.observe("m:num");
         let v = required_violations(f.model.unwrap(), &f);
-        assert!(matches!(&v[..], [Violation::Missing("m:den", 1)]));
+        assert!(matches!(&v[..], [Violation::Missing("m:den", 0, 1)]));
     }
 
     fn judged(name: &str, parent_key: &str, child: &str) -> Vec<String> {
@@ -984,12 +1085,28 @@ mod tests {
     fn judge_num_fmt_domain() {
         let mut acc = Acc::default();
         for ok in ["decimal", "custom", "hebrew1", "arabicAlpha", "hindiNumbers", "thaiCounting", "bahtText"] {
-            judge_num_fmt(Some(ok), "word/numbering.xml", "w:numbering/w:abstractNum[1]/w:lvl[1]/w:numFmt[1]", &mut acc);
+            assert!(!judge_num_fmt(
+                &GrammarAttrValue::Present(ok.to_string()),
+                "word/numbering.xml",
+                "w:numbering/w:abstractNum[1]/w:lvl[1]/w:numFmt[1]",
+                &mut acc,
+            ));
         }
-        judge_num_fmt(None, "word/numbering.xml", "w:numbering/w:abstractNum[1]/w:lvl[1]/w:numFmt[1]", &mut acc);
+        assert!(!judge_num_fmt(&GrammarAttrValue::Missing, "word/numbering.xml", "w:numbering/w:abstractNum[1]/w:lvl[1]/w:numFmt[1]", &mut acc));
+        assert!(judge_num_fmt(&GrammarAttrValue::Unreadable, "word/numbering.xml", "w:numbering/w:abstractNum[1]/w:lvl[1]/w:numFmt[1]", &mut acc));
         assert!(acc.findings.is_empty(), "{:?}", acc.findings);
-        judge_num_fmt(Some("Decimal"), "word/numbering.xml", "w:numbering/w:abstractNum[1]/w:lvl[1]/w:numFmt[1]", &mut acc);
-        judge_num_fmt(Some("banana"), "word/numbering.xml", "w:numbering/w:abstractNum[1]/w:lvl[2]/w:numFmt[1]", &mut acc);
+        assert!(!judge_num_fmt(
+            &GrammarAttrValue::Present("Decimal".to_string()),
+            "word/numbering.xml",
+            "w:numbering/w:abstractNum[1]/w:lvl[1]/w:numFmt[1]",
+            &mut acc,
+        ));
+        assert!(!judge_num_fmt(
+            &GrammarAttrValue::Present("banana".to_string()),
+            "word/numbering.xml",
+            "w:numbering/w:abstractNum[1]/w:lvl[2]/w:numFmt[1]",
+            &mut acc,
+        ));
         let hits: Vec<_> = acc.findings.iter().filter(|f| f.rule == "GRAMMAR-NUMFMT-VALUE").collect();
         assert_eq!(hits.len(), 2, "{:?}", acc.findings);
         assert!(hits.iter().all(|f| f.severity == Severity::Warning));
@@ -1089,7 +1206,7 @@ mod tests {
         let opened = select("w:p", Some("w:CT_Body"), GrammarScope::Wml);
         let f = opened.frame.expect("w:p is modelled");
         let v = judge(&strict, Some(&over), &f);
-        assert!(matches!(&v[..], [Violation::Missing("x:b", 1)]));
+        assert!(matches!(&v[..], [Violation::Missing("x:b", 0, 1)]));
         let v = judge(&strict, None, &f);
         assert_eq!(v.len(), 2);
     }
@@ -1152,6 +1269,70 @@ mod tests {
         let opened = select("w:p", Some("w:CT_Body"), GrammarScope::Wml);
         let f = opened.frame.expect("w:p is modelled");
         let v = judge(&strict, Some(&over), &f);
-        assert!(matches!(&v[..], [Violation::MissingChoice("choice1", _, 1)]));
+        assert!(matches!(&v[..], [Violation::MissingChoice("choice1", _, 0, 1)]));
+    }
+
+    static SHORTFALL_ANY_CHILDREN: &[ChildSpec] =
+        &[ChildSpec { name: "<any>", min: 2, max: MaxOccurs::Unbounded, compositor: Compositor::Sequence, choice_group: None, position: 0 }];
+
+    static SHORTFALL_NAMED_CHILDREN: &[ChildSpec] =
+        &[ChildSpec { name: "x:item", min: 3, max: MaxOccurs::Unbounded, compositor: Compositor::Sequence, choice_group: None, position: 0 }];
+
+    static SHORTFALL_STRICT_CHOICE: &[ChildSpec] =
+        &[ChildSpec { name: "x:a", min: 3, max: MaxOccurs::Unbounded, compositor: Compositor::Choice, choice_group: Some("choice1"), position: 0 }];
+
+    static SHORTFALL_OVER_CHOICE: &[ChildSpec] = &[
+        ChildSpec { name: "x:a", min: 3, max: MaxOccurs::Unbounded, compositor: Compositor::Choice, choice_group: Some("choice1"), position: 0 },
+        ChildSpec { name: "x:b", min: 3, max: MaxOccurs::Unbounded, compositor: Compositor::Choice, choice_group: Some("choice1"), position: 1 },
+    ];
+
+    #[test]
+    fn shortfall_messages_report_observed_count_for_named_choice_and_any() {
+        let make_frame = |name: &'static str, model: &'static TypeModel, children: &[&str]| {
+            let mut f = GFrame {
+                name,
+                type_key: model.key,
+                model: Some(model),
+                fallback: false,
+                counts: Vec::new(),
+                total: 0,
+                unknown: 0,
+                capped: false,
+                child_set_incomplete: false,
+                last_position: None,
+                order_reported: false,
+            };
+            for c in children {
+                f.observe(c);
+            }
+            f
+        };
+
+        // <any>: 0 vs 1 of 2
+        static ANY_MODEL: TypeModel = TypeModel { key: "x:CT_Any", children: SHORTFALL_ANY_CHILDREN };
+        let mut acc0 = Acc::default();
+        close(&make_frame("x:any", &ANY_MODEL, &[]), "p.xml", "x:any", &mut acc0);
+        assert!(acc0.findings[0].message.contains("has no child elements; x:CT_Any requires at least 2"), "{:?}", acc0.findings);
+        let mut acc1 = Acc::default();
+        close(&make_frame("x:any", &ANY_MODEL, &["x:one"]), "p.xml", "x:any", &mut acc1);
+        assert!(acc1.findings[0].message.contains("has 1 child element (short by 1); x:CT_Any requires at least 2"), "{:?}", acc1.findings);
+
+        // Named child: 0, 1, 2 of 3
+        static NAMED_MODEL: TypeModel = TypeModel { key: "x:CT_Named", children: SHORTFALL_NAMED_CHILDREN };
+        let mut acc_n1 = Acc::default();
+        close(&make_frame("x:box", &NAMED_MODEL, &["x:item"]), "p.xml", "x:box", &mut acc_n1);
+        assert!(acc_n1.findings[0].message.contains("has 1 x:item element (short by 2); x:CT_Named requires at least 3"), "{:?}", acc_n1.findings);
+        let mut acc_n2 = Acc::default();
+        close(&make_frame("x:box", &NAMED_MODEL, &["x:item", "x:item"]), "p.xml", "x:box", &mut acc_n2);
+        assert!(acc_n2.findings[0].message.contains("has 2 x:item elements (short by 1); x:CT_Named requires at least 3"), "{:?}", acc_n2.findings);
+
+        // Choice group with Transitional widening: observed count reflects the Transitional union.
+        let strict = TypeModel { key: "x:CT_ChoiceShort", children: SHORTFALL_STRICT_CHOICE };
+        let over = TypeModel { key: "x:CT_ChoiceShort", children: SHORTFALL_OVER_CHOICE };
+        let mut f = select("w:p", Some("w:CT_Body"), GrammarScope::Wml).frame.unwrap();
+        f.observe("x:a");
+        f.observe("x:b");
+        let v = judge(&strict, Some(&over), &f);
+        assert!(matches!(&v[..], [Violation::MissingChoice("choice1", members, 2, 3)] if members.as_slice() == ["x:a", "x:b"]));
     }
 }

@@ -11,7 +11,7 @@ use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::{Namespace, NamespaceResolver, QName, ResolveResult};
 
-use crate::grammar::{ElementEvent, GrammarScope, GrammarWalk};
+use crate::grammar::{ElementEvent, GrammarAttrValue, GrammarScope, GrammarWalk};
 use crate::observed::{CompleteSet, Completeness, Observed};
 use crate::{Acc, NS_A, NS_DS, NS_M, NS_MC, NS_R, NS_W, NS_W14, NS_W15, NS_W16CID, NS_WP};
 
@@ -1050,7 +1050,7 @@ fn decode_utf16_strict(bytes: &[u8], little_endian: bool) -> Result<String, Deco
 pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, scope: GrammarScope, acc: &mut Acc) -> PartScan {
     observation_contract! {
         rules: "STRUCT-TC-NO-P";
-        collections: "access.into_complete_set*2,access.invalidate*2,field.alt_stack*2,field.content_part_exemptions*2,field.content_parts*2,field.declared*8,field.frames*10,field.note_listings*1,field.note_listings_e*1,field.note_listings_f*1,field.para_ids*1,field.special_notes*2,field.unknown_prefixes*2,parser.parse_doctype_entities*1,type.BTreeMap*1,type.HashMap*1,type.HashSet*1,type.Observed*1,type.Vec*9";
+        collections: "access.into_complete_set*2,access.invalidate*2,field.alt_stack*2,field.content_part_exemptions*2,field.content_parts*2,field.declared*10,field.frames*10,field.note_listings*1,field.note_listings_e*1,field.note_listings_f*1,field.para_ids*1,field.special_notes*2,field.unknown_prefixes*2,parser.parse_doctype_entities*1,type.BTreeMap*1,type.HashMap*1,type.HashSet*1,type.Observed*1,type.Vec*9";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -1157,14 +1157,21 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, scope: GrammarSc
                     );
                     check_para_ids(&mut state, &id, &attrs, reader.resolver(), role, part, acc);
                 }
-                let numfmt_val = numfmt_attr(&id, &attrs, reader.resolver(), scope, was_suppressed);
+                let numfmt_val = numfmt_attr(
+                    &id,
+                    &attrs,
+                    reader.resolver(),
+                    scope,
+                    was_suppressed,
+                    (&state.declared, &[], complete_entities.as_ref().map(|_| &entity_decls)),
+                );
                 let ev = ElementEvent {
                     ns: id.ns,
                     local: &id.local,
                     is_alt,
                     unresolved: id.unresolved,
                     suppressed: was_suppressed,
-                    numfmt_val: numfmt_val.as_deref(),
+                    numfmt_val: &numfmt_val,
                 };
                 grammar.open(&ev, part, acc);
                 let frame = Frame { alt: is_alt, suppressed: was_suppressed, alt_branch_prev: branch_prev, ..frame_for(&id) };
@@ -1208,14 +1215,21 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, scope: GrammarSc
                     );
                     check_para_ids(&mut state, &id, &attrs, reader.resolver(), role, part, acc);
                 }
-                let numfmt_val = numfmt_attr(&id, &attrs, reader.resolver(), scope, was_suppressed);
+                let numfmt_val = numfmt_attr(
+                    &id,
+                    &attrs,
+                    reader.resolver(),
+                    scope,
+                    was_suppressed,
+                    (&state.declared, &decls, complete_entities.as_ref().map(|_| &entity_decls)),
+                );
                 let ev = ElementEvent {
                     ns: id.ns,
                     local: &id.local,
                     is_alt,
                     unresolved: id.unresolved,
                     suppressed: was_suppressed,
-                    numfmt_val: numfmt_val.as_deref(),
+                    numfmt_val: &numfmt_val,
                 };
                 grammar.empty(&ev, part, acc);
                 if is_alt {
@@ -1272,12 +1286,25 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, scope: GrammarSc
                 } else {
                     None
                 };
-                if handle_general_ref_event(part, outside_err, &mut entity_notes, &mut state.fld_state_unknown, &mut out, acc, |acc| {
-                    match scan_general_ref(part, e.as_ref(), complete_entities.as_ref(), &entity_decls, &mut entity_status, &mut entity_work, acc) {
+                if handle_general_ref_event(
+                    part,
+                    outside_err,
+                    (&mut entity_notes, &mut state.fld_state_unknown, &mut grammar),
+                    &mut out,
+                    acc,
+                    |acc| match scan_general_ref(
+                        part,
+                        e.as_ref(),
+                        complete_entities.as_ref(),
+                        &entity_decls,
+                        &mut entity_status,
+                        &mut entity_work,
+                        acc,
+                    ) {
                         GeneralRefOutcome::UncheckedReplacement if rels_content_modelled => GeneralRefOutcome::Ok,
                         outcome => outcome,
-                    }
-                }) {
+                    },
+                ) {
                     break;
                 }
             }
@@ -1339,17 +1366,37 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, scope: GrammarSc
     out
 }
 
-/// Extract `w:numFmt/@w:val` for `GRAMMAR-NUMFMT-VALUE` when scanning an unsuppressed WML part.
-fn numfmt_attr(id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, scope: GrammarScope, suppressed: bool) -> Option<String> {
-    if !suppressed && scope == GrammarScope::Wml && id.w() && id.local == "numFmt" { attr_ns(attrs, res, NS_W, b"val") } else { None }
+/// Extract `w:numFmt/@w:val` for `GRAMMAR-NUMFMT-VALUE` when scanning an unsuppressed WML part,
+/// preserving the distinction between missing, delivered, and unreadable attribute values.
+fn numfmt_attr(
+    id: &ElemId,
+    attrs: &[Attribute],
+    res: &NamespaceResolver,
+    scope: GrammarScope,
+    suppressed: bool,
+    context: (&[Vec<String>], &[String], Option<&BTreeMap<String, String>>),
+) -> GrammarAttrValue {
+    observation_contract! {
+        rules: "-";
+        collections: "type.BTreeMap*1,type.Vec*1";
+        scope: "w:numFmt/@w:val attribute read in unsuppressed Wml-scope parts";
+        loss: "unresolvable DOCTYPE subset, nested/markup entity reference, output bound, or unresolved attribute namespace prefix";
+        fallback: "returns Missing outside unsuppressed Wml w:numFmt; preserves Missing vs Present vs Unreadable on w:numFmt";
+        package_loss: "independent";
+    }
+
+    if !suppressed && scope == GrammarScope::Wml && id.w() && id.local == "numFmt" {
+        attr_ns_grammar(attrs, res, NS_W, b"val", context)
+    } else {
+        GrammarAttrValue::Missing
+    }
 }
 
 /// Apply entity reference validation and update malformed/incomplete status; returns `true` to stop scanning.
 fn handle_general_ref_event(
     part: &str,
     outside_err: Option<&'static str>,
-    entity_notes: &mut (bool, bool),
-    fld_state_unknown: &mut bool,
+    (entity_notes, fld_state_unknown, grammar): (&mut (bool, bool), &mut bool, &mut GrammarWalk),
     out: &mut PartScan,
     acc: &mut Acc,
     resolve: impl FnOnce(&mut Acc) -> GeneralRefOutcome,
@@ -1372,6 +1419,7 @@ fn handle_general_ref_event(
                 acc.set_incomplete();
                 entity_notes.0 = true;
             }
+            grammar.mark_child_set_incomplete();
             false
         }
         GeneralRefOutcome::UncheckedReplacement => {
@@ -1381,6 +1429,7 @@ fn handle_general_ref_event(
                 entity_notes.1 = true;
             }
             *fld_state_unknown = true;
+            grammar.mark_child_set_incomplete();
             false
         }
     }
@@ -3202,6 +3251,28 @@ fn unresolved_roles(id: &ElemId) -> u8 {
     }
 }
 
+/// Append literal attribute text (or plain entity replacement text) with XML 1.0 §3.3.3
+/// attribute-value whitespace normalization (`\r\n`, `\r`, `\n`, `\t` -> `' '`).
+fn push_normalized_attr_text(out: &mut String, text: &str) {
+    let mut prev_cr = false;
+    for ch in text.chars() {
+        if prev_cr {
+            prev_cr = false;
+            if ch == '\n' {
+                continue;
+            }
+        }
+        match ch {
+            '\r' => {
+                out.push(' ');
+                prev_cr = true;
+            }
+            '\n' | '\t' => out.push(' '),
+            _ => out.push(ch),
+        }
+    }
+}
+
 /// The value of an attribute as a parser delivers it, when it holds references only to predefined entities, characters
 /// and plain-text internal entities of a resolved DOCTYPE subset (a bounded, non-recursive expansion); `None` otherwise.
 fn delivered_attribute_value(raw: &[u8], decls: &BTreeMap<String, String>) -> Option<String> {
@@ -3218,7 +3289,7 @@ fn delivered_attribute_value(raw: &[u8], decls: &BTreeMap<String, String>) -> Op
     let mut out = String::new();
     let mut rest = text;
     while let Some(at) = rest.find('&') {
-        out.push_str(rest.get(..at)?);
+        push_normalized_attr_text(&mut out, rest.get(..at)?);
         let after = rest.get(at + 1..)?;
         let semi = after.find(';')?;
         let name = after.get(..semi)?;
@@ -3229,16 +3300,16 @@ fn delivered_attribute_value(raw: &[u8], decls: &BTreeMap<String, String>) -> Op
             "apos" => out.push('\''),
             "quot" => out.push('"'),
             _ => {
-                let expansion = if let Some(number) = name.strip_prefix('#') {
+                if let Some(number) = name.strip_prefix('#') {
                     let code = match number.strip_prefix(['x', 'X']) {
                         Some(hex) => u32::from_str_radix(hex, 16).ok()?,
                         None => number.parse().ok()?,
                     };
-                    char::from_u32(code)?.to_string()
+                    out.push(char::from_u32(code)?);
                 } else {
-                    decls.get(name).filter(|text| text.find(['&', '<']).is_none())?.clone()
-                };
-                out.push_str(&expansion);
+                    let expansion = decls.get(name).filter(|text| text.find(['&', '<']).is_none())?;
+                    push_normalized_attr_text(&mut out, expansion);
+                }
             }
         }
         if out.len() > 8192 {
@@ -3246,7 +3317,10 @@ fn delivered_attribute_value(raw: &[u8], decls: &BTreeMap<String, String>) -> Op
         }
         rest = after.get(semi + 1..)?;
     }
-    out.push_str(rest);
+    push_normalized_attr_text(&mut out, rest);
+    if out.len() > 8192 {
+        return None;
+    }
     Some(out)
 }
 
@@ -3438,6 +3512,50 @@ fn namespace_unresolved(id: &ElemId, declared: &[Vec<String>], extra: &[String])
     }
 
     id.unknown.as_deref().is_some_and(|prefix| prefix.is_empty() || nearest_binding(declared, extra, prefix) == Binding::Unresolved)
+}
+
+/// Read a namespaced attribute for grammar evaluation, preserving the distinction
+/// between a missing attribute, a present attribute whose XML-delivered value was
+/// resolved (including plain-text internal entities of a resolved DOCTYPE subset),
+/// and a present attribute whose value could not be delivered or whose namespace
+/// prefix is unresolved.
+fn attr_ns_grammar(
+    attrs: &[Attribute],
+    res: &NamespaceResolver,
+    uri: &str,
+    name: &[u8],
+    (declared, extra, entities): (&[Vec<String>], &[String], Option<&BTreeMap<String, String>>),
+) -> GrammarAttrValue {
+    observation_contract! {
+        rules: "-";
+        collections: "type.BTreeMap*1,type.Vec*1";
+        scope: "namespaced grammar attribute read over one XML element's attributes and resolved internal entities";
+        loss: "unresolvable DOCTYPE subset, nested/markup entity reference, output bound, or unresolved attribute namespace prefix";
+        fallback: "distinguishes Missing, Present(delivered value), and Unreadable without setting Incomplete";
+        package_loss: "independent";
+    }
+
+    if let Some(a) = attrs.iter().find(|a| ns_matches(res.resolve_attribute(a.key).0, uri) && a.key.local_name().as_ref() == name) {
+        let delivered = a
+            .normalized_value(quick_xml::XmlVersion::Implicit1_0)
+            .ok()
+            .map(|v| v.into_owned())
+            .or_else(|| entities.and_then(|decls| delivered_attribute_value(&a.value, decls)));
+        return match delivered {
+            Some(v) => GrammarAttrValue::Present(v),
+            None => GrammarAttrValue::Unreadable,
+        };
+    }
+    if attrs.iter().any(|a| {
+        a.key.local_name().as_ref() == name
+            && match res.resolve_attribute(a.key).0 {
+                ResolveResult::Unknown(p) => nearest_binding(declared, extra, &lossy(&p)) == Binding::Unresolved,
+                _ => false,
+            }
+    }) {
+        return GrammarAttrValue::Unreadable;
+    }
+    GrammarAttrValue::Missing
 }
 
 /// Find an attribute with the given namespace URI and local name, returning its normalized value.

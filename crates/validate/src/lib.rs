@@ -607,6 +607,10 @@ fn rule_spec(id: &str) -> Option<&'static RuleSpec> {
 pub(crate) struct Acc {
     findings: Vec<Finding>,
     coverage: Vec<String>,
+    /// Optional informational notes from grammar checks, kept isolated from
+    /// ordinary coverage accounting until [`Acc::finish`] so grammar can never
+    /// consume ordinary note slots or alter the verdict.
+    grammar_coverage: Vec<String>,
     checks: Vec<&'static str>,
     incomplete: bool,
     limits: Limits,
@@ -766,20 +770,20 @@ impl Acc {
         self.findings.push(Finding { rule, severity: Severity::Warning, evidence, part, message });
     }
 
-    /// Record an informational grammar coverage note without ever exhausting
-    /// the note budget or setting `Incomplete`.
+    /// Record an informational grammar coverage note in an isolated buffer so
+    /// grammar notes never consume ordinary note slots or trigger `Incomplete`.
     pub(crate) fn note_grammar(&mut self, message: String) {
         observation_contract! {
             rules: "-";
-            collections: "field.coverage*2";
+            collections: "field.grammar_coverage*2";
             scope: "report accumulator for verdict-invariant grammar notes; no input definition collection";
-            loss: "informational note dropped when fewer than two coverage-note slots remain";
-            fallback: "never exhausts coverage-note budget, never sets Incomplete, never alters verdict";
+            loss: "optional grammar notes capped at the note budget and appended only into spare coverage slots after ordinary note admission";
+            fallback: "kept separate from ordinary coverage until finish(); never exhausts ordinary note budget, never sets Incomplete, never alters verdict";
             package_loss: "independent";
         }
 
-        if self.coverage.len().saturating_add(1) < self.limits.notes {
-            self.coverage.push(message);
+        if self.grammar_coverage.len() < self.limits.notes {
+            self.grammar_coverage.push(message);
         }
     }
 
@@ -828,10 +832,10 @@ impl Acc {
     fn finish(mut self) -> Report {
         observation_contract! {
             rules: "-";
-            collections: "field.checks*1,field.coverage*1,field.findings*3,field.incomplete*1";
+            collections: "field.checks*1,field.coverage*3,field.findings*3,field.grammar_coverage*1,field.incomplete*1";
             scope: "report accumulator and emission budgets; no input definition collection";
             loss: "per-rule findings, total findings, or coverage-note budget";
-            fallback: "preserve emitted evidence and record truncation/Incomplete; never supplies definition absence";
+            fallback: "preserve emitted evidence and record truncation/Incomplete; optional grammar notes fill only spare coverage slots after verdict accounting; never supplies definition absence";
             package_loss: "independent";
         }
 
@@ -848,6 +852,10 @@ impl Acc {
         } else {
             Verdict::Pass
         };
+        let spare = self.limits.notes.saturating_sub(self.coverage.len());
+        if spare > 0 {
+            self.coverage.extend(self.grammar_coverage.into_iter().take(spare));
+        }
         Report { verdict, findings: self.findings, coverage_notes: self.coverage, checks_run: self.checks }
     }
 }
@@ -6878,6 +6886,57 @@ mod budget_tests {
         let hits: Vec<_> = report.findings.iter().filter(|f| f.rule == "GRAMMAR-CHILD-NOT-ALLOWED").collect();
         assert_eq!(hits.len(), 2, "{hits:?}");
         assert!(hits.iter().all(|f| f.severity == Severity::Warning));
+    }
+
+    /// Finding 1 regression: grammar notes must never consume ordinary coverage-note
+    /// budget or trigger `Incomplete` when subsequent ordinary notes fill `limits.notes`.
+    #[test]
+    fn grammar_notes_are_isolated_from_ordinary_note_budget_and_verdict() {
+        let build = |with_grammar_notes: bool, unreferenced_comments: usize| {
+            let ct = format!(
+                r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="{}"/><Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/></Types>"#,
+                package::MAIN_CONTENT_TYPE
+            );
+            let extra = if with_grammar_notes {
+                let foreign: String = (0..33).map(|i| format!("<x:e{i}/>")).collect();
+                format!("<w:p>{foreign}</w:p>")
+            } else {
+                String::from("<w:p/>")
+            };
+            let doc = format!(r#"<?xml version="1.0"?><w:document xmlns:w="{NS_W}" xmlns:x="urn:example:x"><w:body>{extra}</w:body></w:document>"#)
+                .into_bytes();
+            let comments_inner: String = (0..unreferenced_comments).map(|i| format!(r#"<w:comment w:id="{i}"><w:p/></w:comment>"#)).collect();
+            let comments = format!(r#"<?xml version="1.0"?><w:comments xmlns:w="{NS_W}">{comments_inner}</w:comments>"#).into_bytes();
+            let rels = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rC" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/></Relationships>"#.to_vec();
+            tiny_zip(&[
+                ("[Content_Types].xml", ct.into_bytes()),
+                ("_rels/.rels", package_rels()),
+                ("word/document.xml", doc),
+                ("word/_rels/document.xml.rels", rels),
+                ("word/comments.xml", comments),
+            ])
+        };
+        // Exact budget boundary: 5 ordinary notes with notes=5 stays Pass and preserves every ordinary note.
+        let limits = Limits { notes: 5, ..Limits::default() };
+        let with_g = validate_bytes_limited(&build(true, 5), limits);
+        let without_g = validate_bytes_limited(&build(false, 5), limits);
+        assert_eq!(without_g.verdict, Verdict::Pass);
+        assert_eq!(with_g.verdict, Verdict::Pass, "grammar note must not flip Pass to Incomplete: {with_g:?}");
+        assert!(with_g.findings.is_empty(), "{:?}", with_g.findings);
+        assert_eq!(with_g.coverage_notes, without_g.coverage_notes);
+
+        // Overflow boundary: 6 ordinary notes with notes=5 yields identical Incomplete and notes in both.
+        let over_with = validate_bytes_limited(&build(true, 6), limits);
+        let over_without = validate_bytes_limited(&build(false, 6), limits);
+        assert_eq!(over_with.verdict, Verdict::Incomplete);
+        assert_eq!(over_without.verdict, Verdict::Incomplete);
+        assert_eq!(over_with.coverage_notes, over_without.coverage_notes);
+
+        // Spare capacity: 3 ordinary notes with notes=5 keeps all 3 ordinary notes first and appends the grammar note.
+        let spare = validate_bytes_limited(&build(true, 3), limits);
+        assert_eq!(spare.verdict, Verdict::Pass);
+        assert_eq!(spare.coverage_notes.len(), 4, "{:?}", spare.coverage_notes);
+        assert!(spare.coverage_notes[3].contains("more than 32 distinct unmodelled child names"));
     }
 
     /// Finding 2 canary: the pairing reports must not run on a partial scan. A field left open when

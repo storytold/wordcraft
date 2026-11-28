@@ -10,7 +10,9 @@
 //! never move a document's verdict.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use crate::common::{CT_CHART, CT_HEADER, CT_MACRO_MAIN, CT_NUMBERING, CT_SETTINGS, CT_THEME, Doc, content_types_xml, document_xml};
+use crate::common::{
+    CT_CHART, CT_COMMENTS, CT_FOOTER, CT_HEADER, CT_MACRO_MAIN, CT_NUMBERING, CT_SETTINGS, CT_THEME, Doc, content_types_xml, document_xml,
+};
 use wordcraft_validate::{Evidence, Finding, Report, Severity, Verdict, validate_bytes};
 
 const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
@@ -468,4 +470,336 @@ fn grammar_runs_on_macro_enabled_main_part_and_conflicting_scope_is_order_indepe
     }
     assert_eq!(grammar_findings(&reports[0]).len(), 0);
     assert_eq!(serde_json::to_value(&reports[0]).unwrap(), serde_json::to_value(&reports[1]).unwrap());
+}
+
+#[test]
+fn grammar_verdict_invariance_ab_probe_default_limits_large_ordinary_notes() {
+    // Finding 1 A/B probe at default limits (notes = 10,000):
+    // 33 distinct foreign children under one main-document paragraph plus 10,000 unique
+    // unreferenced comments in the linked comments part must keep Verdict::Pass with
+    // zero findings and identical ordinary coverage notes compared to the package without
+    // the foreign children.
+    let comments_inner: String = (0..10_000).map(|i| format!(r#"<w:comment w:id="{i}"><w:p/></w:comment>"#)).collect();
+    let comments_xml = format!(r#"<?xml version="1.0"?><w:comments xmlns:w="{W_NS}">{comments_inner}</w:comments>"#);
+    let build = |with_foreign: bool| {
+        let mut d = Doc::minimal();
+        let body = if with_foreign {
+            let ext: String = (0..33).map(|i| format!("<x:e{i}/>")).collect();
+            format!("<w:p>{ext}</w:p>")
+        } else {
+            String::from("<w:p/>")
+        };
+        d.set(
+            "word/document.xml",
+            format!(r#"<?xml version="1.0"?><w:document xmlns:w="{W_NS}" xmlns:x="urn:example:x"><w:body>{body}</w:body></w:document>"#),
+        );
+        d.add_with_override("word/comments.xml", CT_COMMENTS, comments_xml.clone());
+        d.set_doc_rels(
+            r#"<Relationship Id="rC" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/>"#,
+        );
+        d
+    };
+    let with_foreign = validate(&build(true));
+    let baseline = validate(&build(false));
+    assert_eq!(baseline.verdict, Verdict::Pass, "{:?}", baseline.findings);
+    assert_eq!(with_foreign.verdict, Verdict::Pass, "grammar note must never flip Pass to Incomplete: {:?}", with_foreign.findings);
+    assert!(baseline.findings.is_empty(), "{:?}", baseline.findings);
+    assert!(with_foreign.findings.is_empty(), "{:?}", with_foreign.findings);
+    assert_eq!(with_foreign.coverage_notes.len(), 10_000);
+    assert_eq!(with_foreign.coverage_notes, baseline.coverage_notes);
+}
+
+#[test]
+fn grammar_required_child_suppressed_by_unexpanded_entity_only_on_affected_parent() {
+    // Finding 2 (UncheckedReplacement): table 1 gets w:tblPr via an unexpanded markup-bearing entity
+    // (must NOT emit GRAMMAR-REQUIRED-CHILD); unaffected table 2 and unaffected nested table STILL fire.
+    let mut d = Doc::minimal();
+    d.set(
+        "word/document.xml",
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:document [<!ENTITY tblpr "<w:tblPr/>">]>"#,
+                r#"<w:document xmlns:w="{w}"><w:body>"#,
+                r#"<w:tbl>&tblpr;<w:tblGrid/><w:tr><w:tc><w:tbl><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p/></w:tc></w:tr></w:tbl>"#,
+                r#"<w:tbl><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>"#,
+                r#"</w:body></w:document>"#,
+            ),
+            w = W_NS,
+        ),
+    );
+    let report = validate(&d);
+    let hits = rule_findings(&report, "GRAMMAR-REQUIRED-CHILD");
+    assert_eq!(hits.len(), 2, "only unaffected inner and second tables should fire: {hits:?}");
+    assert!(!hits.iter().any(|f| f.message.contains("at w:document/w:body[1]/w:tbl[1] ")), "{hits:?}");
+    assert!(hits.iter().any(|f| f.message.contains("at w:document/w:body[1]/w:tbl[1]/w:tr[1]/w:tc[1]/w:tbl[1] ")), "{hits:?}");
+    assert!(hits.iter().any(|f| f.message.contains("at w:document/w:body[1]/w:tbl[2] ")), "{hits:?}");
+
+    // Class generalization (UnresolvedSubset): external DOCTYPE subset leaves &ext; unexpanded.
+    let mut d = Doc::minimal();
+    d.set(
+        "word/document.xml",
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:document SYSTEM "ext.dtd">"#,
+                r#"<w:document xmlns:w="{w}"><w:body>"#,
+                r#"<w:tbl>&ext;<w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>"#,
+                r#"<w:tbl><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>"#,
+                r#"</w:body></w:document>"#,
+            ),
+            w = W_NS,
+        ),
+    );
+    let report = validate(&d);
+    let hits = rule_findings(&report, "GRAMMAR-REQUIRED-CHILD");
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(hits[0].message.contains("at w:document/w:body[1]/w:tbl[2] "), "{hits:?}");
+
+    // Control: a plain-text internal entity cannot supply child elements, so absence still fires.
+    let mut d = Doc::minimal();
+    d.set(
+        "word/document.xml",
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:document [<!ENTITY txt "hello">]>"#,
+                r#"<w:document xmlns:w="{w}"><w:body>"#,
+                r#"<w:tbl>&txt;<w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>"#,
+                r#"</w:body></w:document>"#,
+            ),
+            w = W_NS,
+        ),
+    );
+    let report = validate(&d);
+    let hits = rule_findings(&report, "GRAMMAR-REQUIRED-CHILD");
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(hits[0].message.contains("at w:document/w:body[1]/w:tbl[1] "), "{hits:?}");
+}
+
+#[test]
+fn grammar_ordinals_stay_exact_for_modelled_names_and_uncertain_past_unmodelled_cap() {
+    // Finding 3 (exact probe): after 1,030 distinct foreign children under w:p,
+    // two w:pPr elements must report the offending second instance w:pPr[2], never w:pPr[1].
+    let foreign: String = (0..1030).map(|i| format!("<x:e{i}/>")).collect();
+    let mut d = Doc::minimal();
+    d.set(
+        "word/document.xml",
+        format!(r#"<?xml version="1.0"?><w:document xmlns:w="{W_NS}" xmlns:x="urn:example:x"><w:body><w:p>{foreign}<w:pPr/><w:pPr/></w:p></w:body></w:document>"#),
+    );
+    let report = validate(&d);
+    assert_eq!(report.verdict, Verdict::Pass, "{report:?}");
+    let hits = rule_findings(&report, "GRAMMAR-CHILD-TOO-MANY");
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(hits[0].message.contains("at w:document/w:body[1]/w:p[1]/w:pPr[2] "), "{:?}", hits[0]);
+    assert!(!hits[0].message.contains("w:pPr[1]"), "{:?}", hits[0]);
+
+    // Class generalization: an unmodelled ancestor arriving past the 1,024-name cap must render [?],
+    // never fabricate [1], while modelled descendants inside it keep exact ordinals.
+    let foreign_body: String = (0..1024).map(|i| format!("<x:b{i}/>")).collect();
+    let wrapped_tbl = "<x:overflow><w:tbl><w:tblPr/><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl></x:overflow>";
+    let mut d = Doc::minimal();
+    d.set(
+        "word/document.xml",
+        format!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="{W_NS}" xmlns:x="urn:example:x"><w:body>{foreign_body}{wrapped_tbl}{wrapped_tbl}</w:body></w:document>"#
+        ),
+    );
+    let report = validate(&d);
+    assert_eq!(report.verdict, Verdict::Pass, "{report:?}");
+    let hits = rule_findings(&report, "GRAMMAR-CHILD-TOO-MANY");
+    assert_eq!(hits.len(), 2, "{hits:?}");
+    for hit in &hits {
+        assert!(hit.message.contains("at w:document/w:body[1]/{urn:example:x}overflow[?]/w:tbl[1]/w:tblPr[2] "), "{hit:?}");
+        assert!(!hit.message.contains("overflow[1]"), "{hit:?}");
+    }
+}
+
+#[test]
+fn grammar_numfmt_delivers_internal_entities_and_distinguishes_missing_vs_unreadable() {
+    // Finding 4 (exact probe): internal plain-text entity delivering invalid format fires GRAMMAR-NUMFMT-VALUE.
+    let mut d = Doc::minimal();
+    d.add_with_override(
+        "word/numbering.xml",
+        CT_NUMBERING,
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:numbering [<!ENTITY bad "notAFormat"><!ENTITY ok "decimal"><!ENTITY part "dec">]>"#,
+                r#"<w:numbering xmlns:w="{w}">"#,
+                r#"<w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0">"#,
+                r#"<w:numFmt w:val="&bad;"/>"#,
+                r#"<w:numFmt w:val="&ok;"/>"#,
+                r#"<w:numFmt w:val="&part;imal"/>"#,
+                r#"<w:numFmt w:val="&part;imal&#9;"/>"#,
+                r#"</w:lvl></w:abstractNum></w:numbering>"#,
+            ),
+            w = W_NS,
+        ),
+    );
+    let report = validate(&d);
+    let hits = rule_findings(&report, "GRAMMAR-NUMFMT-VALUE");
+    assert_eq!(hits.len(), 2, "{hits:?}");
+    assert!(hits.iter().all(|f| f.severity == Severity::Warning));
+    assert!(hits.iter().any(|f| f.message.contains("\"notAFormat\"") && f.message.contains("w:numFmt[1]")), "{hits:?}");
+    assert!(hits.iter().any(|f| f.message.contains("\"decimal\t\"") && f.message.contains("w:numFmt[4]")), "{hits:?}");
+
+    // Unreadable entity-bearing attribute (nested entity): no false NUMFMT warning, but disclosed via grammar note.
+    let mut d = Doc::minimal();
+    d.add_with_override(
+        "word/numbering.xml",
+        CT_NUMBERING,
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:numbering [<!ENTITY inner "notAFormat"><!ENTITY outer "&inner;">]>"#,
+                r#"<w:numbering xmlns:w="{w}"><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0">"#,
+                r#"<w:numFmt w:val="&outer;"/>"#,
+                r#"</w:lvl></w:abstractNum></w:numbering>"#,
+            ),
+            w = W_NS,
+        ),
+    );
+    let report = validate(&d);
+    assert!(rule_findings(&report, "GRAMMAR-NUMFMT-VALUE").is_empty(), "{:?}", report.findings);
+    assert!(
+        report.coverage_notes.iter().any(|n| n.contains("w:numFmt/@w:val") && n.contains("could not be delivered")),
+        "{:?}",
+        report.coverage_notes
+    );
+
+    // Unresolved namespace prefix on val attribute: also disclosed as unreadable, not silently missing.
+    let mut d = Doc::minimal();
+    d.add_with_override(
+        "word/numbering.xml",
+        CT_NUMBERING,
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:numbering [<!ENTITY wns "{w}">]>"#,
+                r#"<w:numbering xmlns:w="{w}"><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0">"#,
+                r#"<w:numFmt xmlns:u="&wns;" u:val="notAFormat"/>"#,
+                r#"</w:lvl></w:abstractNum></w:numbering>"#,
+            ),
+            w = W_NS,
+        ),
+    );
+    let report = validate(&d);
+    assert!(rule_findings(&report, "GRAMMAR-NUMFMT-VALUE").is_empty(), "{:?}", report.findings);
+    assert!(
+        report.coverage_notes.iter().any(|n| n.contains("w:numFmt/@w:val") && n.contains("could not be delivered")),
+        "{:?}",
+        report.coverage_notes
+    );
+
+    // Control: genuinely missing w:val stays silent with no unreadable-attribute note.
+    let mut d = Doc::minimal();
+    d.add_with_override(
+        "word/numbering.xml",
+        CT_NUMBERING,
+        format!(r#"<?xml version="1.0"?><w:numbering xmlns:w="{W_NS}"><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:numFmt/></w:lvl></w:abstractNum></w:numbering>"#),
+    );
+    let report = validate(&d);
+    assert_eq!(report.verdict, Verdict::Pass);
+    assert!(rule_findings(&report, "GRAMMAR-NUMFMT-VALUE").is_empty());
+    assert!(!report.coverage_notes.iter().any(|n| n.contains("w:numFmt/@w:val")));
+}
+
+#[test]
+fn grammar_required_child_shortfall_reports_observed_counts_truthfully() {
+    // Finding 6 (exact probe): a:fillStyleLst requires 3 fill choices; 2 a:noFill must report
+    // 2 observed and short by 1 (never "has none of"). Similarly a:lnStyleLst with 2 a:ln (named child).
+    let colors: String = ["dk1", "lt1", "dk2", "lt2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6", "hlink", "folHlink"]
+        .iter()
+        .map(|n| format!(r#"<a:{n}><a:srgbClr val="000000"/></a:{n}>"#))
+        .collect();
+    let effects = "<a:effectStyle><a:effectLst/></a:effectStyle>".repeat(3);
+    let mut d = Doc::minimal();
+    d.add_with_override(
+        "word/theme/theme1.xml",
+        CT_THEME,
+        format!(
+            r#"<?xml version="1.0"?><a:theme xmlns:a="{A_NS}" name="Test"><a:themeElements><a:clrScheme name="Test">{colors}</a:clrScheme><a:fontScheme name="Test"><a:majorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont></a:fontScheme><a:fmtScheme name="Test"><a:fillStyleLst><a:noFill/><a:noFill/></a:fillStyleLst><a:lnStyleLst><a:ln/><a:ln/></a:lnStyleLst><a:effectStyleLst>{effects}</a:effectStyleLst><a:bgFillStyleLst><a:noFill/><a:noFill/><a:noFill/></a:bgFillStyleLst></a:fmtScheme></a:themeElements></a:theme>"#
+        ),
+    );
+    let report = validate(&d);
+    assert_eq!(report.verdict, Verdict::Pass);
+    let hits = rule_findings(&report, "GRAMMAR-REQUIRED-CHILD");
+    assert_eq!(hits.len(), 2, "{hits:?}");
+    let fill = hits.iter().find(|f| f.message.contains("a:fillStyleLst")).expect("fillStyleLst shortfall");
+    assert!(fill.message.contains("has 2 of ") && fill.message.contains("(short by 1)") && fill.message.contains("at least 3 of them"), "{fill:?}");
+    assert!(!fill.message.contains("has none of"), "{fill:?}");
+    let line = hits.iter().find(|f| f.message.contains("a:lnStyleLst")).expect("lnStyleLst shortfall");
+    assert!(line.message.contains("has 2 a:ln elements (short by 1)") && line.message.contains("at least 3"), "{line:?}");
+    assert!(!line.message.contains("has no a:ln"), "{line:?}");
+
+    // Chart named-child shortfall: c:barChart requires 2 c:axId; 1 observed reports 1 (short by 1).
+    let report = validate(&chart_doc("<c:barChart><c:barDir/><c:axId/></c:barChart>"));
+    assert_eq!(report.verdict, Verdict::Pass);
+    let hits = rule_findings(&report, "GRAMMAR-REQUIRED-CHILD");
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(hits[0].message.contains("has 1 c:axId element (short by 1)") && hits[0].message.contains("at least 2"), "{:?}", hits[0]);
+    assert!(!hits[0].message.contains("has no c:axId"), "{:?}", hits[0]);
+}
+
+#[test]
+fn grammar_footer_deep_nested_tables_and_numfmt_boundary_spellings() {
+    // Regression surface for positive generalization probes:
+    // Footer with two levels of nested tables: single w:tblPr stay clean, second w:pPr in second
+    // nested table fires TOO-MANY once, and rPr inversion in first nested table fires ORDER at deep path.
+    let mut d = Doc::minimal();
+    d.set("[Content_Types].xml", content_types_xml(&[], &[("/word/footer1.xml", CT_FOOTER)]));
+    d.set(
+        "word/footer1.xml",
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?><w:ftr xmlns:w="{w}">"#,
+                r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc>"#,
+                r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:rPr><w:sz w:val="20"/><w:rFonts w:ascii="Calibri"/></w:rPr><w:t>a</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+                r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:pPr/><w:pPr/></w:p></w:tc></w:tr></w:tbl>"#,
+                r#"<w:p/></w:tc></w:tr></w:tbl>"#,
+                r#"</w:ftr>"#,
+            ),
+            w = W_NS,
+        ),
+    );
+    let report = validate(&d);
+    assert_eq!(report.verdict, Verdict::Pass, "{report:?}");
+    let too_many = rule_findings(&report, "GRAMMAR-CHILD-TOO-MANY");
+    assert_eq!(too_many.len(), 1, "{too_many:?}");
+    assert_eq!(too_many[0].part.as_deref(), Some("word/footer1.xml"));
+    assert!(too_many[0].message.contains("at w:ftr/w:tbl[1]/w:tr[1]/w:tc[1]/w:tbl[2]/w:tr[1]/w:tc[1]/w:p[1]/w:pPr[2] "), "{:?}", too_many[0]);
+    let order = rule_findings(&report, "GRAMMAR-ORDER");
+    assert_eq!(order.len(), 1, "{order:?}");
+    assert_eq!(order[0].part.as_deref(), Some("word/footer1.xml"));
+    assert!(
+        order[0].message.contains("at w:ftr/w:tbl[1]/w:tr[1]/w:tc[1]/w:tbl[1]/w:tr[1]/w:tc[1]/w:p[1]/w:r[1]/w:rPr[1]/w:rFonts[1] "),
+        "{:?}",
+        order[0]
+    );
+    assert!(rule_findings(&report, "GRAMMAR-REQUIRED-CHILD").is_empty());
+
+    // Footer numFmt boundary spellings: first/last codes and numeric-reference decimal clean;
+    // empty, case-changed, and trailing-space each fire GRAMMAR-NUMFMT-VALUE.
+    let mut d = Doc::minimal();
+    d.set("[Content_Types].xml", content_types_xml(&[], &[("/word/footer1.xml", CT_FOOTER)]));
+    d.set(
+        "word/footer1.xml",
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?><w:ftr xmlns:w="{w}"><w:p>"#,
+                r#"<w:numFmt w:val="decimal"/><w:numFmt w:val="custom"/><w:numFmt w:val="&#100;ecimal"/>"#,
+                r#"<w:numFmt w:val=""/><w:numFmt w:val="Decimal"/><w:numFmt w:val="decimal "/>"#,
+                r#"</w:p></w:ftr>"#,
+            ),
+            w = W_NS,
+        ),
+    );
+    let report = validate(&d);
+    assert_eq!(report.verdict, Verdict::Pass, "{report:?}");
+    let hits = rule_findings(&report, "GRAMMAR-NUMFMT-VALUE");
+    assert_eq!(hits.len(), 3, "{hits:?}");
+    assert!(hits.iter().any(|f| f.message.contains("numFmt format \"\"") && f.message.contains("w:numFmt[4]")), "{hits:?}");
+    assert!(hits.iter().any(|f| f.message.contains("numFmt format \"Decimal\"") && f.message.contains("w:numFmt[5]")), "{hits:?}");
+    assert!(hits.iter().any(|f| f.message.contains("numFmt format \"decimal \"") && f.message.contains("w:numFmt[6]")), "{hits:?}");
 }
