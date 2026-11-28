@@ -11,6 +11,7 @@ use craft::ui::contract::{
     Access, Bind, Common, Component, Cx, Entry, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, Show as _,
     ShowContainer as _, Trigger,
 };
+use craft::ui::display::Text;
 use craft::ui::menu::Menu;
 use craft::ui::pickers::{Calendar, CalendarView, DatePrecision, PickedDate};
 use craft::ui::popover::Popover;
@@ -320,15 +321,22 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, layout: &DocLayout, body: &Pa
     let mut open = true;
     match &range.control.kind {
         ControlKind::ComboBox { items, .. } | ControlKind::DropDown { items, .. } => {
-            let entries: Vec<Entry<usize>> = items.iter().enumerate().map(|(i, item)| Entry::new(i, item.display.clone())).collect();
-            let shown = Menu::new(tl!("Choose item").to_string())
+            let menu = Menu::new(tl!("Choose item").to_string())
                 .open(Bind::bound(&mut open))
                 .opened_by(&out.response, Trigger::Manual)
-                .anchor(Anchor::Rect(anchor))
-                .pick(ui, &entries);
-            if let Some(index) = shown.picked {
-                let _ = app.run("developer.chooseItem", json!({"at": at, "index": index}));
-                open = false;
+                .anchor(Anchor::Rect(anchor));
+            if items.is_empty() {
+                // #3144: an empty list says so instead of an empty popup.
+                menu.show(ui, |ui, _| {
+                    Text::new(tl!("(none)").to_string()).show(ui);
+                });
+            } else {
+                let entries: Vec<Entry<usize>> = items.iter().enumerate().map(|(i, item)| Entry::new(i, item.display.clone())).collect();
+                let shown = menu.pick(ui, &entries);
+                if let Some(index) = shown.picked {
+                    let _ = app.run("developer.chooseItem", json!({"at": at, "index": index}));
+                    open = false;
+                }
             }
         }
         ControlKind::Date { .. } => {
@@ -451,5 +459,30 @@ mod tests {
         }
         assert!(!popup_open(h.state()), "the press did not open the list");
         assert!(h.state().session.undo_depth() > depth, "the stroke ran table.draw");
+    }
+
+    /// #3144: a list control with no entries opens a popup that says so, not an empty frame.
+    #[test]
+    fn an_empty_control_popup_says_none() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("developer.comboBox", json!({})).unwrap();
+        app.run("view.commentsPane", json!({"value": false})).unwrap();
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        h.get_by_label("Choose item").click();
+        for _ in 0..3 {
+            h.step();
+        }
+        assert!(popup_open(h.state()), "the list is open");
+        assert!(h.query_by_label("(none)").is_some(), "the empty list says so");
     }
 }

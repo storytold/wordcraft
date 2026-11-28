@@ -298,3 +298,26 @@ fn headings_show_their_list_numbers() {
     let texts: Vec<String> = nav_headings(&doc).into_iter().map(|(_, _, t)| t).collect();
     assert_eq!(texts, ["1. Intro", "1.1. Scope", "1.3. Terms", "2. Method", "Appendix"]);
 }
+
+/// #3144: with no comments the pane says so instead of leaving a blank area; the first
+/// comment replaces the message and deleting it brings the message back.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn the_comments_pane_says_when_there_are_no_comments() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default());
+    app.run("view.commentsPane", serde_json::json!({"value": true})).unwrap();
+    let mut h = pane_harness(app);
+    assert!(h.query_by_label("No comments yet. Select text and choose New Comment to start a thread.").is_some(), "the empty pane says so");
+    h.state_mut().run("review.newComment", serde_json::json!({"text": "First"})).unwrap();
+    h.run_steps(4);
+    assert!(h.query_by_label("No comments yet. Select text and choose New Comment to start a thread.").is_none(), "the comment shows instead");
+    let id = h.state().session.doc.comments.keys().next().copied().expect("the comment exists");
+    h.state_mut().run("review.deleteComment", serde_json::json!({"id": id})).unwrap();
+    h.run_steps(4);
+    assert!(
+        h.query_by_label("No comments yet. Select text and choose New Comment to start a thread.").is_some(),
+        "deleting the last one brings it back"
+    );
+}

@@ -188,8 +188,9 @@ impl ControlForm {
             let rows = self.items.clone();
             let out = Table::<usize>::new(word("List entries"), columns)
                 .select(SelectMode::Single)
-                .min_rows(1)
+                .min_rows(if self.items.is_empty() { 0 } else { 1 })
                 .max_rows(6)
+                .empty(word("(none)"))
                 .selection(Bind::given(Selection::default()))
                 .show_items(ui, &Items(&rows), &mut |key, icx| {
                     let at = *key;
@@ -292,5 +293,40 @@ pub(crate) fn open(app: &mut WordApp, _name: &str, _params: &Value, parent: Opti
             app.status(tl!("Put the caret in a content control first."));
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use egui_kittest::kittest::Queryable;
+    use serde_json::json;
+    use wordcraft_engine::Session;
+
+    use crate::WordApp;
+
+    /// #3144: a list with no entries says so instead of showing only the headings, and the hint
+    /// goes away with the first entry.
+    #[test]
+    fn empty_list_entries_say_none() {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("developer.comboBox", json!({})).unwrap();
+        app.run("developer.properties", json!({})).unwrap();
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..4 {
+            h.step();
+        }
+        assert!(h.query_by_label("(none)").is_some(), "no entries: the hint shows");
+        h.get_by_label("Add").click();
+        for _ in 0..2 {
+            h.step();
+        }
+        assert!(h.query_by_label("(none)").is_none(), "an entry replaces the hint");
     }
 }

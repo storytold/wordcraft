@@ -23,13 +23,18 @@ pub(super) fn comments(app: &mut WordApp, ui: &mut Ui) {
         let _ = app.run("review.newComment", json!({"text": ""}));
     }
     let list = app.session.run("review.comments", &json!({})).unwrap_or_default();
+    let comments = list.as_array().cloned().unwrap_or_default();
+    if comments.is_empty() {
+        // #3144: the pane says it has no comments instead of leaving a blank area.
+        Text::new(tl!("No comments yet. Select text and choose New Comment to start a thread.").to_owned()).show(ui);
+    }
     // Comment ids are the document's own; another window's document has the same ones.
     let document = app.session.document_id();
     Stack::new().fill_width().show(ui, |ui, _| {
-        for c in list.as_array().cloned().unwrap_or_default() {
+        for c in &comments {
             let id = c.get("id").and_then(Value::as_u64).and_then(|id| u32::try_from(id).ok()).unwrap_or(0);
             let author = c.get("author").and_then(Value::as_str).unwrap_or("").to_owned();
-            GroupBox::new(author, None).show(ui, |ui, _| card(app, ui, &ctx, document, id, &c));
+            GroupBox::new(author, None).show(ui, |ui, _| card(app, ui, &ctx, document, id, c));
         }
     });
 }
