@@ -175,6 +175,7 @@ fn missing_pictures_from_shared(source: craft_wordmodel::MissingPictures) -> Res
 
 /// Converts the shared reader's model without copying the full document or its embedded media.
 pub fn from_shared_model(mut source: craft_wordmodel::Document) -> Result<wordcraft_doc::Document, DocxError> {
+    let adjust_line_height_in_table = crate::settings::read_adjust_line_height_in_table(&source.passthrough);
     let mut fit_state = None;
     let fit_key = source.passthrough.keys().find(|k| k.eq_ignore_ascii_case(crate::fit::PART)).cloned();
     if let Some(key) = fit_key
@@ -216,6 +217,7 @@ pub fn from_shared_model(mut source: craft_wordmodel::Document) -> Result<wordcr
     document.comments = convert(comments)?;
     document.revisions = convert(revisions)?;
     document.settings = convert(settings)?;
+    document.settings.adjust_line_height_in_table = adjust_line_height_in_table;
     document.core = convert(core)?;
     document.sources = convert(sources)?;
     document.custom_props = convert(custom_props)?;
@@ -398,6 +400,7 @@ pub fn to_shared_model(source: &wordcraft_doc::Document) -> Result<craft_wordmod
     document.endnote_separators = convert_ref(&source.endnote_separators)?;
     document.media = source.media.clone();
     document.passthrough = source.passthrough.clone();
+    crate::settings::write_adjust_line_height_in_table(&mut document.passthrough, source.settings.adjust_line_height_in_table)?;
     document.glossary = source.glossary.iter().map(glossary_value_to_shared).collect::<Result<_, _>>()?;
     document.missing_pictures = missing_pictures_to_shared(&source.missing_pictures)?;
 

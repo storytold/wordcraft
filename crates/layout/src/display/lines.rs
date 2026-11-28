@@ -92,16 +92,18 @@ fn collect_glyph_run(
     style_index: u32,
     style: &crate::para::StyleRun,
 ) -> (usize, Vec<(u32, f32, f32)>, String, Vec<std::ops::Range<usize>>) {
-    let (pl, para, line, x, base) = (ctx.pl, ctx.para, ctx.line, ctx.x, ctx.base);
+    let (pl, para, line, x) = (ctx.pl, ctx.para, ctx.line, ctx.x);
     let si = style_index;
     let st = style;
     let mut k = start;
     let run = pl.clusters.get(start..line.c1.min(pl.clusters.len())).unwrap_or_default();
+    let run_shift = line.shift_at(start);
     let (n_glyphs, n_bytes) = run
         .iter()
-        .take_while(|cluster| cluster.style == si)
-        .filter(|cluster| matches!(cluster.kind, ClKind::Text | ClKind::Space))
-        .fold((0usize, 0usize), |(glyphs, bytes), cluster| {
+        .enumerate()
+        .take_while(|(offset, cluster)| cluster.style == si && (*offset == 0 || line.shift_at(start + *offset) == run_shift))
+        .filter(|(_, cluster)| matches!(cluster.kind, ClKind::Text | ClKind::Space))
+        .fold((0usize, 0usize), |(glyphs, bytes), (_, cluster)| {
             (glyphs + cluster.g1.saturating_sub(cluster.g0) as usize, bytes + cluster.end.saturating_sub(cluster.start))
         });
     let mut glyphs = Vec::with_capacity(n_glyphs);
@@ -113,7 +115,11 @@ fn collect_glyph_run(
         if c.style != si {
             break;
         }
+        if k > start && line.shift_at(k) != line.shift_at(start) {
+            break;
+        }
         let cx = x + line.cl_left(k).unwrap_or(0.0);
+        let base = ctx.base + line.shift_at(k);
         if matches!(c.kind, ClKind::Text | ClKind::Space) {
             let a = text.len();
             // An object's cluster (a field, a note number) stands for the text it shows.
@@ -188,8 +194,7 @@ fn collect_glyph_run(
 }
 
 fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
-    let (doc, pl, line, x, base, opts, authors, alpha, down) =
-        (ctx.doc, ctx.pl, ctx.line, ctx.x, ctx.base, ctx.opts, ctx.authors, ctx.alpha, ctx.down);
+    let (doc, pl, line, x, opts, authors, alpha, down) = (ctx.doc, ctx.pl, ctx.line, ctx.x, ctx.opts, ctx.authors, ctx.alpha, ctx.down);
     let mut k = line.c0;
     while k < line.c1 {
         let Some(c) = pl.clusters.get(k) else { break };
@@ -201,6 +206,7 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         let run_start = k;
         let (run_end, mut glyphs, text, ranges) = collect_glyph_run(ctx, run_start, si, st);
         k = run_end;
+        let base = ctx.base + line.shift_at(run_start);
         let rc = &st.rc;
         let m = &opts.revisions;
         // Without markup a deletion is never drawn as ordinary text, even in a layout that
@@ -320,26 +326,38 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         };
         let double = rc.double_strike || del_mark == Some(DeleteMark::DoubleStrikethrough);
         let struck = rc.strike || double || ins_mark == Some(InsertMark::Strikethrough) || del_mark == Some(DeleteMark::Strikethrough);
-        let spans = if underline != Underline::None || struck { line.spans(run_start, end_k) } else { Vec::new() };
-        for (x0, x1) in spans.into_iter().map(|(a, b)| (x + a, x + b)).filter(|(a, b)| b > a) {
-            if underline != Underline::None {
-                let uy = base - st.shift + st.size * 0.12;
-                let ucolor = rc.underline_color.unwrap_or(color);
-                if underline == Underline::Words {
-                    let words = word_spans(pl, line, (run_start, end_k), x, (x0, x1));
-                    for (a, b) in words {
-                        out.push(Draw::Line { x0: a, y0: uy, x1: b, y1: uy, width: thick, color: ucolor, stroke: Stroke::Solid, alpha, text_bg });
+        // Decorations follow the baseline of their clusters. Glyph collection may split this
+        // run at a shift boundary too, but keep decoration placement correct independently of
+        // that grouping: an inline picture and its following text can share a character style.
+        let mut decor_start = run_start;
+        while decor_start < end_k && (underline != Underline::None || struck) {
+            let shift = line.shift_at(decor_start);
+            let mut decor_end = decor_start + 1;
+            while decor_end < end_k && line.shift_at(decor_end) == shift {
+                decor_end += 1;
+            }
+            let decor_base = ctx.base + shift;
+            let spans = line.spans(decor_start, decor_end);
+            for (x0, x1) in spans.into_iter().map(|(a, b)| (x + a, x + b)).filter(|(a, b)| b > a) {
+                if underline != Underline::None {
+                    let uy = decor_base - st.shift + st.size * 0.12;
+                    let ucolor = rc.underline_color.unwrap_or(color);
+                    if underline == Underline::Words {
+                        for (a, b) in word_spans(pl, line, (decor_start, decor_end), x, (x0, x1)) {
+                            out.push(Draw::Line { x0: a, y0: uy, x1: b, y1: uy, width: thick, color: ucolor, stroke: Stroke::Solid, alpha, text_bg });
+                        }
+                    } else {
+                        let w = if underline == Underline::Thick { thick * 2.0 } else { thick };
+                        out.push(Draw::Line { x0, y0: uy, x1, y1: uy, width: w, color: ucolor, stroke: stroke_of(underline), alpha, text_bg });
                     }
-                } else {
-                    let w = if underline == Underline::Thick { thick * 2.0 } else { thick };
-                    out.push(Draw::Line { x0, y0: uy, x1, y1: uy, width: w, color: ucolor, stroke: stroke_of(underline), alpha, text_bg });
+                }
+                if struck {
+                    let sy = decor_base - st.shift - st.size * 0.28;
+                    let stroke = if double { Stroke::Double } else { Stroke::Solid };
+                    out.push(Draw::Line { x0, y0: sy, x1, y1: sy, width: thick, color, stroke, alpha, text_bg });
                 }
             }
-            if struck {
-                let sy = base - st.shift - st.size * 0.28;
-                let stroke = if double { Stroke::Double } else { Stroke::Solid };
-                out.push(Draw::Line { x0, y0: sy, x1, y1: sy, width: thick, color, stroke, alpha, text_bg });
-            }
+            decor_start = decor_end;
         }
         // Emphasis marks (Font › Emphasis mark): one over (or under) each character.
         if rc.emphasis != wordcraft_doc::props::EmphasisMark::None {
@@ -349,7 +367,8 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 }
                 let a = x + line.cl_left(kk).unwrap_or(0.0);
                 let b = x + line.cl_right(kk).unwrap_or(a - x);
-                out.push(emphasis_mark(rc.emphasis, (a + b) / 2.0, base - st.shift, st.size, color));
+                let mark_base = ctx.base + line.shift_at(kk) - st.shift;
+                out.push(emphasis_mark(rc.emphasis, (a + b) / 2.0, mark_base, st.size, color));
             }
         }
     }
@@ -575,10 +594,11 @@ fn draw_hyphen(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         && let Some(style) = ctx.pl.styles.get(style_index as usize)
     {
         let hx = ctx.x + ctx.line.hyphen_x(advance);
+        let shift = ctx.line.c1.checked_sub(1).map_or(0.0, |k| ctx.line.shift_at(k));
         out.push(Draw::Glyphs {
             face: style.face,
             size: style.size,
-            glyphs: vec![(glyph, hx, ctx.base - style.shift)],
+            glyphs: vec![(glyph, hx, ctx.base + shift - style.shift)],
             color: ctx.ink(&style.rc.color, None),
             alpha: ctx.alpha,
             synth_bold: style.synth_bold,
@@ -603,15 +623,16 @@ fn formatting_marks(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             let cx = x + line.cl_left(k).unwrap_or(0.0);
             let nx = x + line.cl_right(k).unwrap_or(cx - x);
             let size = pl.styles.get(c.style as usize).map(|s| s.size).unwrap_or(msize);
+            let cluster_base = base + line.shift_at(k);
             let arrow = if line.rtl { '←' } else { '→' };
             match c.kind {
                 ClKind::Space if marks.spaces => {
-                    out.push(Draw::Mark { x: (cx + nx) / 2.0 - size * 0.12, baseline: base - size * 0.08, size, ch: '·', color: None })
+                    out.push(Draw::Mark { x: (cx + nx) / 2.0 - size * 0.12, baseline: cluster_base - size * 0.08, size, ch: '·', color: None })
                 }
                 ClKind::Tab if marks.tabs => {
-                    out.push(Draw::Mark { x: cx + ((nx - cx) / 2.0 - size * 0.3).max(0.0), baseline: base, size, ch: arrow, color: None })
+                    out.push(Draw::Mark { x: cx + ((nx - cx) / 2.0 - size * 0.3).max(0.0), baseline: cluster_base, size, ch: arrow, color: None })
                 }
-                ClKind::LineBreak if marks.paragraphs => out.push(Draw::Mark { x: cx + 1.0, baseline: base, size, ch: '↵', color: None }),
+                ClKind::LineBreak if marks.paragraphs => out.push(Draw::Mark { x: cx + 1.0, baseline: cluster_base, size, ch: '↵', color: None }),
                 ClKind::PageBreak | ClKind::ColumnBreak if marks.paragraphs => {
                     let label = if c.kind == ClKind::PageBreak { '⤓' } else { '⇥' };
                     out.push(Draw::Line {
@@ -662,14 +683,15 @@ fn formatting_marks(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
 }
 
 fn draw_rubies(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
-    let (pl, line, opts, x, base, alpha) = (ctx.pl, ctx.line, ctx.opts, ctx.x, ctx.base, ctx.alpha);
+    let (pl, line, opts, x, alpha) = (ctx.pl, ctx.line, ctx.opts, ctx.x, ctx.alpha);
     for r in pl.rubies.iter().filter(|r| (line.c0..line.c1).contains(&r.cluster)) {
         let Some(bst) = pl.clusters.get(r.cluster).and_then(|c| pl.styles.get(c.style as usize)) else { continue };
         if bst.rc.del.is_some() && !opts.markup {
             continue;
         }
         let cx = x + line.cl_left(r.cluster).unwrap_or(0.0);
-        let y = base - bst.shift - r.raise;
+        // The ruby follows its base's baseline, shifted with it under `w:textAlignment`.
+        let y = ctx.base + line.shift_at(r.cluster) - bst.shift - r.raise;
         let mut i = 0;
         while let Some(&(style, _)) = r.glyphs.get(i) {
             let n = r.glyphs.get(i..).map_or(0, |g| g.iter().take_while(|(s, _)| *s == style).count()).max(1);
@@ -709,6 +731,7 @@ fn inline_objects(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             continue;
         }
         let cx = x + line.cl_left(k).unwrap_or(0.0);
+        let base = base + line.shift_at(k);
         let obj = para.and_then(|p| p.objects.get(oi));
         let modern = doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT;
         let rect = inline_rect(obj, cx, base, c.adv, (c.obj_h, c.obj_d), pl.rule_room(line, k), modern);
@@ -754,23 +777,41 @@ fn proofing_marks(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         if *end <= ctx.line.start || *start >= ctx.line.stop {
             continue;
         }
-        for (x0, x1) in ctx.pl.x_spans(ctx.li, (*start).max(ctx.line.start), (*end).min(ctx.line.stop)) {
-            if x1 - x0 < 1.0 {
+        let from = (*start).max(ctx.line.start);
+        let to = (*end).min(ctx.line.stop);
+        let mut k = ctx.line.c0;
+        while k < ctx.line.c1 {
+            let Some(cluster) = ctx.pl.clusters.get(k) else { break };
+            if cluster.start >= to || cluster.end <= from {
+                k += 1;
                 continue;
             }
-            let y = ctx.base + 2.5;
-            let color = if *grammar { Rgb(0x2B, 0x57, 0xC0) } else { Rgb(0xE0, 0x24, 0x24) };
-            out.push(Draw::Line {
-                x0: ctx.x + x0,
-                y0: y,
-                x1: ctx.x + x1,
-                y1: y,
-                width: 0.8,
-                color,
-                stroke: if *grammar { Stroke::Double } else { Stroke::Wave },
-                alpha: ctx.alpha,
-                text_bg: None,
-            });
+            let shift = ctx.line.shift_at(k);
+            let segment_start = k;
+            k += 1;
+            while k < ctx.line.c1 && ctx.line.shift_at(k) == shift && ctx.pl.clusters.get(k).is_some_and(|c| c.start < to && c.end > from) {
+                k += 1;
+            }
+            let Some(first) = ctx.pl.clusters.get(segment_start) else { continue };
+            let Some(last) = ctx.pl.clusters.get(k - 1) else { continue };
+            for (x0, x1) in ctx.pl.x_spans(ctx.li, first.start.max(from), last.end.min(to)) {
+                if x1 - x0 < 1.0 {
+                    continue;
+                }
+                let y = ctx.base + shift + 2.5;
+                let color = if *grammar { Rgb(0x2B, 0x57, 0xC0) } else { Rgb(0xE0, 0x24, 0x24) };
+                out.push(Draw::Line {
+                    x0: ctx.x + x0,
+                    y0: y,
+                    x1: ctx.x + x1,
+                    y1: y,
+                    width: 0.8,
+                    color,
+                    stroke: if *grammar { Stroke::Double } else { Stroke::Wave },
+                    alpha: ctx.alpha,
+                    text_bg: None,
+                });
+            }
         }
     }
 }
@@ -782,7 +823,8 @@ fn tab_leaders(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         let Some(ch) = leader.char() else { continue };
         let gid = style.face.glyph_for(ch);
         let advance = leader_pitch(style.face.advance(gid) as f32, style.face.upem as f32, style.size);
-        let glyphs = leader_xs(ctx.x + left, ctx.x + right, advance).into_iter().map(|gx| (gid, gx, ctx.base)).collect();
+        let y = ctx.base + ctx.line.shift_at(*k);
+        let glyphs = leader_xs(ctx.x + left, ctx.x + right, advance).into_iter().map(|gx| (gid, gx, y)).collect();
         out.push(Draw::Glyphs {
             face: style.face,
             size: style.size,
@@ -844,7 +886,8 @@ fn enclosures(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         }
         let (Some(cluster), Some(left)) = (ctx.pl.clusters.get(*k), ctx.line.cl_left(*k)) else { continue };
         let Some(style) = ctx.pl.styles.get(cluster.style as usize) else { continue };
-        let rect = Rect::new(ctx.x + left + enclosure.x, ctx.base - style.shift - enclosure.top, enclosure.w, enclosure.h);
+        let base = ctx.base + ctx.line.shift_at(*k);
+        let rect = Rect::new(ctx.x + left + enclosure.x, base - style.shift - enclosure.top, enclosure.w, enclosure.h);
         out.push(Draw::Shape {
             rect,
             kind: enclosure.kind,

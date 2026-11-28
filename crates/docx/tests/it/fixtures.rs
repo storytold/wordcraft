@@ -3926,7 +3926,7 @@ fn bidi_theme_slots_follow_the_theme_font_language() {
         };
         let body = [run("majorBidi"), run("minorBidi"), run("majorHAnsi")].concat();
         let rels = [
-            ("rId7", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings", "settings.xml"),
+            ("rId7", "settings", "settings.xml"),
             ("rId8", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles", "styles.xml"),
             ("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme", "theme/theme1.xml"),
         ];
@@ -3987,7 +3987,7 @@ fn roman_fonts_split_fallback_lists() {
 fn html_auto_spacing_off_is_read_and_kept() {
     let settings = |compat: &str| {
         let s = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings {W_NS}><w:compat>{compat}</w:compat></w:settings>"#);
-        let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings", "settings.xml")];
+        let rels = [("rId9", "settings", "settings.xml")];
         let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/settings.xml", &s)])).unwrap();
         let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
         (d.settings.sum_paragraph_spacing, again.settings.sum_paragraph_spacing)
@@ -4002,7 +4002,7 @@ fn html_auto_spacing_off_is_read_and_kept() {
 fn do_not_expand_shift_return_is_read_and_kept() {
     let settings = |compat: &str| {
         let s = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings {W_NS}><w:compat>{compat}</w:compat></w:settings>"#);
-        let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings", "settings.xml")];
+        let rels = [("rId9", "settings", "settings.xml")];
         let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/settings.xml", &s)])).unwrap();
         let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
         (d.settings.do_not_expand_shift_return, again.settings.do_not_expand_shift_return)
@@ -4010,6 +4010,78 @@ fn do_not_expand_shift_return_is_read_and_kept() {
     assert_eq!(settings("<w:doNotExpandShiftReturn/>"), (true, true));
     assert_eq!(settings(r#"<w:doNotExpandShiftReturn w:val="0"/>"#), (false, false));
     assert_eq!(settings(""), (false, false));
+}
+
+/// `w:textAlignment` in a paragraph's properties (§17.3.1.39): the vertical alignment of a line's
+/// characters is read and written back; a token that isn't one of the five is left unset.
+#[test]
+fn text_alignment_is_read_and_kept() {
+    let para = |val: &str| {
+        let body = format!(r#"<w:p><w:pPr><w:textAlignment w:val="{val}"/></w:pPr></w:p>"#);
+        let d = wordcraft_docx::read(&docx(&body, &[], &[])).unwrap();
+        let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        let get = |d: &Document| match d.body.first().map(|b| &**b) {
+            Some(Block::Para(p)) => p.props.text_alignment,
+            _ => None,
+        };
+        (get(&d), get(&again))
+    };
+    use wordcraft_doc::props::TextAlignment;
+    assert_eq!(para("top"), (Some(TextAlignment::Top), Some(TextAlignment::Top)));
+    assert_eq!(para("center"), (Some(TextAlignment::Center), Some(TextAlignment::Center)));
+    assert_eq!(para("bottom"), (Some(TextAlignment::Bottom), Some(TextAlignment::Bottom)));
+    assert_eq!(para("baseline"), (Some(TextAlignment::Baseline), Some(TextAlignment::Baseline)));
+    assert_eq!(para("auto"), (Some(TextAlignment::Auto), Some(TextAlignment::Auto)));
+    assert_eq!(para("sideways"), (None, None));
+}
+
+/// `w:adjustLineHeightInTable` in the settings' `w:compat` (§17.15.3.1): the document grid's line
+/// pitch reaches table cells only when it is on.
+#[test]
+fn adjust_line_height_in_table_is_read_and_kept() {
+    let settings = |compat: &str| {
+        let s = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings {W_NS}><w:compat>{compat}</w:compat></w:settings>"#);
+        let rels = [("rId9", "settings", "settings.xml")];
+        let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/settings.xml", &s)])).unwrap();
+        let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        (d.settings.adjust_line_height_in_table, again.settings.adjust_line_height_in_table)
+    };
+    assert_eq!(settings("<w:adjustLineHeightInTable/>"), (true, true));
+    assert_eq!(settings(r#"<w:adjustLineHeightInTable w:val="0"/>"#), (false, false));
+    assert_eq!(settings(""), (false, false));
+}
+
+/// Turning `w:adjustLineHeightInTable` on or off after a read is saved and read back, also when the
+/// original settings keep other compatibility options (their block is merged, not regenerated).
+#[test]
+fn adjust_line_height_in_table_edits_survive_a_save_over_original_compat() {
+    let original = |flag: &str| {
+        let s = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings {W_NS}><w:compat> {flag}<w:useFELayout/>
+</w:compat>
+    </w:settings>"#
+        );
+        let rels = [("rId9", "settings", "settings.xml")];
+        wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/settings.xml", &s)])).unwrap()
+    };
+    let saved = |d: &Document| wordcraft_docx::read(&wordcraft_docx::write(d).unwrap()).unwrap();
+    // The original's switch, the edit, and the value after the save.
+    let cases = [
+        ("", true, true),
+        ("<w:adjustLineHeightInTable/>", false, false),
+        ("", false, false),
+        ("<w:adjustLineHeightInTable/>", true, true),
+        (r#"<w:adjustLineHeightInTable w:val="0"/>"#, true, true),
+    ];
+    for (start, edit, expected) in cases {
+        let mut d = original(start);
+        let read_on = !start.is_empty() && !start.contains(r#"w:val="0""#);
+        assert_eq!(d.settings.adjust_line_height_in_table, read_on, "read {start:?}");
+        d.settings.adjust_line_height_in_table = edit;
+        let again = saved(&d);
+        assert_eq!(again.settings.adjust_line_height_in_table, expected, "from {start:?} to {edit}");
+        assert_eq!(again.settings.compat_mode, d.settings.compat_mode);
+    }
 }
 
 /// A right triangle (`rtTriangle`) has its right angle at the bottom left: a cover page's white

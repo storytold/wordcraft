@@ -148,6 +148,10 @@ pub struct Settings {
     /// Keep contextual paragraph spacing inside legacy table cells (`allowSpaceOfSameStyleInTable`).
     /// Word ignores the layout override in compatibility mode 15, but the flag still round-trips.
     pub allow_space_of_same_style_in_table: bool,
+    /// `w:adjustLineHeightInTable` (ECMA-376 §17.15.3.1): the document grid's line pitch also
+    /// applies to lines in table cells. Off when absent, so cell text keeps its own line height.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub adjust_line_height_in_table: bool,
     /// `w:doNotSuppressIndentation` (a `.doc`'s `Copts.fWW11IndentRules`): Word 2003's indent
     /// rules beside floating objects. An unnumbered paragraph's line starts right after a floating
     /// object before it on the line, its own indent ignored (ECMA-376 Part 4 §14.8.3.12). Word 2013's
@@ -339,6 +343,7 @@ impl Default for Settings {
             sum_paragraph_spacing: false,
             do_not_expand_shift_return: false,
             allow_space_of_same_style_in_table: false,
+            adjust_line_height_in_table: false,
             do_not_suppress_indentation: false,
             grid_h: DEFAULT_GRID,
             grid_v: DEFAULT_GRID,

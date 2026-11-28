@@ -1,5 +1,6 @@
 use super::ParaLayout;
 use super::model::{ClKind, Line, VisCl};
+use wordcraft_doc::props::TextAlignment;
 
 /// The bidi levels a piece of text is shaped by.
 #[derive(Clone, Copy)]
@@ -70,11 +71,24 @@ pub fn visual_order(levels: &[u8]) -> Vec<usize> {
 }
 
 /// Make a row's lines as tall as its tallest, and return that height.
-pub(super) fn even_row(row: &mut [Line]) -> f32 {
+pub(super) fn even_row(row: &mut [Line], align: TextAlignment, dropped: usize) -> f32 {
     let h = row.iter().map(|l| l.height).fold(0.0f32, f32::max);
     for l in row {
-        l.baseline += h - l.height;
+        let delta = h - l.height;
+        l.baseline += delta;
         l.height = h;
+        let adjustment = match align {
+            TextAlignment::Top => -delta,
+            TextAlignment::Center => -delta / 2.0,
+            TextAlignment::Auto | TextAlignment::Baseline | TextAlignment::Bottom => 0.0,
+        };
+        if adjustment != 0.0 {
+            for (i, shift) in l.shifts.iter_mut().enumerate() {
+                if l.c0 + i >= dropped {
+                    *shift += adjustment;
+                }
+            }
+        }
     }
     h
 }

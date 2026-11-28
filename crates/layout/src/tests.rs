@@ -25,6 +25,7 @@ mod pages;
 mod styleref;
 mod table_contact;
 mod table_first_line;
+mod text_alignment;
 mod textbox;
 mod vertical;
 
