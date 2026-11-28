@@ -8,7 +8,7 @@ pub fn decimal_separator(lang: Option<&str>) -> char {
     let tag = lang.unwrap_or("").trim().to_ascii_lowercase().replace('_', "-");
     // Regions that write a decimal point where the language usually writes a comma.
     const POINT_REGIONS: &[&str] =
-        &["de-ch", "de-li", "it-ch", "es-mx", "es-us", "es-419", "es-pr", "es-do", "es-gt", "es-hn", "es-ni", "es-pa", "es-sv"];
+        &["de-ch", "de-li", "it-ch", "es-mx", "es-us", "es-419", "es-pr", "es-do", "es-gt", "es-hn", "es-ni", "es-pa", "es-sv", "es-cu", "es-pe"];
     if POINT_REGIONS.iter().any(|r| tag == *r || tag.starts_with(&format!("{r}-"))) {
         return '.';
     }
@@ -22,10 +22,29 @@ pub fn decimal_separator(lang: Option<&str>) -> char {
 
 const SPACES: &[char] = &[' ', '\u{a0}', '\u{202f}', '\u{2009}'];
 const CURRENCY: &[char] = &['$', '€', '£', '¥', '¢', '₽', '₴', '₺', '₹', '₩', '₪', '₫', '฿', '₱', '₸', '₼', '₾'];
+/// Currency signs spelled with more than one character: the Panamanian balboa (`B/.`).
+const CURRENCY_SYMBOLS: &[&str] = &["B/."];
 
-/// Strip a currency symbol or a short currency word (`zł`, `kr`, `PLN`) from either end.
+/// Trim spaces and single-character currency signs from either end.
+fn trim_currency(s: &str) -> &str {
+    s.trim_matches(|c: char| c.is_whitespace() || CURRENCY.contains(&c))
+}
+
+/// Strip a currency symbol or a short currency word (`zł`, `kr`, `PLN`, `B/.`) from either end.
+/// As Word does, a multi-character sign is a word of its own (`B/. 1,250.50`, `1,250.50 B/.`);
+/// `B/.1,250.50` and `B/ 1,250.50` are not numbers.
 fn strip_currency(s: &str) -> &str {
-    let mut s = s.trim_matches(|c: char| c.is_whitespace() || CURRENCY.contains(&c));
+    let mut s = trim_currency(s);
+    if let Some(rest) =
+        CURRENCY_SYMBOLS.iter().find_map(|sym| s.strip_prefix(sym).filter(|rest| rest.chars().next().is_some_and(char::is_whitespace)))
+    {
+        s = trim_currency(rest);
+    }
+    if let Some(rest) =
+        CURRENCY_SYMBOLS.iter().find_map(|sym| s.strip_suffix(sym).filter(|rest| rest.chars().next_back().is_some_and(char::is_whitespace)))
+    {
+        s = trim_currency(rest);
+    }
     if let Some((head, word)) = s.rsplit_once(SPACES)
         && (1..=3).contains(&word.chars().count())
         && word.chars().all(|c| c.is_alphabetic() || c == '.')
@@ -102,6 +121,9 @@ pub fn parse_number(s: &str, lang: Option<&str>) -> Option<f64> {
         return None;
     }
     let v: f64 = format!("0{int_digits}.{frac_digits}0").parse().ok()?;
+    if !v.is_finite() {
+        return None;
+    }
     Some(if neg { -v } else { v })
 }
 
@@ -111,10 +133,11 @@ pub fn format_number(v: f64, lang: Option<&str>) -> String {
     if !v.is_finite() {
         return "0".into();
     }
-    if v.fract() == 0.0 && v.abs() < 1e15 {
+    if v.fract() == 0.0 && v.abs() < 9.2e18 {
         return format!("{}", v as i64);
     }
     let s = format!("{v:.2}");
+    let s = if s == "-0.00" { "0.00".to_string() } else { s };
     if decimal_separator(lang) == ',' { s.replace('.', ",") } else { s }
 }
 
@@ -133,6 +156,7 @@ mod tests {
         assert_eq!(parse_number("1.5", pl), Some(1.5));
         assert_eq!(parse_number("-2,25", pl), Some(-2.25));
         assert_eq!(parse_number("PLN 12", pl), Some(12.0));
+        assert_eq!(parse_number("-B/. 1 250,50", pl), Some(-1250.5));
         assert_eq!(parse_number("abc", pl), None);
         assert_eq!(parse_number("1,2,3", pl), None);
         // From review: ordinals, a leading zero, percentages and an en dash minus.
@@ -147,6 +171,55 @@ mod tests {
         assert_eq!(parse_number(".", pl), None);
         assert_eq!(format_number(5.75, pl), "5,75");
         assert_eq!(format_number(1350.0, pl), "1350");
+        assert_eq!(format_number(-0.001, pl), "0,00", "a rounded zero has no sign");
+    }
+
+    #[test]
+    fn overflowing_digit_strings_are_not_numbers() {
+        assert_eq!(parse_number(&"1".repeat(350), None), None);
+        assert_eq!(parse_number(&"9".repeat(400), Some("pl-PL")), None);
+        assert_eq!(parse_number(&format!("-{}", "1".repeat(350)), None), None);
+        let big = parse_number(&"1".repeat(300), None);
+        assert!(big.is_some_and(f64::is_finite), "{big:?}");
+    }
+
+    #[test]
+    fn cuban_and_peruvian_numbers_use_decimal_points() {
+        for lang in [Some("es-CU"), Some("es-PE")] {
+            assert_eq!(parse_number("1.234", lang), Some(1.234));
+            assert_eq!(parse_number("1,234.50", lang), Some(1234.5));
+            assert_eq!(format_number(5.75, lang), "5.75");
+        }
+        assert_eq!(parse_number("1.234,50", Some("es-ES")), Some(1234.5));
+        assert_eq!(format_number(5.75, Some("es-ES")), "5,75");
+    }
+
+    #[test]
+    fn balboa_numbers() {
+        let en = Some("en-US");
+        // Word 16.0 reads `B/.` as a word of its own, before or after the number.
+        assert_eq!(parse_number("B/. 1,234.50", en), Some(1234.5));
+        assert_eq!(parse_number("1,234.50 B/.", en), Some(1234.5));
+        assert_eq!(parse_number("B/.\u{a0}1,234.50", en), Some(1234.5), "a no-break space after the sign");
+        assert_eq!(parse_number("B/. 1,234.50 B/.", en), Some(1234.5), "the sign at both ends");
+        assert_eq!(parse_number("-B/. 1,234.50", en), Some(-1234.5), "a minus before the sign");
+        assert_eq!(parse_number("B/. 1,234.50", Some("es-PA")), Some(1234.5), "the balboa's own region");
+        // The sign has no space of its own in Word: touching the number is text.
+        assert_eq!(parse_number("B/.1,234.50", en), None);
+        assert_eq!(parse_number("1,234.50B/.", en), None);
+        assert_eq!(parse_number("B/ 1,234.50", en), None, "the balboa is B/. in Word");
+        assert_eq!(parse_number("B/.", en), None);
+        // The slash and the full stop make `B/.` ambiguous with a fraction: the sign is matched at
+        // the ends of the text only, so a fraction is never read as a balboa amount and a sign in
+        // the middle is not a sign.
+        assert_eq!(parse_number("1/.5", en), None, "a fraction is not a price");
+        assert_eq!(parse_number("1/.5", Some("es-PA")), None);
+        assert_eq!(parse_number("1/.5 B/.", en), None, "the sign at the end does not rescue a fraction");
+        assert_eq!(parse_number("B/. 1/.5", en), None);
+        assert_eq!(parse_number("2 B/. 1,234.50", en), None, "the sign sits before the number");
+        assert_eq!(parse_number("1,234.50 B/. 1,234.50", en), None, "the sign sits between two numbers");
+        assert_eq!(parse_number("1,234.50/2", en), None, "a division is not a balboa amount");
+        assert_eq!(parse_number("B/. 1,234.50,50", en), None, "a second decimal separator");
     }
 
     #[test]
@@ -154,6 +227,7 @@ mod tests {
         let en = Some("en-US");
         assert_eq!(parse_number("1,250.50", en), Some(1250.5));
         assert_eq!(parse_number("$1,250", en), Some(1250.0));
+        assert_eq!(parse_number("PAB 1,250.50", en), Some(1250.5), "the ISO code");
         assert_eq!(parse_number("1.5", en), Some(1.5));
         assert_eq!(parse_number("12", None), Some(12.0));
         assert_eq!(parse_number(".5", None), Some(0.5));
@@ -161,6 +235,8 @@ mod tests {
         assert_eq!(parse_number("1.", en), Some(1.0));
         assert_eq!(parse_number("0,125", en), None, "never 125");
         assert_eq!(format_number(5.75, en), "5.75");
+        assert_eq!(format_number(-0.001, en), "0.00", "a rounded zero has no sign");
+        assert_eq!(format_number(-0.0, None), "0");
         assert_eq!(decimal_separator(Some("de-CH")), '.');
         assert_eq!(decimal_separator(Some("de-DE")), ',');
     }
@@ -173,5 +249,14 @@ mod tests {
             }
         }
         assert_eq!(format_number(f64::NAN, None), "0");
+    }
+
+    #[test]
+    fn large_whole_numbers_have_no_decimals() {
+        assert_eq!(format_number(1e15, None), "1000000000000000");
+        assert_eq!(format_number(2.5e15, None), "2500000000000000");
+        assert_eq!(format_number(-1e15, None), "-1000000000000000");
+        assert_eq!(format_number(9.0e18, None), "9000000000000000000");
+        assert_eq!(format_number(1e15 + 0.5, None), "1000000000000000.50");
     }
 }

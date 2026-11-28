@@ -10,6 +10,8 @@ use crate::fields;
 use crate::wire::{self, Call, Frame};
 use crate::{Bridge, Command, Headless, ZoteroError};
 
+mod limits;
+
 const CITE: &str = r#"ITEM CSL_CITATION {"citationID":"k1","properties":{"formattedCitation":"(Doe, 2020)"},"citationItems":[{"id":7}]}"#;
 const BIBL: &str = r#"BIBL {"uncited":[],"omitted":[],"custom":[]} CSL_BIBLIOGRAPHY"#;
 const PREFS: &str = r#"<data data-version="3" zotero-version="7.0"><session id="s1"/><style id="http://www.zotero.org/styles/apa" hasBibliography="1" bibliographyStyleHasBeenSet="1"/><prefs><pref name="fieldType" value="ReferenceMark"/></prefs></data>"#;
@@ -305,7 +307,40 @@ fn frames_round_trip_and_bad_frames_are_errors() {
     assert!(wire::read_frame(&mut [0u8, 0, 0].as_slice()).is_err());
     // Length over the cap, and a truncated payload.
     assert!(matches!(wire::read_frame(&mut [0u8, 0, 0, 1, 0xFF, 0xFF, 0xFF, 0xFF].as_slice()), Err(ZoteroError::Protocol(_))));
+    let over_cap = (wire::MAX_FRAME as u32 + 1).to_be_bytes();
+    let over_cap_hdr = [0, 0, 0, 1, over_cap[0], over_cap[1], over_cap[2], over_cap[3]];
+    assert!(matches!(wire::read_frame(&mut over_cap_hdr.as_slice()), Err(ZoteroError::Protocol(_))));
     assert!(wire::read_frame(&mut [0u8, 0, 0, 1, 0, 0, 0, 9, b'x'].as_slice()).is_err());
+    // Zero-length payload frame.
+    let empty = wire::read_frame(&mut [0u8, 0, 0, 5, 0, 0, 0, 0].as_slice()).unwrap();
+    assert_eq!(empty, Some(Frame { txid: 5, payload: Vec::new() }));
+}
+
+#[test]
+fn frame_bounds_and_interrupted_reads() {
+    struct InterruptedOnce<'a>(&'a [u8], bool);
+    impl std::io::Read for InterruptedOnce<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if !self.1 {
+                self.1 = true;
+                return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "retry"));
+            }
+            let n = buf.len().min(self.0.len()).min(3);
+            buf[..n].copy_from_slice(&self.0[..n]);
+            self.0 = &self.0[n..];
+            Ok(n)
+        }
+    }
+
+    let mut raw = Vec::new();
+    wire::write_frame(&mut raw, 9, b"ok").unwrap();
+    let mut reader = InterruptedOnce(&raw, false);
+    assert_eq!(wire::read_frame(&mut reader).unwrap(), Some(Frame { txid: 9, payload: b"ok".to_vec() }));
+
+    let oversized = vec![0u8; wire::MAX_FRAME + 1];
+    let mut sink = Vec::new();
+    assert!(matches!(wire::write_frame(&mut sink, 1, &oversized), Err(ZoteroError::Protocol(_))));
+    assert!(sink.is_empty());
 }
 
 #[test]
@@ -520,7 +555,16 @@ fn a_note_with_a_picture_stays_when_its_citation_leaves() {
     let pid = *z.s.doc.parts.keys().next().unwrap();
     let p = z.s.doc.para_mut(StoryRef::Part(pid), &Path::top(0)).unwrap();
     let n = p.len();
-    let image = InlineObject::Image { media: "m".into(), w: 1.0, h: 1.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    let image = InlineObject::Image {
+        media: "m".into(),
+        w: 1.0,
+        h: 1.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
     p.insert_object(n, image, &Default::default()).unwrap();
     z.ok("Field_convert", json!([1, a, "ReferenceMark", 0]));
     assert_eq!(z.s.doc.parts.len(), 1);
@@ -563,4 +607,26 @@ fn a_citation_added_just_after_another_is_not_nested_in_it() {
     assert_eq!(z.text(), "Cats purr (Doe 2020)(Roe 2019)");
     let r = z.s.doc.field_ranges(StoryRef::Body);
     assert_eq!(r.iter().map(|f| f.depth).collect::<Vec<_>>(), [0, 0]);
+}
+
+#[test]
+fn citation_at_document_end_stays_closed() {
+    // #898: citing at the very end, typing after it, saving and reloading must all keep
+    // the field's end marker in place.
+    let mut z = Z::new("Hello", 5);
+    z.begin();
+    let id = z.cite(0, r"{\rtf  (Doe, {\i{}2020})}");
+    z.ok("Document_complete", json!([1]));
+    // Type right after the citation, at the very end of the document.
+    z.s.run("text.insert", &json!({"text": "!"})).unwrap();
+    assert_eq!(z.text(), "Hello (Doe, 2020)!");
+    let ranges = z.s.doc.field_ranges(StoryRef::Body);
+    assert_eq!(ranges.len(), 1);
+    assert!(z.s.sel.focus.off > ranges[0].end.off, "typed text lands outside the field");
+    let f = z.ok("Document_getFields", json!([1, "ReferenceMark"]));
+    assert_eq!(f, json!([[id], [CITE], [0]]));
+    // Save and reload: the end marker must survive the round trip.
+    let bytes = wordcraft_engine::io::save_bytes("probe.docx", &z.s.doc).unwrap();
+    let back = wordcraft_engine::io::open_bytes("probe.docx", &bytes).unwrap();
+    assert_eq!(back.field_ranges(StoryRef::Body).len(), 1);
 }

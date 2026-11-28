@@ -1,0 +1,25 @@
+{
+  "source": "log/ember-workspace-tests.log",
+  "sha256": "e9b8c4da07a48f00fac29adcc011fbc870ec5e1d53012903a0708cd2ce73ad1b",
+  "failures": [
+    "a_refusal_leaves_an_existing_output_untouched",
+    "a_refused_save_leaves_the_stamps_path_and_dirty_flag_alone",
+    "a_truncated_report_carries_totals_past_the_cap",
+    "cmd::packs::tests::swiss_german_and_portugal_portuguese_keep_their_languages_rules",
+    "each_list_says_for_itself_that_it_was_cut",
+    "fontdb::tests::a_thai_run_with_latin_falls_back_to_one_face",
+    "strict::an_uncovered_code_point_fails_strict_with_a_report_and_no_file",
+    "strict::render_strict_refuses_an_uncovered_character_on_the_page_with_no_stdout_or_file",
+    "strict_off_gives_the_same_png_as_before_even_with_a_missing_character",
+    "strict_refuses_an_uncovered_character_and_writes_nothing",
+    "strict_report_changes_nothing",
+    "strict_report_has_the_schema_1_shape",
+    "tests::auto_hyphenation_breaks_long_words",
+    "tests::fragmented_hidden_text_lays_out_like_the_visible_text",
+    "tests::hyphenation_and_proofing_follow_each_runs_language",
+    "tests::review_language_validates_tags_and_marks_text_unchecked",
+    "theme::tests::interface_symbols_have_glyphs",
+    "watermark_text_no_font_can_draw_is_refused_and_latin_passes",
+    "wordart_text_effects_keep_their_glyphs_in_the_check"
+  ]
+}
