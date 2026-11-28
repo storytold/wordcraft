@@ -145,12 +145,19 @@ fn shape_outline_weight_keeps_a_canvas_borders_colour() {
 fn the_group_menu_stays_on_for_a_selected_group() {
     let mut a = crate::WordApp::new(Session::new(wordcraft_doc::Document::from_text("one\ntwo\nthree")), crate::Services::default());
     assert!(a.session.why_disabled(group_menu_command(&a)).is_some(), "nothing selected");
+    a.run("caret.docStart", json!({})).unwrap();
     a.run("insert.shape", json!({"kind": "rectangle", "width": 80, "height": 40})).unwrap();
     a.run("arrange.bounds", json!({"page": 0, "x": 100, "y": 150})).unwrap();
     a.run("select.collapse", json!({"end": true})).unwrap();
     a.run("insert.shape", json!({"kind": "ellipse", "width": 80, "height": 40})).unwrap();
     a.run("arrange.bounds", json!({"page": 0, "x": 300, "y": 150})).unwrap();
-    a.run("select.addObject", json!({"index": 0})).unwrap();
+    let objects = a.run("arrange.selectionPane", json!({})).unwrap();
+    let objects = objects.as_array().expect("the shapes appear in the Selection Pane");
+    assert_eq!(objects.len(), 2, "both shapes were inserted");
+    let selected =
+        serde_json::to_value(wordcraft_engine::cmd::objects::object_selection(&a.session).expect("the second shape stays selected").0).unwrap();
+    let other = objects.iter().find(|o| o["pos"] != selected).expect("the first shape is not selected")["pos"].clone();
+    a.run("select.addObject", json!({"pos": other})).unwrap();
     assert_eq!(group_menu_command(&a), "arrange.group");
     assert!(a.session.why_disabled(group_menu_command(&a)).is_none(), "two objects to group");
     // Layout › Arrange holds the Group button; Shape Format's Arrange group has none.
