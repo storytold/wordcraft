@@ -415,7 +415,7 @@ fn diff_blocks(doc: &mut Document, old: &[Arc<Block>], new: &[Arc<Block>], ctx: 
                         let mut p = pb.clone();
                         if ctx.opts.formatting && pa.text == pb.text {
                             let before = doc.revisions.len();
-                            crate::cmd::fmt_revisions::compare_formatting(pa, &mut p, &mut doc.revisions, ctx.author, ctx.date);
+                            crate::cmd::fmt_revisions::compare_formatting(pa, &mut p, &mut doc.revisions, Some(&doc.styles), ctx.author, ctx.date);
                             if doc.revisions.len() > before || p != *pb {
                                 ctx.changes = ctx.changes.saturating_add(1);
                             }

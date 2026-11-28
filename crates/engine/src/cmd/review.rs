@@ -13,10 +13,10 @@ mod changes;
 mod comments;
 mod proofing;
 
-pub(crate) use changes::StyleTarget;
 pub use changes::{
     DELETION_TEXT_CHARS, DeletionBalloon, deletion_balloons, format_changes, has_deletions, has_format_changes, move_changes, tracking_json,
 };
+pub(crate) use changes::{NavigatedTarget, ParaFmtTarget, ParaNumTarget, StyleTarget};
 use changes::{list_changes, nav_change, resolve_all_then, resolve_sel_then, tracking_options};
 use comments::{
     comment_at_caret, comments_change, delete_comment, edit_comment, list_comments, nav_comment, new_comment, reply, validate_comment_id,

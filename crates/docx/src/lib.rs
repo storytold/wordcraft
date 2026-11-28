@@ -6,6 +6,7 @@
 
 mod fit;
 mod model_bridge;
+mod num_change;
 
 pub use craft_docx::{
     DEFAULT_SPIN_COUNT, DocxError, EmbeddedFont, Flavor, MAX_PASSWORD_CHARS, MAX_SOURCES, MAX_XML_FILE, PASSWORD_REQUIRED, PasswordCheck,
