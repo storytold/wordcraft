@@ -487,8 +487,33 @@ fn handle_input(app: &mut WordApp, ctx: &egui::Context, pass: &ToolPass, e: &Edi
         }
         EditorInput::Preedit { text, cursor, .. } => {
             if text.len() <= MAX_IME_PREEDIT_BYTES {
+                // On Windows egui-winit replaces a `0..0` cursor range with `None` (a workaround for
+                // the Korean IME reporting the cursor at the start by mistake). While this
+                // composition's cursor is still tracked, such a `None` means the caret is at its
+                // *start*: falling back to the end would jump from before the first letter to
+                // after the last one and stick there (#6916). This covers a Left press with
+                // unchanged text and a Delete/Backspace at the start (or of the letters before the
+                // cursor). A composition that never reported a cursor keeps the end fallback.
+                let range = match cursor {
+                    Some(r) => Some(chars_range(text, r)),
+                    None if !text.is_empty()
+                        && app.canvas.ime_preedit_range.as_ref().is_some_and(|old| {
+                            let prev = app.canvas.ime_preedit.as_str();
+                            if prev == text.as_ref() {
+                                return true;
+                            }
+                            if !cfg!(target_os = "windows") {
+                                return false;
+                            }
+                            old.end == 0 || prev.chars().skip(old.end).collect::<String>() == text.as_ref()
+                        }) =>
+                    {
+                        Some(0..0)
+                    }
+                    None => None,
+                };
                 app.canvas.ime_preedit = text.to_string();
-                app.canvas.ime_preedit_range = cursor.as_ref().map(|r| chars_range(text, r));
+                app.canvas.ime_preedit_range = range;
             } else {
                 log::warn!("ignoring an IME pre-edit of {} bytes", text.len());
                 app.canvas.ime_preedit.clear();

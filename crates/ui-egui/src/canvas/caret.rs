@@ -17,7 +17,7 @@ use wordcraft_layout::DocLayout;
 
 use super::cursor::{caret_color_at, preedit_cursor_chars};
 use super::story::dims_body;
-use super::{WordApp, preview_sel};
+use super::{WordApp, preview_sel, shown_sel};
 use crate::caret_glide::{Bar, Look, LookRequest, blink_fading, look};
 
 /// Where the caret stands on screen in this pass's placement, and what the painters need of it.
@@ -78,7 +78,9 @@ fn place(app: &WordApp, doc: &DocLayout, pages: &[PlacedPage]) -> Option<Placeme
             typing: None,
         });
     }
-    let sel = preview_sel(app).unwrap_or(&app.session.sel);
+    // While a composition lays the pre-edit out on a copy, place the caret at the input method's
+    // cursor inside that copy (`shown_sel`); otherwise on the previewed or real selection (#6916).
+    let sel = shown_sel(app).or_else(|| preview_sel(app)).unwrap_or(&app.session.sel);
     let c = doc.caret_on(&sel.focus, app.session.page_hint)?;
     // A caret whose page is scrolled out of view still has a place: the input method keeps its context and
     // surroundings there (production placed it from every laid page), from the page's rect in the whole layout.
@@ -146,7 +148,10 @@ pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body:
     let ctx = ui.ctx().clone();
     let focused = app.canvas.focused(&ctx);
     crate::dialogs_smart_art::end_typing_run(app, focused);
-    let doc = app.session.layout();
+    // A composition's caret is drawn on the preview copy, at the input method's cursor, so it
+    // lines up with the reflowed text the page raster shows (#6916).
+    let preview_layout = app.canvas.ime_preview.as_ref().map(|p| p.layout.clone());
+    let doc = preview_layout.unwrap_or_else(|| app.session.layout());
     let Some(pl) = place(app, &doc, body.pages) else { return };
 
     let zoom_key = body.view.zoom.to_bits();
@@ -187,7 +192,11 @@ pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body:
     let shown = pl.collapsed && focused;
     let mut bars: Vec<(Bar, Color32)> = Vec::new();
     let mut composition = None;
-    if focused && !pl.in_equation && !app.canvas.ime_preedit.is_empty() {
+    // With a preview the pre-edit is already in the page raster, so paint only the caret at the
+    // composition's cursor; an overlay here would draw the pre-edit twice. Without one (an
+    // equation, or text that cannot be laid out) keep drawing the underlined overlay (#6916).
+    let painted_in_page = app.canvas.ime_preview.is_some();
+    if focused && !pl.in_equation && !app.canvas.ime_preedit.is_empty() && !painted_in_page {
         // The caret is steady inside the composition, so the glide stands down while it shows.
         app.canvas.glide.reset();
         let text = app.canvas.ime_preedit.clone();

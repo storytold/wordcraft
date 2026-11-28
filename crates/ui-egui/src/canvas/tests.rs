@@ -1150,8 +1150,8 @@ fn the_ime_fixture_draws_kana_without_a_japanese_font() {
 }
 
 /// While an input method composes, the caret and the candidate window sit at its cursor inside
-/// the composition: the end of the range it reports, or the end of the text with no range. The
-/// range comes from the OS and is clamped, whatever it holds.
+/// the composition: the end of the range it reports, or the end of the text when it never reports
+/// a range. The range comes from the OS and is clamped, whatever it holds.
 #[test]
 fn the_caret_follows_the_input_method_cursor_in_the_composition() {
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
@@ -1180,9 +1180,10 @@ fn the_caret_follows_the_input_method_cursor_in_the_composition() {
     };
     let before = compose(Some(0..0));
     assert_eq!(before, start, "a cursor at the composition's start is the caret before composing");
-    let end = compose(None);
     let mid = compose(Some(1..1));
+    let end = compose(Some(3..3));
     assert!(end > mid && mid > before, "the cursor moves through the composition: {before} {mid} {end}");
+    assert_eq!(compose(None), before, "Windows collapses 0..0 to None: the caret stays at the start");
     assert_eq!(compose(Some(0..99)), end, "a range past the text ends at its end");
     assert_eq!(compose(Some(std::ops::Range { start: 5, end: 1 })), mid, "a reversed range uses its end");
     assert_eq!(compose(Some(usize::MAX..usize::MAX)), end);

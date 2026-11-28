@@ -62,7 +62,10 @@ pub(crate) use links::follow_link;
 use links::{field_link, is_followable_link, is_generated_bookmark_link};
 pub use navigation::page_to_screen;
 use navigation::viewed_page;
-pub(crate) use pages::{PageKeys, dark_page, page_doc, page_screen_scale, preview_sel, screen_render_options};
+// While an input method composes in the body, the page raster and its caret come from a document
+// copy with the pre-edit inserted (`shown_doc`/`shown_sel`); a11y and hit-testing stay on the real
+// document through `page_doc`/`preview_sel` (#6916).
+pub(crate) use pages::{PageKeys, dark_page, page_doc, page_screen_scale, preview_sel, screen_render_options, shown_doc, shown_sel};
 use pages::{page_render_options, shown_layout};
 use reading::{reading_anchor_page, reading_page_start, web_layout_width};
 use story::dims_body;
@@ -92,6 +95,21 @@ impl Default for ShownPages {
     fn default() -> Self {
         ShownPages { rect: Rect::NOTHING, pages: Vec::new(), laid: Vec::new(), view: Rect::NOTHING, canvas: None }
     }
+}
+
+/// One frame's laid-out input-method composition. The pre-edit is inserted into a document copy so
+/// the text to its right reflows right, and the caret is placed at the input method's cursor inside
+/// it. Held with the inputs that produced it so an idle frame reuses the layout (#6916).
+pub(crate) struct ImePreview {
+    pub(super) preedit: String,
+    pub(super) cursor_chars: usize,
+    pub(super) document: u64,
+    pub(super) rev: u64,
+    pub(super) real_sel: wordcraft_engine::Selection,
+    pub(super) base: std::sync::Arc<DocLayout>,
+    pub(super) doc: wordcraft_doc::Document,
+    pub(super) sel: wordcraft_engine::Selection,
+    pub(super) layout: std::sync::Arc<DocLayout>,
 }
 
 pub struct CanvasState {
@@ -185,6 +203,8 @@ pub struct CanvasState {
     /// The chars of `ime_preedit` the input method marks as its cursor or selection, as it reports
     /// them (unchecked).
     pub(crate) ime_preedit_range: Option<std::ops::Range<usize>>,
+    /// The composition laid out into a document copy, so the text on its right reflows right.
+    pub(crate) ime_preview: Option<ImePreview>,
     pub context_issue: Option<serde_json::Value>,
     pub context_synonyms: Option<serde_json::Value>,
     /// The right-click context menu is open (the mini toolbar stands down while it is).
@@ -424,6 +444,7 @@ impl Default for CanvasState {
             viewed_page: None,
             ime_preedit: String::new(),
             ime_preedit_range: None,
+            ime_preview: None,
             context_issue: None,
             context_synonyms: None,
             context_menu_open: false,
@@ -597,8 +618,9 @@ fn mark_area(page: usize, r: &wordcraft_geom::Rect, kind: MarkKind) -> MarkArea 
 /// The selection, Find › Reading Highlight and Read Aloud marks, in page points.
 fn mark_areas(app: &mut WordApp, layout: &DocLayout, selected: &[(usize, wordcraft_geom::Rect)]) -> Vec<MarkArea> {
     let mut areas: Vec<MarkArea> = selected.iter().map(|(page, r)| mark_area(*page, r, MarkKind::Selection)).collect();
-    // Find's places are the document's, not the preview's.
-    if preview_sel(app).is_none() {
+    // Find's and Read Aloud's places are the real document's, not a preview's: a composition's
+    // copy has copy-relative offsets, so its marks would land on the pre-edit (#6916).
+    if preview_sel(app).is_none() && app.canvas.ime_preview.is_none() {
         let hint = app.session.page_hint;
         let found: Vec<(Pos, Pos)> = app.session.find_highlights().iter().take(5000).cloned().collect();
         for (a, b) in &found {
@@ -607,7 +629,9 @@ fn mark_areas(app: &mut WordApp, layout: &DocLayout, selected: &[(usize, wordcra
             }
         }
     }
-    if let Some((a, b)) = crate::read_aloud::highlight(app) {
+    if app.canvas.ime_preview.is_none()
+        && let Some((a, b)) = crate::read_aloud::highlight(app)
+    {
         for (page, r) in layout.selection_rects(&app.session.doc, &a, &b, app.session.page_hint) {
             areas.push(mark_area(page, &r, MarkKind::Spoken));
         }
@@ -739,10 +763,35 @@ fn show_reading(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: R
     }
 }
 
+/// A pointer press ends a live body composition before this frame lays the pages out. The pre-edit
+/// is interface state, not document text, so it is discarded rather than committed: leaving it in
+/// the copy would rebuild the preview at the pointer and make the uncommitted text follow the mouse
+/// (#6916). The interrupt flags let the framework's reset handshake drop late platform events.
+fn dismiss_ime_on_pointer_press(app: &mut WordApp, ui: &Ui, full: Rect) {
+    if app.canvas.ime_preedit.is_empty() && app.canvas.ime_preview.is_none() {
+        return;
+    }
+    let press = ui.input(|i| {
+        i.events
+            .iter()
+            .any(|e| matches!(e, egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } if full.contains(*pos)))
+    });
+    if press {
+        app.canvas.ime_preedit.clear();
+        app.canvas.ime_preedit_range = None;
+        app.canvas.ime_preview = None;
+        app.canvas.ime_interrupted_preedit = true;
+        app.canvas.ime_interrupt_now = true;
+    }
+}
+
 /// Render the document canvas for the current frame: the pages (or Read Mode's columns) and everything over them.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let full = ui.available_rect_before_wrap();
     let Some(metrics) = reading_metrics::read(ui) else { return };
+    // End the composition before `prepare_layout` builds the preview copy, so a press never drags
+    // the pre-edit under the pointer and the caret the press moves uses the real document (#6916).
+    dismiss_ime_on_pointer_press(app, ui, full);
     let side = app.canvas.page_side.unwrap_or(0.0);
     let layout = prepare_layout(app, full, &metrics, side, ui.ctx());
     if app.session.view.read_mode {
@@ -795,9 +844,14 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
         LayoutOptions { markup: f64::from(markup_width(app)), min_columns: if app.session.view.multi_page { 2 } else { 1 }, ..LayoutOptions::WORD };
     let paper = DataColor::new(paper_color(app));
     let source = source::WordPages::new(app, layout, dim_body, hidden);
+    // The page raster and its caret use `layout` (the composition preview, if one shows), but a11y
+    // must describe the real document: the preview's layout has copy-relative offsets over the
+    // uncommitted pre-edit. Pair the describer with the real document and its layout (#6916).
+    let doc_layout = if app.canvas.ime_preview.is_some() { app.session.layout() } else { layout.clone() };
     // The describer owns its snapshot, as the source does, so the page view can hold it while the body edits the app.
     let described = preview_sel(app).unwrap_or(app.session.sel_ends()).clone();
-    let describer = crate::a11y::DocumentDescriber::new(source.doc(), layout.clone(), (described.anchor.clone(), described.focus.clone()));
+    let a11y_doc = if app.canvas.ime_preview.is_some() { std::sync::Arc::new(page_doc(app).clone()) } else { source.doc() };
+    let describer = crate::a11y::DocumentDescriber::new(a11y_doc, doc_layout.clone(), (described.anchor.clone(), described.focus.clone()));
     let regions = crate::table_pen::regions(app, layout);
 
     let mut tool_response: Option<ToolHostResponse> = None;

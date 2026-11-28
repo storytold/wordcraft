@@ -158,6 +158,60 @@ impl Session {
         layout.map(|l| (copy.doc, copy.sel, l))
     }
 
+    /// A layout of the document as it would look with an input method's `preedit` composing at the
+    /// caret: the text is inserted at the caret and underlined, so the text on its right reflows
+    /// right instead of being covered by an on-screen composition overlay. The selection is a
+    /// caret at the input method's cursor inside the composition (`cursor_chars`, counted in
+    /// scalar values), which is where the candidate window and the blinking caret belong.
+    ///
+    /// Like [`Session::preview_layout`] this runs on a copy: the document, selection, undo history,
+    /// IME receipts and typing word are untouched. `None` when a composition cannot be laid out
+    /// here — inside an equation, on a control character, or at an invalid caret.
+    pub fn ime_preview_layout(&mut self, preedit: &str, cursor_chars: usize) -> Option<(Document, Selection, Arc<DocLayout>)> {
+        if preedit.is_empty() || self.math.is_some() || !self.sel.is_collapsed() {
+            return None;
+        }
+        // A composition is one visible run of text. Control characters and the inline-object
+        // marker cannot be laid out as such: fall back to the overlay rather than guess offsets.
+        if preedit.chars().any(|c| c.is_control() || c == wordcraft_doc::para::OBJ) {
+            return None;
+        }
+        let at = self.sel.focus.clone();
+        let mut props = self.typing_props();
+        props.underline = Some(wordcraft_doc::props::Underline::Single);
+        let mut copy = Session::with_registry(self.doc.clone(), self.registry.clone());
+        copy.sel = self.sel.clone();
+        copy.column = self.column.clone();
+        copy.widened = self.widened.clone();
+        copy.view = self.view.clone();
+        copy.prefs = self.prefs.clone();
+        copy.path = self.path.clone();
+        copy.file_name = self.file_name.clone();
+        copy.author = self.author.clone();
+        copy.last_highlight = self.last_highlight;
+        copy.system_region = self.system_region.clone();
+        copy.editing_lang = self.editing_lang.clone();
+        // Share the paragraph layouts: only the paragraph holding the composition is laid out.
+        std::mem::swap(&mut copy.cache, &mut self.cache);
+        let built = (|| {
+            let end = copy.doc.insert_text(&at, preedit, &props).ok()?;
+            let chars = preedit.chars().count();
+            let byte = preedit.char_indices().nth(cursor_chars.min(chars)).map(|(i, _)| i).unwrap_or(preedit.len());
+            let off = at.off.saturating_add(byte).min(end.off);
+            let focus = wordcraft_doc::Pos { off, ..at.clone() };
+            if !copy.doc.para_at(&focus).is_some_and(|p| p.text.is_char_boundary(off)) {
+                return None;
+            }
+            copy.sel = Selection::caret(focus);
+            // The composition is a word being typed: no spelling squiggle under it (#1552).
+            let rev = copy.doc.para_at(&at)?.rev;
+            let typing = wordcraft_layout::TypingWord { rev, start: at.off, end: end.off };
+            Some(copy.layout_with(Some(typing)))
+        })();
+        std::mem::swap(&mut copy.cache, &mut self.cache);
+        built.map(|l| (copy.doc, copy.sel, l))
+    }
+
     /// A layout for output (PDF, images, print): no proofing marks, print view, and page
     /// references in the body showing their bookmarks' pages, as Word prints them.
     pub fn export_layout(&self) -> Arc<DocLayout> {
