@@ -4059,6 +4059,63 @@ fn a_navigated_style_change_can_be_resolved_at_its_anchor() {
     assert!(st.para_change.is_none() && st.chr_change.is_none());
 }
 
+/// #5841: A DOCX style carrying author A's `w:rPrChange` keeps only one change slot (`chr_change`),
+/// so author B's tracked `styles.modify` replaces it and accepting B leaves no stale `chr.fmt_change`.
+#[test]
+fn docx_style_change_replaced_by_second_author_clears_on_accept() {
+    let mut doc = wordcraft_doc::Document::from_text("body");
+    doc.revisions.push(wordcraft_doc::Revision {
+        kind: wordcraft_doc::RevisionKind::Format,
+        author: "Author A".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    if let Some(h) = Arc::make_mut(&mut doc.styles).get_mut("Heading1") {
+        h.chr.italic = Some(true);
+        h.chr_change = wordcraft_doc::props::PropChange::boxed(0, wordcraft_doc::props::CharProps::default());
+    }
+    let path = std::env::temp_dir().join(format!("wc-style-two-authors-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &doc).unwrap();
+    let reopened = crate::io::open_path(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let h0 = reopened.styles.get("Heading1").unwrap();
+    assert!(h0.chr_change.is_some());
+    assert!(h0.chr.fmt_change.is_none(), "DOCX read must not duplicate chr_change into chr.fmt_change");
+
+    let mut s = Session::new(reopened);
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Author B".into();
+    run(&mut s, "styles.modify", json!({"style": "Heading1", "chr": {"bold": true}}));
+    s.sel = crate::Selection::caret(s.doc.end_of(StoryRef::Body));
+    run(&mut s, "review.nextChange", json!({}));
+    run(&mut s, "review.accept", json!({}));
+
+    let h1 = s.doc.styles.get("Heading1").unwrap();
+    assert_eq!(h1.chr.bold, Some(true));
+    assert!(h1.chr_change.is_none());
+    assert!(h1.chr.fmt_change.is_none());
+    assert_eq!(run(&mut s, "review.changes", json!({})).as_array().unwrap().len(), 0);
+}
+
+/// #5841: Giving a style an explicit list via `styles.modify` or `list.define` clears `numbering_from_base`.
+#[test]
+fn setting_style_numbering_clears_numbering_from_base() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "item"}));
+    if let Some(h) = Arc::make_mut(&mut s.doc.styles).get_mut("Heading1") {
+        h.numbering_from_base = true;
+    }
+    run(&mut s, "styles.modify", json!({"style": "Heading1", "para": {"numbering": {"num": 1, "level": 1}}}));
+    assert!(!s.doc.styles.get("Heading1").unwrap().numbering_from_base);
+
+    if let Some(h) = Arc::make_mut(&mut s.doc.styles).get_mut("Heading1") {
+        h.numbering_from_base = true;
+    }
+    run(&mut s, "list.define", json!({"levels": [{"format": "decimal", "text": "%1.", "style": "Heading1"}]}));
+    assert!(!s.doc.styles.get("Heading1").unwrap().numbering_from_base);
+}
+
 /// #2697 review: every style change sits at the same collapsed anchor, so Accept or Reject of
 /// the navigated one must resolve that revision only, not another author's style change. A caret
 /// put at the document start by other means resolves none of them; Accept/Reject All still
