@@ -1,6 +1,6 @@
 # Swedish interface
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-23 · **Change:** trivial (interface-language tests: a missing translation never fails a test, `cargo xtask i18n-report` in `cargo xtask ci` prints the strings each language lacks, and lookup and template tests use inline fixture catalogs or the pseudo-language; previously trivial: the interface audit lists missing Swedish entries instead of failing; previously minor: Swedish interface catalog and regression checks) · **Target:** WordCraft 0.6.1
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-23 · **Change:** trivial (the catalog moved to storytold/craft-i18n, `locales/sv/wordcraft.tsv`; previously trivial: interface-language tests: a missing translation never fails a test, `cargo xtask i18n-report` in `cargo xtask ci` prints the strings each language lacks, and lookup and template tests use inline fixture catalogs or the pseudo-language; previously trivial: the interface audit lists missing Swedish entries instead of failing; previously minor: Swedish interface catalog and regression checks) · **Target:** WordCraft 0.6.1
 
 Choose **File › Options › Interface language › Svenska**, or follow a Swedish system display
 language (`sv-SE`, `sv_SE.UTF-8`, and `sv-FI` for Swedish in Finland). The catalog code is `sv`;
@@ -9,7 +9,7 @@ same for a headless screenshot or a launch while the preference is `auto`. The c
 the other interface settings. Document text, command ids, CLI/MCP/control responses and file paths
 do not change.
 
-`crates/ui-egui/src/i18n/sv.tsv` has 2,504 entries: every key of the Spanish reference catalog and
+craft-i18n's `locales/sv/wordcraft.tsv` (storytold/craft-i18n; it was `crates/ui-egui/src/i18n/sv.tsv`) has 2,504 entries: every key of the Spanish reference catalog and
 of the Bulgarian one (built-in style names, equation gallery labels, paper sizes, watermarks and
 citation styles included), plus 44 newer strings no other catalog has yet: 23 that the interface
 audit finds and 21 that the code sends through translation outside the audit's reach (native print
@@ -91,6 +91,7 @@ Swedish proofing.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-23 | trivial | The catalog moved to storytold/craft-i18n (`locales/sv/wordcraft.tsv`) |
 | 2026-10-23 | trivial | Lookup, context, template, style-name and command-search tests use inline fixture catalogs or the pseudo-language; tests that asserted one language's catalog wording removed |
 | 2026-10-23 | trivial | Interface-language tests: a missing translation falls back to English and never fails a test; `cargo xtask i18n-report` (part of `cargo xtask ci`) prints the strings each language lacks; single-language coverage tests removed |
 | 2026-10-23 | trivial | The interface audit lists Swedish strings the catalog lacks; a missing entry doesn't fail the audit |

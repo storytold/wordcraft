@@ -1,6 +1,6 @@
 # Hungarian interface
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** trivial (interface-language tests: a missing translation never fails a test, `cargo xtask i18n-report` in `cargo xtask ci` prints the strings each language lacks, and lookup and template tests use inline fixture catalogs or the pseudo-language; previously trivial: the interface audit lists missing Hungarian entries instead of failing; previously minor: Hungarian interface catalog and regression checks) · **Target:** WordCraft 0.5.0
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** trivial (the catalog moved to storytold/craft-i18n, `locales/hu/wordcraft.tsv`; previously trivial: interface-language tests: a missing translation never fails a test, `cargo xtask i18n-report` in `cargo xtask ci` prints the strings each language lacks, and lookup and template tests use inline fixture catalogs or the pseudo-language; previously trivial: the interface audit lists missing Hungarian entries instead of failing; previously minor: Hungarian interface catalog and regression checks) · **Target:** WordCraft 0.5.0
 
 Choose **File › Options › Interface language › Magyar**, or follow a Hungarian system display
 language (`hu-HU`, `hu_HU.UTF-8`). The catalog code is `hu`; `ui.language` with `{"value":"hu"}`
@@ -8,7 +8,7 @@ selects it explicitly, and `WORDCRAFT_LANGUAGE=hu-HU` does the same for a headle
 launch while the preference is `auto`. The choice is saved with the other interface settings.
 Document text, command ids, CLI/MCP/control responses and file paths do not change.
 
-`crates/ui-egui/src/i18n/hu.tsv` has 2,419 entries: every key of the Russian catalog (built-in style
+craft-i18n's `locales/hu/wordcraft.tsv` (storytold/craft-i18n; it was `crates/ui-egui/src/i18n/hu.tsv`) has 2,419 entries: every key of the Russian catalog (built-in style
 names, equation gallery labels, paper sizes, watermarks and greetings included) plus the citation
 style names. It is written from the meaning of the English labels; no proprietary translation resources were consulted. The catalog
 format has no plural forms, and Hungarian doesn't need them: a noun after a number stays singular
@@ -70,6 +70,7 @@ Hungarian proofing. A native-speaker review of the catalog is welcome.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-23 | trivial | The catalog moved to storytold/craft-i18n (`locales/hu/wordcraft.tsv`) |
 | 2026-10-23 | trivial | Lookup, context, template, style-name and command-search tests use inline fixture catalogs or the pseudo-language; tests that asserted one language's catalog wording removed |
 | 2026-10-23 | trivial | Interface-language tests: a missing translation falls back to English and never fails a test; `cargo xtask i18n-report` (part of `cargo xtask ci`) prints the strings each language lacks; single-language coverage tests removed |
 | 2026-10-23 | trivial | The interface audit lists Hungarian strings the catalog lacks; a missing entry doesn't fail the audit |

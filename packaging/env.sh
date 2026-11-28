@@ -19,6 +19,7 @@ workspace_version() {
     /^\[/ { in_pkg = ($0 == "[workspace.package]") ; next }
     in_pkg && $1 == "version" { gsub(/[" ]/, "", $3); print $3; exit }
   ' "$ROOT/Cargo.toml"
+  return $?
 }
 
 VERSION="${WORDCRAFT_VERSION:-$(workspace_version)}"
@@ -42,15 +43,17 @@ export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 # Emit a GitHub Actions warning (plain stderr outside Actions).
 warn() {
   if [[ -n "${GITHUB_ACTIONS:-}" ]]; then echo "::warning::$*"; else echo "warning: $*" >&2; fi
+  return 0
 }
 
 # Copy licence and readme files that exist into a package directory.
 copy_docs() {
   local dest="$1" f
-  for f in README.md LICENSE LICENSE-MIT LICENSE-APACHE COPYRIGHT; do
+  for f in README.md LICENSE LICENSE-MIT LICENSE-APACHE COPYRIGHT NOTICE ATTRIBUTION.md; do
     if [[ -f "$ROOT/$f" ]]; then cp "$ROOT/$f" "$dest/"; fi
   done
   copy_font_licences "$dest"
+  return 0
 }
 
 # Builds made with craft-fonts (CRAFT_FONTS_DIR, set by the release workflow) embed its fonts, so
@@ -65,5 +68,7 @@ copy_font_licences() {
 
 # Portable SHA-256 of a file (prints just the hash).
 sha256() {
-  if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
+  local file="$1"
+  if command -v sha256sum >/dev/null; then sha256sum "$file" | cut -d' ' -f1; else shasum -a 256 "$file" | cut -d' ' -f1; fi
+  return $?
 }

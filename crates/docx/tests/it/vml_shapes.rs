@@ -2,18 +2,15 @@
 //! `coordsize`/`coordorigin` give them. Fixtures are hand-written from ECMA-376 Part 4
 //! (VML, §14.1 `v:group`, `coordsize`, `coordorigin`; §14.2 shapes).
 
-use std::io::Write;
-
 use wordcraft_doc::para::ShapeKind;
 use wordcraft_doc::{Document, InlineObject, Paragraph};
 
 fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, bytes) in entries {
-        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(bytes).unwrap();
+        zw.add(name, bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 /// A document whose body is `body`.

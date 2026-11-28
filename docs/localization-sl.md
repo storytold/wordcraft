@@ -1,6 +1,6 @@
 # Slovenian interface
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-23 · **Change:** trivial (interface-language tests: a missing translation never fails a test, `cargo xtask i18n-report` in `cargo xtask ci` prints the strings each language lacks, and lookup and template tests use inline fixture catalogs or the pseudo-language; previously trivial: catalog completed to every key of every other catalog, 2,614 entries) · **Target:** WordCraft 0.7.0
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-23 · **Change:** trivial (the catalog moved to storytold/craft-i18n, `locales/sl/wordcraft.tsv`; previously trivial: interface-language tests: a missing translation never fails a test, `cargo xtask i18n-report` in `cargo xtask ci` prints the strings each language lacks, and lookup and template tests use inline fixture catalogs or the pseudo-language; previously trivial: catalog completed to every key of every other catalog, 2,614 entries) · **Target:** WordCraft 0.7.0
 
 Choose **File › Options › Interface language › Slovenščina**, or follow a Slovenian system display
 language (`sl-SI`, `sl_SI.UTF-8`). The catalog code is `sl`; `ui.language` with `{"value":"sl"}`
@@ -8,7 +8,7 @@ selects it explicitly, and `WORDCRAFT_LANGUAGE=sl-SI` does the same for a headle
 launch while the preference is `auto`. Document text, command ids, CLI/MCP/control responses and
 file paths do not change.
 
-`crates/ui-egui/src/i18n/sl.tsv` has 2,614 entries: every key of every other catalog (built-in
+craft-i18n's `locales/sl/wordcraft.tsv` (storytold/craft-i18n; it was `crates/ui-egui/src/i18n/sl.tsv`) has 2,614 entries: every key of every other catalog (built-in
 style names, equation gallery labels, paper sizes, watermarks, greetings, citation style names and
 native print settings included). It is written from the meaning of the English labels; no proprietary translation
 resources were consulted.
@@ -66,6 +66,7 @@ is welcome.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-23 | trivial | The catalog moved to storytold/craft-i18n (`locales/sl/wordcraft.tsv`) |
 | 2026-10-23 | trivial | Lookup, context, template, style-name and command-search tests use inline fixture catalogs or the pseudo-language; tests that asserted one language's catalog wording removed |
 | 2026-10-23 | trivial | Interface-language tests: a missing translation falls back to English and never fails a test; `cargo xtask i18n-report` (part of `cargo xtask ci`) prints the strings each language lacks; single-language coverage tests removed |
 | 2026-10-15 | trivial | Catalog completed to every key of every other catalog (2,614 entries) |

@@ -35,10 +35,9 @@ impl Class {
 pub const TABLE: &[(&str, Class)] = &[
     ("geom", Class::Layer(0)),
     ("control-key", Class::Standalone),
+    ("validate", Class::Standalone),
     ("doc", Class::Layer(1)),
     ("fonts", Class::Layer(1)),
-    ("metafile", Class::Layer(1)),
-    ("proof", Class::Layer(1)),
     ("layout", Class::Layer(2)),
     ("docx", Class::Layer(2)),
     ("docbin", Class::Layer(2)),
@@ -61,7 +60,7 @@ pub const TABLE: &[(&str, Class)] = &[
 /// The L0 foundation is a small chain: `raster` builds on `color` and
 /// `geom`, which the §3 diagram draws on one line. The GPU backend (`gpu`)
 /// reuses the CPU reference (`compose`) for LUTs and parity tests.
-pub const INTRA_LAYER_ORDER: &[&[&str]] = &[&["doc", "fonts"]];
+pub const INTRA_LAYER_ORDER: &[&[&str]] = &[&["doc", "fonts"], &["docx", "formats"]];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {
     let (from, to) = (short_name(from), short_name(to));
@@ -192,7 +191,7 @@ pub fn check(crates: &[Crate]) -> Vec<Violation> {
             }
         }
     }
-    out.sort_by_key(|v| v.to_string());
+    out.sort_by_key(ToString::to_string);
     out.dedup();
     out
 }

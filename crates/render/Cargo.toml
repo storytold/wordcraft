@@ -9,11 +9,11 @@ description = "WordCraft rasteriser: pages and thumbnails from the layout displa
 workspace = true
 
 [dependencies]
-wordcraft-geom = { workspace = true }
+wordcraft-geom = { workspace = true, features = ["image"] }
 wordcraft-doc = { workspace = true }
 wordcraft-fonts = { workspace = true }
 wordcraft-layout = { workspace = true }
-wordcraft-metafile = { workspace = true }
+craft-metafile = { workspace = true }
 vello_cpu = { workspace = true }
 image = { workspace = true }
 log = { workspace = true }

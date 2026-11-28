@@ -22,7 +22,7 @@ jobs:
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
       # Same craft-fonts commit as release.yml.
-      craft-fonts-ref: 8dcdacd5153e64560d109541a47d806f26f048c0
+      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
       packages: >-
         pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev
         libgtk-3-dev libfontconfig1-dev libfreetype-dev mesa-vulkan-drivers
