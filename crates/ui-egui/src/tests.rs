@@ -2080,6 +2080,57 @@ fn title_and_account_buttons_work() {
     assert!(h.query_by_label("User name:").is_some());
 }
 
+/// A pointer drag on a pane's resize edge leaves no keyboard focus behind, so Ctrl and
+/// F-key shortcuts run right after it, docked or floating (#1756).
+#[test]
+fn shortcuts_run_after_a_pane_resize() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, Queryable};
+    type H = egui_kittest::Harness<'static, WordApp>;
+    fn key(h: &mut H, key: egui::Key, modifiers: egui::Modifiers) {
+        h.key_press_modifiers(modifiers, key);
+        h.step();
+    }
+    fn drag(h: &mut H, from: egui::Pos2, by: egui::Vec2) {
+        let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        h.event(egui::Event::PointerMoved(from));
+        h.event(button(from, true));
+        h.step();
+        h.event(egui::Event::PointerMoved(from + by));
+        h.step();
+        h.event(button(from + by, false));
+        h.step();
+    }
+    let find_open = |h: &H| h.state().dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("find"));
+    let styles_pane =
+        |h: &H| h.query_all(By::new().role(Role::Group).label("Styles")).map(|n| n.rect()).find(|r| r.height() > 300.0).expect("Styles pane frame");
+
+    let mut a = app();
+    a.run("view.stylesPane", json!({"value": true})).unwrap();
+    let mut h = harness(a);
+    h.step();
+
+    let pane = styles_pane(&h);
+    // On the pane's inner edge: drag left by 40 px to widen it.
+    drag(&mut h, egui::pos2(pane.left() + 1.0, pane.center().y), egui::vec2(-40.0, 0.0));
+    let width = h.state().ui.styles_pane_width.unwrap_or_default();
+    assert!((width - 290.0).abs() <= 2.0, "the drag widened the docked pane: {width}");
+    key(&mut h, egui::Key::H, egui::Modifiers::COMMAND);
+    assert!(find_open(&h), "Ctrl+H runs after the docked drag");
+    key(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
+    assert!(h.state().dialog_host.open_dialogs().is_empty(), "Escape closes Replace");
+
+    h.state_mut().run("view.stylesPaneDock", json!({"dock": "float"})).unwrap();
+    h.step();
+    let float_pane = styles_pane(&h);
+    let before = h.state().ui.styles_pane_float;
+    // Drag the bottom-right corner.
+    drag(&mut h, float_pane.max - egui::vec2(2.0, 2.0), egui::vec2(30.0, 30.0));
+    assert_ne!(h.state().ui.styles_pane_float, before, "the drag resized the floating pane");
+    key(&mut h, egui::Key::H, egui::Modifiers::COMMAND);
+    assert!(find_open(&h), "Ctrl+H runs after the floating pane's resize");
+}
+
 /// #3172: the Paste button is named "Paste": its tooltip adds the key as the platform writes it,
 /// so its name no longer carries macOS's "⌘V", which screen readers read on Windows as "Paste (⌘V)".
 #[test]
@@ -3340,6 +3391,28 @@ fn check_spelling_off_in_a_second_window_stays_off_in_every_window() {
     let mut b = app();
     b.apply_prefs(serde_json::from_slice(&saved).unwrap());
     assert!(!b.session.view.proofing && !b.session.prefs.check_spelling, "saved off, whichever window was drawn");
+}
+
+/// #7841: in dark mode the app draws its interface text with its own lighter curve, not egui's dark default, and
+/// light mode keeps egui's light one.
+#[test]
+#[cfg(all(unix, not(target_os = "macos")))]
+fn dark_interface_text_uses_the_app_s_lighter_curve() {
+    let ctx = crate::test_harness::context();
+    let mut a = app();
+    let curve = |a: &mut WordApp, theme: theme::Appearance| {
+        a.ui.theme = theme;
+        for _ in 0..2 {
+            crate::test_harness::pass(&ctx, a, egui::RawInput::default());
+        }
+        ctx.global_style().visuals.text_options.color_transfer_function
+    };
+    let dark = curve(&mut a, theme::Appearance::Dark);
+    let light = curve(&mut a, theme::Appearance::Light);
+    let lighter = egui::epaint::FontColorTransferFunction::Gamma(0.8);
+    assert_eq!(dark, lighter, "dark mode draws with the app's curve");
+    assert_eq!(light, egui::Visuals::light().text_options.color_transfer_function, "light mode keeps egui's");
+    assert_eq!(curve(&mut a, theme::Appearance::Dark), lighter, "back to dark gets the app's curve again");
 }
 
 /// #1861: the registered Interface Theme command drives the same setting as Options:

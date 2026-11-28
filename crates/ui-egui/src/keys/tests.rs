@@ -330,6 +330,25 @@ fn a_desktop_paste_after_mod_shift_v_is_not_swallowed() {
     assert_eq!(body(h.state()), "source later");
 }
 
+/// #5616: Mod+Shift+C (Copy Formatting), Shift released, Mod still held or released: Mod+C's
+/// chord isn't the paste's modifiers, so a subsequent Mod+V paste keeps HTML's formatting (bold).
+#[test]
+fn an_unrelated_keys_modifiers_do_not_steer_a_later_paste() {
+    for mod_still_held in [false, true] {
+        let mut h = alt_frame_app();
+        offer(&h, bold_flavours("external"));
+        let chord = Modifiers { shift: true, ..mod_held() };
+        mods_frame(&mut h, chord, vec![key_event(Key::C, true, chord)]);
+        let after = if mod_still_held { mod_held() } else { Modifiers::NONE };
+        mods_frame(&mut h, after, vec![key_event(Key::C, false, after)]);
+        let ctrl = mod_held();
+        mods_frame(&mut h, ctrl, vec![key_event(Key::V, true, ctrl)]);
+        mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
+        assert_eq!(body(h.state()), "external");
+        assert!(is_bold(&mut h), "held={mod_still_held}: Mod+V keeps the HTML's bold");
+    }
+}
+
 /// Paste Formatting on a chord the user bound pastes the copied formatting once.
 #[test]
 fn paste_formatting_on_another_key_pastes_the_copied_formatting() {
