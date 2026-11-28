@@ -2309,6 +2309,32 @@ fn cell_margins_dialog_shows_points_in_the_interface_unit_and_ok_changes_nothing
     assert_eq!(margins(&h), before, "OK without an edit writes no margins");
 }
 
+/// #7970: a width typed into Cell Margins in the interface unit reaches the table in points (1 cm is about 28 pt).
+#[test]
+fn cell_margins_dialog_converts_a_typed_length_back_to_points() {
+    let mut app = app_with("");
+    let _ = app.run("insert.table", json!({"rows": 1, "cols": 1}));
+    app.session.prefs.units = Some(wordcraft_geom::Unit::Centimeters);
+    let mut h = app_harness(app);
+    h.run_steps(2);
+    let (tp, _, _) = h.state().session.sel.focus.path.cell().unwrap();
+    let _ = h.state_mut().run("ui.dialog", json!({"name": "tableCellMargins"}));
+    h.run_steps(3);
+    h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Left").click();
+    h.run_steps(3);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Paste("1".into()));
+    h.run_steps(3);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    let id = id_of(h.state(), "tableCellMargins");
+    let ctx = h.ctx.clone();
+    let _ = h.state_mut().dialog_host.confirm_by_id(&ctx, id);
+    h.run_steps(4);
+    let left = h.state().session.doc.table(h.state().session.sel.focus.story, &tp).unwrap().props.cell_margins.map(|m| m[1]);
+    assert!(left.is_some_and(|l| (l - 28.35).abs() < 0.5), "1 cm is about 28.35 pt: {left:?}");
+}
+
 /// #7980: the Organizer shows this document's styles and the other file's side by side, with Copy, Delete and
 /// Rename between them, all inside the dialog.
 #[test]
