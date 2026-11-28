@@ -7,16 +7,18 @@ pub(super) fn has_picture(s: &Session) -> Option<&'static str> {
     }
 }
 
+/// Guard returning `None` when a picture, shape, or active text box is selected.
 pub(super) fn has_object(s: &Session) -> Option<&'static str> {
-    if selected(s).is_some() { None } else { Some("select a picture or shape first") }
+    if selected_or_text_box(s).is_some() { None } else { Some("select a picture or shape first") }
 }
 
+/// Guard returning `None` when a floating picture, shape, or active text box is selected.
 pub(super) fn has_floating(s: &Session) -> Option<&'static str> {
     // A canvas member moves inside its canvas.
-    if crate::cmd::canvas::selected_member(s).is_some() {
+    if crate::cmd::canvas::active_member(s).is_some() {
         return None;
     }
-    match selected(s) {
+    match selected_or_text_box(s) {
         Some((_, InlineObject::Graphic { .. })) => Some(FROZEN),
         Some((_, o)) if o.is_floating() => None,
         _ => Some("select a floating picture or shape first"),
@@ -55,10 +57,18 @@ pub(super) fn has_movable(s: &Session) -> Option<&'static str> {
     }
 }
 
+/// Guard returning `None` when at least one selected target (or active text box) is movable.
+pub(super) fn has_any_movable(s: &Session) -> Option<&'static str> {
+    if !target_objects(s, |o| !matches!(o, InlineObject::Graphic { .. }) && o.is_drawing()).is_empty() {
+        return None;
+    }
+    has_movable(s)
+}
+
 /// `has_movable` for what places an object in the text (wrapping, position, alignment, Move with
-/// Text): not for a member picked inside a drawing canvas, which the canvas places.
+/// Text): not for a member inside a drawing canvas, which the canvas places.
 pub(super) fn has_placeable(s: &Session) -> Option<&'static str> {
-    if crate::cmd::canvas::selected_member(s).is_some() {
+    if crate::cmd::canvas::active_member(s).is_some() {
         return Some("a shape inside a drawing canvas is placed by the canvas");
     }
     has_movable(s)
@@ -82,23 +92,31 @@ pub(super) fn has_group(s: &Session) -> Option<&'static str> {
     }
 }
 
-/// Shape Fill and Shape Outline: a shape, or a Drawing Canvas's background and border.
+/// Whether `o` is a shape, text box, or drawing canvas.
+pub(crate) fn is_shape_or_canvas(o: &InlineObject) -> bool {
+    matches!(o, InlineObject::Shape { .. }) || o.is_canvas()
+}
+
+/// Shape Fill and Shape Outline: any selected shape or Drawing Canvas, or the active text box.
 pub(crate) fn has_shape_or_canvas(s: &Session) -> Option<&'static str> {
-    match selected(s) {
-        Some((_, o)) if o.is_canvas() => None,
-        _ => has_shape(s),
-    }
+    if target_objects(s, is_shape_or_canvas).is_empty() { Some("select a shape first") } else { None }
 }
 
 pub(super) fn can_group(s: &Session) -> Option<&'static str> {
     if picked_objects(s).len() >= 2 { None } else { Some("select two or more pictures or shapes first (Shift+click)") }
 }
 
+/// Guard returning `None` when a shape or active text box is selected.
 pub(super) fn has_shape(s: &Session) -> Option<&'static str> {
-    match selected(s) {
+    match selected_or_text_box(s) {
         Some((_, InlineObject::Shape { .. })) => None,
         _ => Some("select a shape first"),
     }
+}
+
+/// Guard returning `None` when any selected object (or the active text box) is a shape.
+pub(super) fn has_any_shape(s: &Session) -> Option<&'static str> {
+    if target_objects(s, |o| matches!(o, InlineObject::Shape { .. })).is_empty() { Some("select a shape first") } else { None }
 }
 
 /// The selection when it is exactly one picture, shape or text box (its U+FFFC), rather than
@@ -187,8 +205,51 @@ pub(super) fn alt_text(s: &mut Session, v: &Value) -> CmdResult {
     })
 }
 
+/// Returns the selected inline object, or the active text box containing the caret (including
+/// a text box member inside a Drawing Canvas; never an enclosing group or canvas).
+pub fn selected_or_text_box(s: &Session) -> Option<(Pos, InlineObject)> {
+    if let Some((pos, o)) = selected(s) {
+        return Some((pos, o));
+    }
+    if let Some((pos, _, member)) = crate::cmd::canvas::text_box_member(s) {
+        return Some((pos, member.clone()));
+    }
+    let (pos, id) = super::shape::text_box_target(s)?;
+    let o = s.doc.para_at(&pos)?.object_at(pos.off)?;
+    matches!(o, InlineObject::Shape { story: Some(sid), .. } if *sid == id).then(|| (pos, o.clone()))
+}
+
+/// Most objects one multi-object command changes.
+pub(crate) const MAX_TARGET_OBJECTS: usize = 10_000;
+
+/// Selected objects matching `pred` (in the selection range or added with `select.addObject`),
+/// or — when nothing is selected — the active text box containing the caret if it matches `pred`.
+pub fn target_objects(s: &Session, pred: impl Fn(&InlineObject) -> bool) -> Vec<(Pos, InlineObject)> {
+    if let Some((pos, _, member)) = crate::cmd::canvas::active_member(s) {
+        return if pred(member) { vec![(pos, member.clone())] } else { Vec::new() };
+    }
+    let mut out: Vec<(Pos, InlineObject)> = selected_all(s, MAX_TARGET_OBJECTS).into_iter().filter(|(_, o)| pred(o)).collect();
+    for pos in picked_objects(s) {
+        if !out.iter().any(|(p, _)| p == &pos)
+            && let Some(o) = s.doc.para_at(&pos).and_then(|q| q.object_at(pos.off))
+            && pred(o)
+        {
+            out.push((pos, o.clone()));
+        }
+    }
+    if out.is_empty()
+        && selected(s).is_none()
+        && let Some((pos, o)) = selected_or_text_box(s)
+        && pred(&o)
+    {
+        out.push((pos, o));
+    }
+    out
+}
+
+/// Mutates the selected picture or shape, or the active text box containing the caret.
 pub(super) fn with_obj(s: &mut Session, f: impl Fn(&mut InlineObject)) -> CmdResult {
-    let (pos, _) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
+    let (pos, _) = selected_or_text_box(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
     let o = edit_obj(s, &pos, f)?;
     Ok(json!({"object": serde_json::to_value(o).unwrap_or(Value::Null)}))
 }
@@ -215,17 +276,38 @@ pub(super) fn edit_float(s: &mut Session, pos: &Pos, f: impl Fn(&mut Float)) -> 
     })
 }
 
-pub(super) fn with_float(s: &mut Session, f: impl Fn(&mut Float)) -> CmdResult {
-    with_obj(s, |o| {
-        if let Some(float) = o.float_mut() {
-            let was_inline = float.wrap == Wrap::Inline;
-            f(float);
-            // Word's distance from text for a newly wrapped object: 0.125" at the sides.
-            if was_inline && float.wrap != Wrap::Inline && float.dist == 0.0 {
-                float.dist = 9.0;
-            }
+fn apply_float(o: &mut InlineObject, f: impl Fn(&mut Float)) {
+    if let Some(float) = o.float_mut() {
+        let was_inline = float.wrap == Wrap::Inline;
+        f(float);
+        // Word's distance from text for a newly wrapped object: 0.125" at the sides.
+        if was_inline && float.wrap != Wrap::Inline && float.dist == 0.0 {
+            float.dist = 9.0;
         }
-    })
+    }
+}
+
+pub(super) fn with_float(s: &mut Session, f: impl Fn(&mut Float)) -> CmdResult {
+    with_obj(s, |o| apply_float(o, &f))
+}
+
+/// Mutates `Float` on all selected targets matching `pred` (or the active text box if it matches).
+pub(super) fn with_floats_matching(s: &mut Session, pred: impl Fn(&InlineObject) -> bool, f: impl Fn(&mut Float)) -> CmdResult {
+    let targets = target_objects(s, pred);
+    if targets.is_empty() {
+        return Err(CmdError::Disabled("no picture or shape selected".into()));
+    }
+    let mut last = Value::Null;
+    for (pos, _) in &targets {
+        let o = edit_obj(s, pos, |o| apply_float(o, &f))?;
+        last = serde_json::to_value(o).unwrap_or(Value::Null);
+    }
+    Ok(json!({"object": last, "count": targets.len()}))
+}
+
+/// Mutates `Float` on all selected movable objects (or the active text box).
+pub(super) fn with_movable_floats(s: &mut Session, f: impl Fn(&mut Float)) -> CmdResult {
+    with_floats_matching(s, |o| !matches!(o, InlineObject::Graphic { .. }) && o.is_drawing(), f)
 }
 
 /// The selected pictures, shapes, text boxes and groups: the one the selection holds, then

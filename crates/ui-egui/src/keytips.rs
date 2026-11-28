@@ -142,6 +142,24 @@ fn legacy() -> &'static [(&'static str, CommandRef)] {
     })
 }
 
+/// Cached `Phase::Tabs` keytip sequences (`SEARCH_LETTER` when Backstage is closed, plus Word
+/// 2003 legacy menu keys on non-macOS).
+fn sequences(backstage: bool) -> &'static [(&'static str, CommandRef)] {
+    static WITH_SEARCH: OnceLock<Vec<(&'static str, CommandRef)>> = OnceLock::new();
+    static SEARCH_ONLY: OnceLock<[(&'static str, CommandRef); 1]> = OnceLock::new();
+
+    match (cfg!(target_os = "macos"), backstage) {
+        (true, true) => &[],
+        (true, false) => SEARCH_ONLY.get_or_init(|| [(SEARCH_LETTER, CommandRef::new("tools.search"))]),
+        (false, true) => legacy(),
+        (false, false) => WITH_SEARCH.get_or_init(|| {
+            let mut v = legacy().to_vec();
+            v.push((SEARCH_LETTER, CommandRef::new("tools.search")));
+            v
+        }),
+    }
+}
+
 /// The letter badge for a tab (empty when it has none).
 pub fn tab_letter(tab: &str) -> &'static str {
     TAB_LETTERS.iter().chain(&TABLE_TAB_LETTERS).find(|(t, _)| *t == tab).map(|(_, l)| *l).unwrap_or("")
@@ -526,7 +544,7 @@ pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>
         None => KeytipCache::new(app, &app.ui.tab),
     };
     let controls: &[KeytipControl<'_>] = if app.ui.backstage { backstage_controls() } else { &cache.tab_controls };
-    let sequences: &[(&str, CommandRef)] = if cfg!(target_os = "macos") { &[] } else { legacy() };
+    let sequences = sequences(app.ui.backstage);
     // A hidden toolbar has no badges, and a disabled command's button has none to press.
     let digits: Vec<CommandRef> = if app.ui.quick_access_toolbar {
         app.session

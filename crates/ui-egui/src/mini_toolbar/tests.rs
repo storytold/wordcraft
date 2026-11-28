@@ -352,10 +352,26 @@ fn hovering_a_bar_member_previews_its_command() {
                 h.get_by_label("20").rect().center()
             }
             Member::Font => {
+                // `FontPicker` scans `Catalog::global()` on a background thread; wait until ready so the
+                // chevron click isn't ignored while the picker is still disabled in a fresh test process.
+                let catalog = craft::font_manager::Catalog::global();
+                catalog.scan_in_background();
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while !catalog.is_ready() && std::time::Instant::now() < deadline {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                assert!(catalog.is_ready(), "font catalog finished scanning");
+                steps(&mut h);
                 let b = font_box(&h);
-                // The font picker's chevron is an adornment inside the field and a click on the name opens the list
-                // too, so click the field itself (the size box's chevron lies beside it).
-                click_at(&mut h, b.center());
+                let c = canvas(&h);
+                // A click on a Plain picker's name only selects it (craft-libs #3103); the chevron opens the list.
+                let chevron = h
+                    .query_all_by_label("Fonts")
+                    .map(|n| n.rect())
+                    .filter(|r| c.contains_rect(*r))
+                    .min_by(|a, z| a.center().distance(b.center()).total_cmp(&z.center().distance(b.center())))
+                    .expect("the font box's chevron");
+                click_at(&mut h, chevron.center());
                 // The framework's font list is a tree of families (depth rows), so its rows are tree items.
                 h.query_all_by_role(Role::TreeItem)
                     .filter(|n| {

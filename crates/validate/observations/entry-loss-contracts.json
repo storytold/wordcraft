@@ -1,0 +1,41 @@
+{
+  "lib.rs::set_unknown_unreadable": [
+    "self . unknown_unreadable = true"
+  ],
+  "lib.rs::absence_suppressed": [
+    "self . unknown_unreadable && matches ! (severity , Severity :: Corrupt | Severity :: Error) && contracts_generated :: PACKAGE_ABSENCE_RULES . contains (& rule)"
+  ],
+  "lib.rs::discovery_unavailable": [
+    "pkg . entries_truncated || pkg . identity_incomplete"
+  ],
+  "lib.rs::ownership_discovery_complete": [
+    "! pkg . entries_truncated && ! pkg . identity_incomplete && ! pkg . content_types . incomplete && ! (match package :: content_unavailable (pkg , \"[Content_Types].xml\") { Resolution :: One (unavailable) => unavailable , Resolution :: Absent => false , Resolution :: Unknown (_) => true , Resolution :: Ambiguous (_) => true , }) && ! pkg . rels . iter () . any (| rp | rp . incomplete)"
+  ],
+  "package.rs::load": [
+    "producer entries_truncated = zip . len () > limits . entries",
+    "entries_truncated",
+    "producer mut unknown_unreadable = false",
+    "unknown_unreadable = true",
+    "unknown_unreadable |= directory_disagreement",
+    "unknown_unreadable |= unexplained",
+    "unknown_unreadable",
+    "! content_types_present && ! entries_truncated",
+    "! content_types_present && entries_truncated",
+    "! entries_truncated && ! unknown_unreadable && ! package_rels_unavailable && ! package_rels . is_some_and (| rp | rp . incomplete)",
+    "! entries_truncated && ! unknown_unreadable",
+    "entries_truncated",
+    "unknown_unreadable"
+  ],
+  "package.rs::canonical_entry": [
+    "! pkg . entries_truncated && ! pkg . identity_incomplete"
+  ],
+  "package.rs::entry_by_name": [
+    "! pkg . entries_truncated && ! pkg . identity_incomplete"
+  ],
+  "package.rs::content_unavailable": [
+    "! pkg . entries_truncated && ! pkg . identity_incomplete"
+  ],
+  "package.rs::entry_point_profile": [
+    "! pkg . entries_truncated && ! pkg . identity_incomplete && (match content_unavailable (pkg , \"_rels/.rels\") { Resolution :: One (unavailable) => ! unavailable , Resolution :: Absent => true , Resolution :: Unknown (_) => false , Resolution :: Ambiguous (_) => false , }) && ! pkg . rels . iter () . any (| rp | rp . name . eq_ignore_ascii_case (\"_rels/.rels\") && rp . incomplete)"
+  ]
+}

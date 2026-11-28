@@ -190,7 +190,7 @@ impl RibbonDialog {
             &mut |page, _| Tab::new(tabs.iter().find(|tab| tab.0 == *page).map_or_else(String::new, |tab| tab.1.clone())),
         );
         for event in out.response.events {
-            if let CollectionEvent::Selection(SelectionChange::Set(pages)) = event
+            if let CollectionEvent::Selection { change: SelectionChange::Set(pages), .. } = event
                 && let Some(page) = pages.last()
                 && *page != self.page
             {

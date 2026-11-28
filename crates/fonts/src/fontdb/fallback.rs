@@ -1,7 +1,9 @@
 use super::face::{FALLBACK_FAMILY, FontFace};
 #[cfg(not(target_arch = "wasm32"))]
 use super::fallback_data::{CoverageIndex, IndexedFile, SYS_MISSES_MAX, SYSTEM_FALLBACKS, file_stamp, ranges_hold, read_fallback_file};
-use super::fallback_data::{FALLBACK_CACHE_MAX, RTL_FALLBACKS, RUN_FALLBACK_CACHE_CHARS, RUN_FALLBACK_CACHE_MAX, arabic_block, fallback_order};
+use super::fallback_data::{
+    DiagramFallbackKey, FALLBACK_CACHE_MAX, RTL_FALLBACKS, RUN_FALLBACK_CACHE_CHARS, RUN_FALLBACK_CACHE_MAX, arabic_block, fallback_order,
+};
 use super::{Arc, FontDb};
 #[cfg(not(target_arch = "wasm32"))]
 use super::{HashMap, Ordering};
@@ -29,28 +31,35 @@ impl FontDb {
         Some(if styled.family.eq_ignore_ascii_case(&base.family) && styled.covers(c) && styled.id != exclude { styled } else { base })
     }
 
-    /// The fallback search, cached per (character, excluded face) until more faces load.
+    /// The fallback search, cached per (character, excluded face) until loaded faces or font
+    /// generation change.
     fn cached_fallback(&self, c: char, exclude: u32) -> Option<Arc<FontFace>> {
+        let generation = self.generation();
         let n = self.read_faces().len();
         {
             let cache = self.fallbacks.read().unwrap_or_else(std::sync::PoisonError::into_inner);
             if cache.faces == n
+                && cache.generation == generation
                 && let Some(hit) = cache.map.get(&(c, exclude))
             {
                 return hit.clone();
             }
         }
         let (found, n) = self.search_fallback(c, exclude);
-        // Keyed by the face count the answer was chosen from (a system fallback may have loaded
-        // fonts, and another thread may have loaded more since: an answer from before that load
-        // is returned but not cached under the new count).
-        if n != self.read_faces().len() {
+        // Keyed by the face count and generation the answer was chosen from (a system fallback may
+        // have loaded fonts, and another thread may have loaded or changed fonts since: an answer
+        // from before that change is returned but not cached under the new state).
+        if n != self.read_faces().len() || generation != self.generation() {
             return found;
         }
         let mut cache = self.fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if cache.faces != n || cache.map.len() >= FALLBACK_CACHE_MAX {
+        if n != self.read_faces().len() || generation != self.generation() {
+            return found;
+        }
+        if cache.faces != n || cache.generation != generation || cache.map.len() >= FALLBACK_CACHE_MAX {
             cache.map.clear();
             cache.faces = n;
+            cache.generation = generation;
         }
         cache.map.insert((c, exclude), found.clone());
         found
@@ -151,23 +160,36 @@ impl FontDb {
         set.sort_unstable();
         set.dedup();
         let key = (set, exclude, bold, italic);
+        let generation = self.generation();
         let n = self.read_faces().len();
         {
             let cache = self.run_fallbacks.read().unwrap_or_else(std::sync::PoisonError::into_inner);
             if cache.faces == n
+                && cache.generation == generation
                 && let Some(hit) = cache.map.get(&key)
             {
                 return hit.clone();
             }
         }
-        // Keyed by the face count the search last looked at, not the count after it: a face loaded
-        // meanwhile by another thread (one its search, or a family named by a document) must make
-        // a miss count as stale, not as the answer for the new count.
+        // Keyed by the face count and generation the search last looked at, not the state after it:
+        // a face loaded or changed meanwhile by another thread (one its search, a family named by a
+        // document, or a user font change) must not be overwritten with a stale answer.
         let (found, n) = self.search_run(&key.0, exclude, bold, italic);
+        if n != self.read_faces().len() || generation != self.generation() {
+            return found;
+        }
         let mut cache = self.run_fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if cache.faces != n || cache.map.len() >= RUN_FALLBACK_CACHE_MAX || cache.chars.saturating_add(key.0.len()) > RUN_FALLBACK_CACHE_CHARS {
+        if n != self.read_faces().len() || generation != self.generation() {
+            return found;
+        }
+        if cache.faces != n
+            || cache.generation != generation
+            || cache.map.len() >= RUN_FALLBACK_CACHE_MAX
+            || cache.chars.saturating_add(key.0.len()) > RUN_FALLBACK_CACHE_CHARS
+        {
             cache.map.clear();
             cache.faces = n;
+            cache.generation = generation;
             cache.chars = 0;
         }
         cache.chars = cache.chars.saturating_add(key.0.len());
@@ -213,7 +235,11 @@ impl FontDb {
             (true, false) => "Bold",
             _ => "Italic",
         };
+        let before_style = self.read_faces().len();
         let styled = self.face(&base.family, style);
+        if before_style == checked {
+            checked = self.read_faces().len();
+        }
         let face = if styled.family.eq_ignore_ascii_case(&base.family) && chars.iter().all(|c| styled.covers(*c)) && styled.id != exclude {
             styled
         } else {
@@ -234,11 +260,140 @@ impl FontDb {
         (found, faces.len())
     }
 
+    /// First face covering all characters in `chars`, preferring faces matching `prefer_serif`
+    /// (so a diagram maintains a consistent fallback face across its nodes matching the
+    /// diagram's primary style, #5672). Does not alter body text fallback ordering. Cached until
+    /// the loaded faces or font database generation changes, so page redraws do not repeat system scans.
+    pub fn fallback_for_diagram(&self, chars: &[char], exclude: u32, prefer_serif: bool) -> Option<Arc<FontFace>> {
+        if chars.is_empty() {
+            return None;
+        }
+        let mut set: Vec<char> = chars.to_vec();
+        set.sort_unstable();
+        set.dedup();
+        let key: DiagramFallbackKey = (set, exclude, prefer_serif);
+        let generation = self.generation();
+        let n = self.read_faces().len();
+        {
+            let cache = self.diagram_fallbacks.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if cache.faces == n
+                && cache.generation == generation
+                && let Some(hit) = cache.map.get(&key)
+            {
+                return hit.clone();
+            }
+        }
+        // Keyed by the face count and generation the search last looked at, not the state after it:
+        // a face loaded or added meanwhile (for instance via `add_font`) must not be shadowed by
+        // caching an older answer under the newer face count.
+        let (found, n) = self.search_diagram(&key.0, exclude, prefer_serif);
+        if n != self.read_faces().len() || generation != self.generation() || key.0.len() > RUN_FALLBACK_CACHE_CHARS {
+            return found;
+        }
+        #[cfg(test)]
+        if let Some(hook) = self.diagram_publish_hook.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+            hook(self);
+        }
+        let mut cache = self.diagram_fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if n != self.read_faces().len() || generation != self.generation() {
+            return found;
+        }
+        if cache.faces != n
+            || cache.generation != generation
+            || cache.map.len() >= RUN_FALLBACK_CACHE_MAX
+            || cache.chars.saturating_add(key.0.len()) > RUN_FALLBACK_CACHE_CHARS
+        {
+            cache.map.clear();
+            cache.faces = n;
+            cache.generation = generation;
+            cache.chars = 0;
+        }
+        cache.chars = cache.chars.saturating_add(key.0.len());
+        cache.map.insert(key, found.clone());
+        found
+    }
+
+    /// The face covering a diagram's missing character set, and the face count it was chosen from.
+    /// Prefers faces matching `prefer_serif`; when the best loaded face has a mismatched serif
+    /// classification, checks system font candidates and retains the loaded face only when no
+    /// matching candidate covers the full set (#5672).
+    fn search_diagram(&self, chars: &[char], exclude: u32, prefer_serif: bool) -> (Option<Arc<FontFace>>, usize) {
+        #[cfg(test)]
+        self.diagram_searches.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+        let (mut base, mut checked) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
+        #[cfg(not(target_arch = "wasm32"))]
+        if base.is_none() || base.as_ref().is_some_and(|f| f.is_serif() != prefer_serif) {
+            for c in chars {
+                if self.read_faces().iter().any(|f| f.id != exclude && f.covers(*c) && f.is_serif() == prefer_serif) {
+                    continue;
+                }
+                if self.system_fallback_matching(*c, Some((exclude, prefer_serif))) {
+                    let (cand, cand_checked) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
+                    let matching = cand.as_ref().is_some_and(|f| f.is_serif() == prefer_serif);
+                    if let Some(f) = cand {
+                        base = Some(f);
+                        checked = cand_checked;
+                    } else if base.is_none() {
+                        checked = cand_checked;
+                    }
+                    if matching {
+                        break;
+                    }
+                }
+            }
+            if base.as_ref().is_none_or(|f| f.is_serif() != prefer_serif) {
+                self.indexed_run_fallback_matching(chars, Some((exclude, prefer_serif)));
+                let (cand, cand_checked) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
+                if let Some(f) = cand {
+                    base = Some(f);
+                    checked = cand_checked;
+                } else if base.is_none() {
+                    checked = cand_checked;
+                }
+            }
+        }
+        #[cfg(test)]
+        if let Some(hook) = self.diagram_search_hook.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+            hook(self);
+        }
+        (base, checked)
+    }
+
+    /// The first face covering every char in `chars`, preferring matching `prefer_serif`,
+    /// and the number of loaded faces it was chosen from.
+    fn loaded_diagram_covering(&self, chars: &[char], exclude: u32, prefer_serif: bool) -> (Option<Arc<FontFace>>, usize) {
+        let faces = self.read_faces();
+        let rtl = chars.iter().any(|c| crate::is_rtl(*c) || arabic_block(*c));
+        let complex = chars.iter().copied().find(|c| crate::needs_layout_tables(*c));
+        let mut candidates: Vec<&Arc<FontFace>> = faces.iter().filter(|f| f.id != exclude && chars.iter().all(|c| f.covers(*c))).collect();
+        let rank = |f: &FontFace| {
+            if rtl { RTL_FALLBACKS.iter().position(|n| f.family.eq_ignore_ascii_case(n)).unwrap_or(RTL_FALLBACKS.len()) } else { 0 }
+        };
+        let shaping = |f: &FontFace| match complex {
+            Some(c) => (!f.has_layout_tables(), crate::fallback_rank(c, &f.family)),
+            None => (false, 0),
+        };
+        let serif_mismatch = |f: &FontFace| f.is_serif() != prefer_serif;
+        candidates.sort_by_cached_key(|f| {
+            (rank(f), shaping(f), serif_mismatch(f), !f.family.eq_ignore_ascii_case(FALLBACK_FAMILY), f.italic, (f.weight - 400.0).abs() as i32)
+        });
+        (candidates.first().map(|f| (*f).clone()), faces.len())
+    }
+
     /// Load a system font covering `c` (preferred fallback families first, then any cataloged
     /// file under 40 MB, both found through the coverage index). Returns true if one was loaded.
     /// Misses are remembered.
     #[cfg(not(target_arch = "wasm32"))]
     fn system_fallback(&self, c: char) -> bool {
+        self.system_fallback_matching(c, None)
+    }
+
+    /// Like [`Self::system_fallback`], optionally requiring the covering face to not be `exclude`
+    /// and to match `prefer_serif` (so a loaded mismatched face does not short-circuit the search
+    /// before a matching installed candidate is checked, #5672).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn system_fallback_matching(&self, c: char, style: Option<(u32, bool)>) -> bool {
         if c.is_control() || c.is_whitespace() {
             return false;
         }
@@ -248,7 +403,9 @@ impl FontDb {
                 return false;
             }
         }
-        let covered = |db: &FontDb| db.read_faces().iter().any(|f| f.covers(c));
+        let covered = |db: &FontDb| {
+            db.read_faces().iter().any(|f| f.covers(c) && style.is_none_or(|(exclude, prefer_serif)| f.id != exclude && f.is_serif() == prefer_serif))
+        };
         let cataloged: Vec<String> = self.read_catalog().iter().map(|e| e.family.clone()).collect();
         let rtl = crate::is_rtl(c) || arabic_block(c);
         let preferred = RTL_FALLBACKS.iter().filter(|_| rtl);
@@ -270,14 +427,20 @@ impl FontDb {
                 return true;
             }
         }
-        if self.indexed_fallback(c) {
+        if style.is_none() {
+            if self.indexed_fallback(c) {
+                return true;
+            }
+        } else if self.load_indexed_matching(&[c], false, style) {
             return true;
         }
-        let mut sys = self.sys.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if sys.misses.len() >= SYS_MISSES_MAX {
-            sys.misses.clear();
+        if style.is_none() || !self.read_faces().iter().any(|f| f.covers(c)) {
+            let mut sys = self.sys.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if sys.misses.len() >= SYS_MISSES_MAX {
+                sys.misses.clear();
+            }
+            sys.misses.insert(c);
         }
-        sys.misses.insert(c);
         false
     }
 
@@ -324,7 +487,7 @@ impl FontDb {
     /// now covers `c`.
     #[cfg(not(target_arch = "wasm32"))]
     fn indexed_fallback(&self, c: char) -> bool {
-        self.load_indexed(&[c], false)
+        self.load_indexed_matching(&[c], false, None)
     }
 
     /// Load the family of the first cataloged font file (in path order) that maps every char of a
@@ -332,10 +495,17 @@ impl FontDb {
     /// before the Regular.
     #[cfg(not(target_arch = "wasm32"))]
     fn indexed_run_fallback(&self, chars: &[char]) {
+        self.indexed_run_fallback_matching(chars, None);
+    }
+
+    /// Like [`Self::indexed_run_fallback`], optionally requiring a loaded face matching
+    /// `(exclude, prefer_serif)` to stop scanning (#5672).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn indexed_run_fallback_matching(&self, chars: &[char], style: Option<(u32, bool)>) {
         if !self.sys.lock().unwrap_or_else(std::sync::PoisonError::into_inner).enabled || chars.iter().any(|c| c.is_control()) {
             return;
         }
-        self.load_indexed(chars, true);
+        self.load_indexed_matching(chars, true, style);
     }
 
     /// Load the cataloged font files (in path order) that map every char of `chars`, reading the
@@ -344,8 +514,12 @@ impl FontDb {
     /// of it isn't loaded yet). A collection's faces only together may map them: the search then
     /// goes on. Returns whether a loaded face now covers them all.
     #[cfg(not(target_arch = "wasm32"))]
-    fn load_indexed(&self, chars: &[char], whole_family: bool) -> bool {
-        let covered = |db: &FontDb| db.read_faces().iter().any(|f| chars.iter().all(|c| f.covers(*c)));
+    fn load_indexed_matching(&self, chars: &[char], whole_family: bool, style: Option<(u32, bool)>) -> bool {
+        let covered = |db: &FontDb| {
+            db.read_faces().iter().any(|f| {
+                style.is_none_or(|(exclude, prefer_serif)| f.id != exclude && f.is_serif() == prefer_serif) && chars.iter().all(|c| f.covers(*c))
+            })
+        };
         let cps: Vec<u32> = chars.iter().map(|c| u32::from(*c)).collect();
         let maps_all = |ranges: &[(u32, u32)]| cps.iter().all(|cp| ranges_hold(ranges, *cp));
         let mut index = self.coverage_index();

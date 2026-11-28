@@ -116,17 +116,18 @@ pub(super) fn shape_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         });
     }
     row.group(RibbonGroup::new("shape.wordart", tl!("Decorative Text Styles"), IconId::new("wordcraft.more").into()), |ui| {
-        let styles = Button::new(tl!("Styles")).icon(IconId::new("wordArt")).tooltip(tl!("Decorative Text Styles")).arrangement(Arrangement::Stacked);
+        let styles =
+            Button::new(tl!("Styles")).icon(crate::icons::spec("wordArt")).tooltip(tl!("Decorative Text Styles")).arrangement(Arrangement::Stacked);
         menu_button(ui, styles, tl!("Decorative Text Styles"), None, |ui, cx| super::galleries::wordart(ui, cx, app, "wordArt.style"));
         let outline = crate::wordart_menus::current_outline(app);
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-            menu_button(ui, Button::new(tl!("Text Fill")).icon(IconId::new("textFill")), tl!("Text Fill"), None, |ui, cx| {
+            menu_button(ui, Button::new(tl!("Text Fill")).icon(crate::icons::spec("textFill")), tl!("Text Fill"), None, |ui, cx| {
                 crate::wordart_menus::fill_menu(ui, cx, app, &theme)
             });
-            menu_button(ui, Button::new(tl!("Text Outline")).icon(IconId::new("textOutline")), tl!("Text Outline"), None, |ui, _| {
+            menu_button(ui, Button::new(tl!("Text Outline")).icon(crate::icons::spec("textOutline")), tl!("Text Outline"), None, |ui, _| {
                 crate::wordart_menus::outline_menu(ui, app, outline)
             });
-            menu_button(ui, Button::new(tl!("Text Effects")).icon(IconId::new("transform")), tl!("Text Effects"), None, |ui, _| {
+            menu_button(ui, Button::new(tl!("Text Effects")).icon(crate::icons::spec("transform")), tl!("Text Effects"), None, |ui, _| {
                 crate::wordart_menus::effects_menu(ui, app, true)
             });
         });
@@ -162,7 +163,7 @@ fn shape_text_group(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     let body = target.and_then(|(_, id)| app.session.doc.parts.get(&id).map(|p| p.body)).unwrap_or_default();
     row.group(RibbonGroup::new("shape.text", tl!("Text"), IconId::new("wordcraft.more").into()), |ui| {
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-            menu_button(ui, Button::new(tl!("Text Direction")).icon(IconId::new("textDirection")), tl!("Text Direction"), None, |ui, _| {
+            menu_button(ui, Button::new(tl!("Text Direction")).icon(crate::icons::spec("textDirection")), tl!("Text Direction"), None, |ui, _| {
                 for (label, vert) in [
                     ("Horizontal", TextVert::Horz),
                     ("Rotate all text 90°", TextVert::Vert),

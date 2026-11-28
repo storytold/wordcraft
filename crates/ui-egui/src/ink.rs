@@ -489,7 +489,7 @@ fn show_replay(app: &mut WordApp, ui: &mut Ui, body: &PageBody) {
             }
             let playing = r.playing_from.is_some();
             let (icon, name) = if playing { ("replayPause", tl!("Pause")) } else { ("replayPlay", tl!("Play")) };
-            if IconButton::new(crate::icons::id(icon)).label(name.to_string()).show(ui).clicks > 0 {
+            if IconButton::new(crate::icons::spec(icon)).label(name.to_string()).show(ui).clicks > 0 {
                 let here = r.at(now);
                 if playing {
                     r.pause_at(here);
