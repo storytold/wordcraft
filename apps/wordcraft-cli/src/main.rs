@@ -889,6 +889,17 @@ fn parity_markdown(p: &Value) -> String {
     for t in p["tabs"].as_array().cloned().unwrap_or_default() {
         s += &format!("| {} | {} | {} |\n", t["tab"].as_str().unwrap_or(""), t["live"], t["total"]);
     }
+    let h = &p["headless"];
+    s += &format!(
+        "\n**Headless ([RFC-0052](https://github.com/storytold/craft-contrib/blob/main/rfcs/0052-headless-reach.md)): {} yes, {} no (window {}, os {}, engine-gap {}), {} partial, {} unknown.** A feature is `headless: yes` when its command is in the engine registry that `wordcraft-cli` and the MCP server load, so every live feature above is `yes`; the missing ones carry the hand mark from `HEADLESS` in `crates/engine/src/catalog.rs`, or `unknown`.\n",
+        h["yes"],
+        h["no"]["window"].as_u64().unwrap_or(0) + h["no"]["os"].as_u64().unwrap_or(0) + h["no"]["engine-gap"].as_u64().unwrap_or(0),
+        h["no"]["window"],
+        h["no"]["os"],
+        h["no"]["engine-gap"],
+        h["partial"],
+        h["unknown"]
+    );
     s += "\n## Missing\n\n";
     for t in p["tabs"].as_array().cloned().unwrap_or_default() {
         let m = t["missing"].as_array().cloned().unwrap_or_default();

@@ -647,6 +647,20 @@ fn remap_media_block(b: &mut Block, map: &BTreeMap<String, String>) {
     });
 }
 
+/// Remaps media references across `blocks` and any text box stories in `parts`.
+fn remap_media_in(blocks: &mut [Block], parts: &mut BTreeMap<u32, Part>, map: &BTreeMap<String, String>) {
+    if map.is_empty() {
+        return;
+    }
+    for b in blocks {
+        remap_media_block(b, map);
+    }
+    for part in parts.values_mut() {
+        for b in &mut part.blocks {
+            remap_media_block(Arc::make_mut(b), map);
+        }
+    }
+}
 /// Visit `(index, item)` in forward (`!last`) or reverse (`last`) order, returning the first `Some`.
 fn find_in_slice<T>(slice: &[T], last: bool, mut f: impl FnMut(usize, &T) -> Option<Path>) -> Option<Path> {
     if last { slice.iter().enumerate().rev().find_map(|(i, x)| f(i, x)) } else { slice.iter().enumerate().find_map(|(i, x)| f(i, x)) }
@@ -688,7 +702,6 @@ fn trim_para(para: &Paragraph, from: usize, to: usize, clear_section: bool) -> P
     }
     p
 }
-
 impl Document {
     /// Convert notes between footnotes and endnotes: footnotes (`foot`) become endnotes and
     /// endnotes (`end`) footnotes, both at once to swap them. Each note's kind changes, as do its
@@ -1643,13 +1656,41 @@ impl Document {
         Some(id)
     }
 
-    /// The blocks of `frag`, a fragment of another document, with every text box given a new
-    /// story of its own here copied from the fragment's parts (as a paste does), to place them
-    /// in this document; a box the fragment has no story for keeps none.
+    /// Copies `media` into `self.media`, returning a remap for keys whose bytes differ from an
+    /// existing entry under the same key.
+    fn adopt_media(&mut self, media: &BTreeMap<String, Arc<Vec<u8>>>) -> BTreeMap<String, String> {
+        let mut media_remap = BTreeMap::new();
+        for (k, v) in media {
+            if let Some(existing) = self.media.get(k) {
+                if existing.as_slice() != v.as_slice() {
+                    let ext = k.rsplit_once('.').map_or("png", |(_, ext)| ext);
+                    let new_key = self.add_media((**v).clone(), ext);
+                    media_remap.insert(k.clone(), new_key);
+                }
+            } else {
+                self.media.insert(k.clone(), v.clone());
+            }
+        }
+        media_remap
+    }
+
+    /// The blocks of `frag`, a fragment of another document, with its media copied (remapping
+    /// conflicting keys) and every text box given a new story of its own here copied from the
+    /// fragment's parts (as a paste does), to place them in this document; a box the fragment
+    /// has no story for keeps none.
     pub fn adopt_fragment(&mut self, frag: &Fragment) -> Vec<Block> {
+        let media_remap = self.adopt_media(&frag.media);
         let mut blocks = frag.blocks.clone();
+        let mut remapped_parts;
+        let parts = if media_remap.is_empty() {
+            &frag.parts
+        } else {
+            remapped_parts = frag.parts.clone();
+            remap_media_in(&mut blocks, &mut remapped_parts, &media_remap);
+            &remapped_parts
+        };
         let mut budget = BoxBudget { local: false, ..BoxBudget::new() };
-        self.adopt_text_boxes(&mut blocks, &frag.parts, 0, &mut budget);
+        self.adopt_text_boxes(&mut blocks, parts, 0, &mut budget);
         if budget.skipped > 0 {
             log::warn!(
                 "{} text boxes are left empty; their stories are past what one copy brings ({MAX_PASTED_BOXES} stories, {MAX_PASTED_BOX_BYTES} bytes)",
@@ -1661,18 +1702,7 @@ impl Document {
 
     /// Insert a fragment at `pos`; returns the position after the pasted content.
     pub fn insert_fragment(&mut self, pos: &Pos, frag: &Fragment) -> Result<Pos> {
-        let mut media_remap = BTreeMap::new();
-        for (k, v) in &frag.media {
-            if let Some(existing) = self.media.get(k) {
-                if existing.as_slice() != v.as_slice() {
-                    let ext = k.rsplit_once('.').map_or("png", |(_, ext)| ext);
-                    let new_key = self.add_media((**v).clone(), ext);
-                    media_remap.insert(k.clone(), new_key);
-                }
-            } else {
-                self.media.insert(k.clone(), v.clone());
-            }
-        }
+        let media_remap = self.adopt_media(&frag.media);
         // Tables that would nest deeper than the limit here become their paragraphs (#1596).
         let room = MAX_TABLE_DEPTH.saturating_sub(pos.path.depth());
         let mut blocks = Vec::with_capacity(frag.blocks.len());
@@ -1689,16 +1719,7 @@ impl Document {
         let table_para = table_style_para(self, pos);
         let destination_shading = self.styles.resolve_para_in(&dest_para.props, table_para.as_ref()).shading;
         let mut parts = frag.parts.clone();
-        if !media_remap.is_empty() {
-            for b in &mut blocks {
-                remap_media_block(b, &media_remap);
-            }
-            for part in parts.values_mut() {
-                for b in &mut part.blocks {
-                    remap_media_block(Arc::make_mut(b), &media_remap);
-                }
-            }
-        }
+        remap_media_in(&mut blocks, &mut parts, &media_remap);
         // Pasted text boxes get stories of their own (never shared with the copy's source).
         let mut budget = BoxBudget::new();
         self.adopt_text_boxes(&mut blocks, &parts, 0, &mut budget);
