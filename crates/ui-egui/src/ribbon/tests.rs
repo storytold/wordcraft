@@ -959,92 +959,109 @@ fn unimplemented_stub_ribbon_buttons_are_disabled() {
     }
 }
 
-/// #7324, #7457: Table ribbon menu buttons (Styles, Borders, Select, Delete, AutoFit) bind their command IDs
-/// so they disable when editing is protected or when no table is active.
-#[test]
-fn table_ribbon_menu_buttons_disable_when_unselected_or_protected() {
+/// Is the ribbon button `name` disabled? (helpers for the table ribbon gate tests below.)
+fn table_button_disabled(h: &Harness, name: &str) -> bool {
     use egui::accesskit::Role;
+    h.query_all(By::new().role(Role::Button).label(name)).next().unwrap_or_else(|| panic!("button {name} not found")).accesskit_node().is_disabled()
+}
 
-    let is_disabled = |h: &Harness, name: &str| {
-        h.query_all(By::new().role(Role::Button).label(name))
-            .next()
-            .unwrap_or_else(|| panic!("button {name} not found"))
-            .accesskit_node()
-            .is_disabled()
-    };
+fn table_button_hint(h: &Harness, name: &str) -> String {
+    use egui::accesskit::Role;
+    h.query_all(By::new().role(Role::Button).label(name))
+        .next()
+        .unwrap_or_else(|| panic!("button {name} not found"))
+        .accesskit_node()
+        .description()
+        .map(|s| s.to_string())
+        .unwrap_or_default()
+}
 
-    let description = |h: &Harness, name: &str| {
-        h.query_all(By::new().role(Role::Button).label(name))
-            .next()
-            .unwrap_or_else(|| panic!("button {name} not found"))
-            .accesskit_node()
-            .description()
-            .map(|s| s.to_string())
-    };
+/// A 2x2 table app on `tab`; `protected` sets read-only protection.
+fn table_tab_harness(tab: &str, protected: bool) -> Harness {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    if protected {
+        app.session.doc.settings.protection = Some("readOnly".into());
+    }
+    tab_harness(app, tab)
+}
 
-    // Configure Table Design & Table Layout as explicit ribbon tabs so they can be
-    // displayed even when the cursor is outside a table.
-    let make_table_tabs_app = |mut app: WordApp| {
+/// #7324, #7457: without an active table the Table ribbon menu buttons disable. The Table tabs are
+/// configured explicitly so they show with the cursor outside a table.
+#[test]
+fn table_ribbon_menu_buttons_disable_when_unselected() {
+    for tab in ["Table Design", "Table Layout"] {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default());
         app.session.ribbon.tabs = vec![
             wordcraft_engine::ribbon::TabEntry { name: "Table Design".to_string(), custom: false, hidden: false, groups: Vec::new() },
             wordcraft_engine::ribbon::TabEntry { name: "Table Layout".to_string(), custom: false, hidden: false, groups: Vec::new() },
         ];
-        app
-    };
+        let h = tab_harness(app, tab);
+        if tab == "Table Design" {
+            assert!(table_button_disabled(&h, "Styles"), "Styles button should be disabled when not in table");
+            assert!(table_button_disabled(&h, "Borders"), "Borders button should be disabled when not in table");
+        } else {
+            assert!(table_button_disabled(&h, "Select"), "Select button should be disabled when not in table");
+            assert!(table_button_disabled(&h, "Delete"), "Delete button should be disabled when not in table");
+            assert!(table_button_disabled(&h, "AutoFit"), "AutoFit button should be disabled when not in table");
+            assert!(
+                table_button_hint(&h, "Select").to_ascii_lowercase().contains("the cursor isn't in a table"),
+                "Select should indicate outside table in disabled hint"
+            );
+        }
+    }
+}
 
-    // 1. Without a table active:
-    let app_no_table = make_table_tabs_app(WordApp::new(Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default()));
-    let h_design_empty = tab_harness(app_no_table, "Table Design");
-    assert!(is_disabled(&h_design_empty, "Styles"), "Styles button should be disabled when not in table");
-    assert!(is_disabled(&h_design_empty, "Borders"), "Borders button should be disabled when not in table");
+/// With an active, unprotected table the Table Design buttons are enabled.
+#[test]
+fn table_design_menu_buttons_enabled_in_table() {
+    let h = table_tab_harness("Table Design", false);
+    assert!(!table_button_disabled(&h, "Styles"), "Styles button should be enabled in table");
+    assert!(!table_button_disabled(&h, "Borders"), "Borders button should be enabled in table");
+}
 
-    let app_no_table2 = make_table_tabs_app(WordApp::new(Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default()));
-    let h_layout_empty = tab_harness(app_no_table2, "Table Layout");
-    assert!(is_disabled(&h_layout_empty, "Select"), "Select button should be disabled when not in table");
-    assert!(is_disabled(&h_layout_empty, "Delete"), "Delete button should be disabled when not in table");
-    assert!(is_disabled(&h_layout_empty, "AutoFit"), "AutoFit button should be disabled when not in table");
-    assert!(
-        description(&h_layout_empty, "Select").as_deref().unwrap_or("").to_ascii_lowercase().contains("the cursor isn't in a table"),
-        "Select should indicate outside table in disabled hint"
-    );
+/// With an active, unprotected table the Table Layout buttons are enabled and open their menus
+/// (the controls for the shut-menu checks under protection).
+#[test]
+fn table_layout_menu_buttons_enabled_in_table() {
+    let mut h = table_tab_harness("Table Layout", false);
+    assert!(!table_button_disabled(&h, "Select"), "Select button should be enabled in table");
+    assert!(!table_button_disabled(&h, "Delete"), "Delete button should be enabled in table");
+    assert!(!table_button_disabled(&h, "AutoFit"), "AutoFit button should be enabled in table");
+    click_button(&mut h, "Delete");
+    assert!(h.query_all(menu_row("Delete Rows")).next().is_some(), "an enabled Delete opens its menu");
+}
 
-    // 2. With an active table and no protection: buttons are enabled:
-    let mut app_table = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
-    app_table.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
-    let h_design = tab_harness(app_table, "Table Design");
-    assert!(!is_disabled(&h_design, "Styles"), "Styles button should be enabled in table");
-    assert!(!is_disabled(&h_design, "Borders"), "Borders button should be enabled in table");
+/// Positive control for the AutoFit shut-menu check under protection: an enabled AutoFit opens its menu.
+#[test]
+fn table_layout_autofit_opens_menu_in_table() {
+    let mut h = table_tab_harness("Table Layout", false);
+    click_button(&mut h, "AutoFit");
+    assert!(h.query_all(menu_row("AutoFit Window")).next().is_some(), "an enabled AutoFit opens its menu");
+}
 
-    let mut app_table2 = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
-    app_table2.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
-    let h_layout = tab_harness(app_table2, "Table Layout");
-    assert!(!is_disabled(&h_layout, "Select"), "Select button should be enabled in table");
-    assert!(!is_disabled(&h_layout, "Delete"), "Delete button should be enabled in table");
-    assert!(!is_disabled(&h_layout, "AutoFit"), "AutoFit button should be enabled in table");
+/// Under read-only protection the Table Design buttons disable and say why.
+#[test]
+fn table_design_menu_buttons_disable_when_protected() {
+    let h = table_tab_harness("Table Design", true);
+    assert!(table_button_disabled(&h, "Styles"), "Styles button should be disabled under protection");
+    assert!(table_button_disabled(&h, "Borders"), "Borders button should be disabled under protection");
+    assert!(table_button_hint(&h, "Styles").contains("protected"), "Styles should indicate protection in disabled hint");
+}
 
-    // 3. With an active table under document protection (read-only): mutating buttons are disabled:
-    let mut app_protected_design = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
-    app_protected_design.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
-    app_protected_design.session.doc.settings.protection = Some("readOnly".into());
-    let h_prot_design = tab_harness(app_protected_design, "Table Design");
-    assert!(is_disabled(&h_prot_design, "Styles"), "Styles button should be disabled under protection");
-    assert!(is_disabled(&h_prot_design, "Borders"), "Borders button should be disabled under protection");
-    assert!(
-        description(&h_prot_design, "Styles").as_deref().unwrap_or("").contains("protected"),
-        "Styles should indicate protection in disabled hint"
-    );
-
-    let mut app_protected_layout = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
-    app_protected_layout.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
-    app_protected_layout.session.doc.settings.protection = Some("readOnly".into());
-    let h_prot_layout = tab_harness(app_protected_layout, "Table Layout");
-    assert!(!is_disabled(&h_prot_layout, "Select"), "Select button should remain enabled under protection");
-    assert!(is_disabled(&h_prot_layout, "Delete"), "Delete button should be disabled under protection");
-    assert!(is_disabled(&h_prot_layout, "AutoFit"), "AutoFit button should be disabled under protection");
-    assert!(
-        description(&h_prot_layout, "Delete").as_deref().unwrap_or("").contains("protected"),
-        "Delete should indicate protection in disabled hint"
-    );
+/// Under read-only protection the mutating Table Layout buttons disable, say why, and stay shut
+/// when clicked (C2-5, #7824).
+#[test]
+fn table_layout_menu_buttons_disable_when_protected() {
+    let mut h = table_tab_harness("Table Layout", true);
+    assert!(!table_button_disabled(&h, "Select"), "Select button should remain enabled under protection");
+    assert!(table_button_disabled(&h, "Delete"), "Delete button should be disabled under protection");
+    assert!(table_button_disabled(&h, "AutoFit"), "AutoFit button should be disabled under protection");
+    assert!(table_button_hint(&h, "Delete").contains("protected"), "Delete should indicate protection in disabled hint");
+    click_button(&mut h, "Delete");
+    assert!(h.query_all(menu_row("Delete Rows")).next().is_none(), "a disabled Delete opens no menu");
+    click_button(&mut h, "AutoFit");
+    assert!(h.query_all(menu_row("AutoFit Window")).next().is_none(), "a disabled AutoFit opens no menu");
 }
 
 /// #7374: the Decorative Text / WordArt Styles dropdown menu renders compact tiles (~40×36 pt)
@@ -1321,4 +1338,38 @@ fn a_combo_field_reached_with_tab_shows_its_hint_after_a_delay() {
         h.step();
     }
     assert!(h.query_all_by_label("Font Size").count() >= 2, "hint must show after tooltip delay");
+}
+
+/// #7165: the Symbol drop-down's cells are compact (a thumbnail-small step, not a card) and the hover text names
+/// the character, not just the glyph.
+#[test]
+fn symbol_menu_cells_are_compact_and_the_tooltip_names_the_character() {
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    let mut h = tab_harness(app, "Insert");
+    click_button(&mut h, "Symbol");
+    let cell_y = |h: &Harness| h.get_by_label("\u{A9}").rect().min.y;
+    let cell = h.get_by_label("\u{A9}").rect();
+    assert!(cell.width() <= 80.0 && cell.height() <= 80.0, "a symbol cell is compact, got {:?}", cell.size());
+    // Eight symbols fit one row, so the menu does not cover the page.
+    assert_eq!(h.get_by_label("\u{A5}").rect().min.y, cell_y(&h), "the eighth symbol is on the first row");
+    h.get_by_label("\u{A9}").hover();
+    crate::test_harness::frames(&mut h, 40);
+    assert!(h.query_by_label_contains("COPYRIGHT SIGN (U+00A9)").is_some(), "the tooltip names the character");
+    // A screen reader gets the name without hovering: the tile's label is the glyph, its description the name.
+    let desc = h.get_by_label("\u{A9}").accesskit_node().description().map(|d| d.to_string()).unwrap_or_default();
+    assert!(desc.contains("COPYRIGHT SIGN"), "the tile's accessible description names the character, got {desc:?}");
+}
+
+/// Characters outside the common list still say what they are: code point and block.
+#[test]
+fn symbol_tip_names_known_characters_and_falls_back_to_the_code_point() {
+    use super::insert::symbol_tip;
+    let named = symbol_tip("\u{A9}", "");
+    assert!(named.contains("COPYRIGHT SIGN") && named.contains("00A9"), "named character: {named}");
+    let with_font = symbol_tip("\u{3B1}", "Symbol");
+    assert!(with_font.contains("GREEK SMALL LETTER ALPHA") && with_font.contains("03B1") && with_font.contains("Symbol"), "{with_font}");
+    assert!(!named.contains("Symbol"), "no font, none named");
+    let unnamed = symbol_tip("\u{2602}", "");
+    assert!(unnamed.contains("2602") && unnamed.contains("Miscellaneous Symbols"), "unnamed character: {unnamed}");
+    assert_eq!(symbol_tip("", ""), "");
 }

@@ -1,7 +1,7 @@
 use super::options::DisplayOptions;
 use super::paint::{Paint, paint_for};
 use super::{BezPath, Document, Draw, FaceRef, Graphic, GraphicItem, GraphicKind, InlineObject, PathSeg, Rect, Rgb, ShapeKind, Spin, TextAlign};
-use wordcraft_doc::connector::ArrowStyle;
+use wordcraft_doc::connector::{ArrowStyle, LineCap};
 
 /// The draws of a chart or diagram's items inside `rect` (page coordinates). The items were built
 /// for the size `g.w` × `g.h` (0: `rect`'s own size), so they are scaled to `rect`; strokes and text
@@ -294,9 +294,14 @@ fn line_draws(
     out: &mut Vec<Draw>,
 ) {
     use wordcraft_doc::connector::{connector_segs, end_direction};
+    let start_dir = end_direction(kind, rect.w, rect.h, false);
+    let end_dir = end_direction(kind, rect.w, rect.h, true);
+    // An arrowed end stops inside its head, which the stroke would otherwise stick out of.
+    let inset = |on: bool, style| if on && stroke.is_some() { arrow_inset(stroke_width, style, extra.cap) } else { 0.0 };
+    let ends = [(inset(extra.arrow_start, extra.start_style), start_dir), (inset(extra.arrow_end, extra.end_style), end_dir)];
     match connector_segs(kind, rect.w, rect.h) {
         Some(segs) => {
-            let segs = segs
+            let mut segs: Vec<PathSeg> = segs
                 .into_iter()
                 .map(|s| match s {
                     PathSeg::Move(x, y) => PathSeg::Move(rect.x + x, rect.y + y),
@@ -305,29 +310,89 @@ fn line_draws(
                     PathSeg::Close => PathSeg::Close,
                 })
                 .collect();
+            shorten_ends(&mut segs, ends);
             let width = path_stroke_width(stroke_width);
             out.push(Draw::Path { segs, fill: None, stroke, stroke_width: width, dash: extra.dash.pattern(width), cap: extra.cap });
         }
-        None => out.push(Draw::Shape {
-            rect,
-            kind,
-            fill: None,
-            stroke,
-            stroke_width,
-            effects,
-            corner: None,
-            dash: extra.dash.pattern(stroke_width),
-            cap: extra.cap,
-        }),
+        None => {
+            // A line's frame is its diagonal, top left to bottom right: shortened, it stays one.
+            let mut segs = [PathSeg::Move(rect.x, rect.y), PathSeg::Line(rect.right(), rect.bottom())];
+            shorten_ends(&mut segs, ends);
+            let line = match segs {
+                [PathSeg::Move(x0, y0), PathSeg::Line(x1, y1)] => Rect::new(x0.min(x1), y0.min(y1), (x1 - x0).abs(), (y1 - y0).abs()),
+                _ => rect,
+            };
+            out.push(Draw::Shape {
+                rect: line,
+                kind,
+                fill: None,
+                stroke,
+                stroke_width,
+                effects,
+                corner: None,
+                dash: extra.dash.pattern(stroke_width),
+                cap: extra.cap,
+            });
+        }
     }
     let Some(color) = stroke else { return };
     // A line runs from the top-left corner to the bottom-right, as it is drawn (DrawingML's
     // `line`), and so do connectors; flips are the frame's turn.
     let (start, end) = ((rect.x, rect.y), (rect.right(), rect.bottom()));
-    for (on, tip, at_end, style) in [(extra.arrow_start, start, false, extra.start_style), (extra.arrow_end, end, true, extra.end_style)] {
+    for (on, tip, dir, style) in [(extra.arrow_start, start, start_dir, extra.start_style), (extra.arrow_end, end, end_dir, extra.end_style)] {
         if on {
-            out.push(arrowhead(tip, end_direction(kind, rect.w, rect.h, at_end), stroke_width, style, color));
+            out.push(arrowhead(tip, dir, stroke_width, style, color));
         }
+    }
+}
+
+/// How far short of an arrowhead's tip a line `stroke_width` wide with `cap` ends stops, so that
+/// none of its stroke shows outside the head (#6767): where the head is as wide as the stroke,
+/// plus what the cap reaches past the end. A head is at least twice as wide as its line, so this
+/// is inside the head; never past its base.
+fn arrow_inset(stroke_width: f32, style: ArrowStyle, cap: LineCap) -> f32 {
+    let width = path_stroke_width(stroke_width);
+    let (len, wide) = style.dims(stroke_width);
+    let reach = if cap == LineCap::Flat { 0.0 } else { width / 2.0 };
+    (len * width / wide.max(f32::EPSILON) + reach).clamp(0.0, len)
+}
+
+/// Draw the path `segs` (a line's or connector's, from its start to its end) short of its ends:
+/// each end by its distance, back against its unit direction (where its arrowhead points). An end
+/// moves at most half way to its neighbouring point, so the path keeps its shape, and a curve its
+/// direction at the end. The two ends of a single straight segment share its length in proportion
+/// to their distances instead, so an end without an arrowhead leaves its share to the other.
+fn shorten_ends(segs: &mut [PathSeg], [(start, start_dir), (end, end_dir)]: [(f32, (f32, f32)); 2]) {
+    let distance = |by: f32| if by.is_finite() { by.max(0.0) } else { 0.0 };
+    let (start, end) = (distance(start), distance(end));
+    let share = |by: f32| match segs {
+        [PathSeg::Move(..), PathSeg::Line(..)] => by / (start + end).max(f32::EPSILON),
+        _ => 0.5,
+    };
+    let (start_share, end_share) = (share(start), share(end));
+    let pull = |(x, y): (f32, f32), toward: Option<(f32, f32)>, by: f32, share: f32, (dx, dy): (f32, f32)| {
+        let room = toward.map_or(0.0, |(tx, ty)| (tx - x).hypot(ty - y) * share);
+        let by = if room.is_finite() { by.min(room) } else { 0.0 };
+        (x - dx * by, y - dy * by)
+    };
+    // The points next to each end, before either moves.
+    let after_first = match segs.get(1) {
+        Some(PathSeg::Line(x, y) | PathSeg::Cubic(x, y, ..)) => Some((*x, *y)),
+        _ => None,
+    };
+    let before_last = match segs.len().checked_sub(1).map(|i| segs.split_at(i)) {
+        Some((_, [PathSeg::Cubic(_, _, x, y, ..)])) => Some((*x, *y)),
+        Some((head, [PathSeg::Line(..)])) => match head.last() {
+            Some(PathSeg::Move(x, y) | PathSeg::Line(x, y) | PathSeg::Cubic(.., x, y)) => Some((*x, *y)),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(PathSeg::Move(x, y)) = segs.first_mut() {
+        (*x, *y) = pull((*x, *y), after_first, start, start_share, start_dir);
+    }
+    if let Some(PathSeg::Line(x, y) | PathSeg::Cubic(.., x, y)) = segs.last_mut() {
+        (*x, *y) = pull((*x, *y), before_last, end, end_share, end_dir);
     }
 }
 
