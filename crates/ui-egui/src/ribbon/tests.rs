@@ -392,6 +392,22 @@ fn contextual_tabs_follow_the_selection() {
     }
 }
 
+/// #7974: SmartArt Design keeps its Layouts gallery to one strip, as tall as the other groups, and the Size
+/// fields show their H: and W: labels.
+#[test]
+fn smart_art_design_layouts_are_one_strip_and_size_is_labelled() {
+    use egui::accesskit::Role;
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.run("insert.smartArt", json!({"layout": "cycle"})).unwrap();
+    let h = tab_harness(a, "SmartArt Design");
+    let height = |name: &str| h.get_by_role_and_label(Role::Group, name).rect().height();
+    assert!(height("Layouts") <= height("Create Graphic") * 1.2, "Layouts: {} vs {}", height("Layouts"), height("Create Graphic"));
+    for side in ["H:", "W:"] {
+        let shown = h.query_all(By::new().label(side)).any(|n| n.accesskit_node().role() != Role::SpinButton);
+        assert!(shown, "{side} is drawn beside its field");
+    }
+}
+
 /// No group's content runs into its label: View › Show stacked four check boxes in a column
 /// made for three, so "Hide White Space" was drawn under "Show". Every tab, every language: each
 /// control lies inside its group's access node.

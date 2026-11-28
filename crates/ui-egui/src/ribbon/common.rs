@@ -5,12 +5,13 @@ use craft::menu::ribbon::{RibbonGroup, RibbonRow};
 use craft::ui::buttons::{Arrangement, Button};
 use craft::ui::contract::{Bind, BodyCx, Gap, Props as _, Show as _, ShowContainer as _, TooltipSpec, Trigger};
 use craft::ui::controls::disclosure::DisclosureGlyph;
-use craft::ui::display::Divider;
+use craft::ui::display::{Divider, Text};
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::list::ThumbAspect;
 use craft::ui::menu::{Menu, MenuItem, MenuOutput};
 use craft::ui::primitives::{FacePaint, IconSpec};
 use craft::ui::runtime::env::Label;
+use craft::ui::style::TypeRole;
 use craft::ui::text::NumberField;
 
 use serde_json::Value;
@@ -89,11 +90,18 @@ pub(super) fn custom_groups(row: &mut RibbonRow<'_>, app: &mut WordApp, groups: 
 /// Esc cancels. A value outside `range` (points) is shown and writes nothing. `lock_aspect` false
 /// resizes the one side only.
 pub(super) fn size_field(ui: &mut Ui, app: &mut WordApp, label: &str, key: &str, pt: f32, lock_aspect: bool, range: RangeInclusive<f32>) {
-    let field = NumberField::length(tl!(label).to_string(), Bind::given(Some(f64::from(pt))), crate::options::lengths(app.session.units()))
-        .range(f64::from(*range.start())..=f64::from(*range.end()))
-        .id_salt(("size_field", key));
-    let events = field.show(ui).edit.events;
+    let lengths = crate::options::lengths(app.session.units());
+    let mut events = None;
+    // The label shows beside the field, as the old ribbon drew `H: 252 pt`; it is the field's accessible name too.
+    Row::new().gap(Gap::Tight).show(ui, |ui, _| {
+        Text::new(tl!(label).to_string()).role(TypeRole::Caption).show(ui);
+        let field = NumberField::length(tl!(label).to_string(), Bind::given(Some(f64::from(pt))), lengths)
+            .range(f64::from(*range.start())..=f64::from(*range.end()))
+            .id_salt(("size_field", key));
+        events = Some(field.show(ui).edit.events);
+    });
     let key = key.to_string();
+    let Some(events) = events else { return };
     apply_edits(app, events, move |app, v: Option<f64>| {
         let Some(v) = v.map(|v| v as f32).filter(|v| range.contains(v)) else { return };
         let params = if lock_aspect { json!({ key.as_str(): v }) } else { json!({ key.as_str(): v, "lockAspect": false }) };
