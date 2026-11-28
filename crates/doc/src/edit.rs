@@ -1669,7 +1669,7 @@ impl Document {
     }
 
     /// Copies `media` into `self.media`, returning a remap for keys whose bytes differ from an
-    /// existing entry under the same key.
+    /// existing entry under the same key or match an existing entry under another key.
     fn adopt_media(&mut self, media: &BTreeMap<String, Arc<Vec<u8>>>) -> BTreeMap<String, String> {
         let mut media_remap = BTreeMap::new();
         for (k, v) in media {
@@ -1679,8 +1679,10 @@ impl Document {
                     let new_key = self.add_media((**v).clone(), ext);
                     media_remap.insert(k.clone(), new_key);
                 }
+            } else if let Some(existing_key) = self.find_media(v) {
+                media_remap.insert(k.clone(), existing_key);
             } else {
-                self.media.insert(k.clone(), v.clone());
+                self.insert_media(k.clone(), v.clone());
             }
         }
         media_remap
