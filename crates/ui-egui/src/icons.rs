@@ -161,6 +161,8 @@ static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("legend", include_bytes!("../icons/legend.svg")),
     ("lineNumbers", include_bytes!("../icons/lineNumbers.svg")),
     ("lineSpacing", include_bytes!("../icons/lineSpacing.svg")),
+    ("lineStyle", include_bytes!("../icons/lineStyle.svg")),
+    ("lineWeight", include_bytes!("../icons/lineWeight.svg")),
     ("wordcraft.link", include_bytes!("../icons/link.svg")),
     ("macros", include_bytes!("../icons/macros.svg")),
     ("mailMerge", include_bytes!("../icons/mailMerge.svg")),

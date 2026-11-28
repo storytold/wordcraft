@@ -92,6 +92,36 @@ pub(super) fn table_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         });
     });
     row.group(RibbonGroup::new("borders", tl!("Borders").to_string(), IconId::new("borders").into()), |ui| {
+        // The pen (#4589): Draw Table, the Borders menu and Border Painter draw with it.
+        let pen = app.canvas.table_pen.clone();
+        let face = Button::new(tl!("Line Style").to_string()).icon(IconId::new("lineStyle")).arrangement(Arrangement::Stacked);
+        let _ = menu_button(ui, face, tl!("Line Style").to_string(), Some("table.borders"), |ui, _| {
+            for (label, style) in crate::table_pen::LINE_STYLES {
+                MenuItem::command(CommandRef::with_params("ui.tablePen", json!({"style": style})))
+                    .label(tl!(label).to_string())
+                    .entry_checked(pen.style == style)
+                    .show(ui);
+            }
+        });
+        let weight = crate::table_pen::Pen::weight_label(pen.width);
+        let face = Button::new(weight.clone()).icon(IconId::new("lineWeight")).arrangement(Arrangement::Stacked);
+        let _ = menu_button(ui, face, tl!("Line Weight").to_string(), Some("table.borders"), |ui, _| {
+            for w in crate::table_pen::LINE_WEIGHTS {
+                MenuItem::command(CommandRef::with_params("ui.tablePen", json!({"width": w})))
+                    .label(crate::table_pen::Pen::weight_label(w))
+                    .entry_checked((pen.width - w).abs() < 0.01)
+                    .show(ui);
+            }
+        });
+        let face = Button::new(tl!("Pen Color").to_string()).icon(IconId::new("pencil")).arrangement(Arrangement::Stacked);
+        let _ = menu_button(ui, face, tl!("Pen Color").to_string(), Some("table.borders"), |ui, _| {
+            MenuItem::command(CommandRef::with_params("ui.tablePen", json!({"color": "auto"})))
+                .label(tl!("Automatic").to_string())
+                .entry_checked(pen.color.is_none())
+                .show(ui);
+            let _ = crate::colors::menu(ui, app, Target::cmd("ui.tablePen"));
+        });
+        let params = pen.params();
         let face = Button::new(tl!("Borders").to_string()).icon(IconId::new("borders")).arrangement(Arrangement::Stacked);
         let _ = menu_button(ui, face, tl!("Borders").to_string(), Some("table.borders"), |ui, _| {
             for (label, kind) in [
@@ -102,10 +132,12 @@ pub(super) fn table_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 ("Top Border", "top"),
                 ("Bottom Border", "bottom"),
             ] {
-                MenuItem::command(CommandRef::with_params("table.borders", json!({"kind": kind}))).label(tl!(label).to_string()).show(ui);
+                let mut p = params.clone();
+                p["kind"] = json!(kind);
+                MenuItem::command(CommandRef::with_params("table.borders", p)).label(tl!(label).to_string()).show(ui);
             }
         });
-        Button::command(CommandRef::new("table.borderPainter"))
+        Button::command(CommandRef::with_params("table.borderPainter", params))
             .label(tl!("Border\nPainter").to_string())
             .icon(IconId::new("borderPainter"))
             .arrangement(Arrangement::Stacked)

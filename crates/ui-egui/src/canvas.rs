@@ -212,6 +212,8 @@ pub struct CanvasState {
     pub balloon_rects: Vec<(u32, Rect)>,
     /// Draw Table or Eraser is on (`table_pen`): presses draw instead of moving the caret.
     pub table_tool: Option<crate::table_pen::TableTool>,
+    /// The pen Draw Table and the table borders draw with (Table Design › Borders, #4589).
+    pub table_pen: crate::table_pen::Pen,
     /// The Draw Table stroke (or eraser press) in progress, written during one gesture and cleared on release
     /// or cancel.
     pub(crate) table_stroke: Option<crate::table_pen::PenStroke>,
@@ -272,6 +274,7 @@ impl CanvasState {
             last_highlight: old.last_highlight,
             last_font_color: old.last_font_color,
             last_shading: old.last_shading,
+            table_pen: old.table_pen,
             tab_kind: old.tab_kind,
             // The window's page is the same widget, and keeps the keyboard it had: without its id the page would
             // count as unfocused for the pass that shows the new document, and report no editor to the input method.
@@ -438,6 +441,7 @@ impl Default for CanvasState {
             sync_out: 0.0,
             balloon_rects: Vec::new(),
             table_tool: None,
+            table_pen: Default::default(),
             table_stroke: None,
             ime_join_text: None,
             ime_reset: false,
