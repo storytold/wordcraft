@@ -708,7 +708,12 @@ impl<'e> Breaker<'e> {
             self.row_rest.clear();
         }
         if self.row_rest.is_empty() {
-            self.top += even_row(self.lines.get_mut(self.row_first..).unwrap_or_default());
+            let row_height = even_row(self.lines.get_mut(self.row_first..).unwrap_or_default());
+            // A joined paragraph's first line shares the row above, whose height can exceed this
+            // paragraph's measured line. Keep the following line below the row estimate used to
+            // place that shared line; `Joint::fit` supplies an exclusion for any remaining border.
+            let shared_height = self.joined && self.row_first == 0 && self.lines.len() == 1;
+            self.top += if shared_height { row_height.max(self.row_h) } else { row_height };
             self.reset_row_height();
         }
         if self.i >= self.n {
