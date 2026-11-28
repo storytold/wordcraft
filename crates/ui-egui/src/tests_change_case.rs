@@ -2,40 +2,32 @@
 //! right-click menu. Text changes only when a row is applied, so Original is the text as it was
 //! when the picker opened (#3483).
 
-use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use serde_json::json;
 use wordcraft_doc::{Document, StoryRef};
 
 use crate::{Services, WordApp};
 
-fn harness(text: &str) -> Harness<'static, WordApp> {
+fn harness(text: &str) -> egui_kittest::Harness<'static, WordApp> {
     let a = WordApp::new(wordcraft_engine::Session::new(Document::from_text(text)), Services::default());
-    Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    )
+    crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(move |_| a)
 }
 
-fn body(h: &Harness<'static, WordApp>) -> String {
+fn body(h: &egui_kittest::Harness<'static, WordApp>) -> String {
     h.state().session.doc.plain_text(StoryRef::Body).trim_end().to_string()
 }
 
-fn select_all(h: &mut Harness<'static, WordApp>) {
+fn select_all(h: &mut egui_kittest::Harness<'static, WordApp>) {
     h.state_mut().run("select.all", json!({})).unwrap();
     h.run_steps(2);
 }
 
-fn shift_f3(h: &mut Harness<'static, WordApp>) {
+fn shift_f3(h: &mut egui_kittest::Harness<'static, WordApp>) {
     h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::F3);
     h.run_steps(2);
 }
 
-fn is_open(h: &Harness<'static, WordApp>) -> bool {
+fn is_open(h: &egui_kittest::Harness<'static, WordApp>) -> bool {
     h.state().canvas.case_picker.is_some()
 }
 

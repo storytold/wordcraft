@@ -1,205 +1,111 @@
-//! Custom keyboard shortcuts (Tools › Customize Keyboard, `tools.customizeKeyboard`): keys the
-//! user assigned to commands and built-in keys the user removed. The user's map is consulted
-//! before the registry's built-in `shortcut`s, so an assignment overrides a built-in key and a
-//! removed built-in key does nothing.
+//! Custom keyboard shortcuts (Tools › Customize Keyboard, `tools.customizeKeyboard`). The user's
+//! changes are craft-keymap [`Overrides`]: a command's entry is the full list of keys that
+//! replaces its registry `shortcut`s, so an assignment that takes a built-in key gives the losing
+//! command an entry of its own.
 //!
-//! Keys are written like the registry's shortcuts (`Mod+Shift+K`, `Alt+F7`, `F2`; `Mod` is Ctrl,
-//! or ⌘ on macOS) and compared in one canonical form ([`normalize`]). The map is saved with the
-//! front end's preferences; reading a saved map never fails: entries that aren't a valid key or
-//! command are dropped.
+//! The registry writes keys as `Mod+Shift+K`, `Alt+F7` or `F2` (`Mod` is Ctrl, or ⌘ on macOS); the
+//! keymap reads that spelling. The overrides are saved with the front end's preferences.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use craft_keymap::{Binding, Chord, CommandDef, CommandRef, Keymap, Overrides, Platform, Scope, Scopes};
 use serde_json::Value;
 
 use crate::{CommandSpec, Registry};
 
-/// At most this many saved entries are read (a hand-edited settings file can't balloon memory).
+/// At most this many entries of an old saved map are read (a hand-edited settings file can't
+/// balloon memory).
 const MAX_ENTRIES: usize = 2000;
-/// Longest key text accepted.
+/// Longest key text an old saved map may hold.
 const MAX_KEY_LEN: usize = 48;
+/// Longest command id an old saved map may hold.
+const MAX_ID_LEN: usize = 128;
 
-/// Named (non-character) keys, in their canonical spelling.
-const NAMED: &[&str] =
-    &["Left", "Right", "Up", "Down", "Home", "End", "PageUp", "PageDown", "Enter", "Tab", "Backspace", "Delete", "Escape", "Space", "Insert"];
-
-/// Custom keyboard shortcuts. `assigned` maps a key to the command it runs; `removed` holds
-/// built-in keys that were taken away (removed, or reassigned to another command).
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
-pub struct KeyMap {
-    pub assigned: BTreeMap<String, String>,
-    pub removed: BTreeSet<String>,
+/// A command's built-in keys as the registry writes them.
+fn pieces(spec: &CommandSpec) -> impl Iterator<Item = &'static str> {
+    spec.shortcut.split(" / ").filter(|piece| !piece.is_empty())
 }
 
-/// A key in canonical form: modifiers in the order `Mod+Ctrl+Alt+Shift+`, then the key (a single
-/// character upper-cased, a named key, or `F1`–`F24`). `None` when it isn't a key.
-pub fn normalize(key: &str) -> Option<String> {
-    let key = key.trim();
-    if key.is_empty() || key.len() > MAX_KEY_LEN {
+/// The keymap of every engine command with its registry keys, under `overrides`. Off macOS,
+/// Alt+Q is the interface's command search key, so it never reaches an engine command.
+pub(crate) fn registry_keymap(reg: &Registry, overrides: &Overrides) -> Keymap {
+    let catalog: Vec<CommandDef> = reg
+        .all()
+        .iter()
+        .map(|spec| {
+            pieces(spec)
+                .filter_map(|piece| Binding::parse(piece).ok())
+                .fold(CommandDef::new(CommandRef::new(spec.id), spec.label, Scope::app()), CommandDef::with_default)
+        })
+        .collect();
+    let platform = Platform::current();
+    let reserved: Vec<Chord> = if platform == Platform::Mac { Vec::new() } else { Chord::parse("Alt+Q").ok().into_iter().collect() };
+    Keymap::new(catalog, Scopes::new(), platform).with_reserved(reserved).with_overrides(overrides.clone())
+}
+
+/// A key of an old saved map: its canonical text and the chord it is on `platform`.
+fn legacy_chord(text: &str, platform: Platform) -> Option<(String, Chord)> {
+    if text.len() > MAX_KEY_LEN {
         return None;
     }
-    // `Mod++` is the plus key with Mod.
-    let (mods, name) = match key.strip_suffix("++") {
-        Some(m) => (m, "+"),
-        None => match key.rsplit_once('+') {
-            Some((m, n)) => (m, n),
-            None => ("", key),
-        },
-    };
-    let (mut cmd, mut ctrl, mut alt, mut shift) = (false, false, false, false);
-    for m in mods.split('+').filter(|m| !m.is_empty()) {
-        match m.to_ascii_lowercase().as_str() {
-            "mod" => cmd = true,
-            "ctrl" => ctrl = true,
-            "alt" => alt = true,
-            "shift" => shift = true,
-            _ => return None,
-        }
-    }
-    let name = canonical_name(name)?;
-    let mut out = String::new();
-    for (on, m) in [(cmd, "Mod+"), (ctrl, "Ctrl+"), (alt, "Alt+"), (shift, "Shift+")] {
-        if on {
-            out.push_str(m);
-        }
-    }
-    out.push_str(&name);
-    Some(out)
+    let chord = Chord::parse(text.trim()).ok()?;
+    Some((chord.portable(), chord.effective(platform)))
 }
 
-fn canonical_name(name: &str) -> Option<String> {
-    let mut chars = name.chars();
-    if let (Some(c), None) = (chars.next(), chars.next()) {
-        return (!c.is_whitespace() && !c.is_control()).then(|| c.to_uppercase().collect());
-    }
-    if let Some(n) = NAMED.iter().find(|n| n.eq_ignore_ascii_case(name)) {
-        return Some((*n).to_string());
-    }
-    let f = name.strip_prefix('F').or_else(|| name.strip_prefix('f'))?;
-    let n: u8 = f.parse().ok()?;
-    (1..=24).contains(&n).then(|| format!("F{n}"))
+/// A command's built-in keys: the registry's text and the chord on `platform`.
+fn default_chords(spec: &CommandSpec, platform: Platform) -> Vec<(String, Chord)> {
+    pieces(spec).filter_map(|piece| Some((piece.to_string(), Chord::parse(piece).ok()?.effective(platform)))).collect()
 }
 
-/// A command's built-in keys, normalized.
-fn builtin_keys(spec: &CommandSpec) -> impl Iterator<Item = String> + '_ {
-    spec.shortcut.split(" / ").filter_map(normalize)
+/// The command that has `chord` among its built-in keys (the first in the registry).
+fn default_holder(reg: &Registry, chord: Chord, platform: Platform) -> Option<&CommandSpec> {
+    reg.all().iter().find(|spec| default_chords(spec, platform).iter().any(|(_, c)| *c == chord))
 }
 
-/// The command a key runs without customization (the first command listing it).
-fn builtin<'a>(reg: &'a Registry, key: &str) -> Option<&'a CommandSpec> {
-    reg.all().iter().find(|s| !s.shortcut.is_empty() && builtin_keys(s).any(|k| k == key))
+/// The key list being built for `spec`, starting from its built-in keys.
+fn entry<'a>(lists: &'a mut BTreeMap<&'static str, Vec<(String, Chord)>>, spec: &CommandSpec, platform: Platform) -> &'a mut Vec<(String, Chord)> {
+    lists.entry(spec.id).or_insert_with(|| default_chords(spec, platform))
 }
 
-impl KeyMap {
-    /// Read a saved map, keeping only well-formed entries (never fails).
-    pub fn from_value(v: &Value) -> KeyMap {
-        let mut map = KeyMap::default();
-        if let Some(a) = v.get("assigned").and_then(Value::as_object) {
-            for (k, id) in a.iter().take(MAX_ENTRIES) {
-                if let (Some(k), Some(id)) = (normalize(k), id.as_str().filter(|id| !id.is_empty() && id.len() <= 128)) {
-                    map.assigned.insert(k, id.to_string());
-                }
+/// The overrides an old saved `{"assigned": {key: command}, "removed": [key]}` map stands for: an
+/// assigned key joins its command's keys and leaves the command that had it built in; a removed
+/// built-in key leaves its command. Only commands whose keys differ from their built-in ones get
+/// an entry. Entries that aren't a key or a known command are dropped, and any JSON value reads.
+pub fn overrides_from_legacy(reg: &Registry, saved: &Value) -> Overrides {
+    let platform = Platform::current();
+    let mut lists: BTreeMap<&'static str, Vec<(String, Chord)>> = BTreeMap::new();
+    // Removals first: a key both removed and assigned (taken from a built-in command) ends with
+    // the command it was assigned to.
+    if let Some(removed) = saved.get("removed").and_then(Value::as_array) {
+        for (_, chord) in removed.iter().take(MAX_ENTRIES).filter_map(Value::as_str).filter_map(|t| legacy_chord(t, platform)) {
+            if let Some(spec) = default_holder(reg, chord, platform) {
+                entry(&mut lists, spec, platform).retain(|(_, c)| *c != chord);
             }
         }
-        if let Some(r) = v.get("removed").and_then(Value::as_array) {
-            map.removed.extend(r.iter().take(MAX_ENTRIES).filter_map(Value::as_str).filter_map(normalize));
-        }
-        map
     }
-
-    /// Whether nothing is customized.
-    pub fn is_empty(&self) -> bool {
-        self.assigned.is_empty() && self.removed.is_empty()
-    }
-
-    /// Drop entries for commands that don't exist and removals of keys that aren't built in.
-    pub fn retain_known(&mut self, reg: &Registry) {
-        self.assigned.retain(|_, id| reg.get(id).is_some());
-        self.removed.retain(|k| builtin(reg, k).is_some());
-    }
-
-    /// The command a key runs: the user's assignment, else the built-in one unless removed.
-    pub fn resolve<'a>(&self, reg: &'a Registry, key: &str) -> Option<&'a CommandSpec> {
-        let key = normalize(key)?;
-        if let Some(spec) = self.assigned.get(&key).and_then(|id| reg.get(id)) {
-            return Some(spec);
-        }
-        if self.removed.contains(&key) {
-            return None;
-        }
-        builtin(reg, &key)
-    }
-
-    /// The keys that run a command now: its built-in keys still in effect, then the user's.
-    pub fn keys_for(&self, reg: &Registry, id: &str) -> Vec<String> {
-        let mut keys: Vec<String> = Vec::new();
-        if let Some(spec) = reg.get(id) {
-            for k in builtin_keys(spec) {
-                // Uncustomized (the usual case, every frame for tooltips): no registry scan.
-                if !keys.contains(&k) && (self.is_empty() || self.resolve(reg, &k).is_some_and(|s| s.id == id)) {
-                    keys.push(k);
-                }
+    if let Some(assigned) = saved.get("assigned").and_then(Value::as_object) {
+        for (key, id) in assigned.iter().take(MAX_ENTRIES) {
+            let Some((text, chord)) = legacy_chord(key, platform) else { continue };
+            let Some(spec) = id.as_str().filter(|id| !id.is_empty() && id.len() <= MAX_ID_LEN).and_then(|id| reg.get(id)) else { continue };
+            if let Some(holder) = default_holder(reg, chord, platform).filter(|h| h.id != spec.id) {
+                entry(&mut lists, holder, platform).retain(|(_, c)| *c != chord);
+            }
+            let list = entry(&mut lists, spec, platform);
+            if !list.iter().any(|(_, c)| *c == chord) {
+                list.push((text, chord));
             }
         }
-        for (k, owner) in &self.assigned {
-            if owner == id && !keys.contains(k) {
-                keys.push(k.clone());
-            }
-        }
-        keys
     }
-
-    /// Assign `key` to command `id`; the key leaves whatever command had it. Returns that command.
-    pub fn assign(&mut self, reg: &Registry, id: &str, key: &str) -> Result<Option<String>, String> {
-        if reg.get(id).is_none() {
-            return Err(format!("unknown command `{id}`"));
+    let mut overrides = Overrides::new();
+    for (id, list) in lists {
+        let Some(spec) = reg.get(id) else { continue };
+        let defaults = default_chords(spec, platform);
+        let unchanged = list.len() == defaults.len() && list.iter().zip(&defaults).all(|((_, a), (_, b))| a == b);
+        if !unchanged {
+            let _ = overrides.insert(CommandRef::new(id).key(), list.into_iter().map(|(text, _)| text).collect());
         }
-        let key = normalize(key).ok_or_else(|| format!("`{key}` isn't a key (e.g. Mod+Shift+K, Alt+F7, F2)"))?;
-        let previous = self.resolve(reg, &key).map(|s| s.id.to_string()).filter(|p| p != id);
-        match builtin(reg, &key) {
-            // Back to its own built-in key: no custom entry needed.
-            Some(b) if b.id == id => {
-                self.assigned.remove(&key);
-                self.removed.remove(&key);
-            }
-            // Taken from a built-in command: it loses the key for good.
-            Some(_) => {
-                self.assigned.insert(key.clone(), id.to_string());
-                self.removed.insert(key);
-            }
-            None => {
-                self.assigned.insert(key, id.to_string());
-            }
-        }
-        Ok(previous)
     }
-
-    /// Take `key` away from command `id`. Returns whether it had the key.
-    pub fn remove(&mut self, reg: &Registry, id: &str, key: &str) -> Result<bool, String> {
-        let key = normalize(key).ok_or_else(|| format!("`{key}` isn't a key"))?;
-        if self.resolve(reg, &key).is_none_or(|s| s.id != id) {
-            return Ok(false);
-        }
-        self.assigned.remove(&key);
-        if builtin(reg, &key).is_some() {
-            self.removed.insert(key);
-        }
-        Ok(true)
-    }
-
-    /// Back to the built-in keys only.
-    pub fn reset(&mut self) {
-        *self = KeyMap::default();
-    }
-}
-
-impl<'de> Deserialize<'de> for KeyMap {
-    /// Lenient: any JSON reads (junk entries dropped), so a damaged map never loses the other
-    /// preferences saved next to it.
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        Ok(KeyMap::from_value(&Value::deserialize(d)?))
-    }
+    overrides
 }
 
 #[cfg(test)]
@@ -208,68 +114,101 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn keys_normalize_to_one_spelling() {
-        assert_eq!(normalize("mod+shift+alt+v").as_deref(), Some("Mod+Alt+Shift+V"));
-        assert_eq!(normalize("Mod+=").as_deref(), Some("Mod+="));
-        assert_eq!(normalize("Mod++").as_deref(), Some("Mod++"));
-        assert_eq!(normalize("f12").as_deref(), Some("F12"));
-        assert_eq!(normalize("Ctrl+pagedown").as_deref(), Some("Ctrl+PageDown"));
-        for junk in ["", "Mod+", "Hyper+K", "F99", "Mod+Shift+NotAKey", "Mod+\u{7}", &"x".repeat(100)] {
-            assert_eq!(normalize(junk), None, "{junk:?}");
-        }
+    /// The keys a command has, through the command.
+    fn keys(s: &mut crate::Session, id: &str) -> Vec<String> {
+        let r = s.run("tools.customizeKeyboard", &json!({"command": id})).unwrap();
+        r["keys"].as_array().unwrap().iter().map(|k| k.as_str().unwrap().to_string()).collect()
     }
 
-    /// #368: an assignment overrides a built-in key, a removed built-in key runs nothing, and
-    /// Reset All brings the built-ins back.
+    /// The command a key runs, through the command.
+    fn holder(s: &mut crate::Session, key: &str) -> Option<String> {
+        let r = s.run("tools.customizeKeyboard", &json!({"key": key})).unwrap();
+        r["assignedTo"].as_str().map(str::to_string)
+    }
+
+    /// #368: an assignment takes a built-in key from its command, a removed built-in key runs
+    /// nothing, and Reset All brings the built-ins back; agents do it without the dialog.
     #[test]
     fn user_keys_override_and_remove_built_ins() {
-        let reg = crate::cmd::registry();
-        let mut m = KeyMap::default();
-        assert_eq!(m.resolve(&reg, "Mod+B").map(|s| s.id), Some("format.bold"));
-        // Mod+B to Italic: Bold loses it.
-        assert_eq!(m.assign(&reg, "format.italic", "mod+b").unwrap().as_deref(), Some("format.bold"));
-        assert_eq!(m.resolve(&reg, "Mod+B").map(|s| s.id), Some("format.italic"));
-        assert!(m.keys_for(&reg, "format.bold").is_empty());
-        assert_eq!(m.keys_for(&reg, "format.italic"), ["Mod+I", "Mod+B"]);
-        // Removing it from Italic leaves Mod+B doing nothing (Bold doesn't get it back).
-        assert!(m.remove(&reg, "format.italic", "Mod+B").unwrap());
-        assert!(m.resolve(&reg, "Mod+B").is_none());
-        // Removing a built-in key disables it; a new key works.
-        assert!(m.remove(&reg, "format.underline", "Mod+U").unwrap());
-        assert!(m.resolve(&reg, "Mod+U").is_none());
-        assert_eq!(m.assign(&reg, "format.underline", "Mod+Alt+Shift+U").unwrap(), None);
-        assert_eq!(m.resolve(&reg, "Mod+Shift+Alt+U").map(|s| s.id), Some("format.underline"));
-        assert!(m.assign(&reg, "no.such.command", "Mod+Q").is_err());
-        assert!(m.assign(&reg, "format.bold", "Hyper+Q").is_err());
-        m.reset();
-        assert_eq!(m.resolve(&reg, "Mod+B").map(|s| s.id), Some("format.bold"));
-        assert_eq!(m.resolve(&reg, "Mod+U").map(|s| s.id), Some("format.underline"));
-
-        // The command does the same for agents, without opening the dialog.
         let mut s = crate::Session::new(wordcraft_doc::Document::new());
+        let bold = keys(&mut s, "format.bold");
+        let italic = keys(&mut s, "format.italic");
+        let underline = keys(&mut s, "format.underline");
+        assert!(!bold.is_empty() && !italic.is_empty() && !underline.is_empty());
+
+        // Mod+B to Italic: Bold loses it.
         let r = s.run("tools.customizeKeyboard", &json!({"assign": {"command": "format.italic", "key": "Mod+B"}, "key": "Mod+B"})).unwrap();
         assert_eq!((r["replaced"].as_str(), r["assignedTo"].as_str()), (Some("format.bold"), Some("format.italic")));
         assert!(s.ui_requests.is_empty(), "programmatic calls never open dialogs");
+        assert!(keys(&mut s, "format.bold").is_empty());
+        let now = keys(&mut s, "format.italic");
+        assert_eq!(now.len(), italic.len() + 1);
+        assert!(now.starts_with(&italic), "{now:?}");
+        assert!(!s.keymap().is_empty());
+        assert_eq!(r["custom"], serde_json::to_value(s.keymap()).unwrap());
+
+        // Removing it from Italic leaves Mod+B doing nothing; Bold doesn't get it back.
+        let r = s.run("tools.customizeKeyboard", &json!({"remove": {"command": "format.italic", "key": "Mod+B"}})).unwrap();
+        assert_eq!(r["removed"], json!(true));
+        assert_eq!(holder(&mut s, "Mod+B"), None);
+        assert!(keys(&mut s, "format.bold").is_empty());
+
+        // Removing a built-in key disables it; a new key works.
+        let first = underline[0].clone();
+        s.run("tools.customizeKeyboard", &json!({"remove": {"command": "format.underline", "key": first}})).unwrap();
+        assert_eq!(holder(&mut s, &first), None);
+        s.run("tools.customizeKeyboard", &json!({"assign": {"command": "format.underline", "key": "Mod+Alt+Shift+U"}})).unwrap();
+        assert_eq!(holder(&mut s, "Mod+Shift+Alt+U").as_deref(), Some("format.underline"));
+
+        // Mistakes are errors.
+        assert!(s.run("tools.customizeKeyboard", &json!({"assign": {"command": "no.such.command", "key": "Mod+Q"}})).is_err());
+        assert!(s.run("tools.customizeKeyboard", &json!({"assign": {"command": "format.bold", "key": "Hyper+Q"}})).is_err());
+        if !cfg!(target_os = "macos") {
+            assert!(
+                s.run("tools.customizeKeyboard", &json!({"assign": {"command": "format.bold", "key": "Alt+Q"}})).is_err(),
+                "Alt+Q is the command search"
+            );
+        }
+
+        s.run("tools.customizeKeyboard", &json!({"reset": true})).unwrap();
+        assert!(s.keymap().is_empty());
+        assert_eq!(keys(&mut s, "format.bold"), bold);
+        assert_eq!(keys(&mut s, "format.italic"), italic);
+        assert_eq!(keys(&mut s, "format.underline"), underline);
+        assert!(s.ui_requests.is_empty());
+
         s.run("tools.customizeKeyboard", &json!({})).unwrap();
         assert_eq!(s.ui_requests.last(), Some(&json!({"open": "customizeKeyboard"})));
     }
 
+    /// The old saved map reads as the overrides it stands for; its junk is dropped.
     #[test]
-    fn saved_maps_round_trip_and_junk_is_ignored() {
+    fn legacy_saved_maps_import_as_overrides() {
         let reg = crate::cmd::registry();
-        let mut m = KeyMap::default();
-        m.assign(&reg, "format.italic", "Mod+B").unwrap();
-        let back: KeyMap = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
-        assert_eq!(back, m);
-        let junk = json!({"assigned": {"Hyper+X": "format.bold", "Mod+Q": 7, "Mod+J": "no.such", "Mod+Alt+K": "format.bold"}, "removed": ["Mod+U", 3, "F99", "Mod+Shift+Q"]});
-        let mut j: KeyMap = serde_json::from_value(junk).unwrap();
-        j.retain_known(&reg);
-        assert_eq!(j.assigned.len(), 1, "{j:?}");
-        assert_eq!(j.resolve(&reg, "Mod+Alt+K").map(|s| s.id), Some("format.bold"));
-        assert_eq!(j.removed.iter().collect::<Vec<_>>(), ["Mod+U"]);
+        let chord = |text: &str| Chord::parse(text).unwrap();
+        let saved = json!({
+            "assigned": {"Mod+B": "format.italic", "Hyper+X": "format.bold", "Mod+Q": 7, "Mod+J": "no.such", "Mod+I": "format.italic"},
+            "removed": ["Mod+U", 3, "F99"]
+        });
+        let o = overrides_from_legacy(&reg, &saved);
+        let mut ids: Vec<&str> = o.iter().map(|(k, _)| k).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["format.bold", "format.italic", "format.underline"], "{o:?}");
+
+        let keymap = registry_keymap(&reg, &o);
+        let id = |c: &str| keymap.holder(&chord(c)).map(|c| c.id);
+        assert_eq!(id("Mod+B").as_deref(), Some("format.italic"), "the assignment wins");
+        assert_eq!(id("Mod+I").as_deref(), Some("format.italic"), "Italic keeps its own key");
+        assert_eq!(id("Mod+U"), None, "the removed built-in key runs nothing");
+        let platform = keymap.platform();
+        let bold = keymap.bindings(&CommandRef::new("format.bold"));
+        assert!(!bold.iter().any(|b| b.trigger.chord.effective(platform) == chord("Mod+B").effective(platform)), "{bold:?}");
+        assert!(keymap.problems().is_empty(), "{:?}", keymap.problems());
+
+        // An assignment of a command's own built-in key changes nothing.
+        assert!(overrides_from_legacy(&reg, &json!({"assigned": {"Mod+I": "format.italic"}})).is_empty());
         for v in [json!(null), json!(5), json!("x"), json!({"assigned": [1], "removed": {"a": 1}})] {
-            assert!(serde_json::from_value::<KeyMap>(v).unwrap().is_empty());
+            assert!(overrides_from_legacy(&reg, &v).is_empty(), "{v}");
         }
     }
 }

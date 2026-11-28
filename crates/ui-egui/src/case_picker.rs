@@ -42,29 +42,35 @@ pub fn open(app: &mut WordApp) {
         next(app);
         return;
     }
-    if !app.has_document()
-        || app.session.view.read_mode
-        || app.dialog.is_some()
-        || app.colors.is_some()
-        || app.ui.backstage
-        || app.ui.keytips != crate::keytips::Phase::Off
-    {
+    if !app.has_document() || app.session.view.read_mode || !app.dialog_host.is_empty() || app.ui.backstage || app.keytips_active {
         return;
     }
     app.canvas.case_picker = Some(Picker::new(app));
-    app.canvas.want_focus = true;
+    if let Some(ctx) = app.ctx.clone() {
+        app.canvas.focus_page(&ctx);
+    } else {
+        app.canvas.focus_pending = true;
+    }
 }
 
 fn next(app: &mut WordApp) {
     if let Some(p) = app.canvas.case_picker.as_mut() {
         p.selected = (p.selected + 1) % ROWS;
-        app.canvas.want_focus = true;
+        if let Some(ctx) = app.ctx.clone() {
+            app.canvas.focus_page(&ctx);
+        } else {
+            app.canvas.focus_pending = true;
+        }
     }
 }
 
 fn close(app: &mut WordApp) {
     app.canvas.case_picker = None;
-    app.canvas.want_focus = true;
+    if let Some(ctx) = app.ctx.clone() {
+        app.canvas.focus_page(&ctx);
+    } else {
+        app.canvas.focus_pending = true;
+    }
 }
 
 fn apply(app: &mut WordApp, row: usize) {
@@ -88,10 +94,11 @@ enum Action {
 }
 
 fn action(key: Key, m: Modifiers) -> Option<Action> {
-    if key == Key::F3 && m.shift && !m.command && !m.ctrl && !m.alt && !m.mac_cmd {
+    if is_shift_f3(key, m) {
         return Some(Action::Next);
     }
-    if !m.is_none() {
+    // Command/Alt keys belong to the app. Shift may still be down after Shift+F3.
+    if m.command || m.ctrl || m.alt || m.mac_cmd {
         return None;
     }
     Some(match key {
@@ -107,15 +114,28 @@ fn action(key: Key, m: Modifiers) -> Option<Action> {
 
 /// Handle the picker's keys before the canvas sees them. Keys the picker doesn't own close it
 /// and continue to the document, so typing and Shift+Arrow behave normally.
+fn is_shift_f3(key: Key, m: Modifiers) -> bool {
+    key == Key::F3 && m.shift && !m.command && !m.ctrl && !m.alt && !m.mac_cmd
+}
+
 pub fn keys(app: &mut WordApp, ctx: &egui::Context) {
     if !is_open(app) {
+        // Shift+F3 opens the picker in the UI (#3483). Consume the key so the no-mode
+        // engine command does not also cycle the text.
+        let pressed = ctx
+            .input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key, pressed: true, modifiers, .. } if is_shift_f3(*key, *modifiers))));
+        if pressed {
+            open(app);
+            ctx.input_mut(|i| {
+                i.events.retain(|e| !matches!(e, egui::Event::Key { key, pressed: true, modifiers, .. } if is_shift_f3(*key, *modifiers)));
+            });
+        }
         return;
     }
     // A dialog, the Backstage, Read Mode or another document invalidates the picker.
     if !app.has_document()
         || app.session.view.read_mode
-        || app.dialog.is_some()
-        || app.colors.is_some()
+        || !app.dialog_host.is_empty()
         || app.ui.backstage
         || app.session.document_id() != app.canvas.case_picker.as_ref().map(|p| p.document).unwrap_or_default()
         || app.session.sel != app.canvas.case_picker.as_ref().map(|p| p.opened.clone()).unwrap_or_default()
@@ -189,6 +209,61 @@ pub fn keys(app: &mut WordApp, ctx: &egui::Context) {
     }
 }
 
+/// Remove the picker's keys from the frame's raw input before the runtime and the canvas see them,
+/// so Enter and Shift+F3 do not also run a document command (#3483).
+pub fn filter_raw(app: &mut WordApp, raw: &mut egui::RawInput) {
+    let mut chosen = None;
+    let mut cancel = false;
+    raw.events.retain(|event| {
+        let egui::Event::Key { key, pressed: true, modifiers, .. } = event else { return true };
+        if !is_open(app) {
+            if is_shift_f3(*key, *modifiers) {
+                open(app);
+                return false;
+            }
+            return true;
+        }
+        match action(*key, *modifiers) {
+            Some(Action::Up) => {
+                if let Some(p) = app.canvas.case_picker.as_mut() {
+                    p.selected = if p.selected == 0 { ROWS - 1 } else { p.selected - 1 };
+                }
+                false
+            }
+            Some(Action::Down) | Some(Action::Next) => {
+                next(app);
+                false
+            }
+            Some(Action::Home) => {
+                if let Some(p) = app.canvas.case_picker.as_mut() {
+                    p.selected = 0;
+                }
+                false
+            }
+            Some(Action::End) => {
+                if let Some(p) = app.canvas.case_picker.as_mut() {
+                    p.selected = ROWS - 1;
+                }
+                false
+            }
+            Some(Action::Apply) => {
+                chosen = app.canvas.case_picker.as_ref().map(|p| p.selected);
+                false
+            }
+            Some(Action::Cancel) => {
+                cancel = true;
+                false
+            }
+            None => true,
+        }
+    });
+    if let Some(row) = chosen {
+        apply(app, row);
+    } else if cancel {
+        close(app);
+    }
+}
+
 /// Draw the picker above the page. Called after the canvas so its Foreground layer sits over the
 /// ribbon and the mini toolbar.
 pub fn show(app: &mut WordApp, ctx: &egui::Context) {
@@ -199,12 +274,10 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     };
     if !app.has_document()
         || app.session.view.read_mode
-        || app.dialog.is_some()
-        || app.colors.is_some()
+        || !app.dialog_host.is_empty()
         || app.ui.backstage
         || app.session.document_id() != document
         || app.session.sel != opened
-        || !ctx.input(|i| i.focused)
     {
         close(app);
         return;
@@ -219,7 +292,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         close(app);
         return;
     };
-    let viewport = app.canvas.viewport.unwrap_or_else(|| ctx.content_rect());
+    let viewport = ctx.content_rect();
     let pos = place(at, line_h, viewport);
 
     let frame = ctx.cumulative_frame_nr();
@@ -229,7 +302,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     }
 
     let mut chosen = None;
-    let shown = egui::Area::new(Id::new("wc_change_case")).order(Order::Foreground).fixed_pos(pos).constrain_to(viewport).show(ctx, |ui| {
+    let shown = egui::Area::new(Id::unique("wc_change_case")).order(Order::Foreground).fixed_pos(pos).constrain_to(viewport).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(WIDTH);
             ui.spacing_mut().item_spacing.y = 2.0;
