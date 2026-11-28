@@ -192,9 +192,9 @@ pub fn specs() -> Vec<CommandSpec> {
             // off a shading a file gave the text (#4685); a caret or paragraphs shade paragraphs.
             // `paragraph` (Borders and Shading › Apply to: Paragraph) shades the paragraphs anyway.
             if p::bool(v, "paragraph") != Some(true) && shades_text(s) {
-                return super::format::apply(s, &|x| x.shading = c);
+                return super::format::apply(s, &|x| x.set_shading(c));
             }
-            fmt(s, &|p| p.shading = c)
+            fmt(s, &|p| p.set_shading(c))
         })
         .params(
             r#"{"color": "RRGGBB" | null, "paragraph"?: bool} (text selected inside one paragraph is shaded itself, as in Word; `paragraph: true` shades the paragraphs instead, as Borders and Shading › Apply to: Paragraph)"#,

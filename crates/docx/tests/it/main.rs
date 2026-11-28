@@ -42,6 +42,7 @@ mod settings_merge;
 mod strict_drawings;
 mod text_alignment;
 mod text_boxes;
+mod theme_colours;
 mod toc_ranges;
 mod twips_wrap;
 mod undefined_style;

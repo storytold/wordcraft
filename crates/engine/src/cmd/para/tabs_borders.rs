@@ -91,7 +91,7 @@ pub(super) fn borders(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(sides) = v.get("sides") {
         let b = border_sides(sides, 1.0, 4.0)?;
         // An explicit empty set keeps a style's borders off.
-        return fmt(s, &|p| p.borders = Some(b));
+        return fmt(s, &|p| p.set_borders(Some(b)));
     }
     let kind = p::str(v, "kind").unwrap_or("bottom");
     let width = p::f32(v, "width").unwrap_or(0.5).clamp(0.25, 6.0);
@@ -100,7 +100,7 @@ pub(super) fn borders(s: &mut Session, v: &Value) -> CmdResult {
     let b = Border { style, width, color, space: if kind == "left" || kind == "right" { 4.0 } else { 1.0 } };
     if kind == "horizontalLine" {
         // A paragraph with a bottom border, like Word's Horizontal Line.
-        return fmt(s, &|p| p.borders = Some(Borders { bottom: Some(Border { width: 1.5, ..b }), ..Default::default() }));
+        return fmt(s, &|p| p.set_borders(Some(Borders { bottom: Some(Border { width: 1.5, ..b }), ..Default::default() })));
     }
     fmt(s, &|p| {
         let mut cur = p.borders.unwrap_or_default();
@@ -120,6 +120,7 @@ pub(super) fn borders(s: &mut Session, v: &Value) -> CmdResult {
             "right" => cur.right = if cur.right.is_some_and(|x| x.is_visible()) { None } else { Some(b) },
             _ => {}
         }
-        p.borders = if cur.any_visible() { Some(cur) } else { Some(Borders::default()) };
+        // The sides this sets lose their theme colours; the others keep theirs.
+        p.replace_borders(if cur.any_visible() { Some(cur) } else { Some(Borders::default()) });
     })
 }

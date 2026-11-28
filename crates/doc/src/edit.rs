@@ -1211,6 +1211,9 @@ impl Document {
     /// [`Self::adopt_with`], its permission range ids from at least `perms` on (and past ours);
     /// `perms` moves past them.
     fn adopt_in(&mut self, mut src: Document, keep_styles: bool, perms: &mut u32) -> Fragment {
+        // Its theme colours would name this document's colours here: a theme colour that gives
+        // another colour here than the one it shows there becomes that colour, fixed.
+        src.fit_theme_colors_to(self);
         let mut renamed = BTreeMap::new();
         let mut default_style = None;
         if keep_styles {
@@ -1719,6 +1722,14 @@ impl Document {
         let table_para = table_style_para(self, pos);
         let destination_shading = self.styles.resolve_para_in(&dest_para.props, table_para.as_ref()).shading;
         let mut parts = frag.parts.clone();
+        // Copied from another document, or from this one under another theme, the content keeps
+        // the colours it shows.
+        for b in &mut blocks {
+            self.fit_theme_colors(b);
+        }
+        for part in parts.values_mut() {
+            self.fit_shared_theme_colors(&mut part.blocks);
+        }
         remap_media_in(&mut blocks, &mut parts, &media_remap);
         // Pasted text boxes get stories of their own (never shared with the copy's source).
         let mut budget = BoxBudget::new();

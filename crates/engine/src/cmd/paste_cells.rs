@@ -204,6 +204,14 @@ pub fn paste_cells(s: &mut Session, frag: &Fragment) -> Result<bool, CmdError> {
 }
 
 fn apply_plan(s: &mut Session, src: &Table, story: StoryRef, tp: &Path, row0: usize, col0: usize, plan: Plan) -> Result<(), CmdError> {
+    // The copied cells keep the colours they show, whatever this document's theme gives their
+    // theme colours (`Document::fit_theme_colors`, as `insert_fragment` does for a paste).
+    let mut copied = Block::Table(src.clone());
+    s.doc.fit_theme_colors(&mut copied);
+    let src = match &copied {
+        Block::Table(t) => t,
+        Block::Para(_) => src,
+    };
     let t = s.doc.table_mut(story, tp)?;
     let first = match plan {
         Plan::InsertRows => insert_source_rows(t, src, row0),

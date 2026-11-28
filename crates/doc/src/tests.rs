@@ -469,6 +469,41 @@ fn box_para(story: u32, id: u32) -> Blocks {
     vec![para_block(p)]
 }
 
+/// Content brought in from a document whose theme gives a theme colour another colour keeps the
+/// colour it shows, as a fixed one: its record would name this document's colour once saved. A
+/// theme colour both themes give the same colour keeps its record, as every one does from a
+/// document with the same theme.
+#[test]
+fn adopted_content_keeps_a_theme_colour_only_where_this_theme_gives_its_colour() {
+    use crate::props::{CharColorSources, ColorSource, ThemeColor, ThemeRef};
+    let theirs = |accent1: Rgb| {
+        let mut d = Document::new();
+        d.settings.theme_colors[4] = accent1;
+        let body = [ThemeColor::Accent1, ThemeColor::Accent2].map(|color| {
+            let theme = ThemeRef { color, tint: None, shade: None };
+            let shown = theme.resolve(&d.settings.theme_colors, None).map(TextColor::Rgb);
+            let source = ColorSource { theme, value: shown, shown };
+            let props = CharProps {
+                color: shown,
+                color_sources: Some(Box::new(CharColorSources { color: Some(source), ..Default::default() })),
+                ..Default::default()
+            };
+            para_block(Paragraph::with_text("Brought in", props))
+        });
+        d.body = body.into();
+        d
+    };
+    let first = |blocks: &[Block]| blocks.iter().map(|b| b.as_para().map(|p| p.props_of_char(0).clone()).unwrap_or_default()).collect::<Vec<_>>();
+    let mut ours = Document::new();
+    for (accent1, keeps) in [(ours.settings.theme_colors[4], [true, true]), (Rgb(0x99, 0x33, 0x66), [false, true])] {
+        let src = theirs(accent1);
+        let shown = src.body.iter().map(|b| b.as_para().and_then(|p| p.props_of_char(0).color)).collect::<Vec<_>>();
+        let props = first(&ours.adopt(src).blocks);
+        assert_eq!(props.iter().map(|p| p.color).collect::<Vec<_>>(), shown, "shown as they were");
+        assert_eq!(props.iter().map(|p| p.color_sources.is_some()).collect::<Vec<_>>(), keeps, "{accent1:?}: accent1, accent2");
+    }
+}
+
 #[test]
 fn adopting_relinks_lists_in_deeply_nested_tables() {
     // As #1339: a list paragraph 20 tables down takes the list it is brought in with.

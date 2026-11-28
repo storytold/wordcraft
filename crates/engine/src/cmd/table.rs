@@ -93,7 +93,7 @@ pub fn specs() -> Vec<CommandSpec> {
         )),
         t(CommandSpec::new("table.shading", "Shading", "Table Design › Table Styles", |s, v| {
             let c = p::str(v, "color").and_then(Rgb::parse);
-            with_cells(s, |cl| cl.props.shading = c)
+            with_cells(s, |cl| cl.props.set_shading(c))
         })
         .params(r#"{"color": "RRGGBB" | null}"#)),
         t(CommandSpec::new("table.borders", "Borders", "Table Design › Borders", borders)

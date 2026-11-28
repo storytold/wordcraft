@@ -19,6 +19,7 @@ macro_rules! drop_same_fields {
 
 mod char_props;
 mod color;
+pub(crate) mod color_source;
 mod para_props;
 mod table_props;
 
@@ -26,6 +27,9 @@ pub use char_props::{
     CharProps, CombineBrackets, DEFAULT_FONT_SIZE, EastAsianLayout, EmphasisMark, Highlight, Ligatures, NumChange, PropChange, Underline, VertAlign,
 };
 pub use color::{Rgb, TextColor};
+pub use color_source::{
+    BlockColorSources, BorderColorSources, CharColorSources, ColorSource, Palette, SHADING_PATTERNS, ShadingSource, ThemeColor, ThemeRef,
+};
 pub use para_props::{
     Align, Border, BorderStyle, Borders, LineSpacing, NumRef, ParaProps, ParagraphTextDirection, TAB_POS_EPS, TabAlign, TabLeader, TabStop,
     TextAlignment, TextFrame,
@@ -38,6 +42,32 @@ pub use table_props::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A colour and its theme colour record move as one: a colour set over a theme colour
+    /// replaces the record even when it looks the same (it was chosen), formatting that sets no
+    /// colour keeps it, and `minus` keeps such a chosen colour, so base plus patch is the run.
+    #[test]
+    fn a_colour_and_its_theme_colour_move_as_one() {
+        let shown = Rgb(0x26, 0x4C, 0x73);
+        let theme = ThemeRef { color: ThemeColor::Accent1, tint: None, shade: Some(0xBF) };
+        let color = ColorSource { theme, value: Some(TextColor::Rgb(Rgb(0xA1, 0xB2, 0xC3))), shown: Some(TextColor::Rgb(shown)) };
+        let shading = ShadingSource { fill_theme: Some(theme), shown: Some(shown), ..Default::default() };
+        let themed = CharProps {
+            color: Some(TextColor::Rgb(shown)),
+            shading: Some(shown),
+            color_sources: Some(Box::new(CharColorSources { color: Some(color), shading: Some(shading.clone()), ..Default::default() })),
+            ..Default::default()
+        };
+        let bold = themed.clone().overlaid(&CharProps { bold: Some(true), ..Default::default() });
+        assert_eq!(bold.color_sources, themed.color_sources, "bold sets no colour");
+        let chosen = themed.clone().overlaid(&CharProps { color: Some(TextColor::Rgb(shown)), ..Default::default() });
+        assert_eq!(chosen.color, themed.color);
+        let kept = chosen.color_sources.as_deref().unwrap();
+        assert_eq!((kept.color, kept.shading.as_ref()), (None, Some(&shading)), "the shading wasn't chosen");
+        for (base, run) in [(&themed, &chosen), (&chosen, &themed)] {
+            assert_eq!(base.clone().overlaid(&run.clone().minus(base)), *run);
+        }
+    }
 
     #[test]
     fn rgb_hex() {

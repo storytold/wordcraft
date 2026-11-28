@@ -373,7 +373,7 @@ pub(super) fn apply_border_line(s: &mut Session, at: &Pos, line: Border) -> Resu
     let set_bottom = |p: &mut wordcraft_doc::Paragraph| {
         let mut b = p.props.borders.unwrap_or_default();
         b.bottom = Some(line);
-        p.props.borders = Some(b);
+        p.props.replace_borders(Some(b));
         p.touch();
     };
     let i = at.path.last();
@@ -390,7 +390,7 @@ pub(super) fn apply_border_line(s: &mut Session, at: &Pos, line: Border) -> Resu
             set_bottom(s.doc.para_mut(at.story, &at.path)?);
             let new = split_para(s, &end)?;
             let p = s.doc.para_mut(new.story, &new.path)?;
-            p.props.borders = None;
+            p.props.set_borders(None);
             p.touch();
             // The split changes the block count, and the formatting comparison after the command
             // skips a container whose block count changed, so the border is recorded here.

@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::props::{
-    Align, Border, BorderStyle, Borders, CharProps, LineSpacing, ParaProps, PropChange, Rgb, TabAlign, TabLeader, TabStop, TableLook, TextColor,
-    Underline, VAlign,
+    Align, BlockColorSources, Border, BorderStyle, Borders, CharProps, LineSpacing, ParaProps, PropChange, Rgb, TabAlign, TabLeader, TabStop,
+    TableLook, TextColor, Underline, VAlign,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -106,8 +106,9 @@ pub struct TableStyleParts {
     pub col_band_chr: CharProps,
     pub col_band_borders: Option<Borders>,
     /// Per-part formatting the named fields above don't carry: every field of the parts without
-    /// one (even bands, corner cells), and the cell text alignment of every part. Read and write
-    /// parts through [`TableStyleParts::part`] / [`TableStyleParts::set_part`].
+    /// one (even bands, corner cells), and the cell text alignment and the theme colours
+    /// ([`PartFormat::color_sources`]) of every part. Read and write parts through
+    /// [`TableStyleParts::part`] / [`TableStyleParts::set_part`].
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub regions: BTreeMap<TablePart, PartFormat>,
 }
@@ -286,16 +287,35 @@ pub struct PartFormat {
     pub align: Option<Align>,
     /// Vertical alignment in the cells (`w:tcPr/w:vAlign`).
     pub v_align: Option<VAlign>,
+    /// The theme colours the fill and the borders' colours came from
+    /// ([`crate::props::ParaProps::color_sources`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_sources: Option<Box<BlockColorSources>>,
 }
 
 impl PartFormat {
     pub fn is_empty(&self) -> bool {
         *self == PartFormat::default()
     }
-    /// What `patch` sets wins; borders merge edge by edge.
+    /// What `patch` sets wins; borders merge edge by edge. A fill or a border's colour goes with
+    /// its theme colour record, as a run's colours do (`CharProps::overlay`).
     pub fn overlay(&mut self, patch: &PartFormat) {
         self.chr.overlay(&patch.chr);
-        self.fill = patch.fill.or(self.fill);
+        let theirs = patch.color_sources.as_deref();
+        if patch.fill.is_some() || theirs.is_some_and(|s| s.shading.is_some()) {
+            self.fill = patch.fill;
+            crate::props::color_source::put(
+                &mut self.color_sources,
+                |s| &mut s.shading,
+                theirs.and_then(|s| s.shading.clone()),
+                BlockColorSources::is_empty,
+            );
+        }
+        if let Some(p) = &patch.borders {
+            let mut sides = crate::props::color_source::borders_of(&self.color_sources);
+            sides.overlay(p, &theirs.map(|s| s.borders).unwrap_or_default());
+            crate::props::color_source::put_borders(&mut self.color_sources, sides);
+        }
         self.borders = match (self.borders, patch.borders) {
             (Some(mut b), Some(p)) => {
                 b.overlay(&p);
@@ -310,41 +330,16 @@ impl PartFormat {
 
 impl TableStyleParts {
     /// Apply `patch` (a style further down a based-on chain) over these parts: what it sets wins,
-    /// the rest is inherited; borders merge edge by edge.
+    /// the rest is inherited; borders merge edge by edge ([`PartFormat::overlay`], part by part,
+    /// so each colour keeps its theme colour record).
     pub fn overlay(&mut self, patch: &TableStyleParts) {
-        let merge = |b: Option<Borders>, p: Option<Borders>| match (b, p) {
-            (Some(mut b), Some(p)) => {
-                b.overlay(&p);
-                Some(b)
-            }
-            (b, p) => p.or(b),
-        };
-        self.borders = merge(self.borders, patch.borders);
-        self.header_borders = merge(self.header_borders, patch.header_borders);
-        self.band_borders = merge(self.band_borders, patch.band_borders);
         self.band_size = patch.band_size.or(self.band_size);
         self.col_band_size = patch.col_band_size.or(self.col_band_size);
-        self.band_chr.overlay(&patch.band_chr);
-        self.fill = patch.fill.or(self.fill);
         self.cell_margins = patch.cell_margins.or(self.cell_margins);
-        self.header_fill = patch.header_fill.or(self.header_fill);
-        self.header_chr.overlay(&patch.header_chr);
-        self.band_fill = patch.band_fill.or(self.band_fill);
-        self.first_col_chr.overlay(&patch.first_col_chr);
-        self.total_chr.overlay(&patch.total_chr);
-        self.total_border_top = patch.total_border_top.or(self.total_border_top);
-        self.first_col_fill = patch.first_col_fill.or(self.first_col_fill);
-        self.first_col_borders = merge(self.first_col_borders, patch.first_col_borders);
-        self.last_col_fill = patch.last_col_fill.or(self.last_col_fill);
-        self.last_col_chr.overlay(&patch.last_col_chr);
-        self.last_col_borders = merge(self.last_col_borders, patch.last_col_borders);
-        self.total_fill = patch.total_fill.or(self.total_fill);
-        self.total_borders = merge(self.total_borders, patch.total_borders);
-        self.col_band_fill = patch.col_band_fill.or(self.col_band_fill);
-        self.col_band_chr.overlay(&patch.col_band_chr);
-        self.col_band_borders = merge(self.col_band_borders, patch.col_band_borders);
-        for (k, f) in &patch.regions {
-            self.regions.entry(*k).or_default().overlay(f);
+        for p in TablePart::ALL {
+            let mut f = self.part(p);
+            f.overlay(&patch.part(p));
+            self.set_part(p, f);
         }
     }
 
@@ -358,11 +353,17 @@ impl TableStyleParts {
             borders,
             align: extra.align,
             v_align: extra.v_align,
+            color_sources: extra.color_sources.clone(),
         };
         match p {
-            TablePart::WholeTable => {
-                PartFormat { chr: CharProps::default(), fill: self.fill, borders: self.borders, align: None, v_align: extra.v_align }
-            }
+            TablePart::WholeTable => PartFormat {
+                chr: CharProps::default(),
+                fill: self.fill,
+                borders: self.borders,
+                align: None,
+                v_align: extra.v_align,
+                color_sources: extra.color_sources.clone(),
+            },
             TablePart::FirstRow => named(&self.header_chr, self.header_fill, self.header_borders),
             TablePart::LastRow => {
                 // The built-in top rule is the region's top edge unless its borders set one.
@@ -386,13 +387,14 @@ impl TableStyleParts {
     /// Replace part `p`'s formatting (for the whole table only its fill, borders and vertical
     /// alignment: [`Style::set_table_part`] stores the rest).
     pub fn set_part(&mut self, p: TablePart, f: PartFormat) {
-        let align_only = PartFormat { align: f.align, v_align: f.v_align, ..PartFormat::default() };
+        // What the named fields don't hold: the alignments and the theme colours.
+        let align_only = PartFormat { align: f.align, v_align: f.v_align, color_sources: f.color_sources.clone(), ..PartFormat::default() };
         let PartFormat { chr, fill, borders, .. } = f.clone();
         let rest = match p {
             TablePart::WholeTable => {
                 self.fill = fill;
                 self.borders = borders;
-                PartFormat { v_align: f.v_align, ..PartFormat::default() }
+                PartFormat { v_align: f.v_align, color_sources: f.color_sources.clone(), ..PartFormat::default() }
             }
             TablePart::FirstRow => {
                 (self.header_chr, self.header_fill, self.header_borders) = (chr, fill, borders);

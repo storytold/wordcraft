@@ -360,7 +360,9 @@ impl StyleSheet {
         with.overlay(&ParaProps { style: None, ..table.clone() });
         let (with, _) = self.para_style_props_over(&style, with, CharProps::default());
         let (without, _) = self.para_style_props_over(&style, self.default_para.clone(), CharProps::default());
-        diff_patch(&with, &without)
+        let mut patch = diff_patch(&with, &without);
+        pair_para_colors(&mut patch, &with);
+        patch
     }
 
     /// What a table style's run formatting `table` changes for a run of character style
@@ -380,7 +382,10 @@ impl StyleSheet {
         };
         let mut with = self.default_chr.clone();
         with.overlay(&CharProps { style: None, ..table.clone() });
-        diff_patch(&chain(with), &chain(self.default_chr.clone()))
+        let with = chain(with);
+        let mut patch = diff_patch(&with, &chain(self.default_chr.clone()));
+        pair_char_colors(&mut patch, &with);
+        patch
     }
 
     /// Resolve a paragraph's properties.
@@ -447,6 +452,42 @@ impl StyleSheet {
     }
 }
 
+/// Each colour of `patch` whole: a colour and its theme colour record go together
+/// (`CharProps::overlay`), so where the patch has either (the records differ by box, not one by
+/// one, in [`diff_patch`]), it takes both from `with`.
+fn pair_char_colors(patch: &mut CharProps, with: &CharProps) {
+    let records = |p: &CharProps| p.color_sources.as_deref().cloned().unwrap_or_default();
+    let (mine, theirs) = (records(patch), records(with));
+    let mut kept = crate::props::CharColorSources::default();
+    if patch.color.is_some() || mine.color.is_some() {
+        (patch.color, kept.color) = (with.color, theirs.color);
+    }
+    if patch.underline_color.is_some() || mine.underline.is_some() {
+        (patch.underline_color, kept.underline) = (with.underline_color, theirs.underline);
+    }
+    if patch.border.is_some() || mine.border.is_some() {
+        (patch.border, kept.border) = (with.border, theirs.border);
+    }
+    if patch.shading.is_some() || mine.shading.is_some() {
+        (patch.shading, kept.shading) = (with.shading, theirs.shading);
+    }
+    patch.edit_color_sources(|s| *s = kept);
+}
+
+/// [`pair_char_colors`] for a paragraph's shading and borders.
+fn pair_para_colors(patch: &mut ParaProps, with: &ParaProps) {
+    let records = |p: &ParaProps| p.color_sources.as_deref().cloned().unwrap_or_default();
+    let (mine, theirs) = (records(patch), records(with));
+    let mut kept = crate::props::BlockColorSources::default();
+    if patch.shading.is_some() || mine.shading.is_some() {
+        (patch.shading, kept.shading) = (with.shading, theirs.shading);
+    }
+    if patch.borders.is_some() || !mine.borders.is_empty() {
+        (patch.borders, kept.borders) = (with.borders, theirs.borders);
+    }
+    patch.edit_color_sources(|s| *s = kept);
+}
+
 /// The properties of `with` that differ from `without` (both fully resolved property sets of one
 /// kind), as a set of only those; empty when serialisation fails.
 fn diff_patch<T: Serialize + serde::de::DeserializeOwned + Default>(with: &T, without: &T) -> T {
@@ -485,6 +526,26 @@ mod tests {
         }
         let rc = StyleSheet::builtin().resolve_char(None, &CharProps { size: Some(11.0), ..Default::default() });
         assert_eq!(rc.draw_size(), 11.0, "baseline text keeps its size");
+    }
+
+    /// A table style's run formatting differs from the chain's only in a colour's theme colour
+    /// (the same colour shown): the patch still gives the colour with its record, which replaces
+    /// the two together where it is applied, so the colour isn't lost there.
+    #[test]
+    fn a_table_style_patch_gives_a_theme_colour_with_its_colour() {
+        use crate::props::{CharColorSources, ColorSource, ThemeColor, ThemeRef};
+        let shown = TextColor::Rgb(Rgb(0x15, 0x60, 0x82));
+        let mut sheet = StyleSheet::empty();
+        sheet.default_chr.color = Some(shown);
+        let source = ColorSource { theme: ThemeRef { color: ThemeColor::Accent1, tint: None, shade: None }, value: Some(shown), shown: Some(shown) };
+        let table = CharProps {
+            color: Some(shown),
+            color_sources: Some(Box::new(CharColorSources { color: Some(source), ..Default::default() })),
+            ..Default::default()
+        };
+        let patch = sheet.table_char_patch(None, None, &table);
+        assert_eq!(patch.color_sources.as_deref().and_then(|s| s.color), Some(source));
+        assert_eq!(sheet.default_chr.clone().overlaid(&patch).color, Some(shown));
     }
 
     /// #2036: only a character itself (direct formatting) has a symbol font of its own; a

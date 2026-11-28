@@ -93,6 +93,11 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let date = crate::cmd::now_iso();
     let mut budget = MAX_COMPARE_CELLS;
     let mut revised = revised;
+    // The result is this document, under its theme: a theme colour of the revised text that
+    // gives another colour here than the one it shows there becomes that colour, fixed, as in
+    // content brought in by `Document::adopt`. One that gives the same colour stays, so text in
+    // it on both sides isn't a change.
+    revised.fit_theme_colors_to(&s.doc);
     let mut raw_media = std::mem::take(&mut revised.media);
     let mut media_map = BTreeMap::new();
     let notes = prepare_notes(&mut s.doc, &mut revised, &mut raw_media, &mut media_map, &opts, compare_notes);

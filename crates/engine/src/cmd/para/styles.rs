@@ -53,14 +53,14 @@ pub(super) fn apply_style(s: &mut Session, v: &Value) -> CmdResult {
                 c.font_ea = None;
                 c.size = None;
                 c.size_cs = None;
-                c.color = None;
+                c.set_color(None);
             })?;
             para.mark.font = None;
             para.mark.font_cs = None;
             para.mark.font_ea = None;
             para.mark.size = None;
             para.mark.size_cs = None;
-            para.mark.color = None;
+            para.mark.set_color(None);
         }
     }
     s.pending = None;
@@ -216,11 +216,45 @@ const CHAR_KEEP: &[&str] = &["style", "link", "ins", "del", "fmtChange"];
 /// stays a heading), list numbering and revisions.
 const PARA_KEEP: &[&str] = &["style", "outlineLevel", "numbering", "numChange", "fmtChange"];
 
+/// Each colour property and the member of `colorSources` that records its theme colour.
+const COLOR_GROUPS: [(&str, &str); 5] =
+    [("color", "color"), ("underlineColor", "underline"), ("border", "border"), ("shading", "shading"), ("borders", "borders")];
+
+/// `t` as a map of its properties, each colour with its theme colour record under the colour's
+/// key (`{"value", "source"}`), so the two compare and move as one: a colour chosen to look like
+/// a theme colour differs from it.
 fn props_map<T: serde::Serialize>(t: &T) -> serde_json::Map<String, Value> {
-    match serde_json::to_value(t) {
+    let mut m = match serde_json::to_value(t) {
         Ok(Value::Object(m)) => m,
         _ => serde_json::Map::new(),
+    };
+    let sources = m.remove("colorSources");
+    for (color, member) in COLOR_GROUPS {
+        let (value, source) = (m.remove(color), sources.as_ref().and_then(|s| s.get(member)).cloned());
+        if value.is_some() || source.is_some() {
+            m.insert(color.into(), json!({"value": value, "source": source}));
+        }
     }
+    m
+}
+
+/// The properties [`props_map`] gives, as `T`.
+fn from_map<T: serde::de::DeserializeOwned>(mut m: serde_json::Map<String, Value>) -> serde_json::Result<T> {
+    let mut sources = serde_json::Map::new();
+    for (color, member) in COLOR_GROUPS {
+        if let Some(group) = m.remove(color) {
+            if let Some(v) = group.get("value").filter(|v| !v.is_null()) {
+                m.insert(color.into(), v.clone());
+            }
+            if let Some(s) = group.get("source").filter(|s| !s.is_null()) {
+                sources.insert(member.into(), s.clone());
+            }
+        }
+    }
+    if !sources.is_empty() {
+        m.insert("colorSources".into(), Value::Object(sources));
+    }
+    serde_json::from_value(Value::Object(m))
 }
 
 /// A style's own properties `own`, changed so that its chain gives `want` where it gave `have`:
@@ -238,14 +272,14 @@ fn retarget<T: serde::Serialize + serde::de::DeserializeOwned>(own: &T, have: &T
             None => out.remove(k),
         };
     }
-    serde_json::from_value(Value::Object(out)).map_err(|e| CmdError::Failed(e.to_string()))
+    from_map(out).map_err(|e| CmdError::Failed(e.to_string()))
 }
 
 /// `direct` without the properties that have the same value in `inherited` (outside `keep`).
 fn strip_matching<T: serde::Serialize + serde::de::DeserializeOwned + Clone>(direct: &T, inherited: &T, keep: &[&str]) -> T {
     let (mut out, inherited) = (props_map(direct), props_map(inherited));
     out.retain(|k, v| keep.contains(&k.as_str()) || inherited.get(k) != Some(v));
-    serde_json::from_value(Value::Object(out)).unwrap_or_else(|_| direct.clone())
+    from_map(out).unwrap_or_else(|_| direct.clone())
 }
 
 /// Delete a custom style. Text that uses it falls back to the style it was based on (or the

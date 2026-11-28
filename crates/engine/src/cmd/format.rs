@@ -59,7 +59,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"value"?: bool}"#),
         // Note: off clears the direct property only; a border inherited from a character style stays on.
         CommandSpec::new("format.border", "Character Border", "Home › Font", |s, v| {
-            toggle(s, v, |r| r.border.is_some(), |c, on| c.border = on.then(|| Border::single(0.5)))
+            toggle(s, v, |r| r.border.is_some(), |c, on| c.set_border(on.then(|| Border::single(0.5))))
         })
         .params(r#"{"value"?: bool}"#),
         CommandSpec::new("format.doubleStrikethrough", "Double Strikethrough", "Home › Font › Font", |s, v| {
@@ -114,7 +114,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .key(super::non_mac("Mod+Alt+H")),
         CommandSpec::new("format.shading", "Character Shading", "Home › Font", |s, v| {
             let c = p::str(v, "color").and_then(Rgb::parse);
-            apply(s, &|x| x.shading = c)
+            apply(s, &|x| x.set_shading(c))
         })
         .params(r#"{"color": "RRGGBB" | null}"#),
         CommandSpec::new("format.changeCase", "Change Case", "Home › Font", change_case)
@@ -455,7 +455,8 @@ fn resize(s: &mut Session, next: &dyn Fn(f32) -> f32) -> CmdResult {
 fn color(s: &mut Session, v: &Value) -> CmdResult {
     let c = p::req_str(v, "color")?;
     let tc = TextColor::parse(c).ok_or_else(|| CmdError::Params("color must be RRGGBB or auto".into()))?;
-    apply(s, &|x| x.color = Some(tc))
+    // A colour chosen replaces the theme colour the text had, one that looks the same too.
+    apply(s, &|x| x.set_color(Some(tc)))
 }
 
 /// `format.underlineColor`: the underline's own colour (`w:u w:color`), or `auto` to drop it so the
@@ -466,7 +467,7 @@ fn underline_color(s: &mut Session, v: &Value) -> CmdResult {
         TextColor::Auto => None,
         TextColor::Rgb(rgb) => Some(rgb),
     };
-    apply(s, &|x| x.underline_color = rgb)
+    apply(s, &|x| x.set_underline_color(rgb))
 }
 
 /// Test the entire highlight target without the formatting-state query's run cap.

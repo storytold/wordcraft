@@ -271,10 +271,11 @@ pub(super) fn borders(s: &mut Session, v: &Value) -> CmdResult {
             "right" => cur.right = Some(b),
             _ => {}
         }
-        t.props.borders = Some(cur);
+        // The sides this sets lose their theme colours; the others keep theirs.
+        t.props.replace_borders(Some(cur));
         for r in &mut t.rows {
             for c in &mut r.cells {
-                c.props.borders = None;
+                c.props.set_borders(None);
             }
         }
     })

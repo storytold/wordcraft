@@ -906,11 +906,14 @@ fn painter(s: &mut Session, v: &Value) -> CmdResult {
 /// Apply the format painter's formatting to the selection, or else what Copy Formatting picked
 /// up (which stays for the next Paste Formatting).
 fn paste_format(s: &mut Session, _: &Value) -> CmdResult {
-    let (chr, para, sticky) = match (s.painter.clone(), s.copied_format.clone()) {
+    let (mut chr, mut para, sticky) = match (s.painter.clone(), s.copied_format.clone()) {
         (Some(brush), _) => brush,
         (None, Some((chr, para))) => (chr, para, true),
         (None, None) => return Err(CmdError::Failed("no formatting copied".into())),
     };
+    // Picked up in another open document, or here under another theme: it keeps the colours it
+    // shows, as Paste does.
+    s.doc.fit_formatting(&mut chr, &mut para);
     let (a, b) = s.sel.ordered();
     if a == b {
         // No selection: apply paragraph formatting (and word formatting like Word).

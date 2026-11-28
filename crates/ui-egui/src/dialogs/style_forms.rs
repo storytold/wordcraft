@@ -33,6 +33,9 @@ pub(crate) struct ModifyStyleForm {
     italic: bool,
     /// `RRGGBB`, or "auto".
     color: String,
+    /// The colour the dialog opened with: sent again only when changed, so a style whose colour
+    /// follows a theme colour keeps following it when another field is edited.
+    color_read: String,
     before: f64,
     after: f64,
 }
@@ -49,6 +52,10 @@ impl ModifyStyleForm {
             },
         );
         let rp = app.session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some(id.into()), ..Default::default() });
+        let color = match rc.color {
+            wordcraft_doc::TextColor::Rgb(c) => c.hex(),
+            wordcraft_doc::TextColor::Auto => "auto".into(),
+        };
         Some(ModifyStyleForm {
             id: id.into(),
             name: st.name.clone(),
@@ -56,19 +63,20 @@ impl ModifyStyleForm {
             size: f64::from(rc.size),
             bold: rc.bold,
             italic: rc.italic,
-            color: match rc.color {
-                wordcraft_doc::TextColor::Rgb(c) => c.hex(),
-                wordcraft_doc::TextColor::Auto => "auto".into(),
-            },
+            color_read: color.clone(),
+            color,
             before: f64::from(rp.space_before),
             after: f64::from(rp.space_after),
         })
     }
 
-    /// The `styles.modify` parameters; `font` is the family as the document stores it. An unparsable colour sends none.
+    /// The `styles.modify` parameters; `font` is the family as the document stores it. An unparsable colour, or one
+    /// left as it opened, sends none.
     fn params(&self, font: &str) -> Value {
         let mut chr = json!({"font": font, "size": self.size, "bold": self.bold, "italic": self.italic});
-        if let Some(c) = wordcraft_doc::Rgb::parse(&self.color) {
+        if !self.color.trim().eq_ignore_ascii_case(&self.color_read)
+            && let Some(c) = wordcraft_doc::Rgb::parse(&self.color)
+        {
             chr["color"] = json!({"Rgb": [c.0, c.1, c.2]});
         }
         json!({"style": self.id, "name": self.name, "chr": chr, "para": {"spaceBefore": self.before, "spaceAfter": self.after}})

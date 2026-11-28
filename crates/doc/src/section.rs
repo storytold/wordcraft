@@ -802,6 +802,11 @@ pub struct SectionProps {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub form_prot: Option<bool>,
     pub page_borders: Option<Borders>,
+    /// The theme colours the page borders' colours came from, as the file gave them
+    /// ([`crate::props::BorderColorSources`]), so saving writes them back. Set the borders
+    /// through [`SectionProps::set_page_borders`], which drops them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_border_sources: Option<Box<crate::props::BorderColorSources>>,
     /// Text direction / bidi section.
     pub rtl: bool,
     /// Which way the section's text runs (`w:textDirection`, ECMA-376 §17.6.20): vertical
@@ -865,6 +870,7 @@ impl Default for SectionProps {
             valign: PageVAlign::Top,
             form_prot: None,
             page_borders: None,
+            page_border_sources: None,
             rtl: false,
             text_direction: crate::props::TextDirection::Horizontal,
             text_direction_set: false,
@@ -890,6 +896,13 @@ fn is_horizontal(d: &crate::props::TextDirection) -> bool {
 }
 
 impl SectionProps {
+    /// Set the page borders, their colours chosen: the theme colours they had go. A change of a
+    /// border's width or style alone keeps its theme colour: change it in place.
+    pub fn set_page_borders(&mut self, borders: Option<Borders>) {
+        self.page_borders = borders;
+        self.page_border_sources = None;
+    }
+
     /// Join the section before this one into it, as when the break between them is deleted:
     /// this section's setup stays, as in Word, and the headers and footers it leaves out (linked
     /// to the previous section) are taken from `before`, so its text keeps showing them.

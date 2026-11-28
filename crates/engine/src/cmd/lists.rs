@@ -130,8 +130,12 @@ pub fn level_from(mut l: Level, i: usize, v: &Value) -> Level {
         l.chr.italic = Some(b);
     }
     match v.get("color") {
-        Some(Value::Null) => l.chr.color = None,
-        Some(Value::String(s)) => l.chr.color = Rgb::parse(s).map(TextColor::Rgb).or(l.chr.color),
+        Some(Value::Null) => l.chr.set_color(None),
+        Some(Value::String(s)) => {
+            if let Some(c) = Rgb::parse(s) {
+                l.chr.set_color(Some(TextColor::Rgb(c)));
+            }
+        }
         _ => {}
     }
     if let Some(b) = p::bool(v, "legal") {
@@ -234,7 +238,7 @@ pub fn define_bullet(s: &mut Session, v: &Value) -> CmdResult {
                 lv.chr.italic = italic;
             }
             if color.is_some() {
-                lv.chr.color = color;
+                lv.chr.set_color(color);
             }
             if let Some(a) = align {
                 lv.align = a;

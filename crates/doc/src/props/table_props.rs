@@ -1,5 +1,6 @@
 use super::char_props::PropChange;
 use super::color::Rgb;
+use super::color_source::{BlockColorSources, put, put_borders};
 use super::para_props::{Align, Borders};
 use super::{Deserialize, Serialize};
 
@@ -142,6 +143,10 @@ pub struct TableProps {
     /// column, banded columns.
     pub look: TableLook,
     pub shading: Option<Rgb>,
+    /// The theme colours `shading` and the borders' colours came from
+    /// ([`super::ParaProps::color_sources`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_sources: Option<Box<BlockColorSources>>,
     /// Alternative text: the title (`w:tblCaption`).
     pub caption: Option<String>,
     /// Alternative text: the description (`w:tblDescription`).
@@ -278,6 +283,10 @@ pub struct CellProps {
     pub vmerge: VMerge,
     pub shading: Option<Rgb>,
     pub borders: Option<Borders>,
+    /// The theme colours `shading` and the borders' colours came from
+    /// ([`super::ParaProps::color_sources`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_sources: Option<Box<BlockColorSources>>,
     /// Vertical alignment (`w:vAlign`); `None` follows the table style, else top. An explicit
     /// `Top` beats the style.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -333,6 +342,29 @@ pub enum PictureRepeat {
     /// Stretched over the area.
     Stretch,
 }
+
+/// Setters for a table's, a row's exceptions' and a cell's shading and borders, as
+/// [`super::ParaProps::set_shading`] and [`super::ParaProps::set_borders`] set a paragraph's.
+macro_rules! shading_and_borders {
+    ($t:ty) => {
+        impl $t {
+            /// Set the shading as a colour chosen: the theme colour it had goes.
+            pub fn set_shading(&mut self, shading: Option<Rgb>) {
+                self.shading = shading;
+                put(&mut self.color_sources, |s| &mut s.shading, None, BlockColorSources::is_empty);
+            }
+
+            /// Set the borders, their colours chosen: the theme colours they had go.
+            pub fn set_borders(&mut self, borders: Option<Borders>) {
+                self.borders = borders;
+                put_borders(&mut self.color_sources, Default::default());
+            }
+        }
+    };
+}
+
+shading_and_borders!(TableProps);
+shading_and_borders!(CellProps);
 
 impl CellProps {
     /// Resolve top, left, bottom and right margins against the current table defaults.

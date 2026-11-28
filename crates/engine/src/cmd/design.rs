@@ -62,6 +62,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let name = p::req_str(v, "name")?;
             let t = THEMES.iter().find(|t| t.0.eq_ignore_ascii_case(name)).ok_or_else(|| CmdError::Params(format!("unknown colours `{name}`")))?;
             set_accent(s, t.3[0]);
+            s.doc.refresh_theme_colors();
             sel_result(s)
         })
         .params(r#"{"name": string (see design.themes)}"#),
@@ -74,7 +75,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("design.watermark", "Watermark", "Design › Page Background", watermark)
             .params(r#"{"text"?: string, "remove"?: bool, "diagonal"?: bool, "color"?: "RRGGBB"}"#),
         CommandSpec::new("design.pageColor", "Page Color", "Design › Page Background", |s, v| {
-            s.doc.settings.page_color = p::str(v, "color").and_then(Rgb::parse);
+            s.doc.settings.set_page_color(p::str(v, "color").and_then(Rgb::parse));
             s.doc.settings.page_picture = None;
             sel_result(s)
         })
@@ -109,6 +110,9 @@ fn set_fonts(s: &mut Session, heading: &str, body: &str) {
     }
 }
 
+/// Give the headings and intense styles the accent colour, and make it the theme's first accent.
+/// A colour that follows a theme colour keeps following it: the caller refreshes those once the
+/// theme's colours are all set (`Document::refresh_theme_colors`).
 fn set_accent(s: &mut Session, accent: Rgb) {
     for st in &mut Arc::make_mut(&mut s.doc.styles).styles {
         if st.id.starts_with("Heading") && st.id.len() == 8 && st.id.as_bytes().get(7).is_some_and(|d| *d <= b'5')
@@ -116,11 +120,21 @@ fn set_accent(s: &mut Session, accent: Rgb) {
             || st.id == "IntenseEmphasis"
             || st.id == "IntenseReference"
         {
-            st.chr.color = Some(TextColor::Rgb(accent));
-            if let Some(b) = st.para.borders.as_mut() {
-                for e in [&mut b.top, &mut b.bottom].into_iter().flatten() {
-                    e.color = Some(accent);
+            let themed = |source: Option<&wordcraft_doc::props::ColorSource>, now: Option<TextColor>| source.is_some_and(|c| c.holds(now));
+            if !themed(st.chr.color_sources.as_deref().and_then(|c| c.color.as_ref()), st.chr.color) {
+                st.chr.set_color(Some(TextColor::Rgb(accent)));
+            }
+            let sources = st.para.color_sources.as_deref().map(|c| c.borders).unwrap_or_default();
+            if let Some(mut b) = st.para.borders {
+                for (e, source) in [(&mut b.top, sources.top), (&mut b.bottom, sources.bottom)] {
+                    if let Some(e) = e.as_mut()
+                        && !themed(source.as_ref(), e.color.map(TextColor::Rgb))
+                    {
+                        e.color = Some(accent);
+                    }
                 }
+                // The edges given the accent lose any theme colour they had; the others keep theirs.
+                st.para.replace_borders(Some(b));
             }
         }
     }
@@ -142,6 +156,8 @@ fn theme(s: &mut Session, v: &Value) -> CmdResult {
         }
     }
     s.doc.settings.theme_colors = colors;
+    // The colours that follow the theme's colours now show the new ones.
+    s.doc.refresh_theme_colors();
     sel_result(s)
 }
 
@@ -291,7 +307,7 @@ fn page_borders(s: &mut Session, v: &Value) -> CmdResult {
         Some(x) => return Err(CmdError::Params(format!("unknown `applyTo` `{x}`"))),
     };
     for block in blocks {
-        s.doc.section_mut(block).page_borders = borders;
+        s.doc.section_mut(block).set_page_borders(borders);
     }
     sel_result(s)
 }
