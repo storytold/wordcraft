@@ -128,6 +128,7 @@ pub const SPECIAL: &[(&str, char, Option<&str>)] = &[
     ("Double Closing Quote", '\u{201D}', None),
     ("No-Width Optional Break", '\u{200B}', None),
     ("No-Width Non Break", '\u{2060}', None),
+    ("Zero Width Non-Joiner", '\u{200C}', Some("text.zwnj")),
 ];
 
 /// What a form asks the Symbol dialog to pick: the character and font it opens on.
@@ -558,7 +559,8 @@ fn special_table(ui: &mut Ui, form: &mut SymbolForm) -> bool {
         .selection(Bind::bound(&mut selection))
         .show_items(ui, &source, &mut |at, icx| {
             let Some((label, c, command)) = SPECIAL.get(*at) else { return ListRow::new(Label::Empty) };
-            let shown = if c.is_whitespace() || matches!(*c, '\u{00AD}' | '\u{200B}' | '\u{2060}') { String::new() } else { c.to_string() };
+            let shown =
+                if c.is_whitespace() || matches!(*c, '\u{00AD}' | '\u{200B}' | '\u{200C}' | '\u{2060}') { String::new() } else { c.to_string() };
             let row = ListRow::new(shown).cells(icx.cells()).cell(name.clone(), word(label));
             // The chord comes from the framework's command chords, as the ribbon's.
             match command.and_then(|id| craft::ui::runtime::commands::chord(&ctx, &craft::ui::runtime::commands::CommandRef::from(id))) {

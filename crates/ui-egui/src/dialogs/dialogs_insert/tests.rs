@@ -119,6 +119,21 @@ fn symbol_dialog_inserts_with_its_font() {
     assert_eq!(f.params().unwrap(), json!({"char": "\u{2665}"}));
 }
 
+/// #3447: Special Characters lists the Persian half-space (U+200C) with `text.zwnj`, so its row
+/// shows the command's key and inserts through it. Every row's command exists.
+#[test]
+fn special_characters_list_the_half_space_with_its_command() {
+    let mut a = app();
+    let row = SPECIAL.iter().find(|(_, c, _)| *c == '\u{200C}').expect("the half-space row");
+    assert_eq!(row.2, Some("text.zwnj"));
+    for (label, _, command) in SPECIAL {
+        if let Some(id) = command {
+            assert!(a.run(id, json!({})).is_ok(), "{label}: {id}");
+        }
+    }
+    assert!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains('\u{200C}'));
+}
+
 /// #7326: Recently used symbols and Symbols map use compact tile sizing so the dialog
 /// fits comfortably within default window bounds without vertical overflow.
 #[test]

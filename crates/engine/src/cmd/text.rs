@@ -41,6 +41,8 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("text.nbsp", "Nonbreaking Space", "Insert › Symbols", |s, _| ins_char(s, NBSP)).key("Mod+Shift+Space"),
         CommandSpec::new("text.nbHyphen", "Nonbreaking Hyphen", "Insert › Symbols", |s, _| ins_char(s, NB_HYPHEN)).key("Mod+Shift+-"),
         CommandSpec::new("text.optionalHyphen", "Optional Hyphen", "Insert › Symbols", |s, _| ins_char(s, SOFT_HYPHEN)).key("Mod+-"),
+        // The Persian half-space (نیم‌فاصله, U+200C) on the chord Persian typists use for it (#3447).
+        CommandSpec::new("text.zwnj", "Zero Width Non-Joiner", "Insert › Symbols", |s, _| ins_char(s, '\u{200C}')).key("Mod+Shift+2"),
         // Alt+X on Windows and Linux; macOS has no default (Option+X types a character there).
         CommandSpec::new("text.toggleUnicode", "Toggle Unicode Character", "Editing", toggle_unicode).key(if cfg!(target_os = "macos") {
             ""
