@@ -411,7 +411,17 @@ impl<'e> Breaker<'e> {
                 // A taller line starts a new row so `even_row` cannot enlarge those lines into a
                 // float missed by the original estimate.
                 if self.lines.len() > self.row_first {
-                    self.top += even_row(self.lines.get_mut(self.row_first..).unwrap_or_default());
+                    let row_top = self.top;
+                    let row_end = row_top + even_row(self.lines.get_mut(self.row_first..).unwrap_or_default());
+                    self.top = if self.joined {
+                        self.exclusions
+                            .iter()
+                            .filter(|e| e.top_bottom && e.top < row_end + 0.02 && e.bottom > row_top)
+                            .map(|e| e.bottom)
+                            .fold(row_end, f32::max)
+                    } else {
+                        row_end
+                    };
                     self.row_rest.clear();
                     self.reset_row_height();
                     sc = self.scan_line(pl);
@@ -420,9 +430,20 @@ impl<'e> Breaker<'e> {
                 let table_h = if matches!(self.rp.line_spacing, LineSpacing::Exactly(_)) { self.table_h } else { v.height };
                 let row = (self.top, v.height, table_h);
                 let spans = row_spans(self.exclusions, row, (sc.row_lo, self.base_right), self.tight_indent);
-                let fits =
-                    spans.as_ref().is_ok_and(|spans| spans.iter().any(|(left, right)| *left <= sc.left + 0.01 && *right >= sc.right_edge - 0.01));
-                if !fits {
+                let current = spans.as_ref().ok().and_then(|spans| {
+                    spans.iter().position(|(left, right)| *left <= sc.left + 0.01 && *right >= sc.right_edge - 0.01)
+                });
+                if let Some(current) = current {
+                    // Keep the remaining spans, updated for the measured height. In a joined
+                    // paragraph they can include the area continuing below the shared line.
+                    self.row_h = v.height;
+                    self.row_rest = spans
+                        .as_ref()
+                        .ok()
+                        .into_iter()
+                        .flat_map(|spans| spans.iter().skip(current + 1).copied())
+                        .collect();
+                } else {
                     self.top = match spans {
                         Err(below) => below,
                         Ok(_) => {
@@ -440,9 +461,6 @@ impl<'e> Breaker<'e> {
                     sc = self.scan_line(pl);
                     continue;
                 }
-                // The current span is still clear, but later spans were computed with a shorter row.
-                self.row_h = v.height;
-                self.row_rest.clear();
             }
             self.align(pl, &mut sc, c1);
             let start = pl.clusters.get(sc.c0).map(|c| c.start).unwrap_or(pl.text_len);
