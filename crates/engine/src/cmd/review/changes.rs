@@ -608,10 +608,11 @@ pub(super) fn list_changes(s: &mut Session, _: &Value) -> CmdResult {
         list.iter()
             .map(|c| {
                 let rev = c.rev.and_then(|r| s.doc.revisions.get(r as usize));
+                // The date in UTC when it is known; a file's `w:date` without it is as read.
                 let mut v = json!({
                     "kind": c.kind, "start": pos_json(&c.a), "end": pos_json(&c.b),
                     "text": s.doc.copy_range(&c.a, &c.b).plain_text(),
-                    "author": rev.map(|r| r.author.clone()), "date": rev.map(|r| r.date.clone()),
+                    "author": rev.map(|r| r.author.clone()), "date": rev.map(|r| r.instant().to_string()),
                 });
                 if c.kind == "format" {
                     v["description"] = json!(fmt_revisions::describe(&c.props));

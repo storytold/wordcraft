@@ -56,7 +56,7 @@ pub fn cut_tracked(s: &mut Session) -> Result<bool, CmdError> {
     if !s.doc.settings.track_changes || !s.doc.settings.track_moves || a == b || a.story != b.story || !move_sized(&s.clipboard_text) {
         return Ok(false);
     }
-    s.doc.revisions.push(Revision::new(RevisionKind::Delete, s.author.clone(), now_iso()));
+    s.doc.revisions.push(Revision::made_at(RevisionKind::Delete, s.author.clone(), now_iso()));
     let rid = (s.doc.revisions.len() - 1) as u32;
     let at = track_delete_as(s, &a, &b, rid)?.at;
     s.sel = Selection::caret(at);
@@ -75,13 +75,13 @@ pub fn take_paste(s: &mut Session, frag: &Fragment) -> Option<u32> {
         return None;
     }
     let src = s.doc.revisions.get(m.rev as usize).filter(|r| r.kind == RevisionKind::Delete && r.move_name.is_none())?;
-    let date = src.date.clone();
+    let (date, date_utc) = (src.date.clone(), src.date_utc.clone());
     let taken: BTreeSet<&str> = s.doc.revisions.iter().filter_map(|r| r.move_name.as_deref()).collect();
     let name = (1..).map(|n: u64| format!("move{n}")).find(|n| !taken.contains(n.as_str()))?;
     if let Some(r) = s.doc.revisions.get_mut(m.rev as usize) {
         r.move_name = Some(name.clone());
     }
-    s.doc.revisions.push(Revision { kind: RevisionKind::Insert, author: s.author.clone(), date, move_name: Some(name) });
+    s.doc.revisions.push(Revision { kind: RevisionKind::Insert, author: s.author.clone(), date, move_name: Some(name), date_utc });
     Some((s.doc.revisions.len() - 1) as u32)
 }
 

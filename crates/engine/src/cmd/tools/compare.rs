@@ -116,9 +116,9 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         }
         std::mem::take(&mut revised.body)
     };
-    s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Insert, author: author.clone(), date: date.clone(), move_name: None });
+    s.doc.revisions.push(wordcraft_doc::Revision::made_at(RevisionKind::Insert, author.clone(), date.clone()));
     let ins = (s.doc.revisions.len() - 1) as u32;
-    s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Delete, author: author.clone(), date: date.clone(), move_name: None });
+    s.doc.revisions.push(wordcraft_doc::Revision::made_at(RevisionKind::Delete, author.clone(), date.clone()));
     let del = (s.doc.revisions.len() - 1) as u32;
     let mut char_fallbacks = 0usize;
     let mut table_fallbacks = 0usize;
@@ -1437,10 +1437,10 @@ fn diff_table(
 
 /// Find or create the formatting revision entry for `author` and `date`.
 fn format_revision(doc: &mut Document, author: &str, date: &str) -> u32 {
-    if let Some(i) = doc.revisions.iter().rposition(|r| r.kind == RevisionKind::Format && r.author == author && r.date == date) {
+    if let Some(i) = doc.revisions.iter().rposition(|r| r.kind == RevisionKind::Format && r.author == author && r.instant() == date) {
         return u32::try_from(i).unwrap_or(u32::MAX);
     }
-    doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Format, author: author.to_string(), date: date.to_string(), move_name: None });
+    doc.revisions.push(wordcraft_doc::Revision::made_at(RevisionKind::Format, author.to_string(), date.to_string()));
     u32::try_from(doc.revisions.len().saturating_sub(1)).unwrap_or(u32::MAX)
 }
 

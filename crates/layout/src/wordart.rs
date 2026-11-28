@@ -426,7 +426,7 @@ mod tests {
         use wordcraft_doc::props::TextDirection;
         use wordcraft_doc::{CharProps, Document, Paragraph, Revision, RevisionKind, para_block};
         let mut d = Document::new();
-        d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Ada".into(), date: String::new(), move_name: None });
+        d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Ada".into(), date: String::new(), move_name: None, date_utc: None });
         let cp = CharProps { outline: Some(true), size: Some(20.0), ins: Some(0), ..Default::default() };
         d.body = vec![para_block(Paragraph::with_text("Inserted", cp))];
         let mut opts = DisplayOptions { markup: true, ..Default::default() };

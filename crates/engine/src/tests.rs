@@ -15133,7 +15133,7 @@ fn sectioned_revision(delete: bool) -> Session {
     run(&mut s, "caret.set", json!({"pos": {"block": 2, "off": 0}}));
     run(&mut s, "para.style", json!({"style": "Heading1"}));
     let kind = if delete { RevisionKind::Delete } else { RevisionKind::Insert };
-    s.doc.revisions.push(Revision { kind, author: "Ada".into(), date: String::new(), move_name: None });
+    s.doc.revisions.push(Revision { kind, author: "Ada".into(), date: String::new(), move_name: None, date_utc: None });
     s.doc.last_section.margin_left = 72.0;
     let mut sect = s.doc.last_section.clone();
     sect.margin_left = 144.0;

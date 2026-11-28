@@ -429,6 +429,7 @@ fn tracked_separator_session(slot: Slot) -> Session {
         author: "Alice".into(),
         date: String::new(),
         move_name: None,
+        date_utc: None,
     });
     let props = wordcraft_doc::CharProps { ins: Some(0), ..Default::default() };
     let p = wordcraft_doc::Paragraph::with_text("SEP", props);

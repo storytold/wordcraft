@@ -9,7 +9,7 @@ pub fn open(ext: &str, bytes: &[u8], page: &wordcraft_doc::SectionProps) -> Opti
         "docx" | "docm" | "dotx" | "dotm" => Some(crate::io::read_docx(bytes, None).map_err(|e| e.to_string())),
         "doc" | "dot" => Some(wordcraft_docbin::read(bytes).map_err(|e| e.to_string())),
         // Word XML Document (Flat OPC) or Word 2003 XML, told apart by the root element.
-        "xml" => Some(crate::io::read_word_xml(bytes).map_err(|e| e.to_string())),
+        "xml" => Some(wordcraft_docx::read_xml(bytes).map_err(|e| e.to_string())),
         // HTML, Markdown, RTF…: pictures fit the text width (see `io::fit_pictures`). An
         // OpenDocument file says how big they are, and one wider than the text is meant to be;
         // changing it would take its paragraph off being written as read. Its reader fits those
@@ -103,11 +103,12 @@ pub fn save(ext: &str, doc: &Document, opts: &crate::io::ExportOptions) -> Optio
     }
 }
 
-/// The document with its tracked changes dated as Word dates them (`w:date`): in local wall-clock
-/// time, with a `Z` Word writes but doesn't mean. Word read the UTC dates WordCraft wrote as local
-/// time, shifted by the user's offset from UTC (#6851). The document itself keeps the UTC instant:
-/// the repeated hour as daylight saving time ends gives two edits an hour apart the same local
-/// time, and an author's edits at one date share a revision. None when no date changes.
+/// The document with the tracked changes made here dated as Word dates them (`w:date`): in local
+/// wall-clock time, with a `Z` Word writes but doesn't mean. Word read the UTC dates WordCraft
+/// wrote as local time, shifted by the user's offset from UTC (#6851). Each keeps its UTC instant
+/// in `date_utc`, written as `w16du:dateUtc`: the repeated hour as daylight saving time ends gives
+/// two edits an hour apart the same local time. A change read from a file is written as read.
+/// None when no date changes.
 pub(crate) fn word_revision_dates(doc: &Document) -> Option<Document> {
     let revisions = revision_dates(&doc.revisions, |d| word_date(d, crate::cmd::local_offset_secs))?;
     let mut doc = doc.clone();
@@ -115,18 +116,14 @@ pub(crate) fn word_revision_dates(doc: &Document) -> Option<Document> {
     Some(doc)
 }
 
-/// A Word document's tracked change dates as the document keeps them, in UTC: see
-/// [`word_revision_dates`].
-pub(crate) fn utc_revision_dates(doc: &mut Document) {
-    if let Some(revisions) = revision_dates(&doc.revisions, |d| utc_date(d, crate::cmd::local_offset_secs)) {
-        doc.revisions = revisions;
-    }
-}
-
-/// `revisions` with each date `convert` gives a new one for; None when it gives none.
+/// `revisions` with the date of each one made here (its `date` is its `date_utc`) that `convert`
+/// gives a new one for; None when it gives none.
 fn revision_dates(revisions: &[wordcraft_doc::Revision], convert: impl Fn(&str) -> Option<String>) -> Option<Vec<wordcraft_doc::Revision>> {
     let mut out = None;
     for (i, r) in revisions.iter().enumerate() {
+        if r.date_utc.as_deref() != Some(r.date.as_str()) {
+            continue;
+        }
         if let Some(date) = convert(&r.date).filter(|d| *d != r.date) {
             out.get_or_insert_with(|| revisions.to_vec()).get_mut(i)?.date = date;
         }
@@ -140,25 +137,6 @@ fn revision_dates(revisions: &[wordcraft_doc::Revision], convert: impl Fn(&str) 
 fn word_date(date: &str, zone: impl Fn(u64) -> i64) -> Option<String> {
     let utc = u64::try_from(chrono::DateTime::parse_from_rfc3339(date.trim()).ok()?.timestamp()).ok()?;
     Some(crate::cmd::iso_from_unix_secs(utc.checked_add_signed(zone(utc))?))
-}
-
-/// Word's `w:date` as a UTC date: a `Z` date is the wall-clock time in the zone `zone` gives, as
-/// Word writes it; one with an offset is converted by it. A wall-clock time the clocks pass twice
-/// as they go back reads as one of the two. None leaves the date as read (no zone or no time of
-/// day, before 1970, unreadable).
-fn utc_date(date: &str, zone: impl Fn(u64) -> i64) -> Option<String> {
-    let date = date.trim();
-    let t = chrono::DateTime::parse_from_rfc3339(date).ok()?;
-    let secs = u64::try_from(t.timestamp()).ok()?;
-    let utc = if date.ends_with(['Z', 'z']) {
-        // The wall-clock time read as UTC is off by about the zone's offset; the zone at that
-        // first guess is the one at the instant, also when the offset changes in between.
-        let guess = secs.checked_add_signed(zone(secs).saturating_neg())?;
-        secs.checked_add_signed(zone(guess).saturating_neg())?
-    } else {
-        secs
-    };
-    Some(crate::cmd::iso_from_unix_secs(utc))
 }
 
 /// How a page image is drawn: the printed page, headers and footers at full strength, tracked
@@ -205,40 +183,33 @@ pub(crate) mod tests {
         if (1_772_953_200..1_793_512_800).contains(&t) { -4 * 3600 } else { -5 * 3600 }
     }
 
-    /// Word dates `w:date` in local wall-clock time with a `Z`; the document keeps UTC (#6851).
+    /// Word dates `w:date` in local wall-clock time with a `Z`; the change keeps UTC (#6851).
     #[test]
     fn word_dates_tracked_changes_in_local_time() {
         let plus8 = |_| 8 * 3600;
         // The issue's edit: 08:33:24 UTC at UTC+8, which Word showed as 8:33 AM.
         assert_eq!(word_date("2026-11-16T08:33:24Z", plus8).as_deref(), Some("2026-11-16T16:33:24Z"));
-        assert_eq!(utc_date("2026-11-16T16:33:24Z", plus8).as_deref(), Some("2026-11-16T08:33:24Z"));
         // A date naming its offset is that instant, whatever the zone.
         assert_eq!(word_date("2026-11-16T16:33:24+08:00", plus8).as_deref(), Some("2026-11-16T16:33:24Z"));
-        assert_eq!(utc_date("2026-11-16T16:33:24+08:00", |_| -5 * 3600).as_deref(), Some("2026-11-16T08:33:24Z"));
         // West of UTC, the date can go back a day.
         assert_eq!(word_date("2026-01-01T03:00:00Z", new_york).as_deref(), Some("2025-12-31T22:00:00Z"));
-        assert_eq!(utc_date("2025-12-31T22:00:00Z", new_york).as_deref(), Some("2026-01-01T03:00:00Z"));
 
-        // The repeated hour: 05:30 and 06:30 UTC are both 01:30 in New York. The document keeps
-        // them apart; Word's date can't, and reads back as one of the two.
+        // The repeated hour: 05:30 and 06:30 UTC are both 01:30 in New York; `dateUtc` keeps them
+        // apart. Either side of a change of offset takes the offset at that instant.
         assert_eq!(word_date("2026-11-01T05:30:00Z", new_york).as_deref(), Some("2026-11-01T01:30:00Z"));
         assert_eq!(word_date("2026-11-01T06:30:00Z", new_york).as_deref(), Some("2026-11-01T01:30:00Z"));
-        assert_eq!(utc_date("2026-11-01T01:30:00Z", new_york).as_deref(), Some("2026-11-01T05:30:00Z"));
-        // Either side of a change of offset reads back as written.
-        for utc in ["2026-11-01T04:30:00Z", "2026-11-01T07:30:00Z", "2026-03-08T06:30:00Z", "2026-03-08T07:30:00Z"] {
-            let word = word_date(utc, new_york).unwrap();
-            assert_eq!(utc_date(&word, new_york).as_deref(), Some(utc), "{word}");
-        }
+        assert_eq!(word_date("2026-11-01T04:30:00Z", new_york).as_deref(), Some("2026-11-01T00:30:00Z"));
+        assert_eq!(word_date("2026-11-01T07:30:00Z", new_york).as_deref(), Some("2026-11-01T02:30:00Z"));
+        assert_eq!(word_date("2026-03-08T06:30:00Z", new_york).as_deref(), Some("2026-03-08T01:30:00Z"));
+        assert_eq!(word_date("2026-03-08T07:30:00Z", new_york).as_deref(), Some("2026-03-08T03:30:00Z"));
 
         // Anything else is left as it is: no zone, no time of day, before 1970, not a date.
         for date in ["", "2026-11-16T08:33:24", "2026-11-16", "1969-12-31T23:00:00Z", "yesterday", "2026-13-01T00:00:00Z"] {
             assert_eq!(word_date(date, plus8), None, "{date:?}");
-            assert_eq!(utc_date(date, plus8), None, "{date:?}");
         }
         // A hostile zone or a far date doesn't overflow.
         for zone in [i64::MAX, i64::MIN] {
             let _ = word_date("2026-11-16T08:33:24Z", |_| zone);
-            let _ = utc_date("2026-11-16T08:33:24Z", |_| zone);
         }
         assert!(word_date("9999-12-31T23:59:59Z", plus8).is_some());
     }

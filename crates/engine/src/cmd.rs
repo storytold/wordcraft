@@ -210,11 +210,11 @@ pub fn new_revision(s: &mut Session, kind: RevisionKind) -> u32 {
         .iter()
         .enumerate()
         .rev()
-        .find(|(i, r)| r.kind == kind && r.author == s.author && r.date == date && r.move_name.is_none() && held != Some(*i as u32))
+        .find(|(i, r)| r.kind == kind && r.author == s.author && r.instant() == date && r.move_name.is_none() && held != Some(*i as u32))
     {
         return i as u32;
     }
-    s.doc.revisions.push(Revision { kind, author: s.author.clone(), date, move_name: None });
+    s.doc.revisions.push(Revision::made_at(kind, s.author.clone(), date));
     (s.doc.revisions.len() - 1) as u32
 }
 

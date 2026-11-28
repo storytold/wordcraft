@@ -41,7 +41,7 @@ fn sample() -> Document {
     let foot = d.add_part(PartKind::Footnote, vec![para_block(Paragraph::with_text("Sown in May.", CharProps::default()))]);
     let com = d.add_part(PartKind::Comment, vec![para_block(Paragraph::with_text("Too short?", CharProps::default()))]);
     d.comments.insert(3, Comment { author: "Bo".into(), part: com, ..Default::default() });
-    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Ada".into(), date: String::new(), move_name: None });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Ada".into(), date: String::new(), move_name: None, date_utc: None });
     d.last_section.headers.default = Some(head);
 
     let mut p = Paragraph::new();

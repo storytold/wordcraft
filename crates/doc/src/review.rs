@@ -42,11 +42,28 @@ pub struct Revision {
     /// insertion or deletion.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub move_name: Option<String>,
+    /// The change's UTC timestamp: from the file (`w16du:dateUtc`, where `date` is the local time
+    /// Word writes in `w:date`), or the time WordCraft stamped the change with. `None` when the
+    /// file doesn't give it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date_utc: Option<String>,
 }
 
 impl Revision {
     pub fn new(kind: RevisionKind, author: impl Into<String>, date: impl Into<String>) -> Revision {
-        Revision { kind, author: author.into(), date: date.into(), move_name: None }
+        Revision { kind, author: author.into(), date: date.into(), move_name: None, date_utc: None }
+    }
+
+    /// A change made here at `utc` (ISO 8601, UTC): `date` and `date_utc` are both that instant;
+    /// a Word save writes `date` in local time.
+    pub fn made_at(kind: RevisionKind, author: impl Into<String>, utc: impl Into<String>) -> Revision {
+        let utc = utc.into();
+        Revision { kind, author: author.into(), date: utc.clone(), move_name: None, date_utc: Some(utc) }
+    }
+
+    /// The instant changes are grouped by: the UTC time when it is known, else `date`.
+    pub fn instant(&self) -> &str {
+        self.date_utc.as_deref().unwrap_or(&self.date)
     }
 }
 
