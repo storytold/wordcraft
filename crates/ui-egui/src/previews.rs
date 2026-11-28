@@ -10,7 +10,10 @@ use std::sync::Arc;
 use craft::theme::Mode;
 use craft::ui::display::Picture;
 use craft::ui::list::ThumbAspect;
-use craft::ui::primitives::textures::{LoadedPicture, Revision, ThumbRender, ThumbRequest, ThumbSource, ThumbnailOptions, Thumbnails};
+use craft::ui::primitives::ContentPainterCx;
+use craft::ui::primitives::textures::{
+    LoadedPicture, Priority, Revision, ThumbPaint, ThumbRender, ThumbRequest, ThumbSource, ThumbnailOptions, Thumbnails,
+};
 use craft::ui::runtime::env::Label;
 use egui::{Color32, ColorImage, Vec2};
 use wordcraft_doc::props::CharProps;
@@ -225,9 +228,26 @@ pub(crate) fn math_thumbnails(ctx: &egui::Context) -> Thumbnails<u64> {
     Thumbnails::in_context(ctx, "wordcraft.math", ThumbnailOptions::new())
 }
 
+/// The picture request for a tile `rect`: sized by its short side. The picture is fitted into the rect, so a
+/// request from the long side of a tall tile (24 x 52 pt in the ribbon) shrinks the symbol to a speck.
+pub(crate) fn cell_request(rect: egui::Rect, pixels_per_point: f32) -> ThumbRequest {
+    ThumbRequest::for_cell(rect.width().min(rect.height()), pixels_per_point)
+}
+
+/// Paints the equation picture `key` in a rect, asked for at the size it is painted, for a `GalleryFace::Paint`. The
+/// picture is an ink mask, so it is drawn without the transparency grid; the store's placeholder shows until the render
+/// lands. lean: only `GalleryFace::rendered` lacks `Picture`'s `checker(false)`; drop this once it has one.
+pub(crate) fn math_painter<'a>(key: u64, thumbnails: &'a Thumbnails<u64>, source: &'a MathSource) -> impl Fn(&ContentPainterCx, egui::Rect) + 'a {
+    move |cx, rect| {
+        let request = cell_request(rect, cx.pixels_per_point());
+        let state = thumbnails.state(cx.painter.ctx(), source, &key, &request, Priority::VISIBLE);
+        thumbnails.paint(cx, rect, &state, &ThumbPaint::default().checker(false));
+    }
+}
+
 /// An equation picture that shows the framework's placeholder until the render lands.
 pub(crate) fn math_picture<'a>(label: impl Into<Label>, key: u64, thumbnails: &'a Thumbnails<u64>, source: &'a MathSource) -> Picture<'a> {
-    Picture::rendered(label, key, thumbnails, source)
+    Picture::rendered(label, key, thumbnails, source).checker(false)
 }
 
 /// An equation rasterised for a tile of `w`×`h` points, as an ink mask.

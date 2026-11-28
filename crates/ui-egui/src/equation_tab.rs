@@ -21,7 +21,7 @@ use wordcraft_doc::math::{MNode, MRun, parse_linear};
 use wordcraft_engine::math_gallery::{BUILT_INS, STRUCTURES, SYMBOL_SETS};
 
 use crate::WordApp;
-use crate::previews::{MathSource, math_key, math_picture, math_thumbnails};
+use crate::previews::{MathSource, math_key, math_painter, math_picture, math_thumbnails};
 use crate::ribbon::common::menu_button;
 
 /// What each structure button shows.
@@ -154,10 +154,14 @@ fn math_menu_button(ui: &mut Ui, picture: &str, label: &str, body: impl FnMut(&m
     let _ = menu_button(ui, face, tl!(label).to_string(), None, body);
 }
 
+/// The size a symbol is set at. The strip's tiles are 24 pt wide and the picture is fitted to them, so it reads at
+/// about 16 pt (11 pt drew a speck).
+const SYMBOL_PT: f32 = 22.0;
+
 /// The picture source of one symbol, as a literal run.
-fn symbol_source(c: char, ink: Color32) -> MathSource {
+pub(crate) fn symbol_source(c: char, ink: Color32) -> MathSource {
     let nodes = vec![MNode::Run(MRun { text: c.to_string(), lit: true, ..Default::default() })];
-    MathSource::new(nodes, false, 11.0, [1, 1], ink)
+    MathSource::new(nodes, false, SYMBOL_PT, [1, 1], ink)
 }
 
 /// A grid of rendered math tiles, `(name, picture key)` each over its own source, shaped as the sources are;
@@ -221,13 +225,14 @@ fn symbols(ui: &mut Ui, app: &mut WordApp) {
     let ink = ink(ui);
     let thumbs = math_thumbnails(ui.ctx());
     let sources: Vec<MathSource> = all.iter().map(|c| symbol_source(*c, ink)).collect();
+    let painters: Vec<_> = all.iter().zip(&sources).map(|(c, source)| math_painter(math_key(&format!("sym:{c}")), &thumbs, source)).collect();
     let items: Vec<GalleryItem<'_, char>> = all
         .iter()
-        .zip(&sources)
-        .map(|(c, source)| GalleryItem {
+        .zip(&painters)
+        .map(|(c, paint)| GalleryItem {
             key: *c,
             label: Label::from(symbol_tooltip(*c, &math_placeholder(ui, &c.to_string()))),
-            face: GalleryFace::rendered(math_key(&format!("sym:{c}")), &thumbs, source),
+            face: GalleryFace::Paint(paint),
         })
         .collect();
     let mut sets = |ui: &mut Ui| {

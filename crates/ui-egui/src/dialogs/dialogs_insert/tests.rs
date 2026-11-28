@@ -138,6 +138,43 @@ fn symbol_dialog_uses_compact_tile_grids() {
     assert!(recent.height() < 80.0, "recently used symbols row should be compact: {}", recent.height());
 }
 
+fn h_recent(a: &mut WordApp) {
+    remember_symbol(a, "©", "DejaVu Sans");
+}
+
+/// #7972: the Symbols map shows rows of characters (not one strip), with the Recently used heading
+/// and the note that the code is Unicode hex.
+#[test]
+fn symbol_dialog_shows_the_map_in_rows() {
+    use egui::accesskit::Role;
+    let mut a = app();
+    h_recent(&mut a);
+    let mut h = testing::harness(a);
+    crate::dialogs::open(h.state_mut(), "symbol", &json!({})).expect("symbol dialog opens");
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_label("Recently used symbols:").count(), 1, "the heading is the row's one name");
+    h.get_by_role_and_label(Role::ListBox, "Recently used symbols:");
+    let map = h.get_by_role_and_label(Role::ListBox, "Symbols").rect();
+    let tile = h.query_all_by_label("A").map(|n| n.rect()).find(|r| map.contains_rect(*r)).expect("a tile in the map");
+    assert!(map.height() > 3.0 * tile.height(), "the map is several rows tall: {} vs a tile {}", map.height(), tile.height());
+    h.get_by_label("from Unicode (hex)");
+}
+
+/// #7973: Insert Diagram offers every layout in its grid, not the first row of three.
+#[test]
+fn insert_diagram_dialog_shows_every_layout() {
+    use egui::accesskit::Role;
+    let mut h = testing::harness(app());
+    crate::dialogs::open(h.state_mut(), "insertSmartArt", &json!({})).expect("the dialog opens");
+    // The tiles' heights settle over a few passes.
+    h.run_steps(10);
+    let grid = h.get_by_role_and_label(Role::ListBox, "Layouts").rect();
+    for layout in wordcraft_doc::smart_art::SmartArtLayout::ALL {
+        let shown = h.query_all_by_label(layout.label()).any(|n| grid.contains(n.rect().center()));
+        assert!(shown, "{} is shown in the grid", layout.label());
+    }
+}
+
 /// The Field dialog builds the field code from its options.
 #[test]
 fn field_dialog_builds_the_instruction() {

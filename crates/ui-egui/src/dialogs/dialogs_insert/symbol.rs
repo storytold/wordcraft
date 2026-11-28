@@ -3,23 +3,24 @@ use std::sync::Arc;
 use craft::behavior::{ColumnWidth, Selection, SelectionChange, keyed};
 use craft::font_manager::Catalog;
 use craft::font_manager::picker::FontPickerSettings;
-use craft::ui::contract::{Bind, CollectionEvent, ColumnKey, ColumnSpec, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::contract::{Bind, CollectionEvent, ColumnKey, ColumnSpec, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk, StackDialog, dialog_id};
 use craft::ui::display::{Kbd, Text};
 use craft::ui::form::Field;
-use craft::ui::layout_components::Stack;
+use craft::ui::layout_components::{Row, Stack};
 use craft::ui::list::{ListRow, ThumbAspect, ThumbSize};
 use craft::ui::patterns::form_dialogs::{FormCx, FormDialog};
 use craft::ui::primitives::ContentPainterCx;
 use craft::ui::runtime::env::Label;
 use craft::ui::table::Table;
 use craft::ui::tabs::{Tab, TabKind, TabStrip};
+use craft::ui::text::TextField;
 use craft::ui::tile_grid::{CaptionPlace, Tile, TileGrid};
 use egui::Ui;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{select_index, settled, text_field, word};
+use super::{select_index, settled, word};
 use crate::WordApp;
 use crate::dialogs::host::{DialogHooks, Settle, open_with};
 use crate::widgets::font_box::font_picker;
@@ -35,6 +36,12 @@ pub struct RecentSymbol {
     pub ch: String,
     pub font: String,
 }
+
+/// Characters per row of the Symbols map (Word's grid is 16 wide).
+// lean: the cap assumes this many columns; read the laid-out count if the map becomes resizable.
+const GRID_COLUMNS: usize = 16;
+/// Rows of the Symbols map shown before it scrolls.
+const GRID_ROWS: usize = 8;
 
 /// How many recent symbols are kept.
 pub const RECENT_SYMBOLS: usize = 20;
@@ -621,7 +628,13 @@ fn symbol_page(ui: &mut Ui, form: &mut SymbolForm, catalog: Option<&Arc<Catalog>
         Text::new(Label::from(format!("U+{:04X}", c as u32))).show(ui);
     }
     let before = form.code.clone();
-    text_field(ui, "symbol_code", &word("Character code:"), &mut form.code);
+    let label = word("Character code:");
+    Field::new(label.clone()).id_salt("symbol_code").show(ui, |ui, _| {
+        Row::new().show(ui, |ui, _| {
+            TextField::new(label.clone(), Bind::bound(&mut form.code)).show(ui);
+            Text::new(word("from Unicode (hex)")).show(ui);
+        });
+    });
     if form.code != before {
         let code = form.code.clone();
         form.select_code(&code);
@@ -631,14 +644,17 @@ fn symbol_page(ui: &mut Ui, form: &mut SymbolForm, catalog: Option<&Arc<Catalog>
 
 /// The recently inserted symbols as one row of glyphs, each in its own font; a click picks one.
 fn recent_row(ui: &mut Ui, form: &mut SymbolForm, dark: bool) {
+    // The heading shows while the row is empty too, as Word does; with symbols it labels the row.
     if form.recent.is_empty() {
+        Text::new(word("Recently used symbols:")).show(ui);
         return;
     }
     let positions: Vec<usize> = (0..form.recent.len()).collect();
     let source = keyed(&positions, |at: &usize| *at);
-    let events = {
+    let mut events = Vec::new();
+    Field::new(word("Recently used symbols:")).show(ui, |ui, _| {
         let recent = &form.recent;
-        TileGrid::new(word("Recently used symbols:"))
+        events = TileGrid::new(word("Recently used symbols:"))
             .thumb_size(ThumbSize::Medium)
             .select(SelectMode::Single)
             .caption(CaptionPlace::None)
@@ -652,8 +668,8 @@ fn recent_row(ui: &mut Ui, form: &mut SymbolForm, dark: bool) {
                 Tile::new(r.ch).thumb(ThumbAspect::SQUARE, move |cx, rect| paint_glyph(cx, rect, ch, &font, dark))
             })
             .response
-            .events
-    };
+            .events;
+    });
     for event in events {
         if let CollectionEvent::Selection { change: SelectionChange::Set(rows), .. } = event
             && let Some(r) = rows.last().and_then(|i| form.recent.get(*i)).cloned()
@@ -685,7 +701,8 @@ fn glyph_grid(ui: &mut Ui, form: &mut SymbolForm, dark: bool) -> bool {
         let mut grid = TileGrid::new(word("Symbols"))
             .thumb_size(ThumbSize::Medium)
             .select(SelectMode::Single)
-            .max_rows(8)
+            .max_rows(crate::dialogs::tile_rows_cap(form.chars.len(), GRID_COLUMNS, GRID_ROWS))
+            .card_columns(GRID_COLUMNS)
             .caption(CaptionPlace::None)
             .selection(Bind::bound(&mut selection));
         if let Some(at) = reveal {
