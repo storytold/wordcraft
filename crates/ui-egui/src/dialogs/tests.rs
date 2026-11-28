@@ -2283,3 +2283,27 @@ fn modal_dialog_with_open_popup_does_not_shake_on_inside_click_but_shakes_on_out
     let key2 = chrome::nudge_id(&h.ctx, id2);
     assert!(h.ctx.data(|d| d.get_temp::<f64>(key2)).is_none(), "reopened dialog starts still");
 }
+
+/// #7970: Cell Margins shows the table's points in the interface unit (0.19 cm, not 5.4 cm), and OK without
+/// an edit leaves the table's margins as they were.
+#[test]
+fn cell_margins_dialog_shows_points_in_the_interface_unit_and_ok_changes_nothing() {
+    let mut app = app_with("");
+    let _ = app.run("insert.table", json!({"rows": 1, "cols": 1}));
+    app.session.prefs.units = Some(wordcraft_geom::Unit::Centimeters);
+    let mut h = app_harness(app);
+    h.run_steps(2);
+    let (tp, _, _) = h.state().session.sel.focus.path.cell().unwrap();
+    let margins = |h: &egui_kittest::Harness<'_, WordApp>| h.state().session.doc.table(h.state().session.sel.focus.story, &tp).unwrap().props.cell_margins;
+    let before = margins(&h);
+    let _ = h.state_mut().run("ui.dialog", json!({"name": "tableCellMargins"}));
+    h.run_steps(3);
+    let left = h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Left").value().unwrap_or_default();
+    let shown: f64 = left.trim_end_matches(|c: char| !c.is_ascii_digit()).replace(',', ".").parse().unwrap_or(f64::NAN);
+    assert!(shown < 1.0, "5.4 pt is about 0.19 cm, not the point count: {left:?}");
+    let id = id_of(h.state(), "tableCellMargins");
+    let ctx = h.ctx.clone();
+    let _ = h.state_mut().dialog_host.confirm_by_id(&ctx, id);
+    h.run_steps(4);
+    assert_eq!(margins(&h), before, "OK without an edit writes no margins");
+}
