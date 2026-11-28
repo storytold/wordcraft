@@ -16,12 +16,18 @@ use crate::i18n::Lang;
 // PLAN(chrome-w12): build.rs embeds the craft faces into `craft_fonts.rs`
 pub static CRAFT_FONTS: &[EmbeddedFace] = include!(concat!(env!("OUT_DIR"), "/craft_fonts.rs"));
 
-/// The interface fonts for `lang`: the embedded craft faces, ordered by the language's scripts,
-/// and installed system fonts loaded on demand where the platform has them.
+/// The interface fonts for `lang`: WordCraft's own Inter and the embedded craft faces, ordered by the language's
+/// scripts, and installed system fonts loaded on demand where the platform has them.
 pub fn ui_fonts(lang: Lang) -> UiFonts<'static> {
+    ui_fonts_with_optional_faces(lang, CRAFT_FONTS)
+}
+
+/// [`ui_fonts`] with `faces` as the optional craft-fonts faces. Tests pass none, so the faces a CI build embeds
+/// can't hide a character the interface's own faces lack.
+pub(crate) fn ui_fonts_with_optional_faces(lang: Lang, faces: &[EmbeddedFace]) -> UiFonts<'static> {
     let codes: Vec<&str> = Lang::all().map(Lang::code).collect();
     let os_locale = wordcraft_engine::system_locale();
-    let fonts = UiFonts::new(&I18nScripts).craft_faces(CRAFT_FONTS).languages(&codes).ui_language(lang.code());
+    let fonts = UiFonts::new(&I18nScripts).craft_faces(&own_inter()).craft_faces(faces).languages(&codes).ui_language(lang.code());
     let fonts = match os_locale {
         Some(locale) => fonts.os_locale(locale),
         None => fonts,
@@ -29,6 +35,21 @@ pub fn ui_fonts(lang: Lang) -> UiFonts<'static> {
     #[cfg(not(target_arch = "wasm32"))]
     let fonts = fonts.on_demand(Arc::new(SystemCandidates));
     fonts
+}
+
+/// WordCraft's own Inter Regular and SemiBold, from the bytes the document fonts embed. The suite's interface face is
+/// the same Inter release cut to Latin, Greek and Cyrillic; tagged with those scripts, these come right after the
+/// suite's faces and draw the rest of Inter (○ ✓ ★, the macOS key symbols) in the same design and row height, as the
+/// interface did before it moved onto the shared font stack (#7101).
+fn own_inter() -> [EmbeddedFace; 2] {
+    wordcraft_fonts::bundled_inter().map(|(style, bytes)| EmbeddedFace {
+        family: "Inter",
+        style,
+        scripts: &["Latn", "Grek", "Cyrl"],
+        index: 0,
+        bytes,
+        role: None,
+    })
 }
 
 #[cfg(test)]
@@ -116,12 +137,12 @@ mod tests {
         }
     }
 
-    /// Symbols written as text in the interface code must exist in the interface fonts; a missing
-    /// glyph draws as an empty box, as the panes' "✕" close button once did. Letters are the
-    /// catalogs' business (see the i18n font tests).
+    /// Symbols written as text in the interface code must exist in the interface fonts, also in a build without the
+    /// optional craft-fonts faces; a missing glyph draws as an empty box, as the panes' "✕" close button once did.
+    /// Letters are the catalogs' business (see the i18n font tests).
     #[test]
     fn interface_symbols_have_glyphs() {
-        let stack = ui_fonts(Lang::EN).stack();
+        let stack = ui_fonts_with_optional_faces(Lang::EN, &[]).stack();
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut symbols = BTreeSet::new();
         // The i18n module's literals are catalog and pseudo-locale test text, not interface text.
@@ -154,9 +175,11 @@ mod tests {
         symbols.retain(|(c, file)| !exempt(*c, file));
         let files: Vec<(char, String)> = symbols.into_iter().collect();
         let texts: Vec<(String, String)> = files.iter().map(|(c, f)| (c.to_string(), f.clone())).collect();
-        let samples = texts.iter().map(|(t, f)| Sample::new("en", f, t));
-        let missing = missing_glyphs(&stack, &FontRef::proportional(), samples, false);
-        assert!(missing.is_empty(), "symbols without a glyph: {missing:#?}");
+        for family in [FontRef::proportional(), FontRef::named(craft::ui::fonts::SEMIBOLD)] {
+            let samples = texts.iter().map(|(t, f)| Sample::new("en", f, t));
+            let missing = missing_glyphs(&stack, &family, samples, false);
+            assert!(missing.is_empty(), "symbols without a glyph in {family:?}: {missing:#?}");
+        }
     }
 
     /// An installed Arabic font is asked for only when Arabic text needs one (and no embedded
