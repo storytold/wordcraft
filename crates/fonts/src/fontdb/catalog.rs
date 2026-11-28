@@ -224,6 +224,11 @@ impl FontDb {
         log::debug!("cataloged {n} system font faces");
         *self.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner) = found;
         self.catalog_gen.fetch_add(1, Ordering::AcqRel);
+        // A fallback chosen before the scan may not be the one now: a family installed since can
+        // rank above it (the right-to-left families do), and the cached answer would keep it out
+        // until more faces loaded. A search racing the scan either finds the generation changed
+        // and doesn't cache its answer, or cached it before this drop (see `cached_fallback`).
+        self.drop_fallback_caches();
         n
     }
 

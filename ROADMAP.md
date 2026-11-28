@@ -153,6 +153,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-02: Hebrew and Arabic text the font lacks falls back to the same font whatever was laid out before it (#4300). The ranked right-to-left fallback families are loaded before a fallback is chosen, for a single character and for a run, so a word no longer takes Liberation Sans because a document had asked for Arial first while the next one takes DejaVu Sans. Readiness unchanged.
 - 2026-11-24: Pasting a plain table over selected cells overwrites from the selection's top-left, even when the copy is wider than the selection (#6742).
 - 2026-11-21: Layout: strict column balancing measures a kept paragraph again in each candidate column, so a float in one column does not make the paragraph skip another where it fits (#6821). Readiness estimates unchanged.
 
@@ -981,6 +982,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | trivial | Progress log: the right-to-left fallback font no longer depends on what was laid out before (#4300) |
 | 2026-11-18 | trivial | DOCX validation reports undeclared binary tombstones in coverage notes when relationship discovery establishes that no relationship targets the part. |
 | 2026-11-18 | trivial | DOCX validation excludes the content-type manifest from main-part cardinality and reports untargeted ordinary document parts in coverage when one ordinary main is established. |
 | 2026-11-18 | trivial | DOCX validation warns on an image signature mismatch when the image is unused or can be decoded in another raster format. Used, unusable images retain their error. |
