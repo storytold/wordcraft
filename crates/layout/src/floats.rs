@@ -768,7 +768,15 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
             } else {
                 let cx = x + line.cl_left(k).unwrap_or(0.0);
                 let modern = ctx.doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT;
-                display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, (c.obj_h, c.obj_d), pl.rule_room(line, k), modern)
+                display::inline_rect(
+                    Some(obj),
+                    cx,
+                    y + (line.baseline - fl.top) + line.shift_at(k),
+                    c.adv,
+                    (c.obj_h, c.obj_d),
+                    pl.rule_room(line, k),
+                    modern,
+                )
             };
             let (mut behind, mut front) = (Vec::new(), Vec::new());
             let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };

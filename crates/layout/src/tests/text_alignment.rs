@@ -112,6 +112,13 @@ fn bottom_puts_the_picture_on_the_line_bottom_and_keeps_the_text() {
     let (glyph_y, rect) = drawn(&d, &l);
     assert!((glyph_y - (y + line.baseline - line.top)).abs() < 0.01, "text stays on the baseline: {glyph_y}");
     assert!((rect.y + rect.h - (y + line.height)).abs() < 0.01, "picture {rect:?} bottom vs the line's bottom {}", y + line.height);
+    let placed = l.pages[0]
+        .items
+        .iter()
+        .find_map(|it| if let Placed::Object { rect, off: 5, .. } = it { Some(*rect) } else { None })
+        .expect("the inline picture is placed");
+    assert!((placed.y - rect.y).abs() < 0.01, "placed frame {placed:?} vs drawn picture {rect:?}");
+    assert!((placed.h - rect.h).abs() < 0.01, "placed frame {placed:?} vs drawn picture {rect:?}");
 }
 
 #[test]
