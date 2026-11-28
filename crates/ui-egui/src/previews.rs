@@ -367,6 +367,129 @@ pub fn glyph_image(ch: &str, chr: &CharProps, (w, h, ppp): (f32, f32, f32), dark
     )
 }
 
+/// Fill a rectangle in pixel coordinates on `dst`.
+fn fill_px(dst: &mut ColorImage, x0: i32, y0: i32, x1: i32, y1: i32, color: Color32) {
+    let w = dst.size[0] as i32;
+    let h = dst.size[1] as i32;
+    let (xa, xb) = (x0.clamp(0, w), x1.clamp(0, w));
+    let (ya, yb) = (y0.clamp(0, h), y1.clamp(0, h));
+    for y in ya..yb {
+        let row = (y as usize) * dst.size[0];
+        for x in xa..xb {
+            dst.pixels[row + x as usize] = color;
+        }
+    }
+}
+
+/// Real-engine preview for Define New Number Format (#2787): lays out three real `ListParagraph`
+/// items using `Level::default()`'s exact geometry (`indent = 36 pt`, `hanging = 18 pt`,
+/// `LevelSuffix::Tab`, `Align::Left/Center/Right`) and `CharProps` through `wordcraft_layout` and
+/// `wordcraft_render`, between faint context paragraph bars on white paper. Labels wider than the
+/// preview box stay single-line and clip cleanly at the inner border.
+pub fn number_format_preview(format: &str, text: &str, chr: &CharProps, align: &str, (w, h, ppp): (f32, f32, f32)) -> ColorImage {
+    let pw = (w * ppp).round().max(16.0) as usize;
+    let ph = (h * ppp).round().max(16.0) as usize;
+    let px = |pt: f32| (pt * ppp).round() as i32;
+    let border = (1.0 * ppp).round().max(1.0) as i32;
+    let border_c = Color32::from_gray(160);
+    // Symmetric page margins before/after the paragraph column (matches real Level::default()
+    // geometry: fixed alignment anchor at margin + 18 pt, text indent / first tab stop at +36 pt).
+    let margin = 16.0_f32.min(w * 0.08);
+
+    // Build a real Document with three ListParagraph items so layout computes exact label placement,
+    // real tab-stop text starts, baselines, and contextual line heights.
+    let mut d = Document::new();
+    d.last_section.page_w = 4096.0;
+    d.last_section.page_h = 2048.0;
+    d.last_section.margin_left = margin;
+    d.last_section.margin_right = 0.0;
+    d.last_section.margin_top = 0.0;
+    d.last_section.margin_bottom = 0.0;
+
+    // Never let Hidden make the preview vanish completely.
+    let mut preview_chr = chr.clone();
+    preview_chr.hidden = None;
+    let mut levels = wordcraft_doc::numbering::levels_for(wordcraft_doc::ListKind::Numbered);
+    if let Some(first) = levels.first_mut() {
+        first.format = wordcraft_doc::section::NumFormat::from_ooxml(format);
+        first.text = text.to_string();
+        first.align = match align {
+            "center" => wordcraft_doc::props::Align::Center,
+            "right" => wordcraft_doc::props::Align::Right,
+            _ => wordcraft_doc::props::Align::Left,
+        };
+        first.chr = preview_chr;
+    }
+    if let Ok(num) = Arc::make_mut(&mut d.numbering).try_add_levels(None, levels) {
+        let context = || para_block(Paragraph::with_text(" ", CharProps::default()).styled("Normal"));
+        let mut body = Vec::with_capacity(5);
+        body.push(context());
+        for _ in 0..3 {
+            let mut p = Paragraph::with_text(" ", CharProps::default()).styled("ListParagraph");
+            p.props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+            body.push(para_block(p));
+        }
+        body.push(context());
+        d.body = body;
+    }
+
+    let layout = wordcraft_layout::layout(&d, &mut wordcraft_layout::LayoutCache::new(), &Default::default());
+    // `(is_list, text_x, baseline)` for every laid-out paragraph (Normal, 3×ListParagraph, Normal).
+    let mut rows: Vec<(bool, f32, f32)> = Vec::with_capacity(5);
+    if let Some(page) = layout.pages.first() {
+        for item in &page.items {
+            if let wordcraft_layout::Placed::Lines { para, x, y, .. } = item
+                && let Some(ln) = para.lines.first()
+            {
+                let is_list = matches!(rows.len(), 1..=3);
+                let text_x = if is_list { x + ln.xs.first().copied().unwrap_or(36.0) } else { margin };
+                rows.push((is_list, text_x, y + ln.baseline));
+            }
+        }
+    }
+
+    let bar_h = 4.0_f32;
+    let bar_offset = 5.5_f32;
+    let visual_top = rows.first().map(|r| r.2 - bar_offset).unwrap_or(0.0);
+    let visual_bottom = rows.last().map(|r| r.2 - bar_offset + bar_h).unwrap_or(h);
+    let content_h = (visual_bottom - visual_top).max(12.0);
+    let y_origin = visual_top - ((h - content_h) / 2.0).max(8.0);
+
+    let mut out = if let Some(page) = layout.pages.first() {
+        let mut opts = crate::canvas::screen_render_options();
+        opts.paper = wordcraft_doc::Rgb(255, 255, 255);
+        opts.dark = false;
+        let img = wordcraft_render::render_area(&d, page, wordcraft_geom::Rect::new(0.0, y_origin, w, h), ppp, &opts);
+        let px_bytes = img.to_straight();
+        ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &px_bytes)
+    } else {
+        ColorImage::new([pw, ph], vec![Color32::WHITE; pw * ph])
+    };
+    let out_w = out.size[0] as i32;
+    let out_h = out.size[1] as i32;
+
+    // Draw all five paragraph text bars at the exact real layout baselines and tab stops,
+    // with uniform bar thickness (faint for surrounding Normal paragraphs, dark for list items).
+    let faint = Color32::from_gray(205);
+    let dark = Color32::from_gray(90);
+    let bar_h_px = (bar_h * ppp).round().max(2.0) as i32;
+    let right_x = px(w - margin).min(out_w - border);
+    for (is_list, text_x, baseline) in rows {
+        let bx0 = px(text_x).max(border);
+        if bx0 < right_x {
+            let y0 = px(baseline - y_origin - bar_offset);
+            fill_px(&mut out, bx0, y0, right_x, y0 + bar_h_px, if is_list { dark } else { faint });
+        }
+    }
+
+    // Uniform device-pixel border on all four edges drawn last so overflowing glyphs clip cleanly.
+    fill_px(&mut out, 0, 0, out_w, border, border_c);
+    fill_px(&mut out, 0, out_h - border, out_w, out_h, border_c);
+    fill_px(&mut out, 0, 0, border, out_h, border_c);
+    fill_px(&mut out, out_w - border, 0, out_w, out_h, border_c);
+    out
+}
+
 /// Manage Styles' preview of one style (`ty`: the `styles.manage` type) in `size` points: a line of sample
 /// text, or a small table for a table style. A dark interface `mode` dims a light page.
 pub fn style_preview_image(app: &mut WordApp, id: &str, ty: &str, size: Vec2, ppp: f32, mode: Mode) -> Option<ColorImage> {

@@ -2711,6 +2711,25 @@ fn russian_letter_list_labels_draw_cyrillic() {
 }
 
 #[test]
+fn list_label_draws_font_underline_and_strikethrough() {
+    crate::test_fonts();
+    use wordcraft_doc::props::Underline;
+    let mut d = Document::from_text("Item");
+    let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+    for a in &mut Arc::make_mut(&mut d.numbering).abstracts {
+        if let Some(l) = a.levels.first_mut() {
+            l.chr.underline = Some(Underline::Single);
+            l.chr.strike = Some(true);
+        }
+    }
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 4), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
+    let l = lay(&d);
+    let lines: Vec<_> =
+        flat(display::page_display(&d, &l.pages[0], &Default::default())).into_iter().filter(|x| matches!(x, display::Draw::Line { .. })).collect();
+    assert_eq!(lines.len(), 2, "list label emits both underline and strikethrough lines");
+}
+
+#[test]
 fn chinese_counting_list_labels_and_their_font_runs() {
     crate::test_fonts();
     // Issue #534: a "一、" list showed digits, drawn with glyph ids of another font.

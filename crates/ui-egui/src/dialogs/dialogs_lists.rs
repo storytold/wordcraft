@@ -480,7 +480,8 @@ impl Default for NumberForm {
 }
 
 impl NumberForm {
-    /// The `n`th label, as the list will show it.
+    /// The `n`th label, as the list will show it (for tests).
+    #[cfg(test)]
     fn sample(&self, n: u32) -> String {
         if self.format == "none" {
             return wordcraft_doc::numbering::none_label(&self.text);
@@ -516,7 +517,8 @@ impl NumberForm {
         json!({"format": self.format, "text": self.text, "align": self.align, "props": self.props})
     }
 
-    /// The number's bold, italic and colour from its properties (for the preview).
+    /// The number's bold, italic and colour from its properties (for tests).
+    #[cfg(test)]
     fn look(&self) -> (bool, bool, Option<wordcraft_doc::Rgb>) {
         let b = |k: &str| self.props.get(k).and_then(Value::as_bool).unwrap_or(false);
         let rgb = self.props.get("color").and_then(|c| c.get("Rgb")).and_then(Value::as_array).and_then(|c| match c.as_slice() {
@@ -526,11 +528,11 @@ impl NumberForm {
         (b("bold"), b("italic"), rgb)
     }
 
-    /// The number's size in the preview: the Font dialog's size, 12 pt without one, kept to what
-    /// the preview's rows have room for.
+    /// The number's size in the preview: the Font dialog's size, 12 pt without one, clamped to
+    /// `6..=36 pt` while the preview box grows vertically to hold all three rows.
     fn preview_size(&self) -> f32 {
         let size = self.props.get("size").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(12.0);
-        size.clamp(6.0, 20.0) as f32
+        size.clamp(6.0, 36.0) as f32
     }
 }
 
@@ -582,16 +584,16 @@ fn number_format_box(ui: &mut Ui, field_id: egui::Id, f: &mut NumberForm) {
     let sel_bg = rgba_c32(colors.state.text_selection);
     let radius = tokens.shape.radius.control;
     ui.painter().rect_filled(outer, radius, bg);
-    ui.painter().rect_stroke(outer, radius, egui::Stroke::new(1.0, border), egui::StrokeKind::Inside);
+    ui.painter().rect_stroke(outer, radius, egui::Stroke::new(tokens.stroke.thin, border), egui::StrokeKind::Inside);
 
     let (mut before, mut after) = f.text.split_once("%1").map(|(a, b)| (a.to_string(), b.to_string())).unwrap_or_default();
-    let font = egui::TextStyle::Body.resolve(ui.style());
+    let font = egui::FontId::proportional(tokens.typography.body.size);
     let measure = |ui: &Ui, s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), text_color).size().x;
     let pressed = |ui: &Ui, k: egui::Key| ui.input(|i| i.key_pressed(k));
     let cursor =
         |ui: &Ui, id: egui::Id| egui::text_edit::TextEditState::load(ui.ctx(), id).and_then(|s| s.cursor.char_range()).map(|r| r.primary.index.0);
     let mut remove = false;
-    let pad_x = (tokens.space.pad.control * 0.5).clamp(6.0, 10.0);
+    let pad_x = tokens.space.pad.control;
     let inner = outer.shrink2(vec2(pad_x, 2.0));
     let click_pos = ui.input(|i| i.pointer.primary_clicked().then(|| i.pointer.interact_pos()).flatten());
     ui.scope_builder(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
@@ -709,78 +711,54 @@ fn number_format_box(ui: &mut Ui, field_id: egui::Id, f: &mut NumberForm) {
     }
 }
 
-/// A page with three numbered paragraphs in the form's style, format, font and alignment
-/// (numbers aligned at one point, text in grey bars after them), between grey lines of text.
-fn number_preview(f: &NumberForm, target_w: f32, target_h: f32) -> Picture<'static> {
-    let samples = [f.sample(1), f.sample(2), f.sample(3)];
+/// Preview height in logical points, growing with the chosen font size so all three real-engine
+/// list rows and context bars have comfortable breathing room.
+fn preview_height(f: &NumberForm) -> f32 {
+    let row_pitch = (f.preview_size() * 1.45).max(20.0);
+    (3.0 * row_pitch + 48.0).clamp(112.0, 216.0)
+}
+
+/// Real `CharProps` for the preview, parsed directly from `NumberForm.props` so font family,
+/// size, colour, bold, italic, underline, strikethrough, caps and spacing render as in the
+/// document.
+fn preview_chr(f: &NumberForm) -> wordcraft_doc::props::CharProps {
+    let mut chr: wordcraft_doc::props::CharProps = serde_json::from_value(Value::Object(f.props.clone())).unwrap_or_default();
+    if chr.size.is_some() {
+        chr.size = Some(f.preview_size());
+    }
+    chr.hidden = None;
+    chr
+}
+
+/// Cache key for [`show_number_preview`].
+fn number_preview_key(format: &str, text: &str, props: &serde_json::Map<String, Value>, align: &str, w: f32, h: f32, ppp: f32) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    "defineNumber-preview".hash(&mut hasher);
+    format.hash(&mut hasher);
+    text.hash(&mut hasher);
+    serde_json::to_string(props).unwrap_or_default().hash(&mut hasher);
+    align.hash(&mut hasher);
+    w.round().to_bits().hash(&mut hasher);
+    h.round().to_bits().hash(&mut hasher);
+    ppp.to_bits().hash(&mut hasher);
+    wordcraft_fonts::FontDb::global().generation().hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Renders three numbered paragraphs through the real layout/render engine (`previews::number_format_preview`)
+/// at device pixel density, growing taller when a larger number font size is chosen.
+fn show_number_preview(ui: &mut Ui, f: &NumberForm, target_w: f32) {
+    let format = f.format.clone();
+    let text = f.text.clone();
     let align = f.align.clone();
-    let (bold, italic, rgb) = f.look();
-    let ink = rgb.map_or(Color32::BLACK, crate::theme::c32);
-    let size = f.preview_size();
-    let font = if bold { crate::theme::semibold(size) } else { egui::FontId::proportional(size) };
-    let aspect = ThumbAspect::new(target_w.round().clamp(1.0, f32::from(u16::MAX)) as u16, target_h.round().clamp(1.0, f32::from(u16::MAX)) as u16);
-    Picture::painter(word(tl!("Preview")), aspect, move |cx: &ContentPainterCx, rect: Rect| {
-        let ppp = cx.pixels_per_point();
-        let snap = |v: f32| (v * ppp).round() / ppp;
-        let r = Rect::from_min_max(pos2(snap(rect.left()), snap(rect.top())), pos2(snap(rect.right()), snap(rect.bottom())));
-        let border_w = (1.0 * ppp).round().max(1.0) / ppp;
-        let mut shapes = vec![
-            egui::Shape::rect_filled(r, 2.0, Color32::WHITE),
-            egui::Shape::rect_stroke(r, 2.0, egui::Stroke::new(border_w, Color32::from_gray(160)), egui::StrokeKind::Inside),
-        ];
-        let pad = 14.0_f32.min(r.width() * 0.08);
-        for edge_y in [r.top() + r.height() * 0.14, r.bottom() - r.height() * 0.14] {
-            let cy = snap(edge_y);
-            let bar = Rect::from_min_max(pos2(snap(r.left() + pad), snap(cy - 2.0)), pos2(snap(r.right() - pad), snap(cy + 2.0)));
-            shapes.push(egui::Shape::rect_filled(bar, 1.0, Color32::from_gray(205)));
-        }
-        cx.data_shapes(shapes);
-        let galleys: Vec<_> = samples
-            .iter()
-            .map(|sample| {
-                let mut job = egui::text::LayoutJob::default();
-                let format = egui::TextFormat { font_id: font.clone(), color: ink, italics: italic, ..Default::default() };
-                job.append(sample, 0.0, format);
-                cx.painter.layout_job(job)
-            })
-            .collect();
-        let max_w = galleys.iter().map(|g| g.size().x).fold(0.0_f32, f32::max);
-        let left_margin = r.left() + pad;
-        let (at, text_x) = match align.as_str() {
-            "center" => {
-                let anchor = (left_margin + 36.0).max(left_margin + max_w / 2.0 + 4.0);
-                (anchor, (anchor + max_w / 2.0 + 10.0).max(left_margin + 56.0))
-            }
-            "right" => {
-                let anchor = (left_margin + 44.0).max(left_margin + max_w + 4.0);
-                (anchor, anchor + 10.0)
-            }
-            _ => {
-                let anchor = left_margin + 22.0;
-                (anchor, (anchor + max_w + 10.0).max(left_margin + 56.0))
-            }
-        };
-        let mut bars = Vec::new();
-        for (i, galley) in galleys.into_iter().enumerate() {
-            let y = snap(r.top() + r.height() * (0.32 + 0.18 * i as f32));
-            let w = galley.size().x;
-            let x = match align.as_str() {
-                "center" => at - w / 2.0,
-                "right" => at - w,
-                _ => at,
-            }
-            .max(left_margin);
-            cx.painter.galley(pos2(snap(x), snap(y - galley.size().y / 2.0)), galley, ink);
-            let bar_left = snap(text_x.max(x + w + 8.0));
-            let bar_right = snap(r.right() - pad);
-            if bar_right > bar_left {
-                let bar = Rect::from_min_max(pos2(bar_left, snap(y - 2.0)), pos2(bar_right, snap(y + 2.0)));
-                bars.push(egui::Shape::rect_filled(bar, 1.0, Color32::from_gray(90)));
-            }
-        }
-        cx.data_shapes(bars);
-    })
-    .extent(PictureSize::Sample(ThumbSize::Large))
+    let chr = preview_chr(f);
+    let h = preview_height(f);
+    let ppp = ui.ctx().pixels_per_point();
+    let key = number_preview_key(&format, &text, &f.props, &align, target_w, h, ppp);
+    let maker = move || crate::previews::number_format_preview(&format, &text, &chr, &align, (target_w, h, ppp));
+    let aspect = ThumbAspect::new(target_w.round().clamp(1.0, f32::from(u16::MAX)) as u16, h.round().clamp(1.0, f32::from(u16::MAX)) as u16);
+    Picture::new(word(tl!("Preview")), key, &maker).aspect(aspect).extent(PictureSize::DevicePixels).show(ui);
 }
 
 impl WordForm for NumberForm {
@@ -798,7 +776,7 @@ impl WordForm for NumberForm {
             styles.iter().enumerate().map(|(at, (_, s))| Entry::new(at, if s.is_empty() { word(tl!("(none)")) } else { word(tl!(s)) })).collect();
         let current = styles.iter().position(|(k, _)| *k == self.format);
         let shown = current.map_or(Mixed::Mixed, Mixed::Same);
-        FieldGroup::new(word(tl!("Number format"))).show(ui, |ui, _| {
+        let top = FieldGroup::new(word(tl!("Number format"))).show(ui, |ui, _| {
             Field::new(word(tl!("Number style:"))).id_salt("dnf_style").show(ui, |ui, _| {
                 Row::new().fill_width().show(ui, |ui, _| {
                     if let Some(at) = Select::new(word(tl!("Number style:")), Bind::given(shown), &style_entries)
@@ -832,11 +810,17 @@ impl WordForm for NumberForm {
                 }
             });
         });
+        let width_key = ui.scope_id().with("dnf_preview_width");
+        if !ui.is_sizing_pass() {
+            let w = top.output.rect.width();
+            if w > 100.0 {
+                ui.ctx().data_mut(|d| d.insert_temp(width_key, w));
+            }
+        }
         section(ui, word(tl!("Preview")), |ui| {
-            let tokens = Env::of(ui).tokens.clone();
-            let h = tokens.size.thumb.sample.lg.max(96.0);
-            let w = if ui.is_sizing_pass() { tokens.size.dialog.least.max(240.0) } else { ui.available_width().max(240.0) };
-            number_preview(self, w, h).show(ui);
+            let least = Env::of(ui).tokens.size.dialog.least.max(240.0);
+            let w = ui.ctx().data(|d| d.get_temp::<f32>(width_key)).unwrap_or(least).max(least);
+            show_number_preview(ui, self, w);
         });
         true
     }
@@ -1118,10 +1102,19 @@ mod tests {
         assert_eq!((form.sample(1), form.sample(2)), ("1.".to_string(), "2.".to_string()));
         let mut sized = form.clone();
         assert_eq!(sized.preview_size(), 12.0);
-        for (size, want) in [(json!(16.0), 16.0), (json!(400.0), 20.0), (json!(1.0), 6.0), (json!("big"), 12.0)] {
+        let base_h = super::preview_height(&sized);
+        for (size, want) in [(json!(16.0), 16.0), (json!(24.0), 24.0), (json!(400.0), 36.0), (json!(1.0), 6.0), (json!("big"), 12.0)] {
             sized.props.insert("size".into(), size);
             assert_eq!(sized.preview_size(), want);
         }
+        sized.props.insert("size".into(), json!(28.0));
+        sized.props.insert("font".into(), json!("Georgia"));
+        sized.props.insert("underline".into(), json!("single"));
+        assert!(super::preview_height(&sized) > base_h, "preview grows taller for larger font sizes");
+        let chr = super::preview_chr(&sized);
+        assert_eq!(chr.font.as_deref(), Some("Georgia"));
+        assert_eq!(chr.size, Some(28.0));
+        assert!(chr.underline.is_some());
     }
 
     /// #2787: the number in the format box deletes as one piece (style none) and comes back

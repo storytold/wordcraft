@@ -550,20 +550,38 @@ fn draw_label_and_hyphen(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 x_scale: 1.0,
             });
         }
-        // Struck through or underlined once, across the whole number, in its first run's size.
-        if let (Some(color), Some(mark), Some(style)) = (del_color, del_mark, first) {
-            let strike_y = ctx.base - style.shift - style.size * 0.28;
-            let under_y = ctx.base - style.shift + style.size * 0.12;
-            let line = match mark {
-                DeleteMark::Strikethrough => Some((strike_y, Stroke::Solid)),
-                DeleteMark::DoubleStrikethrough => Some((strike_y, Stroke::Double)),
-                DeleteMark::Underline => Some((under_y, Stroke::Solid)),
-                DeleteMark::DoubleUnderline => Some((under_y, stroke_of(Underline::Double))),
-                _ => None,
+        // Decorations across the whole number (from the level's font and any deleted-item revision
+        // mark), in its first run's size.
+        if let Some(style) = first {
+            let color = del_color.unwrap_or_else(|| ctx.ink(&style.rc.color, None));
+            let thick = (style.size / 18.0).max(0.5);
+            let underline = match del_mark {
+                Some(DeleteMark::Underline) => Underline::Single,
+                Some(DeleteMark::DoubleUnderline) => Underline::Double,
+                _ => style.rc.underline,
             };
-            if let Some((y, stroke)) = line {
-                let width = (style.size / 18.0).max(0.5);
-                out.push(Draw::Line { x0: gx, y0: y, x1: gx + label.width, y1: y, width, color, stroke, alpha: ctx.alpha, text_bg: None });
+            if underline != Underline::None {
+                let uy = ctx.base - style.shift + style.size * 0.12;
+                let ucolor = del_color.or(style.rc.underline_color).unwrap_or(color);
+                let w = if underline == Underline::Thick { thick * 2.0 } else { thick };
+                out.push(Draw::Line {
+                    x0: gx,
+                    y0: uy,
+                    x1: gx + label.width,
+                    y1: uy,
+                    width: w,
+                    color: ucolor,
+                    stroke: stroke_of(underline),
+                    alpha: ctx.alpha,
+                    text_bg: None,
+                });
+            }
+            let double = style.rc.double_strike || del_mark == Some(DeleteMark::DoubleStrikethrough);
+            let struck = style.rc.strike || double || del_mark == Some(DeleteMark::Strikethrough);
+            if struck {
+                let sy = ctx.base - style.shift - style.size * 0.28;
+                let stroke = if double { Stroke::Double } else { Stroke::Solid };
+                out.push(Draw::Line { x0: gx, y0: sy, x1: gx + label.width, y1: sy, width: thick, color, stroke, alpha: ctx.alpha, text_bg: None });
             }
         }
     }
