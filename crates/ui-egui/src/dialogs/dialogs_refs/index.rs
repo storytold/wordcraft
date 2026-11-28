@@ -20,7 +20,7 @@ use wordcraft_engine::cmd::references::FieldCode;
 
 use super::sample::{LEADERS, leader_char, sample_card};
 use crate::WordApp;
-use crate::dialogs::host::{Asks, Filed, WordForm, open_form};
+use crate::dialogs::host::{Asks, Filed, WordForm, captioned, labelled, open_form};
 
 /// The tab leaders as drop-down entries (value, translated label).
 pub(super) fn leaders() -> Vec<Entry<String>> {
@@ -104,18 +104,21 @@ impl WordForm for IndexForm {
 
     fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, asks: &mut Vec<Asks>) -> bool {
         sample_card(tl!("Preview"), self.sample_lines(), self.right_align, leader_char(&self.leader)).show(ui);
-        let kind = RadioGroup::new(Label::from(tl!("Type:").to_string()), Bind::given(self.kind.clone())).show(ui, |ui, _| {
-            Row::new().show(ui, |ui, _| {
-                Radio::new("indented".to_string()).label(Label::from(tl!("Indented").to_string())).show(ui);
-                Radio::new("runIn".to_string()).label(Label::from(tl!("Run-in").to_string())).show(ui);
-            });
+        let kind = captioned(ui, Label::from(tl!("Type:").to_string()), |name, ui| {
+            RadioGroup::new(name, Bind::given(self.kind.clone())).show(ui, |ui, _| {
+                Row::new().show(ui, |ui, _| {
+                    Radio::new("indented".to_string()).label(Label::from(tl!("Indented").to_string())).show(ui);
+                    Radio::new("runIn".to_string()).label(Label::from(tl!("Run-in").to_string())).show(ui);
+                });
+            })
         });
-        if let Some(kind) = kind.output.value().cloned() {
+        if let Some(kind) = kind.and_then(|kind| kind.output.value().cloned()) {
             self.kind = kind;
         }
-        let columns =
-            NumberField::new(Label::from(tl!("Columns:").to_string()), Bind::given(Some(f64::from(self.columns)))).range(1.0..=4.0).show(ui);
-        if let Some(Some(n)) = columns.edit.value().cloned() {
+        let columns = labelled(ui, Label::from(tl!("Columns:").to_string()), |name, ui| {
+            NumberField::new(name, Bind::given(Some(f64::from(self.columns)))).range(1.0..=4.0).show(ui)
+        });
+        if let Some(Some(n)) = columns.and_then(|out| out.edit.value().cloned()) {
             self.columns = n.round().clamp(1.0, 4.0) as u32;
         }
         Checkbox::new(Bind::bound(&mut self.right_align)).label(Label::from(tl!("Page numbers at the right margin").to_string())).show(ui);

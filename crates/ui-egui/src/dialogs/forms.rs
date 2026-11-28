@@ -19,7 +19,7 @@ use craft::ui::sections::Section;
 use craft::ui::style::TypeRole;
 use craft::ui::text::{NumberField, TextField};
 
-use super::host::{Asks, WordForm, open_form};
+use super::host::{Asks, WordForm, captioned, labelled, open_form};
 
 /// Opens the form dialog `name` when it is one of this file's: Table Properties (only with a table selection) or Custom
 /// Properties.
@@ -49,14 +49,16 @@ fn flag(ui: &mut Ui, id: &'static str, label: String, value: &mut bool, enabled:
 
 /// A radio group choosing one of `options` (key, label) into `value`.
 fn choose(ui: &mut Ui, id: &'static str, label: String, value: &mut String, options: &[(&str, String)]) {
-    let chosen = RadioGroup::new(Label::from(label), Bind::given(value.clone())).id_salt(id).show(ui, |ui, _| {
-        Stack::new().show(ui, |ui, _| {
-            for (key, text) in options {
-                Radio::new((*key).to_string()).label(Label::from(text.clone())).show(ui);
-            }
-        });
+    let chosen = captioned(ui, Label::from(label), |name, ui| {
+        RadioGroup::new(name, Bind::given(value.clone())).id_salt(id).show(ui, |ui, _| {
+            Stack::new().show(ui, |ui, _| {
+                for (key, text) in options {
+                    Radio::new((*key).to_string()).label(Label::from(text.clone())).show(ui);
+                }
+            });
+        })
     });
-    if let Some(next) = chosen.output.value().cloned() {
+    if let Some(next) = chosen.and_then(|c| c.output.value().cloned()) {
         *value = next;
     }
 }
@@ -240,14 +242,21 @@ impl WordForm for CustomPropertiesForm {
         let rows: Vec<String> = self.props.iter().map(|p| format!("{} = {}", p.name, p.value)).collect();
         let positions: Vec<usize> = (0..rows.len()).collect();
         let mut selection = if self.selected < rows.len() { Selection::single(self.selected) } else { Selection::default() };
-        List::new(Label::from(tl!("Properties").to_string()))
-            .id_salt("props")
-            .max_rows(6)
-            .select(SelectMode::Single)
-            .allow_empty(true)
-            .empty(Label::from(tl!("This document has no custom properties.").to_string()))
-            .selection(Bind::bound(&mut selection))
-            .show_items(ui, &keyed(&positions, |at| *at), &mut |at, _| ListRow::new(rows.get(*at).cloned().unwrap_or_default()));
+        if rows.is_empty() {
+            // lean: craft's `List` measures its `.empty()` text shorter than it draws it, so the dialog is a row short and
+            // its footer is drawn over the last row (#7982). Show the text ourselves; drop this once craft-libs fixes
+            // `List`. The same latent overlap may hit the other `.empty()` users: bookmarks.rs:112/268, macros.rs:71,
+            // dialogs_refs/cross_ref.rs:165, dialogs_refs/sources.rs:311 and dialogs_review.rs:423.
+            Text::new(Label::from(tl!("This document has no custom properties.").to_string())).shade(Shade::Muted).show(ui);
+        } else {
+            List::new(Label::from(tl!("Properties").to_string()))
+                .id_salt("props")
+                .max_rows(6)
+                .select(SelectMode::Single)
+                .allow_empty(true)
+                .selection(Bind::bound(&mut selection))
+                .show_items(ui, &keyed(&positions, |at| *at), &mut |at, _| ListRow::new(rows.get(*at).cloned().unwrap_or_default()));
+        }
         if let Some(at) = selection.items.first().copied()
             && at != self.selected
         {
@@ -265,15 +274,16 @@ impl WordForm for CustomPropertiesForm {
                 self.delete();
             }
         });
-        let typed = TextField::new(Label::from(tl!("Name:").to_string()), Bind::given(self.name.clone()))
-            .id_salt("name")
-            .limit(wordcraft_engine::cmd::file::MAX_CUSTOM_NAME)
-            .show(ui);
-        if let Some(text) = typed.value().cloned() {
+        let typed = labelled(ui, Label::from(tl!("Name:").to_string()), |name, ui| {
+            TextField::new(name, Bind::given(self.name.clone())).id_salt("name").limit(wordcraft_engine::cmd::file::MAX_CUSTOM_NAME).show(ui)
+        });
+        if let Some(text) = typed.and_then(|out| out.value().cloned()) {
             self.name = text;
         }
-        let typed = TextField::new(Label::from(tl!("Value:").to_string()), Bind::given(self.value.clone())).id_salt("value").show(ui);
-        if let Some(text) = typed.value().cloned() {
+        let typed = labelled(ui, Label::from(tl!("Value:").to_string()), |name, ui| {
+            TextField::new(name, Bind::given(self.value.clone())).id_salt("value").show(ui)
+        });
+        if let Some(text) = typed.and_then(|out| out.value().cloned()) {
             self.value = text;
         }
         if !self.message.is_empty() {
@@ -444,11 +454,9 @@ fn mixed_check(ui: &mut Ui, id: &'static str, label: String, key: &str, value: &
 /// A length field over points, shown in the interface unit of `units`, within `lo..=hi` points.
 fn length(ui: &mut Ui, id: &'static str, label: String, value: &mut f32, (lo, hi): (f32, f32), units: LengthUnits, enabled: bool) {
     let mut points = Some(f64::from(*value));
-    NumberField::length(Label::from(label), Bind::bound(&mut points), units)
-        .id_salt(id)
-        .range(f64::from(lo)..=f64::from(hi))
-        .enabled(enabled)
-        .show(ui);
+    labelled(ui, Label::from(label), |name, ui| {
+        NumberField::length(name, Bind::bound(&mut points), units).id_salt(id).range(f64::from(lo)..=f64::from(hi)).enabled(enabled).show(ui)
+    });
     if let Some(next) = points {
         *value = next as f32;
     }

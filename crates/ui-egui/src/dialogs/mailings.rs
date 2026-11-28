@@ -22,7 +22,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use wordcraft_engine::cmd::mailings::{FilterOp, FilterRule, SortKey};
 
-use super::host::{DialogHooks, Settle, open_with};
+use super::host::{DialogHooks, Settle, labelled, open_with};
 use crate::WordApp;
 
 /// The address parts Match Fields lists, with their keys in `mailings.matchFields`' `address`.
@@ -376,7 +376,7 @@ fn recipient_body(ui: &mut egui::Ui, d: &mut RecipientDraft, editing: &mut bool,
         filter.only_merged = false;
     }
     Checkbox::new(Bind::bound(&mut filter.only_merged)).label(tl!("Show only records that will be merged")).enabled(order.is_some()).show(ui);
-    TextField::search(tl!("Find in list"), Bind::bound(&mut filter.find)).show(ui);
+    labelled(ui, tl!("Find in list:"), |name, ui| TextField::search(name, Bind::bound(&mut filter.find)).show(ui));
     // The rows the grid shows, by real index: edits and removes go to the right record.
     let fresh = visible_recipients(rows, order.as_deref(), &filter.find, filter.only_merged);
     // A press that ends a cell's edit (one on the row's Remove part) completes its click on release, a pass later: the
@@ -394,7 +394,7 @@ fn recipient_body(ui: &mut egui::Ui, d: &mut RecipientDraft, editing: &mut bool,
     let columns = fields
         .iter()
         .enumerate()
-        .map(|(j, f)| ColumnSpec::new(ColumnKey::index(j as u32), f.clone(), ColumnWidth::fill(1.0)).removable(tl!("Remove field"), can_remove))
+        .map(|(j, f)| ColumnSpec::new(ColumnKey::index(j as u32), f.clone(), ColumnWidth::Controls(6.0)).removable(tl!("Remove field"), can_remove))
         .collect();
     // The dialog body scrolls, and a collection owns its own scroll: the grid shows this many records and scrolls
     // the rest itself.
@@ -530,11 +530,16 @@ fn filter_section(ui: &mut egui::Ui, fields: &[String], filter: &mut RecipientFi
     let directions = [Entry::new(false, tl!("Ascending")), Entry::new(true, tl!("Descending"))];
     for (i, (field, desc)) in filter.sort.iter_mut().enumerate() {
         let label = tl!(if i == 0 { "Sort by" } else { "Then by" });
-        if let Some(f) = Select::new(label, Bind::given(field.clone()), &keys).id_salt(("sort", i)).show(ui).value().cloned() {
+        if let Some(f) = labelled(ui, label, |name, ui| Select::new(name, Bind::given(field.clone()), &keys).id_salt(("sort", i)).show(ui))
+            .and_then(|out| out.value().cloned())
+        {
             *field = f;
         }
         let has_field = !field.is_empty();
-        if let Some(d) = Select::new(tl!("Order"), Bind::given(*desc), &directions).id_salt(("dir", i)).enabled(has_field).show(ui).value().copied() {
+        if let Some(d) =
+            labelled(ui, tl!("Order"), |name, ui| Select::new(name, Bind::given(*desc), &directions).id_salt(("dir", i)).enabled(has_field).show(ui))
+                .and_then(|out| out.value().copied())
+        {
             *desc = d;
         }
     }

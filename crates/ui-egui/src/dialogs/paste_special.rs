@@ -8,7 +8,7 @@ use craft::ui::patterns::form_dialogs::FormCx;
 use craft::ui::runtime::env::Label;
 use serde::{Deserialize, Serialize};
 
-use super::host::{Asks, WordForm, open_form};
+use super::host::{Asks, WordForm, captioned, open_form};
 use super::{Value, WordApp};
 use egui::Ui;
 use serde_json::json;
@@ -69,13 +69,15 @@ impl WordForm for PasteSpecialForm {
             return true;
         }
         let formats = self.formats.clone();
-        RadioGroup::new(Label::from(tl!("Paste as:")), Bind::bound(&mut self.choice)).show(ui, |ui, _| {
-            Stack::new().show(ui, |ui, cx| {
-                for (at, f) in formats.iter().enumerate() {
-                    let label = wordcraft_engine::cmd::paste::FORMATS.iter().find(|(id, _)| id == f).map(|(_, l)| *l).unwrap_or(f.as_str());
-                    cx.labelled(ui, at, Label::from(tl!(label).to_owned()), SideLabel::new().layout(FieldLayout::After), Radio::new(at));
-                }
-            });
+        captioned(ui, Label::from(tl!("Paste as:")), |name, ui| {
+            RadioGroup::new(name, Bind::bound(&mut self.choice)).show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, cx| {
+                    for (at, f) in formats.iter().enumerate() {
+                        let label = wordcraft_engine::cmd::paste::FORMATS.iter().find(|(id, _)| id == f).map(|(_, l)| *l).unwrap_or(f.as_str());
+                        cx.labelled(ui, at, Label::from(tl!(label).to_owned()), SideLabel::new().layout(FieldLayout::After), Radio::new(at));
+                    }
+                });
+            })
         });
         if let Some(f) = formats.get(self.choice) {
             Text::new(Label::from(tl!("Result"))).show(ui);

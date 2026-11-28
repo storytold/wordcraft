@@ -7,8 +7,9 @@
 //! answer is inferred from side effects.
 
 use craft::color_ui::ui::{ColorPickerDialog, ColorPickerTab};
-use craft::ui::contract::Bind;
+use craft::ui::contract::{Bind, FieldLayout, ShowContainer as _};
 use craft::ui::dialog::{ChildDialog, DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk, StackDialog, dialog_id};
+use craft::ui::form::Field;
 use craft::ui::patterns::form_dialogs::{AboutTab, FormButtons, FormCx, FormDialog, HostedAbout};
 use craft::ui::runtime::env::Label;
 use craft::ui::sections::FooterButton;
@@ -415,6 +416,23 @@ impl<F: WordForm> StackDialog for FormHost<F> {
         self.form = serde_json::from_value(fields).map_err(|e| e.to_string())?;
         Ok(())
     }
+}
+
+/// `show` (given `label` to name its control, and the field's `Ui`) with `label` drawn beside the control. A text box,
+/// number box or drop-down names itself but draws no caption, so every bare one in a dialog goes through here
+/// (#7976). `None` when the field is not shown this pass.
+pub(crate) fn labelled<R>(ui: &mut Ui, label: impl Into<Label>, show: impl FnMut(Label, &mut Ui) -> R) -> Option<R> {
+    field(ui, FieldLayout::Beside, label.into(), show)
+}
+
+/// `labelled`, with the caption above the control: for a radio group or a preview, which has no box for a side label
+/// to sit against (#7976).
+pub(crate) fn captioned<R>(ui: &mut Ui, label: impl Into<Label>, show: impl FnMut(Label, &mut Ui) -> R) -> Option<R> {
+    field(ui, FieldLayout::Above, label.into(), show)
+}
+
+fn field<R>(ui: &mut Ui, layout: FieldLayout, label: Label, mut show: impl FnMut(Label, &mut Ui) -> R) -> Option<R> {
+    Field::new(label.clone()).layout(layout).show(ui, |ui, _| show(label.clone(), ui)).inner
 }
 
 /// Opens `form` as a dialog, over `parent` when there is one.

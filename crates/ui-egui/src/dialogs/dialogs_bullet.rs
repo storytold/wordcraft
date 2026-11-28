@@ -6,10 +6,9 @@ use craft::ui::buttons::Button;
 use craft::ui::choice::{Radio, RadioGroup};
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, clicked};
 use craft::ui::dialog::DialogId;
-use craft::ui::display::{Picture, Text};
-use craft::ui::form::FieldGroup;
+use craft::ui::display::{Picture, PictureSize, Text};
 use craft::ui::layout_components::Row;
-use craft::ui::list::ThumbAspect;
+use craft::ui::list::{ThumbAspect, ThumbSize};
 use craft::ui::patterns::form_dialogs::FormCx;
 use craft::ui::primitives::{ContentPainterCx, TextureCache};
 use craft::ui::runtime::env::Label;
@@ -20,7 +19,7 @@ use wordcraft_doc::props::Align;
 
 use super::dialogs_insert::symbol::SymbolRequest;
 use super::font::FontRequest;
-use super::host::{Asks, ChildAnswer, WordForm, open_form};
+use super::host::{Asks, ChildAnswer, WordForm, captioned, open_form};
 use crate::WordApp;
 
 /// The alignments the dialog offers: `para.defineBullet`'s `align` and their names.
@@ -183,6 +182,7 @@ impl DefineBulletForm {
                 }
             },
         )
+        .extent(PictureSize::Sample(ThumbSize::Large))
     }
 }
 
@@ -210,8 +210,8 @@ impl WordForm for DefineBulletForm {
         });
         let entries: Vec<Entry<String>> = ALIGNMENTS.iter().map(|(k, n)| Entry::new((*k).to_string(), Label::from(tl!(n)))).collect();
         let current = if self.align.is_empty() { "left".to_string() } else { self.align.clone() };
-        FieldGroup::new(Label::from(tl!("Alignment:"))).show(ui, |ui, _| {
-            let group = RadioGroup::new(Label::from(tl!("Alignment:")), Bind::given(current.clone())).show(ui, |ui, _| {
+        let group = captioned(ui, Label::from(tl!("Alignment:")), |name, ui| {
+            RadioGroup::new(name, Bind::given(current.clone())).show(ui, |ui, _| {
                 Row::new().show(ui, |ui, _| {
                     for e in &entries {
                         if let (Some(id), label) = (e.value(), e.label()) {
@@ -219,12 +219,12 @@ impl WordForm for DefineBulletForm {
                         }
                     }
                 });
-            });
-            if let Some(a) = group.output.value().cloned() {
-                self.align = a;
-            }
+            })
         });
-        FieldGroup::new(Label::from(tl!("Preview"))).show(ui, |ui, _| {
+        if let Some(a) = group.and_then(|g| g.output.value().cloned()) {
+            self.align = a;
+        }
+        captioned(ui, Label::from(tl!("Preview")), |_, ui| {
             self.preview().show(ui);
         });
         self.ch.chars().count() == 1

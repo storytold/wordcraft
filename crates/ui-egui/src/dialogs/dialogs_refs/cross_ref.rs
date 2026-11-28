@@ -1,6 +1,7 @@
 use craft::behavior::{Mixed, Selection, keyed};
 use craft::ui::contract::{Bind, Entry, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::dialog::DialogId;
+use craft::ui::display::Text;
 use craft::ui::form::Field;
 use craft::ui::list::{List, ListRow};
 use craft::ui::patterns::form_dialogs::FormCx;
@@ -156,6 +157,7 @@ impl WordForm for CrossRefForm {
         let source = keyed(&which, |i: &usize| *i);
         let mut selection = self.selected.map_or_else(|| Selection::new(Vec::new(), None, None), Selection::single);
         let targets = &self.targets;
+        Text::new(Label::from(tl!("For which item:").to_string())).show(ui);
         let _ = List::new(Label::from(tl!("For which item:").to_string()))
             .max_rows(8)
             .select(SelectMode::Single)

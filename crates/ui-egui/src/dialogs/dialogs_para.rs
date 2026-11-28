@@ -14,6 +14,7 @@ use craft::theme::Srgba;
 use craft::ui::choice::{Checkbox, Radio, RadioGroup};
 use craft::ui::contract::{Bind, CollectionEvent, Entry, FieldLayout, Props as _, Show as _, ShowCollection as _, ShowContainer as _, SideLabel};
 use craft::ui::dialog::DialogId;
+use craft::ui::display::Text;
 use craft::ui::form::Field;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::patterns::form_dialogs::FormCx;
@@ -25,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use wordcraft_doc::props::{Border, BorderStyle, Borders, Rgb, TabAlign, TabLeader, TabStop};
 
-use super::host::{Asks, ChildAnswer, DialogHooks, Keyed, Settle, WordForm, open_form, open_with};
+use super::host::{Asks, ChildAnswer, DialogHooks, Keyed, Settle, WordForm, captioned, open_form, open_with};
 use crate::WordApp;
 use crate::colors::{AutoFace, ColorFieldEmpty, Palette, color_field};
 use crate::options::unit_kind;
@@ -60,6 +61,23 @@ pub(super) fn color_row(
     }
 }
 
+/// `color_row` with `label` drawn beside it as plain text. Not a `Field`: its label scope would rename the split button
+/// "Color:" and drop the colour it speaks ("Color: Automatic").
+fn captioned_color_row(
+    ui: &mut Ui,
+    key: &'static str,
+    label: Label,
+    value: &mut String,
+    empty: &ColorFieldEmpty,
+    palette: &Palette,
+    asks: &mut Vec<Asks>,
+) {
+    Row::new().show(ui, |ui, _| {
+        Text::new(label.clone()).show(ui);
+        color_row(ui, key, &label, value, empty, palette, asks);
+    });
+}
+
 /// A drop-down over `labels` under `label`, showing entry `current` (empty while it is `None`). The index of the entry
 /// picked in this pass.
 pub(super) fn pick(ui: &mut Ui, salt: &'static str, label: Label, labels: &[Label], current: Option<usize>, enabled: bool) -> Option<usize> {
@@ -72,9 +90,18 @@ pub(super) fn pick(ui: &mut Ui, salt: &'static str, label: Label, labels: &[Labe
         .flatten()
 }
 
-/// A radio group over `labels` under `label`, entry `current` chosen. The index chosen in this pass, when it is
-/// another one.
+/// A radio group over `labels` under a caption `label`, entry `current` chosen. The index chosen in this pass, when it
+/// is another one.
 pub(super) fn radios(ui: &mut Ui, label: Label, labels: &[Label], current: usize) -> Option<usize> {
+    captioned(ui, label.clone(), |_, ui| radio_set(ui, label.clone(), labels, current)).flatten()
+}
+
+/// `radios` with no caption: for a group inside a section that already carries its title.
+pub(super) fn radios_in_section(ui: &mut Ui, label: Label, labels: &[Label], current: usize) -> Option<usize> {
+    radio_set(ui, label, labels, current)
+}
+
+fn radio_set(ui: &mut Ui, label: Label, labels: &[Label], current: usize) -> Option<usize> {
     let mut at = current;
     RadioGroup::new(label, Bind::bound(&mut at)).show(ui, |ui, cx| {
         for (i, text) in labels.iter().enumerate() {
@@ -481,7 +508,7 @@ fn lines(ui: &mut Ui, key: &'static str, l: &mut LineForm, area: SampleArea, fil
                 l.style = *style;
             }
             let automatic = ColorFieldEmpty::Automatic { label: word(tl!("Automatic")), value: "", face: AutoFace::One(srgba(Rgb(0, 0, 0))) };
-            color_row(ui, key, &word(tl!("Color:")), &mut l.color, &automatic, palette, asks);
+            captioned_color_row(ui, key, word(tl!("Color:")), &mut l.color, &automatic, palette, asks);
             let names: Vec<Label> = WIDTHS.iter().map(|w| word(crate::i18n::fmt(tl!("{n} pt"), &[("n", &w.to_string())]))).collect();
             let current = WIDTHS.iter().position(|w| *w == l.width);
             if let Some(width) = pick(ui, "width", word(tl!("Width:")), &names, current, true).and_then(|at| WIDTHS.get(at)) {
@@ -540,7 +567,7 @@ impl WordForm for BordersForm {
                 Self::apply_to(ui, &mut self.whole_doc, word(tl!("This section")), word(tl!("Whole document")));
             }
             _ => {
-                color_row(ui, "fill", &word(tl!("Fill")), &mut self.fill, &ColorFieldEmpty::NoColor, &palette, asks);
+                captioned_color_row(ui, "fill", word(tl!("Fill")), &mut self.fill, &ColorFieldEmpty::NoColor, &palette, asks);
                 // The same sample as the Borders tab shows, without the lines and not editable.
                 let mut none = BorderEdges::default();
                 let area = if self.fill_to_text { SampleArea::Text } else { SampleArea::Paragraph };

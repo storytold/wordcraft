@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use wordcraft_doc::section::NumFormat;
 use wordcraft_engine::cmd::lists::{LEVELS, caret_list, level_json, levels_of};
 
-use super::dialogs_para::{color_row, pick, radios, srgba, word};
+use super::dialogs_para::{color_row, pick, radios, radios_in_section, srgba, word};
 use super::host::{Asks, ChildAnswer, WordForm, open_form};
 use crate::WordApp;
 use crate::colors::{AutoFace, ColorFieldEmpty, Palette};
@@ -282,7 +282,7 @@ impl ListForm {
             Stack::new().show(ui, |ui, _| {
                 Text::new(word(tl!("Preview"))).show(ui);
                 Picture::painter(word(tl!("Preview")), ThumbAspect::new(5, 3), preview(rows.clone(), level))
-                    .extent(PictureSize::Thumb(ThumbSize::Large))
+                    .extent(PictureSize::Sample(ThumbSize::Large))
                     .show(ui);
             });
         });
@@ -599,7 +599,7 @@ fn choose(ui: &mut Ui, salt: &'static str, label: Label, options: &[(&str, &str)
 /// A radio group over `options` setting `value`.
 fn choose_radio(ui: &mut Ui, label: Label, options: &[(&str, &str)], value: &mut String) {
     let current = index_of(options, value).unwrap_or(0);
-    if let Some((v, _)) = radios(ui, label, &labels(options), current).and_then(|at| options.get(at)) {
+    if let Some((v, _)) = radios_in_section(ui, label, &labels(options), current).and_then(|at| options.get(at)) {
         *value = v.to_string();
     }
 }
@@ -829,6 +829,12 @@ mod tests {
             assert_eq!(h.state_mut().run("list.define", json!({})).unwrap(), json!({"pending": "defineList"}));
             h.run_steps(2);
 
+            // The sheet fills the Preview image's rect, which is larger than the 80 × 48 icon-side thumbnail it once
+            // shrank to (#7977).
+            let preview = egui_kittest::kittest::Queryable::get_by_role_and_label(&h, egui::accesskit::Role::Image, "Preview").rect();
+            assert!(preview.width() > 80.0 && preview.height() > 48.0, "{theme}: the preview is {preview:?}");
+            let is_sheet = |r: egui::Rect| (r.width() - preview.width()).abs() <= 2.0 && (r.height() - preview.height()).abs() <= 2.0;
+
             let mut shapes = Vec::new();
             collect_shapes(&h.output().shapes, &mut shapes);
 
@@ -836,11 +842,7 @@ mod tests {
             let white_rects: Vec<_> = shapes
                 .iter()
                 .filter_map(|s| match s {
-                    egui::Shape::Rect(r)
-                        if r.fill == egui::Color32::WHITE && (r.rect.width() - 80.0).abs() <= 5.0 && (r.rect.height() - 48.0).abs() <= 5.0 =>
-                    {
-                        Some(r)
-                    }
+                    egui::Shape::Rect(r) if r.fill == egui::Color32::WHITE && is_sheet(r.rect) => Some(r),
                     _ => None,
                 })
                 .collect();
@@ -850,13 +852,7 @@ mod tests {
             let stroke_rects: Vec<_> = shapes
                 .iter()
                 .filter_map(|s| match s {
-                    egui::Shape::Rect(r)
-                        if r.stroke.color == egui::Color32::from_gray(160)
-                            && (r.rect.width() - 80.0).abs() <= 5.0
-                            && (r.rect.height() - 48.0).abs() <= 5.0 =>
-                    {
-                        Some(r)
-                    }
+                    egui::Shape::Rect(r) if r.stroke.color == egui::Color32::from_gray(160) && is_sheet(r.rect) => Some(r),
                     _ => None,
                 })
                 .collect();

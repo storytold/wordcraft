@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use wordcraft_engine::cmd::objects::fit_size;
 
 use super::{DialogId, WordApp, length_field, percent_field, points};
-use crate::dialogs::host::{Asks, FormHost, WordForm};
+use crate::dialogs::host::{Asks, FormHost, WordForm, captioned, labelled};
 
 // ---------------------------------------------------------------------------------------------
 // Size
@@ -300,14 +300,22 @@ impl WordForm for PageNumbersForm {
     fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
         let formats: Vec<Entry<String>> =
             crate::dialogs_notes::FORMATS.iter().map(|(v, l)| Entry::new((*v).to_string(), tl!(l).to_string())).collect();
-        Select::new(tl!("Number format").to_string(), Bind::bound(&mut self.format), &formats).show(ui);
-        RadioGroup::new(tl!("Page numbering").to_string(), Bind::bound(&mut self.cont)).show(ui, |ui, _| {
-            Stack::new().show(ui, |ui, cx| {
-                cx.labelled(ui, 0, Label::from(tl!("Continue from previous section")), SideLabel::new().layout(FieldLayout::After), Radio::new(true));
-                cx.labelled(ui, 1, Label::from(tl!("Start at:")), SideLabel::new().layout(FieldLayout::After), Radio::new(false));
-            });
+        labelled(ui, tl!("Number format").to_string(), |name, ui| Select::new(name, Bind::bound(&mut self.format), &formats).show(ui));
+        captioned(ui, tl!("Page numbering").to_string(), |name, ui| {
+            RadioGroup::new(name, Bind::bound(&mut self.cont)).show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, cx| {
+                    cx.labelled(
+                        ui,
+                        0,
+                        Label::from(tl!("Continue from previous section")),
+                        SideLabel::new().layout(FieldLayout::After),
+                        Radio::new(true),
+                    );
+                    cx.labelled(ui, 1, Label::from(tl!("Start at:")), SideLabel::new().layout(FieldLayout::After), Radio::new(false));
+                });
+            })
         });
-        super::count_field(ui, tl!("Start at:"), &mut self.start, 0..=100_000, !self.cont);
+        super::count_box(ui, tl!("Start at:"), &mut self.start, 0..=100_000, !self.cont);
         true
     }
 
