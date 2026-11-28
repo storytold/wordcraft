@@ -1,0 +1,770 @@
+{
+  "reader_class": [
+    "Debug",
+    "serde::Serialize",
+    "serde::Deserialize"
+  ],
+  "readers": [
+    {
+      "derive": "Debug",
+      "generics": "",
+      "shape": {
+        "struct": [
+          {
+            "attributes": [],
+            "name": "input_bytes",
+            "type": "usize"
+          },
+          {
+            "attributes": [],
+            "name": "entries",
+            "type": "usize"
+          },
+          {
+            "attributes": [],
+            "name": "part_bytes",
+            "type": "u64"
+          },
+          {
+            "attributes": [],
+            "name": "total_bytes",
+            "type": "u64"
+          },
+          {
+            "attributes": [],
+            "name": "depth",
+            "type": "usize"
+          },
+          {
+            "attributes": [],
+            "name": "events",
+            "type": "usize"
+          },
+          {
+            "attributes": [],
+            "name": "facts",
+            "type": "usize"
+          },
+          {
+            "attributes": [],
+            "name": "notes",
+            "type": "usize"
+          },
+          {
+            "attributes": [],
+            "name": "findings_per_rule",
+            "type": "usize"
+          }
+        ]
+      },
+      "type": "lib.rs::Limits"
+    },
+    {
+      "derive": "Debug",
+      "generics": "",
+      "shape": {
+        "enum": [
+          {
+            "fields": [],
+            "variant": "Pass"
+          },
+          {
+            "fields": [],
+            "variant": "Fail"
+          },
+          {
+            "fields": [],
+            "variant": "Incomplete"
+          }
+        ]
+      },
+      "type": "lib.rs::Verdict"
+    },
+    {
+      "derive": "serde::Serialize",
+      "generics": "",
+      "shape": {
+        "enum": [
+          {
+            "fields": [],
+            "variant": "Pass"
+          },
+          {
+            "fields": [],
+            "variant": "Fail"
+          },
+          {
+            "fields": [],
+            "variant": "Incomplete"
+          }
+        ]
+      },
+      "type": "lib.rs::Verdict"
+    },
+    {
+      "derive": "Debug",
+      "generics": "",
+      "shape": {
+        "enum": [
+          {
+            "fields": [],
+            "variant": "Corrupt"
+          },
+          {
+            "fields": [],
+            "variant": "Error"
+          },
+          {
+            "fields": [],
+            "variant": "Warning"
+          }
+        ]
+      },
+      "type": "lib.rs::Severity"
+    },
+    {
+      "derive": "serde::Serialize",
+      "generics": "",
+      "shape": {
+        "enum": [
+          {
+            "fields": [],
+            "variant": "Corrupt"
+          },
+          {
+            "fields": [],
+            "variant": "Error"
+          },
+          {
+            "fields": [],
+            "variant": "Warning"
+          }
+        ]
+      },
+      "type": "lib.rs::Severity"
+    },
+    {
+      "derive": "Debug",
+      "generics": "",
+      "shape": {
+        "enum": [
+          {
+            "fields": [],
+            "variant": "ByConstruction"
+          },
+          {
+            "fields": [],
+            "variant": "MsDocumented"
+          },
+          {
+            "fields": [],
+            "variant": "Observed"
+          },
+          {
+            "fields": [],
+            "variant": "Inferred"
+          }
+        ]
+      },
+      "type": "lib.rs::Evidence"
+    },
+    {
+      "derive": "serde::Serialize",
+      "generics": "",
+      "shape": {
+        "enum": [
+          {
+            "fields": [],
+            "variant": "ByConstruction"
+          },
+          {
+            "fields": [],
+            "variant": "MsDocumented"
+          },
+          {
+            "fields": [],
+            "variant": "Observed"
+          },
+          {
+            "fields": [],
+            "variant": "Inferred"
+          }
+        ]
+      },
+      "type": "lib.rs::Evidence"
+    },
+    {
+      "derive": "Debug",
+      "generics": "",
+      "shape": {
+        "struct": [
+          {
+            "attributes": [],
+            "name": "rule",
+            "type": "& 'static str"
+          },
+          {
+            "attributes": [],
+            "name": "severity",
+            "type": "Severity"
+          },
+          {
+            "attributes": [],
+            "name": "evidence",
+            "type": "Evidence"
+          },
+          {
+            "attributes": [],
+            "name": "part",
+            "type": "Option < String >"
+          },
+          {
+            "attributes": [],
+            "name": "message",
+            "type": "String"
+          }
+        ]
+      },
+      "type": "lib.rs::Finding"
+    },
+    {
+      "derive": "serde::Serialize",
+      "generics": "",
+      "shape": {
+        "struct": [
+          {
+            "attributes": [],
+            "name": "rule",
+            "type": "& 'static str"
+          },
+          {
+            "attributes": [],
+            "name": "severity",
+            "type": "Severity"
+          },
+          {
+            "attributes": [],
+            "name": "evidence",
+            "type": "Evidence"
+          },
+          {
+            "attributes": [],
+            "name": "part",
+            "type": "Option < String >"
+          },
+          {
+            "attributes": [],
+            "name": "message",
+            "type": "String"
+          }
+        ]
+      },
+      "type": "lib.rs::Finding"
+    },
+    {
+      "derive": "Debug",
+      "generics": "",
+      "shape": {
+        "struct": [
+          {
+            "attributes": [],
+            "name": "verdict",
+            "type": "Verdict"
+          },
+          {
+            "attributes": [],
+            "name": "findings",
+            "type": "Vec < Finding >"
+          },
+          {
+            "attributes": [],
+            "name": "coverage_notes",
+            "type": "Vec < String >"
+          },
+          {
+            "attributes": [],
+            "name": "checks_run",
+            "type": "Vec < & 'static str >"
+          }
+        ]
+      },
+      "type": "lib.rs::Report"
+    },
+    {
+      "derive": "serde::Serialize",
+      "generics": "",
+      "shape": {
+        "struct": [
+          {
+            "attributes": [],
+            "name": "verdict",
+            "type": "Verdict"
+          },
+          {
+            "attributes": [],
+            "name": "findings",
+            "type": "Vec < Finding >"
+          },
+          {
+            "attributes": [],
+            "name": "coverage_notes",
+            "type": "Vec < String >"
+          },
+          {
+            "attributes": [],
+            "name": "checks_run",
+            "type": "Vec < & 'static str >"
+          }
+        ]
+      },
+      "type": "lib.rs::Report"
+    },
+    {
+      "derive": "Debug",
+      "generics": "",
+      "shape": {
+        "struct": [
+          {
+            "attributes": [],
+            "name": "id",
+            "type": "& 'static str"
+          },
+          {
+            "attributes": [],
+            "name": "severity",
+            "type": "Severity"
+          },
+          {
+            "attributes": [],
+            "name": "evidence",
+            "type": "Evidence"
+          }
+        ]
+      },
+      "type": "lib.rs::RuleSpec"
+    },
+    {
+      "derive": "Debug",
+      "generics": "",
+      "shape": {
+        "enum": [
+          {
+            "fields": [],
+            "variant": "Complete"
+          },
+          {
+            "fields": [
+              {
+                "attributes": [],
+                "name": null,
+                "type": "crate::resolution::Reason"
+              }
+            ],
+            "variant": "Incomplete"
+          }
+        ]
+      },
+      "type": "observed.rs::Completeness"
+    },
+    {
+      "derive": "Debug",
+      "generics": "< T >",
+      "shape": {
+        "struct": [
+          {
+            "attributes": [],
+            "name": "observed_value",
+            "type": "T"
+          },
+          {
+            "attributes": [],
+            "name": "observed_status",
+            "type": "Completeness"
+          }
+        ]
+      },
+      "type": "observed.rs::Observed"
+    },
+    {
+      "derive": "Debug",
+      "generics": "< K >",
+      "shape": {
+        "struct": [
+          {
+            "attributes": [],
+            "name": null,
+            "type": "std::collections::HashSet < K >"
+          }
+        ]
+      },
+      "type": "observed.rs::CompleteSet"
+    },
+    {
+      "derive": "Debug",
+      "generics": "",
+      "shape": {
+        "struct": [
+          {
+            "attributes": [],
+            "name": null,
+            "type": "String"
+          }
+        ]
+      },
+      "type": "ownership.rs::PartId"
+    },
+    {
+      "derive": "Debug",
+      "generics": "",
+      "shape": {
+        "struct": [
+          {
+            "attributes": [],
+            "name": null,
+            "type": "usize"
+          }
+        ]
+      },
+      "type": "ownership.rs::OwnerId"
+    },
+    {
+      "derive": "Debug",
+      "generics": "",
+      "shape": {
+        "enum": [
+          {
+            "fields": [
+              {
+                "attributes": [],
+                "name": null,
+                "type": "String"
+              }
+            ],
+            "variant": "Main"
+          },
+          {
+            "fields": [
+              {
+                "attributes": [],
+                "name": null,
+                "type": "String"
+              }
+            ],
+            "variant": "Glossary"
+          },
+          {
+            "fields": [],
+            "variant": "Fallback"
+          }
+        ]
+      },
+      "type": "ownership.rs::OwnerContext"
+    },
+    {
+      "derive": "Debug",
+      "generics": "",
+      "shape": {
+        "enum": [
+          {
+            "fields": [
+              {
+                "attributes": [],
+                "name": null,
+                "type": "Vec < OwnerId >"
+              }
+            ],
+            "variant": "Owned"
+          },
+          {
+            "fields": [],
+            "variant": "Unowned"
+          },
+          {
+            "fields": [],
+            "variant": "Unknown"
+          }
+        ]
+      },
+      "type": "ownership.rs::Membership"
+    },
+    {
+      "derive": "Debug",
+      "generics": "",
+      "shape": {
+        "struct": [
+          {
+            "attributes": [],
+            "name": "memberships",
+            "type": "std::collections::BTreeMap < PartId , Membership >"
+          },
+          {
+            "attributes": [],
+            "name": "budget_exhausted",
+            "type": "bool"
+          },
+          {
+            "attributes": [],
+            "name": "memberships_complete",
+            "type": "bool"
+          }
+        ]
+      },
+      "type": "ownership.rs::PartGraph"
+    },
+    {
+      "derive": "Debug",
+      "generics": "< T >",
+      "shape": {
+        "enum": [
+          {
+            "fields": [
+              {
+                "attributes": [],
+                "name": null,
+                "type": "T"
+              }
+            ],
+            "variant": "One"
+          },
+          {
+            "fields": [],
+            "variant": "Absent"
+          },
+          {
+            "fields": [
+              {
+                "attributes": [],
+                "name": null,
+                "type": "& 'static str"
+              }
+            ],
+            "variant": "Ambiguous"
+          },
+          {
+            "fields": [
+              {
+                "attributes": [],
+                "name": null,
+                "type": "& 'static str"
+              }
+            ],
+            "variant": "Unknown"
+          }
+        ]
+      },
+      "type": "resolution.rs::Resolution"
+    },
+    {
+      "derive": "Debug",
+      "generics": "",
+      "shape": {
+        "enum": [
+          {
+            "fields": [
+              {
+                "attributes": [],
+                "name": null,
+                "type": "String"
+              }
+            ],
+            "variant": "Valid"
+          },
+          {
+            "fields": [
+              {
+                "attributes": [],
+                "name": null,
+                "type": "String"
+              }
+            ],
+            "variant": "Invalid"
+          }
+        ]
+      },
+      "type": "scan.rs::NumericKey"
+    },
+    {
+      "derive": "Debug",
+      "generics": "",
+      "shape": {
+        "struct": [
+          {
+            "attributes": [],
+            "name": "key",
+            "type": "NumericKey"
+          },
+          {
+            "attributes": [],
+            "name": "raw",
+            "type": "String"
+          }
+        ]
+      },
+      "type": "scan.rs::<template numeric_id>::AuditPlaceholder"
+    },
+    {
+      "derive": "Debug",
+      "generics": "",
+      "shape": {
+        "struct": [
+          {
+            "attributes": [],
+            "name": "key",
+            "type": "NumericKey"
+          },
+          {
+            "attributes": [],
+            "name": "raw",
+            "type": "String"
+          }
+        ]
+      },
+      "type": "scan.rs::DecimalId"
+    },
+    {
+      "derive": "Debug",
+      "generics": "",
+      "shape": {
+        "struct": [
+          {
+            "attributes": [],
+            "name": "key",
+            "type": "NumericKey"
+          },
+          {
+            "attributes": [],
+            "name": "raw",
+            "type": "String"
+          }
+        ]
+      },
+      "type": "scan.rs::HexId"
+    },
+    {
+      "derive": "Debug",
+      "generics": "",
+      "shape": {
+        "struct": [
+          {
+            "attributes": [],
+            "name": null,
+            "type": "String"
+          }
+        ]
+      },
+      "type": "scan.rs::<template lexical_id>::AuditPlaceholder"
+    },
+    {
+      "derive": "Debug",
+      "generics": "",
+      "shape": {
+        "struct": [
+          {
+            "attributes": [],
+            "name": null,
+            "type": "String"
+          }
+        ]
+      },
+      "type": "scan.rs::RelId"
+    },
+    {
+      "derive": "Debug",
+      "generics": "",
+      "shape": {
+        "struct": [
+          {
+            "attributes": [],
+            "name": null,
+            "type": "String"
+          }
+        ]
+      },
+      "type": "scan.rs::StyleId"
+    },
+    {
+      "derive": "Debug",
+      "generics": "",
+      "shape": {
+        "enum": [
+          {
+            "fields": [],
+            "variant": "Unknown"
+          },
+          {
+            "fields": [],
+            "variant": "Main"
+          },
+          {
+            "fields": [],
+            "variant": "Glossary"
+          },
+          {
+            "fields": [],
+            "variant": "Story"
+          },
+          {
+            "fields": [],
+            "variant": "Comments"
+          },
+          {
+            "fields": [],
+            "variant": "Footnotes"
+          },
+          {
+            "fields": [],
+            "variant": "Endnotes"
+          },
+          {
+            "fields": [],
+            "variant": "Settings"
+          },
+          {
+            "fields": [
+              {
+                "attributes": [],
+                "name": null,
+                "type": "u8"
+              }
+            ],
+            "variant": "Conflicting"
+          }
+        ]
+      },
+      "type": "scan.rs::PartRole"
+    },
+    {
+      "derive": "Debug",
+      "generics": "",
+      "shape": {
+        "enum": [
+          {
+            "fields": [
+              {
+                "attributes": [],
+                "name": null,
+                "type": "String"
+              }
+            ],
+            "variant": "Malformed"
+          },
+          {
+            "fields": [
+              {
+                "attributes": [],
+                "name": null,
+                "type": "String"
+              }
+            ],
+            "variant": "Unsupported"
+          },
+          {
+            "fields": [],
+            "variant": "IncompleteDeclaration"
+          }
+        ]
+      },
+      "type": "scan.rs::DecodeError"
+    }
+  ]
+}

@@ -13,6 +13,7 @@
 //! client halts reading on it ([`Outcome::Halted`]), and so does one that never began
 //! ([`Outcome::NotStarted`]).
 
+use craft_ssip::{Lines, final_code, message_data};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::os::unix::net::UnixStream;
@@ -23,8 +24,8 @@ use std::time::{Duration, Instant};
 const POLL: Duration = Duration::from_millis(30);
 /// Longest wait for a reply to a command (the server answers at once; this only bounds a stuck one).
 const REPLY_TIMEOUT: Duration = if cfg!(test) { Duration::from_secs(1) } else { Duration::from_secs(5) };
-/// Longest reply line kept (a server sends short lines; this bounds a broken one).
-const MAX_LINE: usize = 4096;
+/// Most bytes of one sentence sent as message data: [`super::MAX_UTTERANCE`] chars of up to 4 bytes each.
+const MAX_MESSAGE_BYTES: usize = 4 * super::MAX_UTTERANCE;
 /// Speech Dispatcher's TCP port when `SPEECHD_ADDRESS` names none.
 const DEFAULT_PORT: u16 = 6560;
 /// How long a freshly started server gets to open its socket (it loads its speech modules first).
@@ -286,63 +287,6 @@ fn start_server(command: &mut std::process::Command, until: Instant, changed: &d
     stopped
 }
 
-/// The sentence as SSIP message data: one line (a line break is a space when read aloud anyway),
-/// a leading `.` doubled so it can't end the message, and the terminating `.` line.
-pub(super) fn message_data(text: &str) -> String {
-    let line: String = text.chars().map(|c| if c == '\r' || c == '\n' { ' ' } else { c }).collect();
-    let dot = if line.starts_with('.') { "." } else { "" };
-    format!("{dot}{line}\r\n.\r\n")
-}
-
-/// Reads reply lines. Bytes wait in `pending` until their line is complete, so a character split
-/// across reads stays whole, and a line longer than [`MAX_LINE`] is an error, never a growing buffer.
-struct Lines<R> {
-    reader: R,
-    pending: Vec<u8>,
-}
-
-impl<R: Read> Lines<R> {
-    fn new(reader: R) -> Self {
-        Lines { reader, pending: Vec::new() }
-    }
-
-    /// The next complete line without its line ending, or `Ok(None)` when none is complete after
-    /// one read (a timeout, or part of a line): the caller looks at its deadline and whether reading
-    /// moved on between calls, however slowly the bytes trickle in.
-    fn next(&mut self) -> std::io::Result<Option<String>> {
-        if let Some(line) = self.complete_line() {
-            return Ok(Some(line));
-        }
-        if self.pending.len() > MAX_LINE {
-            return Err(ErrorKind::InvalidData.into());
-        }
-        let mut buf = [0u8; 512];
-        match self.reader.read(&mut buf) {
-            Ok(0) => Err(ErrorKind::UnexpectedEof.into()),
-            Ok(n) => {
-                self.pending.extend_from_slice(buf.get(..n).unwrap_or_default());
-                Ok(self.complete_line())
-            }
-            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted) => Ok(None),
-            Err(e) => Err(e),
-        }
-    }
-
-    /// The first complete line in `pending`, taken out of it.
-    fn complete_line(&mut self) -> Option<String> {
-        let end = self.pending.iter().position(|&b| b == b'\n')?;
-        let line: Vec<u8> = self.pending.drain(..=end).collect();
-        Some(String::from_utf8_lossy(&line).trim_end_matches(['\r', '\n']).to_string())
-    }
-}
-
-/// The three-digit code of a final reply line (`225 OK MESSAGE QUEUED`); `None` for a
-/// continuation line (`225-12`).
-fn final_code(line: &str) -> Option<u16> {
-    let code = line.get(..3)?.parse().ok()?;
-    (line.as_bytes().get(3) == Some(&b' ') || line.len() == 3).then_some(code)
-}
-
 /// A `2xx` reply, or an error naming the code.
 fn ok(code: u16) -> std::io::Result<()> {
     if (200..300).contains(&code) { Ok(()) } else { Err(std::io::Error::other(format!("Speech Dispatcher refused a command ({code})"))) }
@@ -378,7 +322,7 @@ impl<W: Write, R: Read> Conversation<'_, W, R> {
     fn reply(&mut self) -> std::io::Result<u16> {
         let start = Instant::now();
         loop {
-            if let Some(line) = self.lines.next()? {
+            if let Some(line) = self.lines.next_line()? {
                 match final_code(&line) {
                     Some(BEGIN) => self.begun = true,
                     Some(code @ (END | CANCEL | PAUSE)) => self.event = Some(code),
@@ -425,7 +369,7 @@ impl<W: Write, R: Read> Conversation<'_, W, R> {
                 Some(t) if t.elapsed() > limit => return Err(std::io::Error::new(ErrorKind::TimedOut, "the sentence didn't end")),
                 _ => {}
             }
-            if let Some(line) = self.lines.next()? {
+            if let Some(line) = self.lines.next_line()? {
                 match final_code(&line) {
                     Some(BEGIN) => {
                         began.get_or_insert_with(Instant::now);
@@ -444,7 +388,7 @@ impl<W: Write, R: Read> Conversation<'_, W, R> {
             if (self.changed)() {
                 return Err(moved_on());
             }
-            self.lines.next()?;
+            self.lines.next_line()?;
         }
         Ok(())
     }
@@ -474,7 +418,7 @@ impl<W: Write, R: Read> Conversation<'_, W, R> {
             self.event = None;
             self.begun = false;
             ok(self.command("SPEAK")?)?;
-            self.w.write_all(message_data(req.text).as_bytes())?;
+            self.w.write_all(message_data(req.text, MAX_MESSAGE_BYTES)?.as_bytes())?;
             ok(self.reply()?)?;
             match self.fate(limit)? {
                 Fate::End => return Ok(Outcome::Done),
@@ -520,6 +464,7 @@ pub(super) fn converse(stream: &Stream, req: &Request<'_>, changed: &dyn Fn() ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use craft_ssip::MAX_LINE;
     use std::io::{BufRead, BufReader};
 
     #[test]
@@ -549,11 +494,11 @@ mod tests {
     #[test]
     fn document_text_is_always_message_data() {
         // `spd-say -e` would run this line as an SSIP command; here it's spoken text.
-        assert_eq!(message_data("!-!SET SELF RATE 50"), "!-!SET SELF RATE 50\r\n.\r\n");
+        assert_eq!(message_data("!-!SET SELF RATE 50", 64).unwrap(), "!-!SET SELF RATE 50\r\n.\r\n");
         // A line of a single `.` would end the message early, and a line break would start a
         // new line that could be one.
-        assert_eq!(message_data(".\r\nQUIT"), "..  QUIT\r\n.\r\n");
-        assert_eq!(message_data("a\n.\nb"), "a . b\r\n.\r\n");
+        assert_eq!(message_data(".\r\nQUIT", 64).unwrap(), "..  QUIT\r\n.\r\n");
+        assert_eq!(message_data("a\n.\nb", 64).unwrap(), "a . b\r\n.\r\n");
         assert_eq!(final_code("225 OK MESSAGE QUEUED"), Some(225));
         assert_eq!(final_code("225-17"), None);
         assert_eq!(final_code("x"), None);
@@ -582,11 +527,11 @@ mod tests {
     fn a_character_split_by_a_read_timeout_stays_whole() {
         // `é` is C3 A9; the read times out (the empty read) between its two bytes.
         let mut lines = Lines::new(Reads(vec![b"249-Caf\xC3".to_vec(), Vec::new(), b"\xA9\tfr\tnone\r\n702 END\r\n".to_vec()].into()));
-        assert_eq!(lines.next().unwrap(), None, "half a line");
-        assert_eq!(lines.next().unwrap(), None, "the timeout");
-        assert_eq!(lines.next().unwrap().as_deref(), Some("249-Café\tfr\tnone"));
-        assert_eq!(lines.next().unwrap().as_deref(), Some("702 END"));
-        assert_eq!(lines.next().unwrap(), None);
+        assert_eq!(lines.next_line().unwrap(), None, "half a line");
+        assert_eq!(lines.next_line().unwrap(), None, "the timeout");
+        assert_eq!(lines.next_line().unwrap().as_deref(), Some("249-Café\tfr\tnone"));
+        assert_eq!(lines.next_line().unwrap().as_deref(), Some("702 END"));
+        assert_eq!(lines.next_line().unwrap(), None);
     }
 
     #[test]
@@ -597,14 +542,13 @@ mod tests {
         let err = loop {
             calls += 1;
             assert!(calls < 100, "never gave up");
-            match lines.next() {
+            match lines.next_line() {
                 Ok(None) => {}
                 Ok(Some(l)) => panic!("{l}"),
                 Err(e) => break e,
             }
         };
         assert_eq!(err.kind(), ErrorKind::InvalidData);
-        assert!(lines.pending.len() <= MAX_LINE + 512);
     }
 
     #[test]
@@ -612,10 +556,61 @@ mod tests {
         // One byte per read and never a line end: every call returns, so the caller can look at
         // its deadline and at whether reading moved on.
         let mut lines = Lines::new(Reads(vec![b"2".to_vec(), b"0".to_vec(), b"0".to_vec(), b" OK\r\n".to_vec()].into()));
-        assert_eq!(lines.next().unwrap(), None);
-        assert_eq!(lines.next().unwrap(), None);
-        assert_eq!(lines.next().unwrap(), None);
-        assert_eq!(lines.next().unwrap().as_deref(), Some("200 OK"));
+        assert_eq!(lines.next_line().unwrap(), None);
+        assert_eq!(lines.next_line().unwrap(), None);
+        assert_eq!(lines.next_line().unwrap(), None);
+        assert_eq!(lines.next_line().unwrap().as_deref(), Some("200 OK"));
+    }
+
+    /// The sentence encoder this module had before it moved to `craft-ssip`, kept as the oracle.
+    fn old_message_data(text: &str) -> String {
+        let line: String = text.chars().map(|c| if c == '\r' || c == '\n' { ' ' } else { c }).collect();
+        let dot = if line.starts_with('.') { "." } else { "" };
+        format!("{dot}{line}\r\n.\r\n")
+    }
+
+    #[test]
+    fn shared_message_data_matches_the_old_encoder() {
+        let near_cap = "é".repeat(super::super::MAX_UTTERANCE);
+        let at_cap = "𝄞".repeat(super::super::MAX_UTTERANCE);
+        assert_eq!(at_cap.len(), MAX_MESSAGE_BYTES, "the cap fits the worst case");
+        for text in ["", ".", "..x", "a\r\nb", "\n.", "!-!SET SELF RATE 50", "\r\n.\r\n", near_cap.as_str(), at_cap.as_str()] {
+            assert_eq!(message_data(text, MAX_MESSAGE_BYTES).unwrap(), old_message_data(text), "{text:?}");
+        }
+    }
+
+    /// A server that answers the first command with `reply` instead of a code.
+    fn bad_server(mut s: UnixStream, reply: Vec<u8>) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            let _ = BufReader::new(s.try_clone().unwrap()).read_line(&mut line);
+            let _ = s.write_all(&reply);
+            // Hold the socket open so the client sees the reply, not a hang-up.
+            std::thread::sleep(Duration::from_millis(1500));
+        })
+    }
+
+    #[test]
+    fn a_reply_code_with_a_sign_is_not_a_code() {
+        // `+22` parsed as a number before; now it's no reply at all, so the wait ends in a timeout.
+        let (client, srv) = UnixStream::pair().unwrap();
+        let h = bad_server(srv, b"+22 OK\r\n".to_vec());
+        let req = Request { text: "Hello.", rate: 0, lang: None };
+        let err = converse(&Stream::Unix(client), &req, &|| false).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::TimedOut);
+        h.join().unwrap();
+    }
+
+    #[test]
+    fn an_overlong_reply_line_is_an_error() {
+        let (client, srv) = UnixStream::pair().unwrap();
+        let mut junk = vec![b'x'; MAX_LINE + 100];
+        junk.extend_from_slice(b"\r\n");
+        let h = bad_server(srv, junk);
+        let req = Request { text: "Hello.", rate: 0, lang: None };
+        let err = converse(&Stream::Unix(client), &req, &|| false).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        h.join().unwrap();
     }
 
     /// How the stand-in server ends a message.

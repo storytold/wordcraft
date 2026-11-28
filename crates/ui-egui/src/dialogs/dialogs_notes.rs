@@ -3,11 +3,24 @@
 //! The form ends in commands (`references.noteOptions`, `references.convertNotes`,
 //! `references.footnote` / `references.endnote`), so agents get the same result without it.
 
-use egui::{Ui, vec2};
-use serde::Serialize;
+use craft::ui::buttons::Button;
+use craft::ui::choice::{Radio, RadioGroup};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Trigger};
+use craft::ui::dialog::DialogId;
+use craft::ui::form::Field;
+use craft::ui::layout_components::{Row, Stack};
+use craft::ui::menu::{Menu, MenuItem};
+use craft::ui::patterns::form_dialogs::FormCx;
+use craft::ui::pickers::Select;
+use craft::ui::runtime::env::Label;
+use craft::ui::sections::{DialogRole, FooterButton, GroupBox};
+use craft::ui::text::{NumberField, TextField};
+use egui::Ui;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::WordApp;
+use crate::dialogs::host::{Asks, WordForm, open_form};
 
 /// Number formats notes offer: OOXML name and a sample (not translated). The Format Page Numbers
 /// dialog offers the same list (#1113).
@@ -19,8 +32,15 @@ pub(crate) const FORMATS: [(&str, &str); 5] = [
     ("upperRoman", "I, II, III, …"),
 ];
 
+/// Longest custom mark, in characters.
+const MARK_LIMIT: usize = 10;
+
+/// Largest "Start at" value.
+const MAX_START: f64 = 32_767.0;
+
 /// The dialog's fields; `[footnotes, endnotes]` where each kind has its own.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct NoteForm {
     /// Which kind the format fields and Insert are for.
     pub endnote: bool,
@@ -32,6 +52,21 @@ pub struct NoteForm {
     pub mark: String,
     /// Apply to the whole document (else the caret's section).
     pub whole: bool,
+}
+
+impl Default for NoteForm {
+    /// Word's defaults: footnotes at the page bottom in 1, 2, 3; endnotes at the document end in i, ii, iii.
+    fn default() -> Self {
+        NoteForm {
+            endnote: false,
+            pos: ["pageBottom".into(), "docEnd".into()],
+            fmt: ["decimal".into(), "lowerRoman".into()],
+            start: [1, 1],
+            restart: ["continuous".into(), "continuous".into()],
+            mark: String::new(),
+            whole: true,
+        }
+    }
 }
 
 impl NoteForm {
@@ -66,132 +101,123 @@ impl NoteForm {
     }
 }
 
-/// A choice from `options` ((value, label)) in a drop-down; `tr` translates the labels.
-fn choice(ui: &mut Ui, id: &str, value: &mut String, options: &[(&str, &str)], tr: bool) {
-    let show = |l: &str| if tr { tl!(l).to_string() } else { l.to_string() };
-    let label = options.iter().find(|(v, _)| *v == value.as_str()).map(|(_, l)| show(l)).unwrap_or_default();
-    craft_ui::ComboBox::from_id_salt(id).selected_text(label).width(170.0).show_ui(ui, |ui| {
-        for (v, l) in options {
-            ui.selectable_value(value, v.to_string(), show(l));
-        }
-    });
+/// Opens Footnote and Endnote for the options in effect at the caret.
+pub(crate) fn open(app: &mut WordApp, name: &str, params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
+    if name != "noteOptions" {
+        return None;
+    }
+    let mut form = NoteForm::read(app);
+    form.endnote = params.get("kind").and_then(Value::as_str) == Some("endnote");
+    Some(open_form(app, parent, form))
 }
 
-/// Footnote and Endnote. Returns true to close.
-pub fn note_options(app: &mut WordApp, ui: &mut Ui, f: &mut NoteForm) -> bool {
-    crate::widgets::section(ui, tl!("Location"), |ui| {
-        let mut convert = None;
-        crate::rtl::grid(ui, egui::Grid::new("notes_location").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
-            ui.radio_value(&mut f.endnote, false, tl!("Footnotes"));
-            ui.add_enabled_ui(!f.endnote, |ui| {
-                choice(ui, "notes_fpos", &mut f.pos[0], &[("pageBottom", "Bottom of Page"), ("beneathText", "Below text")], true);
-            });
-            ui.end_row();
-            ui.radio_value(&mut f.endnote, true, tl!("Endnotes"));
-            ui.add_enabled_ui(f.endnote, |ui| {
-                choice(ui, "notes_epos", &mut f.pos[1], &[("sectEnd", "End of section"), ("docEnd", "End of document")], true);
-            });
-            ui.end_row();
-            ui.label("");
-            ui.menu_button(format!("{}…", tl!("Convert")), |ui| {
-                crate::rtl::root(ui, |ui| {
+impl WordForm for NoteForm {
+    fn key(&self) -> &'static str {
+        "noteOptions"
+    }
+
+    fn title(&self) -> Label {
+        Label::from(tl!("Footnote and Endnote").to_string())
+    }
+
+    fn ok_label(&self) -> Option<Label> {
+        Some(Label::from(if self.endnote { tl!("Insert Endnote").to_string() } else { tl!("Insert Footnote").to_string() }))
+    }
+
+    fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, asks: &mut Vec<Asks>) -> bool {
+        let endnote = self.endnote;
+        let k = usize::from(endnote);
+        Stack::new().show(ui, |ui, _| {
+            GroupBox::new(Label::from(tl!("Location").to_string()), None).show(ui, |ui, _| {
+                RadioGroup::new(Label::from(tl!("Location").to_string()), Bind::bound(&mut self.endnote)).show(ui, |ui, _| {
+                    Stack::new().show(ui, |ui, _| {
+                        Row::new().show(ui, |ui, _| {
+                            Radio::new(false).label(Label::from(tl!("Footnotes").to_string())).show(ui);
+                            if let Some(pos) = self.pos.get_mut(0) {
+                                let options = [("pageBottom", "Bottom of Page"), ("beneathText", "Below text")];
+                                let entries: Vec<Entry<String>> =
+                                    options.iter().map(|(v, l)| Entry::new(v.to_string(), tl!(l).to_string())).collect();
+                                Select::new(Label::from(tl!("Footnotes").to_string()), Bind::bound(pos), &entries).enabled(!endnote).show(ui);
+                            }
+                        });
+                        Row::new().show(ui, |ui, _| {
+                            Radio::new(true).label(Label::from(tl!("Endnotes").to_string())).show(ui);
+                            if let Some(pos) = self.pos.get_mut(1) {
+                                let options = [("sectEnd", "End of section"), ("docEnd", "End of document")];
+                                let entries: Vec<Entry<String>> =
+                                    options.iter().map(|(v, l)| Entry::new(v.to_string(), tl!(l).to_string())).collect();
+                                Select::new(Label::from(tl!("Endnotes").to_string()), Bind::bound(pos), &entries).enabled(endnote).show(ui);
+                            }
+                        });
+                    });
+                });
+                let opener = Button::new(Label::from(format!("{}…", tl!("Convert")))).show(ui);
+                Menu::new(Label::from(tl!("Convert").to_string())).opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
                     for (to, l) in
                         [("endnote", "Footnotes to endnotes"), ("footnote", "Endnotes to footnotes"), ("swap", "Swap footnotes and endnotes")]
                     {
-                        if ui.button(tl!(l)).clicked() {
-                            convert = Some(to);
-                            ui.close();
+                        if MenuItem::new(Label::from(tl!(l).to_string())).show(ui).ran {
+                            asks.push(Asks::Run("references.convertNotes".to_string(), json!({ "to": to })));
                         }
                     }
-                })
-            });
-            ui.end_row();
-        });
-        if let Some(to) = convert
-            && let Err(e) = app.run("references.convertNotes", json!({ "to": to }))
-        {
-            app.status(e);
-        }
-    });
-    crate::widgets::section(ui, tl!("Format"), |ui| {
-        let k = usize::from(f.endnote);
-        crate::rtl::Table::new("notes_format").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
-            t.row(|r| {
-                r.cell(|ui| ui.label(tl!("Number format")));
-                r.cell(|ui| {
-                    if let Some(v) = f.fmt.get_mut(k) {
-                        choice(ui, "notes_fmt", v, &FORMATS, false);
-                    }
                 });
             });
-            t.row(|r| {
-                r.cell(|ui| ui.label(tl!("Custom mark:")));
-                r.cell(|ui| ui.add(egui::TextEdit::singleline(&mut f.mark).desired_width(60.0).char_limit(10)));
-            });
-            t.row(|r| {
-                r.cell(|ui| ui.label(tl!("Start at:")));
-                r.cell(|ui| {
-                    if let Some(v) = f.start.get_mut(k) {
-                        ui.add(egui::DragValue::new(v).range(1..=32_767).speed(0.2));
+            GroupBox::new(Label::from(tl!("Format").to_string()), None).show(ui, |ui, _| {
+                Field::new(Label::from(tl!("Number format").to_string())).show(ui, |ui, _| {
+                    if let Some(v) = self.fmt.get_mut(k) {
+                        let entries: Vec<Entry<String>> = FORMATS.iter().map(|(v, l)| Entry::new(v.to_string(), l.to_string())).collect();
+                        Select::new(Label::from(tl!("Number format").to_string()), Bind::bound(v), &entries).show(ui);
                     }
                 });
-            });
-            t.row(|r| {
-                r.cell(|ui| ui.label(tl!("Numbering")));
-                r.cell(|ui| {
-                    if let Some(v) = f.restart.get_mut(k) {
-                        let each_page: &[(&str, &str)] = if f.endnote { &[] } else { &[("eachPage", "Restart Each Page")] };
-                        let options: Vec<(&str, &str)> = [("continuous", "Continuous numbering"), ("eachSect", "Restart Each Section")]
+                Field::new(Label::from(tl!("Custom mark:").to_string())).show(ui, |ui, _| {
+                    TextField::new(Label::from(tl!("Custom mark:").to_string()), Bind::bound(&mut self.mark)).limit(Some(MARK_LIMIT)).show(ui);
+                });
+                Field::new(Label::from(tl!("Start at:").to_string())).show(ui, |ui, _| {
+                    if let Some(v) = self.start.get_mut(k) {
+                        let out = NumberField::new(Label::from(tl!("Start at:").to_string()), Bind::given(Some(f64::from(*v))))
+                            .range(1.0..=MAX_START)
+                            .show(ui);
+                        if let Some(Some(n)) = out.value().copied() {
+                            *v = n.round().clamp(1.0, MAX_START) as u32;
+                        }
+                    }
+                });
+                Field::new(Label::from(tl!("Numbering").to_string())).show(ui, |ui, _| {
+                    if let Some(v) = self.restart.get_mut(k) {
+                        let each_page: &[(&str, &str)] = if endnote { &[] } else { &[("eachPage", "Restart Each Page")] };
+                        let entries: Vec<Entry<String>> = [("continuous", "Continuous numbering"), ("eachSect", "Restart Each Section")]
                             .into_iter()
                             .chain(each_page.iter().copied())
+                            .map(|(v, l)| Entry::new(v.to_string(), tl!(l).to_string()))
                             .collect();
-                        choice(ui, "notes_restart", v, &options, true);
+                        Select::new(Label::from(tl!("Numbering").to_string()), Bind::bound(v), &entries).show(ui);
                     }
                 });
-            });
-            t.row(|r| {
-                r.cell(|ui| ui.label(tl!("Apply to:")));
-                r.cell(|ui| {
-                    let mut scope = if f.whole { "document" } else { "section" }.to_string();
-                    choice(ui, "notes_scope", &mut scope, &[("document", "Whole document"), ("section", "This section")], true);
-                    f.whole = scope == "document";
+                Field::new(Label::from(tl!("Apply to:").to_string())).show(ui, |ui, _| {
+                    let scopes = [
+                        Entry::new(true, Label::from(tl!("Whole document").to_string())),
+                        Entry::new(false, Label::from(tl!("This section").to_string())),
+                    ];
+                    Select::new(Label::from(tl!("Apply to:").to_string()), Bind::bound(&mut self.whole), &scopes).show(ui);
                 });
             });
         });
-    });
-    // Insert / Apply / Cancel.
-    let (mut insert, mut apply, mut cancel) = (false, false, false);
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
-            let label = if f.endnote { "Insert Endnote" } else { "Insert Footnote" };
-            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if cfg!(target_os = "macos") {
-                // macOS: [Apply] [Cancel] [Insert], the default button rightmost.
-                insert = ui.add(crate::widgets::primary_button(ui, tl!(label))).clicked() || enter;
-                cancel = ui.button(tl!("Cancel")).clicked();
-                apply = ui.button(tl!("Apply")).clicked();
-            } else {
-                cancel = ui.button(tl!("Cancel")).clicked();
-                apply = ui.button(tl!("Apply")).clicked();
-                insert = ui.add(crate::widgets::primary_button(ui, tl!(label))).clicked() || enter;
-            }
-            cancel |= crate::dialogs::cancel_key_pressed(ui);
-        });
-    });
-    if insert || apply {
-        if let Err(e) = app.run("references.noteOptions", f.params()) {
-            app.status(e);
-            return false;
-        }
-        if insert {
-            let id = if f.endnote { "references.endnote" } else { "references.footnote" };
-            if let Err(e) = app.run(id, json!({ "mark": f.mark.trim() })) {
-                app.status(e);
-            }
-        }
+        true
     }
-    insert || apply || cancel
+
+    fn commands(&self) -> Vec<(String, Value)> {
+        let insert = if self.endnote { "references.endnote" } else { "references.footnote" };
+        vec![("references.noteOptions".to_string(), self.params()), (insert.to_string(), json!({ "mark": self.mark.trim() }))]
+    }
+
+    /// Apply keeps the dialog open and sets the options only.
+    fn extra_buttons(&self) -> Vec<FooterButton> {
+        vec![FooterButton::new(Label::from(tl!("Apply").to_string()), DialogRole::Other).stays_open(true)]
+    }
+
+    fn extra(&mut self, _at: usize) -> Vec<(String, Value)> {
+        vec![("references.noteOptions".to_string(), self.params())]
+    }
 }
 
 #[cfg(test)]
@@ -199,7 +225,8 @@ mod tests {
     use serde_json::json;
     use wordcraft_engine::Session;
 
-    use crate::dialogs::Dialog;
+    use super::NoteForm;
+    use crate::dialogs::host::FormHost;
     use crate::{Services, WordApp};
 
     /// #385: the Footnotes group's launcher opens Footnote and Endnote; its settings apply to the
@@ -208,19 +235,19 @@ mod tests {
     fn footnote_and_endnote_opens_from_the_launcher_and_applies() {
         let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
         assert_eq!(a.run("references.noteOptions", json!({})).unwrap(), json!({"pending": "noteOptions"}));
-        let Some(Dialog::NoteOptions { form }) = &mut a.dialog else { panic!("dialog") };
+        let host = a.dialog_host.get_mut::<FormHost<NoteForm>>().expect("dialog");
+        let form = host.form_mut();
         assert_eq!((form.pos[0].as_str(), form.fmt[1].as_str(), form.start[0]), ("pageBottom", "lowerRoman", 1));
         form.pos[0] = "beneathText".into();
         form.restart[0] = "eachPage".into();
         form.whole = false;
         let params = form.params();
-        a.dialog = None;
+        crate::dialogs::host::close_all(&mut a, &egui::Context::default());
         a.run("references.noteOptions", params).unwrap();
         let o = a.session.doc.note_options(&a.session.doc.last_section, false);
         assert_eq!(o.pos, wordcraft_doc::section::NotePos::BeneathText);
         assert!(a.session.doc.settings.footnote_pr.is_empty(), "this section only");
         let got = a.execute("references.noteOptions", json!({})).unwrap();
         assert_eq!(got["footnote"]["numRestart"], "eachPage");
-        assert!(a.dialog.is_none());
     }
 }

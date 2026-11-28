@@ -24,7 +24,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("font.remove", "Remove Added Font", "Home › Font", remove).params(r#"{"family": string}"#).pure(),
         CommandSpec::new("font.loadSystem", "Load System Installed Fonts…", "Home › Font", load_system).pure(),
         CommandSpec::new("font.missing", "Missing Fonts", "Status Bar", missing)
-            .params(r#"{} → {"missing": [{"font": string, "shownAs": [string] (the families drawn instead), "metricCompatible": bool (its substitute measures like the font)}]} — the text the current view shows"#)
+            .params(r#"{} → {"missing": [{"font": string, "shownAs": [string] (the families drawn instead), "metricCompatible": bool (its substitute measures like the font), "download"?: {"name": string, "publisher": string, "url": string, "restricted": bool (the publisher limits who may use it: check its licence terms)} (its publisher's download page, when it offers the font at no charge)}]} — the text the current view shows"#)
             .pure(),
     ]
 }
@@ -136,6 +136,9 @@ pub struct MissingFont {
     /// Fallback faces for characters the substitute lacks don't count: the font itself might
     /// lack them too (an emoji in Calibri text).
     pub metric_compatible: bool,
+    /// Its publisher's download page, when the publisher offers the font at no charge
+    /// ([`wordcraft_fonts::download`]): installing it shows the document as it was written.
+    pub download: Option<&'static wordcraft_fonts::download::FontDownload>,
 }
 
 /// The family text set in `font` is drawn in when `font` isn't installed (None when it is), as
@@ -174,6 +177,7 @@ pub fn missing_fonts(doc: &Document, layout: &DocLayout) -> Vec<MissingFont> {
             // Judged by the name layout looked up, spaces and all: "Arial " isn't Arial to it, so
             // its text is in a substitute even where Arial is installed.
             metric_compatible: shown_as(doc, &recorded).is_some_and(|s| !warns(font, &s)),
+            download: wordcraft_fonts::download::download_for(font),
         });
         if !m.shown_as.contains(&family) {
             m.shown_as.push(family);
@@ -216,7 +220,16 @@ fn missing(s: &mut Session, _: &Value) -> CmdResult {
         (_, n) if n > NAMED => format!("Not installed: {named} and {} more", n - NAMED),
         _ => format!("Not installed: {named}"),
     };
-    let fonts: Vec<Value> = found.iter().map(|f| json!({"font": f.font, "shownAs": f.shown_as, "metricCompatible": f.metric_compatible})).collect();
+    let fonts: Vec<Value> = found
+        .iter()
+        .map(|f| {
+            let mut font = json!({"font": f.font, "shownAs": f.shown_as, "metricCompatible": f.metric_compatible});
+            if let Some(d) = f.download {
+                font["download"] = json!({"name": d.name, "publisher": d.publisher, "url": d.url, "restricted": d.restricted});
+            }
+            font
+        })
+        .collect();
     Ok(json!({"missing": fonts}))
 }
 

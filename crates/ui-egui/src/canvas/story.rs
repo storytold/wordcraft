@@ -1,4 +1,4 @@
-use super::{DocLayout, PartKind, Rect, StoryRef, WordApp, pos2, vec2};
+use super::{DocLayout, PartKind, StoryRef, WordApp};
 
 /// Whether the caret is in a text box's story.
 pub fn in_text_box(app: &WordApp) -> bool {
@@ -45,27 +45,4 @@ pub(super) fn dims_body(app: &WordApp, layout: &DocLayout) -> bool {
         StoryRef::Part(_) if in_text_box(app) => editing_header_footer(app, layout),
         StoryRef::Part(_) => !matches!(part_kind(app, app.session.sel.focus.story), Some(PartKind::Footnote | PartKind::Endnote)),
     }
-}
-
-/// The frame around the equation being edited, on screen: Word's outline, the grip at its top
-/// left and the options strip inside its right edge.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct EquationFrame {
-    pub outline: Rect,
-    pub grip: Rect,
-    pub strip: Rect,
-}
-
-/// Lay the frame out around `bx` on the page drawn at `page` (`scale` screen pixels a point):
-/// the equation's width and its line's height, plus the strip; the frame's pieces keep their
-/// screen size at every zoom.
-pub(super) fn equation_frame(page: Rect, bx: &wordcraft_layout::hit::EquationBox, scale: f32) -> EquationFrame {
-    let (pad, strip_w) = (2.0, 10.0);
-    let x0 = page.min.x + bx.x * scale - pad;
-    let x1 = page.min.x + (bx.x + bx.math.width) * scale + pad;
-    let (top, bottom) = (page.min.y + bx.top * scale - pad, page.min.y + bx.bottom * scale + pad);
-    let outline = Rect::from_min_max(pos2(x0, top), pos2(x1 + strip_w, bottom));
-    let strip = Rect::from_min_max(pos2(x1, top), pos2(x1 + strip_w, bottom));
-    let grip = Rect::from_min_size(pos2(x0 - 5.0, top - 3.0), vec2(7.0, 14.0));
-    EquationFrame { outline, grip, strip }
 }

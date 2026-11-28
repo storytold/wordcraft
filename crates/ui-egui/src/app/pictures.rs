@@ -1,3 +1,5 @@
+use craft::ui::runtime::commands::ClipboardHandle;
+
 use super::{Value, WordApp, json};
 
 /// Whether a pasted picture belongs in the document: the page has keyboard focus, and no
@@ -20,7 +22,7 @@ impl WordApp {
         let Some(off) = end.off.checked_sub(wordcraft_doc::para::OBJ.len_utf8()) else { return };
         let start = wordcraft_doc::Pos { off, ..end.clone() };
         if self.session.doc.para_at(&start).and_then(|p| p.object_at(off)).is_some_and(|o| o.is_drawing()) {
-            self.session.sel = wordcraft_engine::Selection { anchor: start, focus: end };
+            self.session.set_selection(wordcraft_engine::Selection { anchor: start, focus: end });
         }
     }
 
@@ -36,7 +38,7 @@ impl WordApp {
     /// arrive in one drop, put the caret after the picture placed by the previous file (#1592).
     pub(super) fn caret_after_placed_picture(&mut self, placed: bool) {
         if placed {
-            self.session.sel.anchor = self.session.sel.focus.clone();
+            self.session.set_selection(wordcraft_engine::Selection::caret(self.session.sel.focus.clone()));
         }
     }
 
@@ -67,18 +69,19 @@ impl WordApp {
         }
     }
 
-    /// Pictures pasted in the browser: inserted once when the page is the edit target, dropped
-    /// otherwise so the focused field's own paste applies (a text field ignores a picture).
-    pub(crate) fn drain_pasted(&mut self) {
-        let Some(pasted) = self.services.pasted.clone() else { return };
-        let pictures = std::mem::take(&mut *pasted.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
-        let target = paste_target(self.canvas.focused, self.ui.backstage, self.dialog.is_some() || self.file_dialog_open());
-        for (_, bytes) in pictures {
-            if !target {
-                log::debug!("pasted picture ignored: the document is not the edit target");
-                continue;
-            }
-            let _ = self.insert_or_change_picture(json!({"data": wordcraft_engine::cmd::insert::base64_encode(&bytes)}));
+    /// A paste the host delivered as an event (the browser's): run Paste once when the page is the
+    /// edit target, otherwise leave it so the focused field's own paste applies (a text field
+    /// ignores a picture). `arrived` holds in every pass of the frame, so this runs once per
+    /// frame, from `frame_input`.
+    pub(crate) fn paste_arrived(&mut self, ctx: &egui::Context) {
+        if !ClipboardHandle::of(ctx).arrived() {
+            return;
+        }
+        // PLAN(canvas-w9): cv.A10 `CanvasState::focused(&self, &egui::Context) -> bool`
+        if paste_target(self.canvas.focused(ctx), self.ui.backstage, self.modal_open()) {
+            let _ = self.run("edit.paste", json!({}));
+        } else {
+            log::debug!("pasted content ignored: the document is not the edit target");
         }
     }
 }

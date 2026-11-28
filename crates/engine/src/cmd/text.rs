@@ -17,8 +17,8 @@ use autoformat::insert;
 use delete::{backspace, delete, delete_sentence_back, delete_word_back, delete_word_fwd};
 pub use enter_tab::MAX_TYPED_PARAGRAPHS;
 use enter_tab::{back_tab, new_paragraph, tab};
-pub use unicode::{alt_code_char, oem_code_page, system_code_pages, system_oem_code_page, windows_code_pages};
 use unicode::{ins_char, insert_code, toggle_unicode};
+pub use unicode::{oem_code_page, system_code_pages, system_oem_code_page};
 
 /// The text-entry commands: typing, Enter, breaks, Tab, deleting and typed symbols.
 pub fn specs() -> Vec<CommandSpec> {

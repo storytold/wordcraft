@@ -1,13 +1,38 @@
-use super::common::{LEADERS, choice, leader_char, sample};
-use super::shell::{Next, go};
-use super::{FieldCode, RefsDialog, Serialize, Ui, Value, WordApp, buttons, json, vec2};
+use craft::behavior::Mixed;
+use craft::theme::variant::Tone;
+use craft::ui::buttons::Button;
+use craft::ui::choice::{Checkbox, Radio, RadioGroup};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
+use craft::ui::dialog::DialogId;
+use craft::ui::form::Field;
+use craft::ui::layout_components::{Row, Stack};
+use craft::ui::notices::{Notice, NoticeLayout};
+// PLAN: assumed FormButtons (dialogs-w5)
+use craft::ui::patterns::form_dialogs::{FormButtons, FormCx};
+use craft::ui::pickers::Select;
+use craft::ui::runtime::env::Label;
+use craft::ui::sections::{DialogRole, FooterButton, Section};
+use craft::ui::text::{NumberField, TextField};
+use egui::Ui;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use wordcraft_engine::cmd::references::FieldCode;
+
+use super::sample::{LEADERS, leader_char, sample_card};
+use crate::WordApp;
+use crate::dialogs::host::{Asks, Filed, WordForm, open_form};
+
+/// The tab leaders as drop-down entries (value, translated label).
+pub(super) fn leaders() -> Vec<Entry<String>> {
+    LEADERS.iter().map(|(v, l)| Entry::new(v.to_string(), Label::from(tl!(l).to_string()))).collect()
+}
 
 // ---------------------------------------------------------------------------------------------
 // Index and Mark Index Entry
 
 /// The Index dialog's fields.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct IndexForm {
     /// `indented` or `runIn`.
     pub kind: String,
@@ -46,74 +71,80 @@ impl IndexForm {
     pub fn params(&self) -> Value {
         json!({"type": self.kind, "columns": self.columns, "rightAlign": self.right_align, "tabLeader": self.leader, "headings": self.headings})
     }
-}
 
-/// Draws the index preview and type, columns, right-alignment, tab-leader and heading controls,
-/// jumps to Mark Entry, and runs `references.index` on OK.
-pub(super) fn index_ui(app: &mut WordApp, ui: &mut Ui, f: &mut IndexForm) -> Next {
-    let page = |p: &str| p.to_string();
-    let lines: Vec<(usize, String, String)> = {
+    /// The sample card's lines: (indent level, text, page or empty).
+    fn sample_lines(&self) -> Vec<(usize, String, String)> {
         let mut v = Vec::new();
-        if f.headings {
+        if self.headings {
             v.push((0, "A".to_string(), String::new()));
         }
-        if f.kind == "runIn" {
-            v.push((0, format!("{}: {}, 4; {}", tl!("Atmosphere"), tl!("Ionosphere"), tl!("Mesosphere")), page("3")));
+        if self.kind == "runIn" {
+            v.push((0, format!("{}: {}, 4; {}", tl!("Atmosphere"), tl!("Ionosphere"), tl!("Mesosphere")), "3".to_string()));
         } else {
-            v.push((0, tl!("Atmosphere").to_string(), page("1")));
-            v.push((1, tl!("Ionosphere").to_string(), page("3")));
-            v.push((1, tl!("Mesosphere").to_string(), page("4")));
+            v.push((0, tl!("Atmosphere").to_string(), "1".to_string()));
+            v.push((1, tl!("Ionosphere").to_string(), "3".to_string()));
+            v.push((1, tl!("Mesosphere").to_string(), "4".to_string()));
         }
         v
-    };
-    sample(ui, &lines, f.right_align, leader_char(&f.leader));
-    ui.add_space(6.0);
-    crate::rtl::Table::new("idx").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
-        t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Type:")));
-            r.cell(|ui| {
-                ui.horizontal(|ui| {
-                    ui.radio_value(&mut f.kind, "indented".to_string(), tl!("Indented"));
-                    ui.radio_value(&mut f.kind, "runIn".to_string(), tl!("Run-in"));
-                });
+    }
+}
+
+impl WordForm for IndexForm {
+    fn key(&self) -> &'static str {
+        "index"
+    }
+
+    fn title(&self) -> Label {
+        Label::from(tl!("Index").to_string())
+    }
+
+    fn commands(&self) -> Vec<(String, Value)> {
+        vec![("references.index".to_string(), self.params())]
+    }
+
+    fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, asks: &mut Vec<Asks>) -> bool {
+        sample_card(tl!("Preview"), self.sample_lines(), self.right_align, leader_char(&self.leader)).show(ui);
+        let kind = RadioGroup::new(Label::from(tl!("Type:").to_string()), Bind::given(self.kind.clone())).show(ui, |ui, _| {
+            Row::new().show(ui, |ui, _| {
+                Radio::new("indented".to_string()).label(Label::from(tl!("Indented").to_string())).show(ui);
+                Radio::new("runIn".to_string()).label(Label::from(tl!("Run-in").to_string())).show(ui);
             });
         });
-        t.row(|r| {
-            let columns_label = r.cell(|ui| ui.label(tl!("Columns:")));
-            r.cell(|ui| ui.add(egui::DragValue::new(&mut f.columns).range(1..=4)).labelled_by(columns_label.id));
-        });
-        t.row(|r| {
-            r.cell(|ui| ui.label(""));
-            r.cell(|ui| ui.checkbox(&mut f.right_align, tl!("Page numbers at the right margin")));
-        });
-        t.row(|r| {
-            let leader_label = r.cell(|ui| ui.label(tl!("Tab leader:")));
-            r.cell(|ui| {
-                ui.add_enabled_ui(f.right_align, |ui| {
-                    let opts: Vec<(String, &str)> = LEADERS.iter().map(|(v, l)| (v.to_string(), *l)).collect();
-                    choice(ui, "idx_leader", &mut f.leader, &opts, &leader_label);
-                });
-            });
-        });
-        t.row(|r| {
-            r.cell(|ui| ui.label(""));
-            r.cell(|ui| ui.checkbox(&mut f.headings, tl!("Letter headings")));
-        });
-    });
-    ui.add_space(4.0);
-    if ui.button(tl!("Mark Entry…")).clicked() {
-        return go(RefsDialog::MarkEntry(MarkForm::read(app)));
+        if let Some(kind) = kind.output.value().cloned() {
+            self.kind = kind;
+        }
+        let columns =
+            NumberField::new(Label::from(tl!("Columns:").to_string()), Bind::given(Some(f64::from(self.columns)))).range(1.0..=4.0).show(ui);
+        if let Some(Some(n)) = columns.edit.value().cloned() {
+            self.columns = n.round().clamp(1.0, 4.0) as u32;
+        }
+        Checkbox::new(Bind::bound(&mut self.right_align)).label(Label::from(tl!("Page numbers at the right margin").to_string())).show(ui);
+        let title = Label::from(tl!("Tab leader:").to_string());
+        let entries = leaders();
+        let leader = Field::new(title.clone())
+            .show(ui, |ui, _| {
+                Select::new(title.clone(), Bind::given(Mixed::Same(self.leader.clone())), &entries)
+                    .enabled(self.right_align)
+                    .show(ui)
+                    .value()
+                    .cloned()
+            })
+            .inner
+            .flatten();
+        if let Some(leader) = leader {
+            self.leader = leader;
+        }
+        Checkbox::new(Bind::bound(&mut self.headings)).label(Label::from(tl!("Letter headings").to_string())).show(ui);
+        if Button::new(Label::from(tl!("Mark Entry…").to_string())).show(ui).clicked() {
+            asks.push(Asks::Open("markEntry".to_string(), Value::Null));
+        }
+        true
     }
-    let (ok, cancel) = buttons(ui, tl!("OK"));
-    if ok && let Err(e) = app.run("references.index", f.params()) {
-        app.status(e);
-    }
-    if ok || cancel { Next::Close } else { Next::Stay }
 }
 
 /// The Mark Index Entry dialog's fields.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct MarkForm {
     pub entry: String,
     pub subentry: String,
@@ -125,6 +156,8 @@ pub struct MarkForm {
     pub bold: bool,
     pub italic: bool,
     pub message: String,
+    /// `message` reports a refusal, not a success.
+    pub failed: bool,
 }
 
 impl MarkForm {
@@ -140,6 +173,7 @@ impl MarkForm {
             bold: false,
             italic: false,
             message: String::new(),
+            failed: false,
         }
     }
 
@@ -158,73 +192,146 @@ impl MarkForm {
     }
 }
 
-/// Draws the index-entry fields and page, cross-reference or bookmark-range options, with Mark
-/// and Mark All running `references.markEntry`.
-pub(super) fn mark_ui(app: &mut WordApp, ui: &mut Ui, f: &mut MarkForm) -> Next {
-    crate::widgets::section(ui, tl!("Index"), |ui| {
-        crate::rtl::Table::new("xe").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
-            t.row(|r| {
-                let entry_label = r.cell(|ui| ui.label(tl!("Main entry:")));
-                r.cell(|ui| ui.add(egui::TextEdit::singleline(&mut f.entry).desired_width(220.0)).labelled_by(entry_label.id));
-            });
-            t.row(|r| {
-                let subentry_label = r.cell(|ui| ui.label(tl!("Subentry:")));
-                r.cell(|ui| ui.add(egui::TextEdit::singleline(&mut f.subentry).desired_width(220.0)).labelled_by(subentry_label.id));
-            });
+/// The extra footer button that marks every occurrence of the entry.
+const MARK_ALL: usize = 0;
+
+impl WordForm for MarkForm {
+    fn key(&self) -> &'static str {
+        "markEntry"
+    }
+
+    fn title(&self) -> Label {
+        Label::from(tl!("Mark Index Entry").to_string())
+    }
+
+    /// Mark and Mark All are the dialog's actions; there is no OK, only Close.
+    fn buttons(&self) -> FormButtons {
+        FormButtons::Close
+    }
+
+    /// The document stays usable beside the dialog, so the next entry can be selected and marked.
+    fn modeless(&self) -> bool {
+        true
+    }
+
+    fn commands(&self) -> Vec<(String, Value)> {
+        Vec::new()
+    }
+
+    /// Both buttons stay open so the next entry can be marked.
+    fn extra_buttons(&self) -> Vec<FooterButton> {
+        let can = !self.entry.trim().is_empty();
+        vec![
+            FooterButton::new(Label::from(tl!("Mark All").to_string()), DialogRole::Other).enabled(can).stays_open(true),
+            FooterButton::new(Label::from(tl!("Mark").to_string()), DialogRole::Accept).enabled(can).stays_open(true),
+        ]
+    }
+
+    fn extra(&mut self, at: usize) -> Vec<(String, Value)> {
+        vec![("references.markEntry".to_string(), self.params(at == MARK_ALL))]
+    }
+
+    fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
+        Section::fixed(Label::from(tl!("Index").to_string())).id_salt("index").show(ui, |ui, _| {
+            let title = Label::from(tl!("Main entry:").to_string());
+            let typed = Field::new(title.clone())
+                .show(ui, |ui, _| TextField::new(title.clone(), Bind::given(self.entry.clone())).show(ui).value().cloned())
+                .inner
+                .flatten();
+            if let Some(v) = typed {
+                self.entry = v;
+            }
+            let title = Label::from(tl!("Subentry:").to_string());
+            let typed = Field::new(title.clone())
+                .show(ui, |ui, _| TextField::new(title.clone(), Bind::given(self.subentry.clone())).show(ui).value().cloned())
+                .inner
+                .flatten();
+            if let Some(v) = typed {
+                self.subentry = v;
+            }
         });
-    });
-    crate::widgets::section(ui, tl!("Options"), |ui| {
-        ui.horizontal(|ui| {
-            let see_label = ui.radio_value(&mut f.option, "see".to_string(), tl!("Cross-reference:"));
-            ui.add_enabled(f.option == "see", egui::TextEdit::singleline(&mut f.see).desired_width(160.0)).labelled_by(see_label.id);
-        });
-        ui.radio_value(&mut f.option, "page".to_string(), tl!("This page"));
-        ui.horizontal(|ui| {
-            let bookmark_label =
-                ui.add_enabled_ui(!f.bookmarks.is_empty(), |ui| ui.radio_value(&mut f.option, "range".to_string(), tl!("Pages of bookmark:"))).inner;
-            ui.add_enabled_ui(f.option == "range", |ui| {
-                let opts: Vec<(String, &str)> = f.bookmarks.iter().map(|b| (b.clone(), b.as_str())).collect();
-                let combo = craft_ui::ComboBox::from_id_salt("xe_bm").selected_text(f.bookmark.clone()).width(140.0).show_ui(ui, |ui| {
-                    for (v, l) in &opts {
-                        ui.selectable_value(&mut f.bookmark, v.clone(), *l);
+        Section::fixed(Label::from(tl!("Options").to_string())).id_salt("options").show(ui, |ui, _| {
+            let options =
+                [("see", "Cross-reference:", true), ("page", "This page", true), ("range", "Pages of bookmark:", !self.bookmarks.is_empty())];
+            let group = RadioGroup::new(Label::from(tl!("Options").to_string()), Bind::given(self.option.clone())).show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, _| {
+                    for (id, label, enabled) in options {
+                        Radio::new(id.to_string()).label(Label::from(tl!(label).to_string())).enabled(enabled).show(ui);
                     }
                 });
-                combo.response.labelled_by(bookmark_label.id);
             });
+            if let Some(option) = group.output.value().cloned() {
+                self.option = option;
+            }
+            let title = Label::from(tl!("Cross-reference text:").to_string());
+            let typed = Field::new(title.clone())
+                .show(ui, |ui, _| {
+                    TextField::new(title.clone(), Bind::given(self.see.clone())).enabled(self.option == "see").show(ui).value().cloned()
+                })
+                .inner
+                .flatten();
+            if let Some(v) = typed {
+                self.see = v;
+            }
+            let entries: Vec<Entry<String>> = self.bookmarks.iter().map(|b| Entry::new(b.clone(), Label::from(b.clone()))).collect();
+            let title = Label::from(tl!("Bookmark:").to_string());
+            let picked = Field::new(title.clone())
+                .show(ui, |ui, _| {
+                    Select::new(title.clone(), Bind::given(Mixed::Same(self.bookmark.clone())), &entries)
+                        .enabled(self.option == "range")
+                        .show(ui)
+                        .value()
+                        .cloned()
+                })
+                .inner
+                .flatten();
+            if let Some(v) = picked {
+                self.bookmark = v;
+            }
         });
-    });
-    crate::widgets::section(ui, tl!("Page number style"), |ui| {
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut f.bold, tl!("Bold"));
-            ui.checkbox(&mut f.italic, tl!("Italic"));
+        Section::fixed(Label::from(tl!("Page number style").to_string())).id_salt("style").show(ui, |ui, _| {
+            Checkbox::new(Bind::bound(&mut self.bold)).label(Label::from(tl!("Bold").to_string())).show(ui);
+            Checkbox::new(Bind::bound(&mut self.italic)).label(Label::from(tl!("Italic").to_string())).show(ui);
         });
-    });
-    if !f.message.is_empty() {
-        ui.label(egui::RichText::new(&f.message).small());
+        if !self.message.is_empty() {
+            let tone = if self.failed { Tone::Bad } else { Tone::Neutral };
+            Notice::new(tone, Label::from(self.message.clone())).layout(NoticeLayout::Inline).show(ui);
+        }
+        true
     }
-    let mut close = false;
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
-            if ui.button(tl!("Close")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                close = true;
-            }
-            let can = !f.entry.trim().is_empty();
-            if ui.add_enabled(can, egui::Button::new(tl!("Mark All"))).clicked() {
-                f.message = match app.run("references.markEntry", f.params(true)) {
-                    Ok(v) => {
-                        crate::i18n::fmt(tl!("{n} entries marked."), &[("n", &v.get("marked").and_then(Value::as_u64).unwrap_or(0).to_string())])
-                    }
-                    Err(e) => e,
+
+    /// The status line shows the engine's count of marked entries or its refusal; the dialog stays open.
+    fn applied(&mut self, _app: &mut WordApp, filed: Filed, outcome: Result<&[Value], &str>) {
+        let Filed::Extra(at) = filed else { return };
+        match outcome {
+            Ok(results) => {
+                self.message = if at == MARK_ALL {
+                    let marked = results.first().and_then(|v| v.get("marked")).and_then(Value::as_u64).unwrap_or(0);
+                    crate::i18n::fmt(tl!("{n} entries marked."), &[("n", &marked.to_string())])
+                } else {
+                    tl!("Entry marked.").to_string()
                 };
+                self.failed = false;
             }
-            if ui.add_enabled(can, crate::widgets::primary_button(ui, tl!("Mark"))).clicked() {
-                f.message = match app.run("references.markEntry", f.params(false)) {
-                    Ok(_) => tl!("Entry marked.").to_string(),
-                    Err(e) => e,
-                };
+            Err(e) => {
+                self.message = e.to_string();
+                self.failed = true;
             }
-        });
-    });
-    if close { Next::Close } else { Next::Stay }
+        }
+    }
+}
+
+/// Opens the Index dialog or the Mark Index Entry dialog (`name`), over `parent` when it is a child.
+pub(super) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
+    match name {
+        "index" => {
+            let form = IndexForm::read(app);
+            Some(open_form(app, parent, form))
+        }
+        "markEntry" => {
+            let form = MarkForm::read(app);
+            Some(open_form(app, parent, form))
+        }
+        _ => None,
+    }
 }

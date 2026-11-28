@@ -1,16 +1,14 @@
-use super::{DEFAULT_TAB, MAX_DICTIONARY, UiState, WordApp, desktop_theme, recent_fonts_from, theme};
+use craft::settings::{LoadReport, SaveStatus, SharedSettings};
+use craft::ui::notices::{SaveResult, SettingsLoad};
+use craft::ui::shell::ScreenMode;
 
-/// What the operating system says about light and dark. macOS and Windows answer through winit;
-/// winit reports nothing on Linux, where the desktop portal does ([`desktop_theme`]). `None` means
-/// nobody answered, not a preference.
-fn system_theme(ctx: &egui::Context, desktop_dark: Option<bool>) -> Option<egui::Theme> {
-    ctx.system_theme().or_else(|| desktop_dark.map(|dark| if dark { egui::Theme::Dark } else { egui::Theme::Light }))
-}
+use super::{DEFAULT_TAB, MAX_DICTIONARY, WordApp, recent_fonts_from, theme};
+use crate::prefs::{Prefs, Shortcuts};
 
 impl WordApp {
     /// Preferences to save between runs: the UI state plus the current user name and editing
     /// preferences.
-    pub fn prefs(&self) -> UiState {
+    pub fn prefs(&self) -> Prefs {
         let mut ui = self.ui.clone();
         ui.author = Some(self.session.author.clone());
         ui.initials = self.session.initials.clone();
@@ -22,26 +20,26 @@ impl WordApp {
         ui.nav_pane = self.session.view.nav_pane;
         ui.styles_pane_dock = self.session.view.styles_pane_dock;
         ui.check_spelling = self.session.view.proofing;
-        ui.keyboard = self.session.keymap.clone();
+        ui.keyboard = Shortcuts(self.session.keymap().clone());
         ui.ribbon = self.session.ribbon.clone();
         ui.ink_pens = self.session.view.draw.pens.clone();
         ui
     }
 
     /// Restore preferences saved by [`WordApp::prefs`].
-    pub fn apply_prefs(&mut self, ui: UiState) {
+    pub fn apply_prefs(&mut self, ui: Prefs) {
         self.ui = ui;
         self.ui.backstage = false;
-        // Word opens on Home every launch, so the tab `ui.json` holds is not restored. Going File
+        // Word opens on Home every launch, so the tab the settings hold is not restored. Going File
         // and back to the editor within the run still returns to the tab that was showing.
         self.ui.tab = DEFAULT_TAB.into();
-        let recent_fonts = recent_fonts_from(self.ui.recent_fonts.iter().map(String::as_str));
-        self.ui.recent_fonts = recent_fonts;
-        // A `ui.json` from before the theme setting: its dark-mode switch picks Dark or Light.
+        let recent_fonts = recent_fonts_from(self.ui.font_picker.recent.iter().map(String::as_str));
+        self.ui.font_picker.recent = recent_fonts;
+        // Settings from before the theme setting: their dark-mode switch picks Dark or Light.
         if let Some(dark) = self.ui.legacy_dark.take() {
             self.ui.theme = if dark { theme::Appearance::Dark } else { theme::Appearance::Light };
         }
-        // A `ui.json` from before #822: its interface size was on top of the display scale, so it
+        // Settings from before #822: the interface size was on top of the display scale, so it
         // becomes absolute on the first frame that knows that scale (`logic`). A chosen `uiScale`
         // (the current key) wins; "auto" can't be told from a missing key, so the old size does.
         self.legacy_interface_size =
@@ -54,10 +52,16 @@ impl WordApp {
             self.session.author = author;
         }
         self.session.initials = std::mem::take(&mut self.ui.initials).chars().take(wordcraft_engine::cmd::options::MAX_INITIALS_CHARS).collect();
-        for w in std::mem::take(&mut self.ui.dictionary).iter().take(MAX_DICTIONARY) {
-            let w = w.trim();
-            if !w.is_empty() && w.chars().count() <= wordcraft_engine::cmd::options::MAX_WORD_CHARS {
-                wordcraft_engine::proof::add_word(w);
+        // A bound custom dictionary file is the source of truth: `load_user_dictionary` reads it
+        // at start-up. Restoring the `ui.json` copy first would let a missing or unreadable file's
+        // words reach the default `custom-dictionary.txt` on the next Add to Dictionary (#5840).
+        let saved_words = std::mem::take(&mut self.ui.dictionary);
+        if self.ui.editing.custom_dictionary.is_none() {
+            for w in saved_words.iter().take(MAX_DICTIONARY) {
+                let w = w.trim();
+                if !w.is_empty() && w.chars().count() <= wordcraft_engine::cmd::options::MAX_WORD_CHARS {
+                    wordcraft_engine::proof::add_word(w);
+                }
             }
         }
         self.session.prefs = std::mem::take(&mut self.ui.editing);
@@ -75,73 +79,95 @@ impl WordApp {
         self.session.view.styles_pane_dock = self.ui.styles_pane_dock;
         self.session.view.proofing = self.ui.check_spelling;
         self.session.prefs.check_spelling = self.ui.check_spelling;
-        // Keys for commands this version doesn't have are dropped.
-        self.session.keymap = std::mem::take(&mut self.ui.keyboard);
+        *self.session.keymap_mut() = std::mem::take(&mut self.ui.keyboard).0;
+        // Ribbon and toolbar commands this version doesn't have are dropped.
         let reg = self.session.registry.clone();
-        self.session.keymap.retain_known(&reg);
-        // So are ribbon and toolbar commands.
         self.session.ribbon = std::mem::take(&mut self.ui.ribbon);
         self.session.ribbon.retain_known(&reg);
         self.session.view.draw.pens = std::mem::take(&mut self.ui.ink_pens);
     }
 
-    /// Follow the desktop's light/dark choice while the app runs (Linux, where winit reports no
-    /// system theme; see [`desktop_theme`]). The desktop app calls this once at start-up; unit
-    /// tests and `ui_shot` don't, so what they draw doesn't depend on the host's desktop theme.
-    pub fn watch_desktop_theme(&mut self, ctx: &egui::Context) {
-        let ctx = ctx.clone();
-        self.desktop_theme = desktop_theme::DesktopTheme::start(move || ctx.request_repaint());
+    /// Keeps the app's preferences in `settings` and applies what it holds. Changes are saved
+    /// through the store by [`WordApp::save_prefs_step`].
+    #[must_use]
+    pub fn with_settings(mut self, settings: SharedSettings<Prefs>) -> Self {
+        let loaded = settings.lock().get().clone();
+        self.apply_prefs(loaded);
+        self.settings = Some(settings);
+        self
     }
 
-    /// Whether the interface theme setting currently resolves to dark (`System` asks the OS).
-    pub fn ui_is_dark(&self) -> bool {
-        self.ui.theme.is_dark(self.ctx.as_ref().and_then(|ctx| system_theme(ctx, self.desktop_dark)))
+    /// Tells the notices what the store reported when it loaded: values reset, a file moved
+    /// aside, a store that will not save. The host calls it once with the report `open` gave.
+    pub fn settings_loaded(&mut self, ctx: &egui::Context, report: &LoadReport) {
+        let mut load = SettingsLoad::new().reset(report.section_errors.iter().map(|e| e.section.clone()).collect::<Vec<_>>());
+        if let Some(path) = &report.broken_moved_to {
+            load = load.moved_aside(path.display().to_string());
+        }
+        if let Some(why) = &report.read_only {
+            load = load.read_only(why.to_string());
+        }
+        self.settings_notices.loaded(ctx, &load);
     }
 
-    /// Whether animation effects are on: the Animation effects setting, where `System` follows
-    /// what the system last reported (on when it reports nothing).
-    pub fn animations_on(&self) -> bool {
-        self.ui.animations.enabled(self.system_animations)
+    /// One frame of saving: hands the store the current preferences (it schedules a save only when
+    /// they changed), saves when its delay has passed, and tells the notices how a save ended.
+    /// A frame's second pass finds the store unchanged and does nothing more.
+    pub(crate) fn save_prefs_step(&mut self, ctx: &egui::Context) {
+        let Some(settings) = self.settings.clone() else { return };
+        let current = self.prefs();
+        let result = {
+            let mut store = settings.lock();
+            store.set(current);
+            store.tick(craft::ui::runtime::motion::now())
+        };
+        if let Some(at) = result.next_deadline {
+            ctx.request_repaint_after(at.saturating_duration_since(craft::ui::runtime::motion::now()));
+        }
+        match result.status {
+            SaveStatus::Saved => self.settings_notices.ticked(ctx, &SaveResult::Saved),
+            SaveStatus::Failed(e) => self.settings_notices.ticked(ctx, &SaveResult::Failed(e.to_string())),
+            SaveStatus::Idle | SaveStatus::Pending => {}
+        }
     }
 
-    /// What the system last said about its animation effects (`None`: it doesn't say).
-    pub fn system_animations(&self) -> Option<bool> {
-        self.system_animations
-    }
-
-    /// Ask the host for the system's animation setting.
-    pub(super) fn read_system_animations(&mut self) {
-        self.system_animations = self.services.animations_enabled.as_ref().and_then(|ask| ask());
-    }
-
-    /// Carry View › Full Screen (`view.fullScreen`, F11), Focus and Full Screen View (#1678) to
-    /// the window, and follow the window when the system takes it in or out of full screen (the
-    /// macOS title bar button, the window manager): in is Full Screen, out ends all three. Leaving
-    /// full screen gives the window back its earlier size and place: the system keeps them, and
-    /// [`window_geometry`] never saves a full-screen size (#980).
-    pub(crate) fn sync_full_screen(&mut self, ctx: &egui::Context) {
-        let v = &self.session.view;
-        let want = v.full_screen || v.focus_mode || v.full_screen_view;
-        let seen = ctx.input(|i| i.viewport().fullscreen);
-        if seen != self.seen_full_screen {
-            self.seen_full_screen = seen;
-            if let Some(on) = seen
-                && on != want
-            {
-                let v = &mut self.session.view;
-                v.full_screen = on;
-                if !on {
-                    v.focus_mode = false;
-                    v.full_screen_view = false;
-                }
-                self.sent_full_screen = on;
+    /// Saves the preferences now, not at the next tick (#2716): a document taken off the recent
+    /// list should survive the app being killed. `None`: no store keeps them; `Some(Err)`: the
+    /// save failed, and the status line says so.
+    pub(crate) fn flush_prefs(&mut self) -> Option<Result<(), String>> {
+        let settings = self.settings.clone()?;
+        let current = self.prefs();
+        let mut store = settings.lock();
+        store.set(current);
+        match store.flush() {
+            Ok(()) => Some(Ok(())),
+            Err(e) => {
+                drop(store);
+                let e = e.to_string();
+                self.status(crate::i18n::fmt(tl!("Could not save the preferences: {error}"), &[("error", e.as_str())]));
+                Some(Err(e))
             }
         }
-        let v = &self.session.view;
-        let want = v.full_screen || v.focus_mode || v.full_screen_view;
-        if want != self.sent_full_screen {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(want));
-            self.sent_full_screen = want;
-        }
+    }
+
+    /// The screen mode the document window is in: the one mapping of the view's Full Screen,
+    /// Focus and Full Screen View flags to the shell's [`ScreenMode`].
+    pub(crate) fn screen_mode(&self) -> ScreenMode {
+        crate::chrome::Screen::mode(&self.session.view)
+    }
+
+    /// Follows the window into `mode` (the shell sends the window actions itself): sets only the
+    /// view flag of that mode and clears the others, so leaving full screen ends all three (#980,
+    /// #1678). A mode outside the Document set changes nothing.
+    pub(crate) fn follow_screen_mode(&mut self, mode: ScreenMode) {
+        let v = &mut self.session.view;
+        let (full, focus, view) = match mode {
+            ScreenMode::Standard => (false, false, false),
+            ScreenMode::FullScreenWithMenuBar => (true, false, false),
+            ScreenMode::Focus => (false, true, false),
+            ScreenMode::Immersive => (false, false, true),
+            _ => return,
+        };
+        (v.full_screen, v.focus_mode, v.full_screen_view) = (full, focus, view);
     }
 }
