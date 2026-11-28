@@ -10,7 +10,7 @@ use craft::ui::runtime::commands::CommandRef;
 use craft::ui::runtime::overlay::close_popups;
 
 use super::arrange::{align_menu, rotate_menu, rotation_field, wrap_menu};
-use super::common::{menu_button, size_field, weight_menu};
+use super::common::{menu_button, size_field, two_rows, weight_menu};
 use super::{Ui, WordApp, json};
 use crate::colors::Target;
 
@@ -144,13 +144,18 @@ pub(super) fn shape_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     row.group(RibbonGroup::new("shape.size", tl!("Size"), IconId::new("wordcraft.more").into()), |ui| {
         let (w0, h0) =
             wordcraft_engine::cmd::objects::selected(&app.session).and_then(|(_, o)| o.frame().map(|(w, h, _)| (w, h))).unwrap_or((0.0, 0.0));
-        // As Picture Format › Size, each side on its own.
-        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-            Row::new().show(ui, |ui, _| {
-                size_field(ui, app, "W:", "width", w0, false, 1.0..=4000.0);
-                size_field(ui, app, "H:", "height", h0, false, 1.0..=4000.0);
-            });
-            Row::new().show(ui, |ui, _| rotation_field(ui, app));
+        // As Picture Format › Size, each side on its own; the two rows spread over the ribbon's height, as Home's Font
+        // and Paragraph (`two_rows`).
+        two_rows(ui, |ui, at| {
+            if at == 0 {
+                // A row of its own, so the two fields keep the usual gap between them.
+                Row::new().show(ui, |ui, _| {
+                    size_field(ui, app, "W:", "width", w0, false, 1.0..=4000.0);
+                    size_field(ui, app, "H:", "height", h0, false, 1.0..=4000.0);
+                });
+            } else {
+                rotation_field(ui, app);
+            }
         });
     });
 }

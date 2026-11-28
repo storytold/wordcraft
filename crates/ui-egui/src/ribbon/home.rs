@@ -7,14 +7,14 @@ use craft::ui::contract::{
     ActivateOn, Bind, BodyCx, CollectionEvent, Entry, Gap, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
 };
 use craft::ui::display::Divider;
-use craft::ui::layout_components::{Row, Stack};
+use craft::ui::layout_components::Stack;
 use craft::ui::list::{ThumbAspect, ThumbSize};
 use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::primitives::{HAlign, TextRun};
 use craft::ui::tile_grid::{CaptionPlace, Tile, TileGrid};
 use wordcraft_doc::props::Align;
 
-use super::common::{icon_only, menu_button};
+use super::common::{icon_only, menu_button, two_rows};
 use super::underline::underline_menu;
 use egui::vec2;
 use serde_json::Value;
@@ -176,10 +176,11 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     });
     row.group(ribbon_group("font", "Font", "font", Some("format.fontDialog")), |ui| {
         // The Font and Paragraph groups' small buttons sit side by side with no gap, as the old ribbon's (1 pt apart),
-        // and show their icons alone so they never expand with text labels (#7308).
+        // and show their icons alone so they never expand with text labels (#7308). Their two rows spread over the
+        // height of the three rows beside them (`two_rows`).
         icon_only(ui, |ui| {
-            Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-                Row::new().gap(Gap::None).show(ui, |ui, _| {
+            two_rows(ui, |ui, at| {
+                if at == 0 {
                     let mut family = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
                     let out = crate::widgets::font_box(ui, app, tl!("Font").to_string(), &mut family);
                     if let Some(f) = out.picked {
@@ -224,8 +225,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                             .tooltip(tl!(tip).to_string())
                             .show(ui);
                     }
-                });
-                Row::new().gap(Gap::None).show(ui, |ui, _| {
+                } else {
                     for (icon, tip, id, on) in [("bold", "Bold", "format.bold", flag("bold")), ("italic", "Italic", "format.italic", flag("italic"))]
                     {
                         ToggleButton::command(CommandRef::new(id))
@@ -266,7 +266,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     menu_button(ui, face, tl!("Text Effects and Typography").to_string(), None, |ui, cx| text_effects_menu(ui, cx, app));
                     crate::colors::highlight_split(ui, app, tl!("Text Highlight Color"));
                     crate::colors::font_color_split(ui, app, tl!("Font Color"), Target::cmd("format.color").remember(Remember::FontColor));
-                });
+                }
             });
         });
     });
@@ -277,8 +277,8 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         let (align, rtl) = rp.as_ref().map_or((Align::Left, false), |r| (r.align.visual(r.bidi), r.bidi));
         let marks = app.session.view.marks;
         icon_only(ui, |ui| {
-            Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-                Row::new().gap(Gap::None).show(ui, |ui, _| {
+            two_rows(ui, |ui, at| {
+                if at == 0 {
                     SplitButton::<String>::command(
                         CommandRef::with_params("para.bullets", json!({})),
                         SplitMenu::Body(Box::new(|ui, cx| bullets_menu(ui, cx, app))),
@@ -362,8 +362,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                         .selected(marks)
                         .tooltip(tl!("Show/Hide ¶").to_string())
                         .show(ui);
-                });
-                Row::new().gap(Gap::None).show(ui, |ui, _| {
+                } else {
                     for (icon, tip, id, on) in [
                         ("alignLeft", "Align Left", "para.alignLeft", align == Align::Left),
                         ("alignCenter", "Center", "para.alignCenter", align == Align::Center),
@@ -419,7 +418,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     .icon(IconId::new("borders"))
                     .tooltip(tl!("Borders").to_string())
                     .show(ui);
-                });
+                }
             });
         });
     });

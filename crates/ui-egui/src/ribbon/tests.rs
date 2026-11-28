@@ -901,6 +901,189 @@ fn home_font_and_paragraph_buttons_stay_icon_only_and_styles_shows_six_tiles() {
     }
 }
 
+/// #4017: Home › Font and Home › Paragraph spread their two rows over the height Clipboard's three small rows take, with
+/// as much room above the first row, between the rows and under the second, instead of packing both rows at the top
+/// and leaving an empty band over their titles.
+#[test]
+fn home_two_row_groups_spread_their_rows_over_the_three_row_height() {
+    use egui::accesskit::Role;
+
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    let h = tab_harness(app, "Home");
+    let rect = |name: &str| h.get_by_role_and_label(Role::Button, name).rect();
+    // Clipboard's column of Cut, Copy and Format Painter is the three rows' height.
+    let (top, foot) = (rect("Cut").top(), rect("Format").bottom());
+    for (group, first, second) in [("Font", "Increase Font Size", "Bold"), ("Paragraph", "Decrease Indent", "Align Left")] {
+        let (first, second) = (rect(first), rect(second));
+        let (above, between, under) = (first.top() - top, second.top() - first.bottom(), foot - second.bottom());
+        assert!(above > 1.0, "{group}'s first row should stand clear of the rows' top: {above} pt");
+        assert!(
+            (above - under).abs() <= 1.0 && (between - above).abs() <= 1.0,
+            "{group}'s rows should be spread evenly: {above} pt above, {between} pt between, {under} pt under"
+        );
+    }
+}
+
+/// #4017: a large button is as tall as the three small rows beside it, so a one-line label has no more room under it
+/// than the old ribbon gave: Paste reaches the foot of Clipboard's Cut, Copy and Format Painter.
+#[test]
+fn home_large_buttons_reach_the_foot_of_the_three_small_rows() {
+    use egui::accesskit::Role;
+
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    let h = tab_harness(app, "Home");
+    let rect = |name: &str| h.get_by_role_and_label(Role::Button, name).rect();
+    let (paste, cut, format) = (rect("Paste"), rect("Cut"), rect("Format"));
+    assert!(
+        (paste.top() - cut.top()).abs() <= 1.0 && (paste.bottom() - format.bottom()).abs() <= 1.0,
+        "Paste {paste:?} should span the three small rows, Cut {cut:?} to Format Painter {format:?}"
+    );
+}
+
+/// The rectangle of every node named exactly `label`, together: a button and the parts inside it.
+fn named_rect(h: &Harness, label: &str) -> egui::Rect {
+    let rect = h.query_all(By::new().label(label)).map(|node| node.rect()).fold(egui::Rect::NOTHING, |all, rect| all.union(rect));
+    assert!(rect.is_positive(), "a node named {label}");
+    rect
+}
+
+/// #4017: Layout › Paragraph's headings take the first of the ribbon's three small rows and its fields the other two,
+/// so the fields line up with Page Setup's Line Numbers and Hyphenation beside them instead of leaving a band under them.
+#[test]
+fn layout_paragraph_fields_line_up_with_the_small_rows() {
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    let h = tab_harness(app, "Layout");
+    let (second, third) = (named_rect(&h, "Line Numbers"), named_rect(&h, "Hyphenation"));
+    for (upper, lower) in [("Left", "Right"), ("Before", "After")] {
+        let (upper, lower) = (named_rect(&h, upper), named_rect(&h, lower));
+        assert!(
+            (upper.top() - second.top()).abs() < 0.5 && (lower.bottom() - third.bottom()).abs() < 0.5,
+            "fields {upper:?} and {lower:?} should line up with Line Numbers {second:?} and Hyphenation {third:?}"
+        );
+    }
+}
+
+/// #4017: Layout's ribbon is as tall as Home's. Paragraph's headings and fields take the three small rows and nothing
+/// under them, so the group titles sit where every other tab's do.
+#[test]
+fn layout_ribbon_is_as_tall_as_home() {
+    use egui::accesskit::Role;
+    let title = |tab: &str, group: &str| {
+        let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+        let h = tab_harness(app, tab);
+        h.get_by_role_and_label(Role::Label, group).rect()
+    };
+    let (home, layout) = (title("Home", "Clipboard"), title("Layout", "Paragraph"));
+    assert!((layout.top() - home.top()).abs() < 0.5, "Layout's group titles ({layout:?}) should sit where Home's do ({home:?})");
+}
+
+/// #4017: a gallery shorter than the ribbon's body (Table Design › Table Styles, whose tiles would stretch out of shape
+/// if it were taller) sits in the middle of the body, as much room above it as under it, against the Borders button.
+#[test]
+fn short_galleries_sit_in_the_middle_of_the_body() {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    let h = tab_harness(app, "Table Design");
+    let style = h
+        .state()
+        .session
+        .doc
+        .styles
+        .styles
+        .iter()
+        .find(|s| s.kind == wordcraft_doc::StyleKind::Table && !s.hidden)
+        .map(crate::i18n::style_name)
+        .expect("a table style");
+    // The Borders button, not its group of the same name, which also takes the title line.
+    let body = h.get_by_role_and_label(egui::accesskit::Role::Button, "Borders").rect();
+    let tile = named_rect(&h, &style);
+    let (above, under) = (tile.top() - body.top(), body.bottom() - tile.bottom());
+    assert!(
+        above > 1.0 && (above - under).abs() <= 1.0,
+        "the {style} tile {tile:?} should sit in the middle of the body {body:?}: {above} above, {under} under"
+    );
+}
+
+/// #4017: Shape Format › Size, two rows of fields and nothing else, spreads them over the ribbon's height as Home's Font
+/// and Paragraph do, as much room above the first row as between the rows and under the second (against a Shape
+/// Styles' three rows beside it), instead of leaving the third row empty over the title.
+#[test]
+fn shape_size_rows_spread_over_the_three_row_height() {
+    use egui::accesskit::Role;
+
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("insert.shape", json!({"kind": "rectangle"})).unwrap();
+    let h = tab_harness(app, "Shape Format");
+    let field = |name: &str| h.get_by_role_and_label(Role::SpinButton, name).rect();
+    let (width, rotation) = (field("W:"), field("Rotation"));
+    // Shape Styles' first and last rows: the body's top and foot.
+    let (top, foot) = (named_rect(&h, "Shape Fill").top(), named_rect(&h, "Shape Effects").bottom());
+    let (above, between, under) = (width.top() - top, rotation.top() - width.bottom(), foot - rotation.bottom());
+    assert!(
+        above > 1.0 && (above - under).abs() <= 1.0 && (between - above).abs() <= 1.0,
+        "Size's rows should be spread evenly: {above} pt above, {between} between, {under} under"
+    );
+}
+
+/// #4017: Table Layout › Cell Size's Height and Width fields are as tall as the small buttons beside them, so their rows
+/// line up with Distribute Rows and Distribute Columns.
+#[test]
+fn table_cell_size_fields_line_up_with_the_distribute_buttons() {
+    use egui::accesskit::Role;
+
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    let h = tab_harness(app, "Table Layout");
+    let field = |name: &str| h.get_by_role_and_label(Role::SpinButton, name).rect();
+    let (height, width) = (field("Height:"), field("Width:"));
+    let (rows, columns) = (named_rect(&h, "Distribute Rows"), named_rect(&h, "Distribute Columns"));
+    assert!(
+        (height.center().y - rows.center().y).abs() <= 1.0 && (width.center().y - columns.center().y).abs() <= 1.0,
+        "Height {height:?} and Width {width:?} should line up with Distribute Rows {rows:?} and Columns {columns:?}"
+    );
+}
+
+/// #4017: Diagram Design › Layouts is an in-ribbon gallery, one row of previews as Design › Style Sets is, so the tab's
+/// ribbon stays as tall as the others instead of holding every layout in two rows of large cards.
+#[test]
+fn diagram_layouts_show_one_row_in_the_ribbon() {
+    use egui::accesskit::Role;
+
+    let home = {
+        let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+        tab_harness(app, "Home").get_by_role_and_label(Role::Label, "Clipboard").rect()
+    };
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    app.run("insert.smartArt", json!({"layout": "process", "items": ["One", "Two", "Three"]})).unwrap();
+    let h = tab_harness(app, "SmartArt Design");
+    // The tab's ribbon is as tall as the others: its group titles sit where Home's do.
+    let title = h.get_by_role_and_label(Role::Label, "Create Graphic").rect();
+    assert!((title.top() - home.top()).abs() < 0.5, "Diagram Design's group titles ({title:?}) should sit where Home's do ({home:?})");
+    let layouts = wordcraft_doc::smart_art::SmartArtLayout::ALL;
+    let tile = |at: usize| h.get_by_role_and_label(Role::RadioButton, layouts[at].label()).rect();
+    let (first, second) = (tile(0), tile(1));
+    // Create Graphic's first and third rows: the body's top and foot.
+    let (top, foot) = (named_rect(&h, "Promote").top(), named_rect(&h, "Text Pane").bottom());
+    assert!(
+        (first.top() - second.top()).abs() <= 1.0 && first.top() >= top - 1.0 && first.bottom() <= foot + 1.0,
+        "the layouts {first:?} and {second:?} should share one row within the body ({top} to {foot})"
+    );
+}
+
+/// #4017: Home's small buttons, icon-only or labelled, are at least 24 points square: the least target size the
+/// accessibility standard asks for (WCAG 2.5.8).
+#[test]
+fn home_small_buttons_are_at_least_24_points_square() {
+    use egui::accesskit::Role;
+
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    let h = tab_harness(app, "Home");
+    for name in ["Cut", "Copy", "Format", "Increase Font Size", "Bold", "Italic", "Decrease Indent", "Align Left", "Justify", "Find", "Replace"] {
+        let size = h.get_by_role_and_label(Role::Button, name).rect().size();
+        assert!(size.x >= 23.5 && size.y >= 23.5, "{name} is {size:?}, under the 24-point least target");
+    }
+}
+
 /// #7323: the Home › Bullets dropdown renders the Bullet Library grid as compact
 /// square preview tiles (~22×22 pt), rather than expanding to full card dimensions (~132 pt).
 #[test]
