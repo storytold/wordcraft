@@ -163,17 +163,17 @@ fn remove_anchors(s: &mut Session, ids: &BTreeSet<u32>) -> Result<(), CmdError> 
     Ok(())
 }
 
-/// The comment and every reply below it, replies to replies included (#1345). A parent cycle
-/// from a hostile file ends the walk instead of looping.
-fn thread_of(s: &Session, id: u32) -> Vec<u32> {
+/// The comments and every reply below them, replies to replies included (#1345), each once. A
+/// parent cycle from a hostile file ends the walk instead of looping.
+fn threads_of(s: &Session, roots: impl IntoIterator<Item = u32>) -> Vec<u32> {
     let mut children: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
     for (k, c) in &s.doc.comments {
         if let Some(parent) = c.parent {
             children.entry(parent).or_default().push(*k);
         }
     }
-    let mut seen = BTreeSet::from([id]);
-    let mut ids = vec![id];
+    let mut seen = BTreeSet::new();
+    let mut ids: Vec<u32> = roots.into_iter().filter(|id| seen.insert(*id)).collect();
     let mut i = 0;
     while let Some(&at) = ids.get(i) {
         for k in children.get(&at).into_iter().flatten() {
@@ -188,11 +188,15 @@ fn thread_of(s: &Session, id: u32) -> Vec<u32> {
 
 pub(super) fn delete_comment(s: &mut Session, v: &Value) -> CmdResult {
     validate_comment_id(v)?;
-    let ids: Vec<u32> = if p::bool(v, "all").unwrap_or(false) {
+    let ids: Vec<u32> = if p::bool(v, "resolved").unwrap_or(false) {
+        // Delete All Resolved Comments (#7818): each resolved comment goes with its replies.
+        let resolved: Vec<u32> = s.doc.comments.iter().filter(|(_, c)| c.resolved).map(|(k, _)| *k).collect();
+        threads_of(s, resolved)
+    } else if p::bool(v, "all").unwrap_or(false) {
         s.doc.comments.keys().copied().collect()
     } else {
         let id = p::u64(v, "id").map(|x| x as u32).or_else(|| comment_at_caret(s)).ok_or_else(|| CmdError::Params("no comment here".into()))?;
-        thread_of(s, id)
+        threads_of(s, [id])
     };
     remove_anchors(s, &ids.iter().copied().collect())?;
     for id in &ids {

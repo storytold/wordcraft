@@ -796,6 +796,77 @@ fn deleting_a_comment_in_a_parent_cycle_ends() {
     assert!(s.doc.comments.is_empty());
 }
 
+/// Comments on "one", "two" and "three" with a reply on the first; the ids, in that order.
+fn three_commented_words(s: &mut Session) -> [u64; 4] {
+    s.view.proofing = false;
+    s.run("document.setText", &json!({"text": "one two three"})).unwrap();
+    let on = |s: &mut Session, word: &str| {
+        s.run("select.text", &json!({"text": word})).unwrap();
+        s.run("review.newComment", &json!({"text": word})).unwrap()["id"].as_u64().unwrap()
+    };
+    let (one, two, three) = (on(s, "one"), on(s, "two"), on(s, "three"));
+    let reply = s.run("review.reply", &json!({"id": one, "text": "reply"})).unwrap()["id"].as_u64().unwrap();
+    [one, reply, two, three]
+}
+
+/// #7818: Review › Delete › Delete All Resolved Comments deletes each resolved comment with its
+/// replies and their text, and keeps the open ones with their anchors; Undo brings them back.
+#[test]
+fn delete_all_resolved_comments_keeps_the_open_ones() {
+    let mut s = Session::new(Document::new());
+    let [one, reply, two, three] = three_commented_words(&mut s);
+    for id in [one, three] {
+        s.run("review.resolveComment", &json!({"id": id, "value": true})).unwrap();
+    }
+    let part = |s: &Session, id: u64| s.doc.comments[&(id as u32)].part;
+    let kept_part = part(&s, two);
+    let gone_parts: Vec<u32> = [one, reply, three].iter().map(|id| part(&s, *id)).collect();
+    // The caret sits in the open comment, which Delete alone would take.
+    s.run("select.text", &json!({"text": "two"})).unwrap();
+    let depth = s.undo_depth();
+
+    let out = s.run("review.deleteComment", &json!({"resolved": true})).unwrap();
+
+    let mut deleted: Vec<u64> = out["deleted"].as_array().unwrap().iter().filter_map(|v| v.as_u64()).collect();
+    let mut want = vec![one, reply, three];
+    deleted.sort_unstable();
+    want.sort_unstable();
+    assert_eq!(deleted, want, "the resolved comments and the reply below one of them");
+    assert_eq!(s.doc.comments.keys().map(|k| u64::from(*k)).collect::<Vec<_>>(), vec![two], "the open comment stays");
+    assert!(s.doc.parts.contains_key(&kept_part));
+    assert!(gone_parts.iter().all(|p| !s.doc.parts.contains_key(p)), "the deleted comments' text parts are gone");
+    assert_eq!(anchors(&s), vec![(wordcraft_doc::StoryRef::Body, two as u32); 2], "only the open comment's anchors are left");
+    assert_eq!(s.undo_depth(), depth + 1, "one undo step");
+
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc.comments.len(), 4);
+    assert_eq!(anchors(&s).len(), 6);
+}
+
+/// #7818: with nothing resolved, Delete All Resolved Comments leaves every comment.
+#[test]
+fn delete_all_resolved_comments_without_resolved_ones_keeps_all() {
+    let mut s = Session::new(Document::new());
+    three_commented_words(&mut s);
+    let out = s.run("review.deleteComment", &json!({"resolved": true})).unwrap();
+    assert_eq!(out["deleted"], json!([]));
+    assert_eq!(s.doc.comments.len(), 4);
+    assert_eq!(anchors(&s).len(), 6);
+}
+
+/// #7818: Review › Delete › Delete All Comments in Document deletes every comment, reply and
+/// anchor, resolved or not.
+#[test]
+fn delete_all_comments_in_document_deletes_every_comment() {
+    let mut s = Session::new(Document::new());
+    let [one, ..] = three_commented_words(&mut s);
+    s.run("review.resolveComment", &json!({"id": one, "value": true})).unwrap();
+    s.run("review.deleteComment", &json!({"all": true})).unwrap();
+    assert!(s.doc.comments.is_empty());
+    assert!(s.doc.parts.is_empty(), "no comment text is left: {:?}", s.doc.parts.keys());
+    assert!(anchors(&s).is_empty());
+}
+
 /// A very long reply chain (as a hostile file could hold) is deleted in one pass over the
 /// comments, not one pass per reply: 50,000 replies would otherwise freeze the app.
 #[test]

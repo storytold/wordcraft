@@ -33,7 +33,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("review.editComment", "Edit Comment", "Review › Comments", edit_comment)
             .params(r#"{"id": non-negative 32-bit JSON integer, "text": string}"#)
             .when(comments_change),
-        CommandSpec::new("review.deleteComment", "Delete", "Review › Comments", delete_comment).params(r#"{"id"?: non-negative 32-bit JSON integer (omit to use the caret), "all"?: bool}"#),
+        CommandSpec::new("review.deleteComment", "Delete", "Review › Comments", delete_comment).params(
+            r#"{"id"?: non-negative 32-bit JSON integer (omit to use the caret), "all"?: bool (every comment), "resolved"?: bool (every resolved comment, with its replies; wins over all)}"#,
+        ),
         CommandSpec::new("review.resolveComment", "Resolve", "Review › Comments", |s, v| {
             validate_comment_id(v)?;
             let id = p::u64(v, "id").map(|x| x as u32).or_else(|| comment_at_caret(s)).ok_or_else(|| CmdError::Params("`id` required".into()))?;
