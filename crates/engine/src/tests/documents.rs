@@ -124,6 +124,34 @@ fn open_replaces_an_untouched_blank_document_and_otherwise_opens_beside() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A document opened from bytes (`data`) only borrows its path for the name and for Save: a
+/// later open of that path without `data` reads the file on disk instead of switching to it,
+/// whether it is the active document or a parked one.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn open_without_data_reads_the_file_a_data_open_document_names() {
+    let dir = temp_dir("data-path");
+    let one = dir.join("one.txt");
+    std::fs::write(&one, "One").unwrap();
+
+    let mut s = s();
+    run(&mut s, "file.open", json!({"path": one.to_string_lossy(), "data": "aGk="}));
+    let from_bytes = s.document_id();
+    assert_eq!(text(&s), "hi");
+
+    let r = run(&mut s, "file.open", json!({"path": one.to_string_lossy()}));
+    assert_eq!(r["alreadyOpen"], false, "the active document opened from bytes is not the file");
+    let from_disk = s.document_id();
+    assert_ne!(from_disk, from_bytes);
+    assert_eq!(text(&s), "One");
+
+    run(&mut s, "file.new", json!({}));
+    let r = run(&mut s, "file.open", json!({"path": one.to_string_lossy()}));
+    assert_eq!((r["alreadyOpen"].as_bool(), r["id"].as_u64()), (Some(true), Some(from_disk)), "the parked document opened from bytes is skipped");
+    assert_eq!(s.find_open(&one), Some(from_disk));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn close_activates_the_previous_document_and_the_last_leaves_a_blank_one() {
     let mut s = s();

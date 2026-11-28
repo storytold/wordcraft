@@ -45,6 +45,7 @@ pub struct DocState {
     pub(super) pending: Option<CharProps>,
     pub(super) pending_at: Option<Pos>,
     pub(super) path: Option<PathBuf>,
+    pub(super) path_names_only: bool,
     pub(super) file_name: Option<String>,
     pub(super) dirty: bool,
     pub(super) pending_move: Option<crate::cmd::moves::PendingMove>,
@@ -102,6 +103,7 @@ impl DocState {
             pending: None,
             pending_at: None,
             path: None,
+            path_names_only: false,
             file_name: None,
             dirty: false,
             pending_move: None,
@@ -206,6 +208,7 @@ impl Session {
             pending: _,
             pending_at: _,
             path: _,
+            path_names_only: _,
             file_name: _,
             dirty: _,
             pending_move: _,
@@ -309,6 +312,7 @@ impl Session {
             pending,
             pending_at,
             path,
+            path_names_only,
             file_name,
             dirty,
             pending_move,
@@ -359,6 +363,7 @@ impl Session {
         swap(&mut self.pending, pending);
         swap(&mut self.pending_at, pending_at);
         swap(&mut self.path, path);
+        swap(&mut self.path_names_only, path_names_only);
         swap(&mut self.file_name, file_name);
         swap(&mut self.dirty, dirty);
         swap(&mut self.pending_move, pending_move);
@@ -650,15 +655,16 @@ impl Session {
     }
 
     /// The open document saved at `path`, if any: the same file reached by another spelling
-    /// (`./a.docx`, a symbolic link) counts on desktop.
+    /// (`./a.docx`, a symbolic link) counts on desktop. A document opened from bytes that only
+    /// names `path` (`path_names_only`) does not count: its text is not the file's.
     pub fn find_open(&self, path: &FsPath) -> Option<u64> {
         let wanted = crate::io::canonical(path);
         let same = |p: &FsPath| p == path || wanted.is_some() && crate::io::canonical(p) == wanted;
         self.order.iter().copied().find(|&id| {
             if id == self.document_id {
-                self.path.as_deref().is_some_and(same)
+                !self.path_names_only && self.path.as_deref().is_some_and(same)
             } else {
-                self.others.iter().find(|d| d.document_id == id).and_then(|d| d.path.as_deref()).is_some_and(same)
+                self.others.iter().find(|d| d.document_id == id).filter(|d| !d.path_names_only).and_then(|d| d.path.as_deref()).is_some_and(same)
             }
         })
     }
