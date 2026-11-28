@@ -454,3 +454,88 @@ fn escape_does_not_commit_the_custom_dictionary_path() {
     assert_eq!(dictionary_field_text(&h), "", "the field shows the saved (empty) path");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// #7987: the Read Aloud speed is a slider, not only a number box.
+#[test]
+fn read_aloud_speed_is_a_slider() {
+    use egui_kittest::kittest::Queryable;
+    let h = options_harness(app(), system_reducing_motion(false));
+    let _ = h.get_by_role_and_label(egui::accesskit::Role::Slider, "Speed");
+}
+
+/// #7987: the Agents page names itself once.
+#[test]
+fn agents_page_has_one_heading() {
+    use egui_kittest::kittest::Queryable;
+    let mut a = app();
+    a.run("ui.backstage", json!({"value": true, "page": "options", "pane": "agents"})).unwrap();
+    let mut h = crate::test_harness::builder().build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    options_frames(&mut h, 3);
+    use egui_kittest::kittest::NodeT;
+    // The nav entry is a list item; every other node that carries the name is a title.
+    let titles = h.query_all_by_label("Agents").filter(|n| n.accesskit_node().role() != egui::accesskit::Role::ListItem).count();
+    assert_eq!(titles, 2, "the page's group and its title, no second heading");
+}
+
+/// #7987: a hint sits under the setting it explains, not in a page footnote at the bottom.
+#[test]
+fn display_and_save_hints_sit_under_their_rows() {
+    let mut a = app();
+    let (display, save, privacy) = with_model(&mut a, true, |m| {
+        let pages = m.pages();
+        let help_of = |page: &str, key: &str| {
+            let p = pages.iter().find(|p| p.id == page).expect("page");
+            let r = p.groups.iter().flat_map(|g| g.rows.iter()).find(|r| r.key == key).expect("row");
+            (p.footnote.is_none(), r.help.is_some())
+        };
+        (help_of("display", "display.allMarks"), help_of("save", "save.autosave"), help_of("save", "save.removeDateTime"))
+    });
+    assert_eq!(display, (true, true));
+    assert_eq!(save, (true, true));
+    assert_eq!(privacy, (true, true), "the Privacy hint under its row");
+}
+
+/// #7987: a folder setting has Apply and Clear. Typing alone saves nothing, Apply saves the typed path, and Clear
+/// returns to the default.
+#[test]
+fn folder_settings_have_apply_and_clear() {
+    use egui_kittest::kittest::Queryable;
+    let dir = std::env::temp_dir().join(format!("wc-ui-folder-row-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.to_string_lossy().into_owned();
+    for (pane, label, saved) in [
+        ("advanced", "User templates:", (|a: &WordApp| a.session.prefs.user_templates_folder.clone()) as fn(&WordApp) -> Option<String>),
+        ("language", "Dictionaries folder:", |a: &WordApp| a.session.prefs.dictionaries_folder.clone()),
+    ] {
+        let mut a = app();
+        a.run("ui.backstage", json!({"value": true, "page": "options", "pane": pane})).unwrap();
+        let mut h = crate::test_harness::builder().build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        options_frames(&mut h, 3);
+        h.get_by_role_and_label(egui::accesskit::Role::TextInput, label).focus();
+        options_frames(&mut h, 2);
+        h.get_by_role_and_label(egui::accesskit::Role::TextInput, label).type_text(&path);
+        options_frames(&mut h, 3);
+        assert_eq!(saved(h.state()), None, "{label} typing alone saved");
+        h.get_by_label("Apply").click();
+        options_frames(&mut h, 3);
+        assert_eq!(saved(h.state()).as_deref(), Some(path.as_str()), "{label} Apply");
+        h.get_by_label("Clear").click();
+        options_frames(&mut h, 3);
+        assert_eq!(saved(h.state()), None, "{label} Clear");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
