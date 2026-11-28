@@ -10,7 +10,7 @@ use wordcraft_geom::Rect;
 
 use crate::boxes::BoxContext;
 use crate::para::{CellText, ClKind, ParaLayout};
-use crate::{BoxInput, BoxLayout, Ctx, Placed, layout_box};
+use crate::{BoxInput, BoxLayout, Ctx, Placed, ViewMode, layout_box};
 
 /// Largest preferred table width, as a share of the text column, that a file can ask for.
 const MAX_WIDTH_SHARE: f32 = 10.0;
@@ -431,6 +431,12 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
         grid.iter_mut().for_each(|w| *w *= k);
         total = avail;
     }
+    // The reading view reflows to its column, so even a table with its own width fits it (#7988).
+    if ctx.opts.view == ViewMode::Read && total > avail && avail > 0.0 {
+        let k = avail / total;
+        grid.iter_mut().for_each(|w| *w *= k);
+        total = avail;
+    }
     if !t.props.fixed {
         // Measuring lays paragraphs out once more; it mustn't count their equations twice.
         let eq_count = ctx.eq_count;
@@ -477,6 +483,14 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     } else {
         indent - first_cell_left_margin_in(t, margins_def)
     };
+    // The reading view fits the table into what the start offset leaves of the column, mirrored or not (#7988).
+    let room = (avail - start_offset.max(0.0)).max(1.0);
+    if ctx.opts.view == ViewMode::Read && acc > room && !matches!(t.props.align, Some(Align::Center | Align::Right)) {
+        let k = room / acc;
+        colx.iter_mut().for_each(|c| *c *= k);
+        acc = room;
+        total = room;
+    }
     let x = match (t.props.align, rtl) {
         (Some(Align::Center), _) => (avail - total) / 2.0,
         // End alignment: the right margin, or the left one in a right-to-left table.

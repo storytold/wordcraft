@@ -661,6 +661,31 @@ fn reading_layout_reflows_into_viewport_height_pages_without_changing_print_layo
 }
 
 #[test]
+fn reading_layout_fits_a_wide_table_to_the_column() {
+    crate::test_fonts();
+    // #7988: a 468 pt table is wider than a reading column but must not run past its edge, however it is indented or mirrored.
+    let cases = [(0.0, false, None), (36.0, false, None), (36.0, true, None)];
+    let aligned = [None, Some(Align::Left), Some(Align::Center), Some(Align::Right)].map(|a| (36.0, false, a));
+    let aligned_rtl = [Some(Align::Left), Some(Align::Right)].map(|a| (36.0, true, a));
+    for (indent, rtl, align) in cases.into_iter().chain(aligned).chain(aligned_rtl) {
+        let mut d = Document::from_text("Before.");
+        let mut t = Table::new(2, 4, 468.0);
+        t.props.indent = Some(indent);
+        t.props.bidi_visual = rtl;
+        t.props.align = align;
+        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+        let opts = LayoutOptions { view: ViewMode::Read, web_width: 360.0, read_height: 600.0, ..Default::default() };
+        let l = layout(&d, &mut LayoutCache::new(), &opts);
+        let p = &l.pages[0];
+        let cells: Vec<_> = p.items.iter().filter_map(|i| if let Placed::Cell { rect, .. } = i { Some(*rect) } else { None }).collect();
+        let (left, right) = cells.iter().fold((f32::MAX, 0.0f32), |(l, r), c| (l.min(c.x), r.max(c.x + c.w)));
+        assert!(right > left, "cells placed");
+        assert!(right <= p.body.x + p.body.w + 0.5, "indent {indent} rtl {rtl} {align:?}: right {right} vs column {}", p.body.x + p.body.w);
+        assert!(left >= p.body.x - 0.5, "indent {indent} rtl {rtl} {align:?}: left {left} vs column {}", p.body.x);
+    }
+}
+
+#[test]
 fn hit_and_caret_agree() {
     crate::test_fonts();
     let d = Document::from_text("Hello world, this is WordCraft.\nSecond paragraph here.");
