@@ -382,7 +382,7 @@ mod label_spacing_tests {
             (st.ascent, st.descent) = if i == label_style as usize { label_metrics } else { text_metrics };
         }
         let mark_style = pl.clusters[0].style;
-        break_lines(&mut pl, &env, mark_style, Some(&level));
+        break_lines(&mut pl, &p, &env, mark_style, Some(&level), false, &[]);
         pl.lines
     }
 
@@ -526,7 +526,7 @@ mod tests {
         };
         let mut pl = layout_para(&p, &env);
         let mark_style = pl.clusters[0].style;
-        break_lines(&mut pl, &env, mark_style, None);
+        break_lines(&mut pl, &p, &env, mark_style, None, false, &[]);
         let c0 = pl.lines[0].c0;
         let c1 = pl.lines[0].c1;
         let last_tab = (c0..c1).rev().find(|k| pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Tab)).unwrap();

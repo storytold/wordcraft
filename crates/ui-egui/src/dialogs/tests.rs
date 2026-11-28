@@ -618,6 +618,23 @@ fn paragraph_dialog_shows_direction_and_visual_alignment() {
 }
 
 #[test]
+fn paragraph_dialog_round_trips_thai_distributed_alignment() {
+    use craft::text::ui::character::ParagraphAlign;
+    use wordcraft_doc::props::Align;
+
+    let mut app = app_with("ภาษาไทย");
+    app.run("para.align", json!({"value": "thaiDistribute"})).unwrap();
+    let mut h = app_harness(app);
+    assert_eq!(shown_paragraph(&mut h).align, Some(ParagraphAlign::ThaiDistributed));
+    apply_paragraph(&mut h, |_| {});
+    assert_eq!(props(h.state()).align, Some(Align::ThaiDistribute));
+
+    let mut h = app_harness(app_with("ภาษาไทย"));
+    apply_paragraph(&mut h, |format| format.align = Some(ParagraphAlign::ThaiDistributed));
+    assert_eq!(props(h.state()).align, Some(Align::ThaiDistribute));
+}
+
+#[test]
 fn paragraph_dialog_ok_keeps_what_it_shows() {
     for (rtl, align) in [(false, "para.alignCenter"), (false, "para.alignRight"), (true, "para.alignLeft"), (true, "para.alignRight")] {
         let mut app = app_with("متن");

@@ -81,6 +81,7 @@ fn format_of(rp: &ResolvedPara) -> ParagraphFormat {
         Align::Right => ParagraphAlign::Right,
         Align::Justify => ParagraphAlign::Justify,
         Align::Distribute => ParagraphAlign::Distributed,
+        Align::ThaiDistribute => ParagraphAlign::ThaiDistributed,
     });
     f.before_text = Some(left);
     f.after_text = Some(Some(right));
@@ -198,6 +199,7 @@ fn fields(f: &ParagraphFormat) -> Map<String, Value> {
                 ParagraphAlign::Center => Align::Center,
                 ParagraphAlign::Right => Align::Right,
                 ParagraphAlign::Distributed => Align::Distribute,
+                ParagraphAlign::ThaiDistributed => Align::ThaiDistribute,
                 _ => Align::Justify,
             })
             .ok()
