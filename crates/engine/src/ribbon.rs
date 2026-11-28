@@ -16,7 +16,7 @@ use crate::Registry;
 /// The ribbon's tabs in their default order. `File` opens Backstage: it is always first and
 /// isn't part of the customizable list.
 pub const TABS: [&str; 13] =
-    ["File", "Home", "Insert", "Draw", "Design", "Layout", "References", "Mailings", "Review", "View", "Developer", "Zotero", "Help"];
+    ["File", "Home", "Insert", "Draw", "Design", "Layout", "References", "Mailings", "Review", "View", "Developer", "Citations", "Help"];
 /// Tabs that come up with the selection; custom tabs can't take their names.
 pub const CONTEXTUAL_TABS: [&str; 7] =
     ["Table Design", "Table Layout", "Picture Format", "Shape Format", "Equation", "Chart Design", "SmartArt Design"];
@@ -437,6 +437,17 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// A brand name must not name a tab: the citation tab is "Citations", and "Zotero" is not a tab.
+    #[test]
+    fn citations_tab_is_not_named_after_a_brand() {
+        assert!(TABS.contains(&"Citations"));
+        assert!(!TABS.contains(&"Zotero"));
+        let layout = RibbonLayout::default();
+        let tabs = layout.tabs();
+        assert!(tabs.iter().any(|t| t.name == "Citations" && !t.custom));
+        assert!(!tabs.iter().any(|t| t.name == "Zotero"));
+    }
 
     /// #379: custom tabs and groups, hidden and moved tabs, and the Quick Access Toolbar, changed
     /// through the command (as agents do) without opening the dialog.

@@ -8,10 +8,17 @@
 //! `{"steps": n}` to run extra frames, or `{"wait": ms}` to keep running frames for a while (for
 //! background work such as a Zotero session). The window is 1440×900 pt at 2× and opens the sample
 //! document unless the first line is `{"empty": true}`; `{"empty": true, "startScreen": true}`
-//! starts the way the desktop app does with nothing to open (File › Home, #766).
+//! starts the way the desktop app does with nothing to open (File › Home, #766). A line
+//! `{"width": w}`, `{"height": h}` or `{"ppp": s}` sets the window size in points or its pixels
+//! per point (e.g. 1.45 for a 145 % desktop, to see text as it is drawn there).
+//! `{"demoPacks": true}` lists a few sample Language packs (installs only record themselves), and
+//! (with `{"network": true}` on a line, downloading is already on) `{"demoPacks": "store"}` uses a real font store, as the desktop app does, in a new temporary
+//! folder rather than the person's, or in `"storeDir"` given on the same line (with
+//! `CRAFT_LANGUAGE_PACK_INDEX` for a local pack index).
 
+use craft::automation::control::{ControlChannel, ControlRequest};
 use wordcraft_engine::Session;
-use wordcraft_ui_egui::{ControlRequest, Services, WordApp};
+use wordcraft_ui_egui::{Services, WordApp};
 
 static READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -26,15 +33,35 @@ fn main() {
     } else {
         wordcraft_engine::sample::sample_document()
     };
-    let mut app = WordApp::new(Session::new(doc), Services::default()).with_control(rx);
-    app.integrated_titlebar = true;
+    match lines.iter().find_map(|l| l.get("demoPacks")) {
+        Some(serde_json::Value::String(s)) if s == "store" => {
+            // `"storeDir"` on the same line names the folder (to show packs put there beforehand).
+            let dir = lines
+                .iter()
+                .find_map(|l| l.get("storeDir").and_then(|v| v.as_str()))
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::env::temp_dir().join(format!("ui_shot-font-store-{}", std::process::id())));
+            wordcraft_engine::packs::use_font_store_in(dir, true);
+        }
+        Some(_) => {
+            // `"network": true` on a line has downloading already on (to show what follows a click on Add a language…).
+            let backend = wordcraft_engine::packs::FixedBackend::sample();
+            if lines.iter().any(|l| l.get("network") == Some(&serde_json::Value::Bool(true))) {
+                backend.network.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            wordcraft_engine::packs::set_backend(Some(std::sync::Arc::new(backend)));
+        }
+        None => {}
+    }
+    let mut app = WordApp::new(Session::new(doc), Services::default()).with_control(ControlChannel::new(rx));
     if lines.first().is_some_and(|l| l.get("startScreen").is_some()) {
         app.start_screen();
     }
     let w = lines.iter().find_map(|l| l.get("width").and_then(|v| v.as_f64())).unwrap_or(1440.0) as f32;
     let h = lines.iter().find_map(|l| l.get("height").and_then(|v| v.as_f64())).unwrap_or(900.0) as f32;
+    let ppp = lines.iter().find_map(|l| l.get("ppp").and_then(|v| v.as_f64())).map(|p| p.clamp(0.5, 4.0)).unwrap_or(2.0) as f32;
     let mut harness =
-        egui_kittest::Harness::builder().with_size(egui::vec2(w, h)).with_pixels_per_point(2.0).with_max_steps(1_000_000).wgpu().build_ui_state(
+        egui_kittest::Harness::builder().with_size(egui::vec2(w, h)).with_pixels_per_point(ppp).with_max_steps(1_000_000).wgpu().build_ui_state(
             |ui, app: &mut WordApp| {
                 if !READY.load(std::sync::atomic::Ordering::Relaxed) {
                     return;
@@ -46,6 +73,16 @@ fn main() {
             app,
         );
     harness.input_mut().max_texture_side = Some(8192);
+    // PLAN(app-hub): craft-ui `testing` feature and craft-automation in dev-dependencies
+    // PLAN(shell-w11): assumed `wordcraft_ui_egui::ui_fonts` and `i18n::Lang::EN`
+    if let Err(error) = craft::ui::shell::embed::install(
+        &harness.ctx,
+        craft::ui::testing::install_spec(),
+        &wordcraft_ui_egui::ui_fonts(wordcraft_ui_egui::i18n::Lang::EN),
+    ) {
+        eprintln!("installing the UI runtime failed: {error:?}");
+        std::process::exit(1);
+    }
     READY.store(true, std::sync::atomic::Ordering::Relaxed);
     step_n(&mut harness, 6);
     for l in lines {
@@ -84,10 +121,10 @@ fn main() {
     }
 }
 
+/// Hands the app's frame input to the runtime and advances one UI frame.
 fn step(harness: &mut egui_kittest::Harness<'_, WordApp>) {
-    let mut raw = std::mem::take(harness.input_mut());
-    harness.state_mut().raw_input_hook(&mut raw);
-    *harness.input_mut() = raw;
+    let ctx = harness.ctx.clone();
+    craft::ui::shell::embed::before_input(&ctx, |out| harness.state_mut().frame_input(out));
     harness.step();
 }
 
