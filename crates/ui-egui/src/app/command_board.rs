@@ -164,7 +164,21 @@ impl WordApp {
         // the command search show them, so the catalog is rebuilt when the language changes.
         let lang = crate::i18n::current().code();
         let lang_changed = std::mem::replace(&mut self.command_catalog_lang, lang) != lang;
-        if os_changed || lang_changed || !self.command_catalog.as_ref().is_some_and(|(built_from, _)| Arc::ptr_eq(built_from, &registry)) {
+        // A style key (#3910) is `styles.apply` with the style's id: the keymap only fires keys of
+        // commands in the catalog, so each style that has keys gets an entry, labelled with its name.
+        let styles: Vec<(String, String)> = wordcraft_engine::keymap::style_defs(self.session.keymap())
+            .filter_map(|def| {
+                let id = wordcraft_engine::keymap::style_of(&def.command)?.to_string();
+                let name = self.session.doc.styles.get(&id).map_or_else(|| id.clone(), |style| style.name.clone());
+                Some((id, name))
+            })
+            .collect();
+        let styles_changed = self.command_catalog_styles != styles;
+        if os_changed
+            || lang_changed
+            || styles_changed
+            || !self.command_catalog.as_ref().is_some_and(|(built_from, _)| Arc::ptr_eq(built_from, &registry))
+        {
             let generation = self.command_catalog.as_ref().map_or(0, |(_, catalog)| catalog.generation().wrapping_add(1));
             let mut seen = HashSet::new();
             let mut defs = Vec::with_capacity(registry.all().len() + 3);
@@ -203,6 +217,10 @@ impl WordApp {
             interface(CommandRef::new("ui.resetInterfaceSize"), "Reset Interface Size", "Mod+Shift+0");
             // The File keytips fire it (one badge per page); without an entry it shows its id as its label.
             defs.push(CommandDef::new(CommandRef::new("ui.backstage"), tl!("File"), Scope::app()));
+            // Style names are the document's own text, not translated.
+            for (id, name) in &styles {
+                defs.push(CommandDef::new(wordcraft_engine::keymap::style_command(id), name.clone(), Scope::app()));
+            }
             for (id, label) in GATED_UI_COMMANDS {
                 defs.push(CommandDef::new(CommandRef::new(*id), tl!(*label), Scope::app()));
             }
@@ -221,6 +239,7 @@ impl WordApp {
                         catalog.replace_defaults(command.id(), chords)
                     });
                     self.command_catalog = Some((registry, with_word_chords(catalog)));
+                    self.command_catalog_styles = styles;
                 }
                 Err(error) => {
                     log::warn!("command catalog: {error:?}");

@@ -79,6 +79,8 @@ impl ModifyStyleForm {
 enum Request {
     /// The font box's Add Font… entry.
     AddFont,
+    /// Format › Shortcut Key…: Customize Keyboard opens on this style (#3910).
+    ShortcutKey,
 }
 
 /// Modify Style on the dialog stack, over a font box that needs the app's catalog and recent fonts.
@@ -162,6 +164,10 @@ fn body(ui: &mut Ui, form: &mut ModifyStyleForm, catalog: &Arc<Catalog>, setting
         Checkbox::new(Bind::bound(&mut form.bold)).label(label(tl!("Bold"))).id_salt("bold").show(ui);
         Checkbox::new(Bind::bound(&mut form.italic)).label(label(tl!("Italic"))).id_salt("italic").show(ui);
     });
+    // Word's Format › Shortcut key…: a key for this style, in Customize Keyboard (#3910).
+    if ui.button(tl!("Shortcut Key…")).clicked() {
+        requests.push(Request::ShortcutKey);
+    }
 }
 
 impl StackDialog for ModifyStyleDialog {
@@ -240,8 +246,16 @@ fn modify_settle(app: &mut WordApp, _: &Context, id: DialogId) -> Settle {
     let requests = std::mem::take(&mut d.requests);
     let settings = d.settings.clone();
     let filed = d.held.take();
-    for Request::AddFont in requests {
-        let _ = app.run("font.add", json!({}));
+    let style = d.form.id.clone();
+    for request in requests {
+        match request {
+            Request::AddFont => {
+                let _ = app.run("font.add", json!({}));
+            }
+            Request::ShortcutKey => {
+                let _ = super::customize_keyboard::open(app, "customizeKeyboard", &json!({"style": style}), Some(id));
+            }
+        }
     }
     app.set_font_picker_settings(settings);
     if let Some(form) = filed {

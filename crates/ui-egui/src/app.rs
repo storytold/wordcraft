@@ -103,6 +103,7 @@ impl WordApp {
             command_catalog: None,
             command_catalog_mac: cfg!(target_os = "macos"),
             command_catalog_lang: "",
+            command_catalog_styles: Vec::new(),
             key_overrides: Default::default(),
             command_states: Default::default(),
             command_states_cache: None,

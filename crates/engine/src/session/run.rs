@@ -3,6 +3,7 @@ use super::ime_state::ImeCaretState;
 use super::snapshot_types::RunSnapshot;
 use super::{CharProps, CmdError, Document, Fragment, ImeEditOutcome, Pos, Session, StoryRef, Value, document_id_mark};
 use crate::CommandSpec;
+use serde_json::json;
 
 struct SuccessContext<'a> {
     id: &'a str,
@@ -59,6 +60,16 @@ impl Session {
         if (mutates && !matches!(id, "review.accept" | "review.reject")) || id.starts_with("caret.") || id.starts_with("select.") {
             self.review_style = None;
         }
+    }
+
+    /// Run what a pressed key does, under the user's keys: a command key runs its command, a
+    /// style key (#3910) applies its style through `styles.apply`. `None` when the key does
+    /// nothing. The front end dispatches keys itself; this is the same lookup for agents and tests.
+    pub fn press_key(&mut self, key: &str) -> Option<crate::CmdResult> {
+        let chord = craft_keymap::Chord::parse(key).ok()?;
+        let command = crate::keymap::registry_keymap(&self.registry, &self.keymap).holder(&chord)?;
+        let params = if command.params.is_null() { json!({}) } else { command.params };
+        Some(self.run(&command.id, &params))
     }
 
     /// Run a command by id with JSON params (the single entry point for the UI, CLI, MCP and

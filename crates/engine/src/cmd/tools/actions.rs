@@ -282,12 +282,16 @@ pub(super) fn select_similar(s: &mut Session, _: &Value) -> CmdResult {
 
 /// Tools › Customize Keyboard: read and change the custom keyboard shortcuts (the session's
 /// [`craft_keymap::Overrides`] over the registry's keys). Without params it opens the dialog; with
-/// any, it only does what they ask (no dialog).
+/// any, it only does what they ask (no dialog). A `style` (name or id) in place of a `command`
+/// gives or takes a style's shortcut key (#3910; [`crate::keymap::style_command`]).
 pub(super) fn customize_keyboard(s: &mut Session, v: &Value) -> CmdResult {
     let reg = s.registry.clone();
-    let mut keymap = crate::keymap::registry_keymap(&reg, s.keymap());
+    let styles = s.doc.styles.clone();
+    // An unknown style is reported by the assign step itself, after the parts before it (a reset) ran.
+    let extra = v.get("assign").and_then(|a| p::str(a, "style")).and_then(|name| style_id_of(&styles, name).ok());
+    let mut keymap = crate::keymap::keymap_with_style(&reg, s.keymap(), extra.as_deref());
     let mut out = serde_json::Map::new();
-    let asked = keyboard_changes(&mut keymap, &reg, v, &mut out);
+    let asked = keyboard_changes(&mut keymap, &reg, &styles, v, &mut out);
     // Each part is a request of its own: what the parts before a failing one changed stays.
     *s.keymap_mut() = keymap.overrides().clone();
     let asked = asked?;
@@ -298,20 +302,70 @@ pub(super) fn customize_keyboard(s: &mut Session, v: &Value) -> CmdResult {
     Ok(Value::Object(out))
 }
 
+/// The id of the style `name` (a name or an id, any case) names.
+fn style_id_of(styles: &wordcraft_doc::StyleSheet, name: &str) -> Result<String, CmdError> {
+    styles.find(name).map(|x| x.id.clone()).ok_or_else(|| CmdError::Params(format!("no style `{name}`")))
+}
+
+/// The name a style key's style shows: the style's name, or the id it was saved with when the
+/// document has no such style.
+fn style_name(styles: &wordcraft_doc::StyleSheet, id: &str) -> String {
+    styles.get(id).map_or_else(|| id.to_string(), |x| x.name.clone())
+}
+
+/// After a style's key is removed, the command that has that key built in gets it back when
+/// nothing holds the key now, as in Word: a style given Ctrl+B and then cleared leaves Ctrl+B as
+/// Bold again. A command whose keys are then its built-in ones loses its override entry.
+fn give_back_built_in(keymap: &mut craft_keymap::Keymap, binding: &craft_keymap::Binding) {
+    use craft_keymap::{Binding, Policy};
+    let platform = keymap.platform();
+    let chord = binding.trigger.chord.effective(platform);
+    if keymap.holder(&chord).is_some() {
+        return;
+    }
+    let same = |b: &Binding| b.trigger.press == binding.trigger.press && b.trigger.chord.effective(platform) == chord;
+    let owner = keymap.catalog().iter().map(|d| d.command.clone()).find_map(|command| {
+        let built_in = keymap.default_bindings(&command).into_iter().find(|b| same(b))?;
+        (!keymap.bindings(&command).iter().any(&same)).then_some((command, built_in))
+    });
+    let Some((command, built_in)) = owner else { return };
+    let mut now = keymap.bindings(&command);
+    now.push(built_in.clone());
+    let defaults = keymap.default_bindings(&command);
+    if now.len() == defaults.len() && defaults.iter().all(|d| now.contains(d)) {
+        keymap.reset(&command);
+    } else {
+        let _ = keymap.assign(&command, built_in, Policy::Steal);
+    }
+}
+
 /// The parts of a `tools.customizeKeyboard` call, applied to `keymap` in order, with their results
 /// in `out`. Returns whether any part was asked for.
 fn keyboard_changes(
     keymap: &mut craft_keymap::Keymap,
     reg: &crate::Registry,
+    styles: &wordcraft_doc::StyleSheet,
     v: &Value,
     out: &mut serde_json::Map<String, Value>,
 ) -> Result<bool, CmdError> {
+    use crate::keymap::{style_command, style_of};
     use craft_keymap::{AssignError, Binding, Chord, CommandRef, Policy, Scope};
     let not_a_key = |key: &str| CmdError::Params(format!("`{key}` isn't a key (e.g. Mod+Shift+K, Alt+F7, F2)"));
-    let pair = |x: &Value| -> Result<(CommandRef, Binding), CmdError> {
+    // `saved`: a style the document doesn't have still matches a style key saved under that id
+    // (removing the key of a style from another document).
+    let pair = |x: &Value, keymap: &craft_keymap::Keymap, saved: bool| -> Result<(CommandRef, Binding), CmdError> {
         let key = p::req_str(x, "key")?;
         let binding = Binding::parse(key).map_err(|_| not_a_key(key))?;
-        Ok((CommandRef::new(p::req_str(x, "command")?), binding))
+        let command = match (p::str(x, "style"), p::str(x, "command")) {
+            (Some(name), None) => match style_id_of(styles, name) {
+                Ok(id) => style_command(&id),
+                Err(_) if saved && keymap.overrides().get(&style_command(name).key()).is_some() => style_command(name),
+                Err(e) => return Err(e),
+            },
+            (None, Some(id)) => CommandRef::new(id),
+            _ => return Err(CmdError::Params("give exactly one of `command` and `style`".into())),
+        };
+        Ok((command, binding))
     };
     let mut asked = false;
     if p::bool(v, "reset") == Some(true) {
@@ -320,17 +374,24 @@ fn keyboard_changes(
     }
     if let Some(a) = v.get("assign") {
         asked = true;
-        let (command, binding) = pair(a)?;
+        let (command, binding) = pair(a, &*keymap, false)?;
         let assigned = keymap.assign(&command, binding, Policy::Steal).map_err(|e| match e {
             AssignError::UnknownCommand => CmdError::Params(format!("unknown command `{}`", command.id)),
             e => CmdError::Params(e.to_string()),
         })?;
-        out.insert("replaced".into(), json!(assigned.taken_from.first().map(|h| h.command.id.as_str())));
+        let taken = assigned.taken_from.first().map(|h| &h.command);
+        let taken_style = taken.and_then(style_of);
+        out.insert("replaced".into(), json!(taken.filter(|_| taken_style.is_none()).map(|c| c.id.as_str())));
+        out.insert("replacedStyle".into(), json!(taken_style.map(|id| style_name(styles, id))));
     }
     if let Some(r) = v.get("remove") {
         asked = true;
-        let (command, binding) = pair(r)?;
-        out.insert("removed".into(), json!(keymap.remove(&command, &binding)));
+        let (command, binding) = pair(r, &*keymap, true)?;
+        let removed = keymap.remove(&command, &binding);
+        if removed && style_of(&command).is_some() {
+            give_back_built_in(keymap, &binding);
+        }
+        out.insert("removed".into(), json!(removed));
     }
     if let Some(id) = p::str(v, "command") {
         asked = true;
@@ -340,10 +401,18 @@ fn keyboard_changes(
         let keys: Vec<String> = keymap.bindings(&CommandRef::new(id)).iter().map(|b| b.text(&Scope::app())).collect();
         out.insert("keys".into(), json!(keys));
     }
+    if let Some(name) = p::str(v, "style") {
+        asked = true;
+        let keys: Vec<String> = keymap.bindings(&style_command(&style_id_of(styles, name)?)).iter().map(|b| b.text(&Scope::app())).collect();
+        out.insert("keys".into(), json!(keys));
+    }
     if let Some(key) = p::str(v, "key") {
         asked = true;
         let chord = Chord::parse(key).map_err(|_| not_a_key(key))?;
-        out.insert("assignedTo".into(), json!(keymap.holder(&chord).map(|c| c.id)));
+        let holder = keymap.holder(&chord);
+        let style = holder.as_ref().and_then(style_of).map(|id| style_name(styles, id));
+        out.insert("assignedTo".into(), json!(holder.filter(|_| style.is_none()).map(|c| c.id)));
+        out.insert("assignedToStyle".into(), json!(style));
         out.insert("key".into(), json!(chord.portable()));
     }
     Ok(asked)
