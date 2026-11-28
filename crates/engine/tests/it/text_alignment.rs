@@ -24,7 +24,16 @@ fn document(align: Option<TextAlignment>) -> Document {
     let media = d.add_media(PNG.to_vec(), "png");
     let mut p = Paragraph::with_text("Alpha", Default::default());
     p.props.text_alignment = align;
-    let picture = InlineObject::Image { media, w: 30.0, h: 60.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    let picture = InlineObject::Image {
+        media,
+        w: 30.0,
+        h: 60.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
     p.insert_object(5, picture, &Default::default()).unwrap();
     let id = d.add_part(PartKind::TextBox, vec![para_block(p)]);
     d.parts.get_mut(&id).unwrap().body = TextBody::default();
