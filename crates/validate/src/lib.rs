@@ -24,13 +24,11 @@ macro_rules! observation_contract {
 mod contract_tests;
 mod contracts_generated;
 
-// Step 0 of the grammar work: the tables land before any check reads them. This allow is
-// removed when the first grammar rule uses the module.
 #[cfg(test)]
 mod glossary_descendant_tests;
 #[cfg(test)]
 mod glossary_tests;
-#[allow(dead_code)]
+mod grammar;
 mod model;
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -85,6 +83,14 @@ pub(crate) const NS_W15: &str = "http://schemas.microsoft.com/office/word/2012/w
 pub(crate) const NS_W16CID: &str = "http://schemas.microsoft.com/office/word/2016/wordml/cid";
 /// The OPC custom-XML datastore namespace (`ds:schemaRef`).
 pub(crate) const NS_DS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/customXml";
+/// The DrawingML main namespace (`a:theme`, `a:latin`, ...).
+pub(crate) const NS_A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+/// The DrawingML chart namespace (`c:chartSpace`, `c:plotArea`, ...).
+pub(crate) const NS_C: &str = "http://schemas.openxmlformats.org/drawingml/2006/chart";
+/// The DrawingML picture namespace (`pic:pic`, `pic:spPr`, ...).
+pub(crate) const NS_PIC: &str = "http://schemas.openxmlformats.org/drawingml/2006/picture";
+/// The bibliography namespace (`b:Sources`).
+pub(crate) const NS_B: &str = "http://schemas.openxmlformats.org/officeDocument/2006/bibliography";
 
 /// Resource budgets shared by every check. Exhausting a budget stops the affected check, records a
 /// coverage note and makes the verdict [`Verdict::Incomplete`] rather than letting the run grow
@@ -401,6 +407,34 @@ pub(crate) const STRUCT_TC_NO_P: RuleSpec = RuleSpec { id: "STRUCT-TC-NO-P", sev
 /// hold a terminal paragraph, so their ending is treated as unknown. Desktop behaviour
 /// unrecorded.
 pub(crate) const STRUCT_END_P: RuleSpec = RuleSpec { id: "STRUCT-END-P", severity: Severity::Error, evidence: Evidence::Observed };
+/// `GRAMMAR-REQUIRED-CHILD`: an element closed without a child its ECMA-376
+/// content model requires (minOccurs >= 1, choice groups by member sum).
+/// Evaluation is Strict-first with the Transitional model as a veto. Ships at
+/// Warning severity so grammar findings never move a document's verdict.
+pub(crate) const GRAMMAR_REQUIRED_CHILD: RuleSpec =
+    RuleSpec { id: "GRAMMAR-REQUIRED-CHILD", severity: Severity::Warning, evidence: Evidence::Observed };
+/// `GRAMMAR-CHILD-NOT-ALLOWED`: a modelled child element that appears in no
+/// child slot of its parent's ECMA-376 content model, evaluated Strict-first
+/// with the Transitional model as a veto. Fallback parents judge against the
+/// union of candidate variants; `<any>` permits any child; unmodelled elements
+/// are skipped. Ships at Warning severity.
+pub(crate) const GRAMMAR_CHILD_NOT_ALLOWED: RuleSpec =
+    RuleSpec { id: "GRAMMAR-CHILD-NOT-ALLOWED", severity: Severity::Warning, evidence: Evidence::MsDocumented };
+/// `GRAMMAR-CHILD-TOO-MANY`: a child occurring more times than its slot's
+/// `maxOccurs` in the parent's ECMA-376 content model, under Strict-first
+/// evaluation with Transitional veto; fires once at the crossing occurrence.
+/// Ships at Warning severity.
+pub(crate) const GRAMMAR_CHILD_TOO_MANY: RuleSpec =
+    RuleSpec { id: "GRAMMAR-CHILD-TOO-MANY", severity: Severity::Warning, evidence: Evidence::MsDocumented };
+/// `GRAMMAR-ORDER`: a `w:rPr` child appearing after a sibling that follows it
+/// in `EG_RPrBase` schema declaration order. Fires at most once per `w:rPr`
+/// element. Ships at Warning severity.
+pub(crate) const GRAMMAR_ORDER: RuleSpec = RuleSpec { id: "GRAMMAR-ORDER", severity: Severity::Warning, evidence: Evidence::Observed };
+/// `GRAMMAR-NUMFMT-VALUE`: a `w:numFmt/@w:val` outside the 63-value
+/// `ST_NumberFormat` enumeration (exact, case-sensitive). Checked in Wml-scope
+/// parts whenever `w:val` is present. Ships at Warning severity.
+pub(crate) const GRAMMAR_NUMFMT_VALUE: RuleSpec =
+    RuleSpec { id: "GRAMMAR-NUMFMT-VALUE", severity: Severity::Warning, evidence: Evidence::MsDocumented };
 /// `MATH-PLACEMENT`: math elements where Word refuses them — an `m:oMath` nested in
 /// another `m:oMath`, math content outside any `m:oMath`, an `m:oMath` or `m:oMathPara`
 /// outside any `w:p`, or an `m:oMathPara` descended from a math element. MS-OI29500
@@ -512,6 +546,11 @@ pub(crate) const RULES: &[RuleSpec] = &[
     XML_MALFORMED,
     XML_UNDECLARED_PREFIX,
     XML_INVALID_CHAR,
+    GRAMMAR_REQUIRED_CHILD,
+    GRAMMAR_CHILD_NOT_ALLOWED,
+    GRAMMAR_CHILD_TOO_MANY,
+    GRAMMAR_ORDER,
+    GRAMMAR_NUMFMT_VALUE,
     STRUCT_END_P,
     MATH_PLACEMENT,
     COMMENT_RANGE_COUNT,
@@ -697,6 +736,51 @@ impl Acc {
             return;
         }
         self.findings.push(Finding { rule, severity, evidence, part, message });
+    }
+
+    /// Record a grammar finding without ever altering the document's verdict:
+    /// severity is always [`Severity::Warning`], and reaching the per-rule
+    /// finding cap stops recording further findings with an informational note
+    /// instead of setting `Incomplete`.
+    pub(crate) fn add_grammar(&mut self, rule: &'static str, part: Option<String>, message: String) {
+        observation_contract! {
+            rules: "-";
+            collections: "field.findings*1,field.rule_counts*1";
+            scope: "report accumulator for verdict-invariant grammar warnings; no input definition collection";
+            loss: "per-rule findings budget stops recording further grammar warnings";
+            fallback: "always Warning severity; never calls set_incomplete() and never alters verdict";
+            package_loss: "independent";
+        }
+
+        let evidence = rule_spec(rule).map_or(Evidence::Inferred, |r| r.evidence);
+        let cap = self.limits.findings_per_rule;
+        let count = self.rule_counts.entry(rule).or_insert(0);
+        if *count >= cap {
+            if *count == cap {
+                *count = count.saturating_add(1);
+                self.note_grammar(format!("more than {cap} {rule} findings were found; further ones were not recorded"));
+            }
+            return;
+        }
+        *count += 1;
+        self.findings.push(Finding { rule, severity: Severity::Warning, evidence, part, message });
+    }
+
+    /// Record an informational grammar coverage note without ever exhausting
+    /// the note budget or setting `Incomplete`.
+    pub(crate) fn note_grammar(&mut self, message: String) {
+        observation_contract! {
+            rules: "-";
+            collections: "field.coverage*2";
+            scope: "report accumulator for verdict-invariant grammar notes; no input definition collection";
+            loss: "informational note dropped when fewer than two coverage-note slots remain";
+            fallback: "never exhausts coverage-note budget, never sets Incomplete, never alters verdict";
+            package_loss: "independent";
+        }
+
+        if self.coverage.len().saturating_add(1) < self.limits.notes {
+            self.coverage.push(message);
+        }
     }
 
     /// Record a coverage note. Exhausting the note budget is itself a budget exhaustion: the run is
@@ -1424,7 +1508,7 @@ fn xml_source_complete(xml: &XmlScan, entry: &package::Entry) -> bool {
 /// Scan all XML parts for well-formedness, undeclared prefixes, illegal characters, and extract story facts.
 fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     observation_contract! {
-        rules: "HEADERSOURCE-PRESENT,MATH-PLACEMENT,PROTECTION-PASSWORD,STRUCT-END-P,XML-INVALID-CHAR,XML-MALFORMED,XML-UNDECLARED-PREFIX";
+        rules: "GRAMMAR-CHILD-NOT-ALLOWED,GRAMMAR-CHILD-TOO-MANY,GRAMMAR-NUMFMT-VALUE,GRAMMAR-ORDER,GRAMMAR-REQUIRED-CHILD,HEADERSOURCE-PRESENT,MATH-PLACEMENT,PROTECTION-PASSWORD,STRUCT-END-P,XML-INVALID-CHAR,XML-MALFORMED,XML-UNDECLARED-PREFIX";
         collections: "access.prefix*1,access.retain_budget*1,field.comment_para_ids*1,field.content_part_exemptions*2,field.content_parts*2,field.entries*1,field.ink_content_parts*2,field.note_listings*1,field.refs*5,field.special_notes*1,field.unknown_prefixes*1,type.BTreeMap*1,type.HashMap*2,type.HashSet*2,type.Vec*13";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
@@ -1435,11 +1519,17 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     acc.ran("XML-MALFORMED");
     acc.ran("XML-UNDECLARED-PREFIX");
     acc.ran("XML-INVALID-CHAR");
+    acc.ran("GRAMMAR-REQUIRED-CHILD");
+    acc.ran("GRAMMAR-CHILD-NOT-ALLOWED");
+    acc.ran("GRAMMAR-CHILD-TOO-MANY");
+    acc.ran("GRAMMAR-ORDER");
+    acc.ran("GRAMMAR-NUMFMT-VALUE");
     acc.ran("STRUCT-END-P");
     acc.ran("MATH-PLACEMENT");
     acc.ran("PROTECTION-PASSWORD");
     acc.ran("HEADERSOURCE-PRESENT");
     let roles = story_roles(pkg);
+    let scopes = grammar_scopes(pkg);
     let graph = PartGraph::new(pkg);
     if graph.budget_exhausted() {
         acc.note(
@@ -1497,7 +1587,8 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
             continue;
         }
         let Some(text) = &e.decoded else { continue };
-        let mut scanned = scan::scan_part(&e.name, text, role, acc);
+        let scope = scopes.get(&l).copied().unwrap_or_default();
+        let mut scanned = scan::scan_part(&e.name, text, role, scope, acc);
 
         *note_incomplete_parts.entry(l.clone()).or_default() |= scanned.note_loss;
         if append_note_items(&mut note_listings, &mut special_notes, &e.name, scanned.note_listings, scanned.special_notes, acc.limits.facts) {
@@ -2168,6 +2259,79 @@ fn relationship_role(kind: Option<&str>) -> Option<scan::PartRole> {
         "footnotes" => scan::PartRole::Footnotes,
         "endnotes" => scan::PartRole::Endnotes,
         "header" | "footer" => scan::PartRole::Story,
+        _ => return None,
+    })
+}
+
+/// Classify each XML part's grammar vocabulary scope from main-part resolution,
+/// effective content types, and official relationships. Conflicting declarations
+/// merge to [`grammar::GrammarScope::Conflicting`] so traversal order never
+/// chooses a scope.
+fn grammar_scopes(pkg: &Package) -> HashMap<String, grammar::GrammarScope> {
+    observation_contract! {
+        rules: "-";
+        collections: "field.content_types*1,field.entries*1,field.rels*2,lookup.canonical_entry*1,type.HashMap*3";
+        scope: "source-local grammar vocabulary classification across package declarations";
+        loss: "source unavailable or malformed; conflicting content-type and relationship declarations";
+        fallback: "merge conflicts to Conflicting (grammar skipped) without changing verdict";
+        package_loss: "independent";
+    }
+
+    let mut scopes: HashMap<String, grammar::GrammarScope> = HashMap::new();
+    if let Resolution::One(main) = &pkg.main {
+        scopes.insert(main.to_ascii_lowercase(), grammar::GrammarScope::Wml);
+    }
+    for e in pkg.entries.iter().filter(|e| !e.is_dir) {
+        if let Some(scope) = content_type_grammar_scope(pkg.content_types.of(&e.name)) {
+            scopes.entry(e.name.to_ascii_lowercase()).and_modify(|existing| *existing = existing.merge(scope)).or_insert(scope);
+        }
+    }
+    for rp in &pkg.rels {
+        for r in &rp.rels {
+            let Some(scope) = relationship_grammar_scope(r.role.kind()) else { continue };
+            let Some(target) = &r.target_abs else { continue };
+            if let Resolution::One(name) = package::canonical_entry(pkg, target) {
+                scopes.entry(name.to_ascii_lowercase()).and_modify(|existing| *existing = existing.merge(scope)).or_insert(scope);
+            }
+        }
+    }
+    scopes
+}
+
+/// Classify a part's grammar vocabulary scope from its effective content type.
+fn content_type_grammar_scope(ct: Option<&str>) -> Option<grammar::GrammarScope> {
+    use grammar::GrammarScope::{Chart, Theme, Wml};
+    let ct = ct?;
+    if package::is_main_content_type(ct) {
+        return Some(Wml);
+    }
+    Some(match ct {
+        package::COMMENTS_CONTENT_TYPE
+        | package::FOOTNOTES_CONTENT_TYPE
+        | package::ENDNOTES_CONTENT_TYPE
+        | package::HEADER_CONTENT_TYPE
+        | package::FOOTER_CONTENT_TYPE
+        | package::GLOSSARY_CONTENT_TYPE
+        | package::SETTINGS_CONTENT_TYPE
+        | package::STYLES_CONTENT_TYPE
+        | package::NUMBERING_CONTENT_TYPE
+        | package::FONT_TABLE_CONTENT_TYPE
+        | package::WEB_SETTINGS_CONTENT_TYPE
+        | package::BIBLIOGRAPHY_CONTENT_TYPE => Wml,
+        package::CHART_CONTENT_TYPE => Chart,
+        package::THEME_CONTENT_TYPE => Theme,
+        _ => return None,
+    })
+}
+
+/// Classify a part's grammar vocabulary scope from an official relationship kind.
+fn relationship_grammar_scope(kind: Option<&str>) -> Option<grammar::GrammarScope> {
+    use grammar::GrammarScope::{Chart, Theme, Wml};
+    Some(match kind? {
+        "settings" | "glossaryDocument" | "comments" | "footnotes" | "endnotes" | "header" | "footer" | "styles" | "numbering" | "fontTable"
+        | "webSettings" | "bibliography" => Wml,
+        "chart" => Chart,
+        "theme" => Theme,
         _ => return None,
     })
 }
@@ -4720,7 +4884,7 @@ mod budget_tests {
         tiny_zip(&entries)
     }
 
-    const DRAWN: &str = r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="4000" cy="4000"/><wp:docPr id="1" name="Drawing"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:blipFill><a:blip r:embed="rImg"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#;
+    const DRAWN: &str = r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="4000" cy="4000"/><wp:docPr id="1" name="Drawing"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="1" name="drawn.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rImg"/></pic:blipFill><pic:spPr/></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#;
 
     #[test]
     fn media_magic_grades_drawn_and_unused_bytes_separately() {
@@ -6292,17 +6456,17 @@ mod budget_tests {
         // An `AlternateContent` of unresolved namespace is the literal one: its cell has block content, and nothing
         // in its Fallback is established (no missing relationship).
         for attr in ["", r#"xmlns:mc="&mcns;""#] {
-            let cell = story(&format!("<w:tbl><w:tr><w:tc>{}</w:tc></w:tr></w:tbl>", alt(attr, "<w:p/>")));
+            let cell = story(&format!("<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc>{}</w:tc></w:tr></w:tbl>", alt(attr, "<w:p/>")));
             assert_eq!((rules(&cell), cell.verdict), (vec![], Verdict::Pass), "{attr}: {cell:?}");
             let reference = story(&alt(attr, r#"<w:p><w:hyperlink r:id="rAbsent"/></w:p>"#));
             assert_eq!((rules(&reference), reference.verdict), (vec![], Verdict::Pass), "{attr}: {reference:?}");
         }
         // A check whose answer an unresolved element decides is undecided (Incomplete), never silently passed; the same
         // check against a literal foreign spelling is made. An unrelated unresolved wrapper still decides nothing.
-        let cell = |tag: &str| story(&format!("<w:tbl><w:tr><w:tc><{tag}/></w:tc></w:tr></w:tbl>"));
+        let cell = |tag: &str| story(&format!("<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><{tag}/></w:tc></w:tr></w:tbl>"));
         assert_eq!(rules(&cell(r#"q:p xmlns:q="urn:2006""#)), ["STRUCT-TC-NO-P"]);
         assert_eq!(cell(&format!("q:p {q}")).verdict, Verdict::Incomplete);
-        let math = |wrapper: &str| story(&format!(r#"<w:p><{wrapper} xmlns:q="urn:&year;"><m:f/></{wrapper}></w:p>"#));
+        let math = |wrapper: &str| story(&format!(r#"<w:p><{wrapper} xmlns:q="urn:&year;"><m:f><m:num/><m:den/></m:f></{wrapper}></w:p>"#));
         assert_eq!(rules(&math("q:vendor")), ["MATH-PLACEMENT"]);
         assert_eq!(math("q:num").verdict, Verdict::Incomplete);
         // The same holds where a block level or a deletion is decided by an ancestor: undecided, never silent.
@@ -6318,7 +6482,9 @@ mod budget_tests {
         };
         assert_eq!(rules(&sdt("q:tbl xmlns:q=\"urn:2006\"")), Vec::<&str>::new());
         assert_eq!(sdt(&format!("q:tbl {q}")).verdict, Verdict::Incomplete);
-        let merge = |open: &str, close: &str| settings(&format!("<{open}><w:headerSource/></{close}>"));
+        let merge = |open: &str, close: &str| {
+            settings(&format!(r#"<{open}><w:mainDocumentType w:val="formLetters"/><w:dataType w:val="native"/><w:headerSource/></{close}>"#))
+        };
         assert_eq!(rules(&merge("w:mailMerge", "w:mailMerge")), ["HEADERSOURCE-PRESENT"]);
         assert_eq!(merge(&format!("q:mailMerge {q}"), "q:mailMerge").verdict, Verdict::Incomplete);
         let range = |open: &str, close: &str| {
@@ -6678,7 +6844,7 @@ mod budget_tests {
         xml.push_str("</w:document>");
         let mut acc = Acc::with_limits(Limits { depth: 512, ..Limits::default() });
         let role = scan::PartRole::Main;
-        let _ = scan::scan_part("word/document.xml", &xml, role, &mut acc);
+        let _ = scan::scan_part("word/document.xml", &xml, role, grammar::GrammarScope::Wml, &mut acc);
         let report = acc.finish();
         assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
         assert!(!report.findings.iter().any(|f| f.rule == "XML-MALFORMED"), "{:?}", report.findings);
@@ -6690,9 +6856,28 @@ mod budget_tests {
         let xml = format!(r#"<w:document xmlns:w="{}">{}</w:document>"#, NS_W, "<w:p/>".repeat(10_000));
         let mut acc = Acc::with_limits(Limits { events: 1000, ..Limits::default() });
         let role = scan::PartRole::Main;
-        let _ = scan::scan_part("word/document.xml", &xml, role, &mut acc);
+        let _ = scan::scan_part("word/document.xml", &xml, role, grammar::GrammarScope::Wml, &mut acc);
         let report = acc.finish();
         assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+    }
+
+    /// Grammar findings exceeding `findings_per_rule` and grammar notes under a tight note budget
+    /// must stay bounded without ever flipping a `Pass` document to `Incomplete`.
+    #[test]
+    fn grammar_finding_and_note_caps_never_mark_incomplete() {
+        let body = format!("{}{}", "<w:p><w:pPr><w:r/></w:pPr></w:p>".repeat(5), "<w:sdtContent><w:p/></w:sdtContent>");
+        let doc = format!(r#"<?xml version="1.0"?><w:document xmlns:w="{NS_W}"><w:body>{body}</w:body></w:document>"#).into_bytes();
+        let zip = tiny_zip(&[
+            ("[Content_Types].xml", content_types()),
+            ("_rels/.rels", package_rels()),
+            ("word/document.xml", doc),
+            ("word/_rels/document.xml.rels", doc_rels()),
+        ]);
+        let report = validate_bytes_limited(&zip, Limits { findings_per_rule: 2, notes: 1, ..Limits::default() });
+        assert_eq!(report.verdict, Verdict::Pass, "grammar budgets must never flip verdict: {report:?}");
+        let hits: Vec<_> = report.findings.iter().filter(|f| f.rule == "GRAMMAR-CHILD-NOT-ALLOWED").collect();
+        assert_eq!(hits.len(), 2, "{hits:?}");
+        assert!(hits.iter().all(|f| f.severity == Severity::Warning));
     }
 
     /// Finding 2 canary: the pairing reports must not run on a partial scan. A field left open when

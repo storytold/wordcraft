@@ -61,6 +61,8 @@ pub(crate) const WEB_SETTINGS_CONTENT_TYPE: &str = "application/vnd.openxmlforma
 pub(crate) const PEOPLE_CONTENT_TYPE: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.people+xml";
 /// The chart part's content type (ECMA-376 Part 1 §14.2.1).
 pub(crate) const CHART_CONTENT_TYPE: &str = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
+/// The bibliography part's content type.
+pub(crate) const BIBLIOGRAPHY_CONTENT_TYPE: &str = "application/vnd.openxmlformats-officedocument.bibliography+xml";
 /// The plain-XML content type a custom XML item and a bibliography part require
 /// (ECMA-376 Part 1 §§15.2.5, 15.2.3).
 pub(crate) const XML_CONTENT_TYPE: &str = "application/xml";

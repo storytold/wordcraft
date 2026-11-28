@@ -11,8 +11,9 @@ use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::{Namespace, NamespaceResolver, QName, ResolveResult};
 
+use crate::grammar::{ElementEvent, GrammarScope, GrammarWalk};
 use crate::observed::{CompleteSet, Completeness, Observed};
-use crate::{Acc, NS_DS, NS_M, NS_MC, NS_R, NS_W, NS_W14, NS_W15, NS_W16CID, NS_WP};
+use crate::{Acc, NS_A, NS_DS, NS_M, NS_MC, NS_R, NS_W, NS_W14, NS_W15, NS_W16CID, NS_WP};
 
 /// Parsed numeric value; invalid spellings remain explicitly separate from valid keys.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1046,7 +1047,7 @@ fn decode_utf16_strict(bytes: &[u8], little_endian: bool) -> Result<String, Deco
 /// Scan one part. Well-formedness, illegal characters, namespace findings, structural findings and
 /// `XML-INVALID-CHAR` reference findings are added to `acc`; the collected story facts and every
 /// `r:id`/`r:embed`/`r:link` value come back on the `PartScan`.
-pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -> PartScan {
+pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, scope: GrammarScope, acc: &mut Acc) -> PartScan {
     observation_contract! {
         rules: "STRUCT-TC-NO-P";
         collections: "access.into_complete_set*2,access.invalidate*2,field.alt_stack*2,field.content_part_exemptions*2,field.content_parts*2,field.declared*8,field.frames*10,field.note_listings*1,field.note_listings_e*1,field.note_listings_f*1,field.para_ids*1,field.special_notes*2,field.unknown_prefixes*2,parser.parse_doctype_entities*1,type.BTreeMap*1,type.HashMap*1,type.HashSet*1,type.Observed*1,type.Vec*9";
@@ -1059,6 +1060,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
     let mut reader = XmlReader::new(text);
     let mut buf = Vec::new();
     let mut state = State { fact_cap: acc.limits.facts, ..State::default() };
+    let mut grammar = GrammarWalk::new(scope);
     let mut out = PartScan {
         malformed: None,
         unknown_prefixes: Vec::new(),
@@ -1155,6 +1157,16 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                     );
                     check_para_ids(&mut state, &id, &attrs, reader.resolver(), role, part, acc);
                 }
+                let numfmt_val = numfmt_attr(&id, &attrs, reader.resolver(), scope, was_suppressed);
+                let ev = ElementEvent {
+                    ns: id.ns,
+                    local: &id.local,
+                    is_alt,
+                    unresolved: id.unresolved,
+                    suppressed: was_suppressed,
+                    numfmt_val: numfmt_val.as_deref(),
+                };
+                grammar.open(&ev, part, acc);
                 let frame = Frame { alt: is_alt, suppressed: was_suppressed, alt_branch_prev: branch_prev, ..frame_for(&id) };
                 state.frames.push(frame);
             }
@@ -1196,6 +1208,16 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                     );
                     check_para_ids(&mut state, &id, &attrs, reader.resolver(), role, part, acc);
                 }
+                let numfmt_val = numfmt_attr(&id, &attrs, reader.resolver(), scope, was_suppressed);
+                let ev = ElementEvent {
+                    ns: id.ns,
+                    local: &id.local,
+                    is_alt,
+                    unresolved: id.unresolved,
+                    suppressed: was_suppressed,
+                    numfmt_val: numfmt_val.as_deref(),
+                };
+                grammar.empty(&ev, part, acc);
                 if is_alt {
                     state.alt_depth = state.alt_depth.saturating_sub(1);
                     state.alt_stack.pop();
@@ -1206,6 +1228,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
             }
             Ok(Event::End(_)) => {
                 state.declared.pop();
+                grammar.close(part, acc);
                 if let Some(f) = state.frames.pop() {
                     if f.alt {
                         state.alt_depth = state.alt_depth.saturating_sub(1);
@@ -1314,6 +1337,11 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
     out.unknown_prefixes.sort_unstable();
     out.unknown_prefixes.dedup();
     out
+}
+
+/// Extract `w:numFmt/@w:val` for `GRAMMAR-NUMFMT-VALUE` when scanning an unsuppressed WML part.
+fn numfmt_attr(id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, scope: GrammarScope, suppressed: bool) -> Option<String> {
+    if !suppressed && scope == GrammarScope::Wml && id.w() && id.local == "numFmt" { attr_ns(attrs, res, NS_W, b"val") } else { None }
 }
 
 /// Apply entity reference validation and update malformed/incomplete status; returns `true` to stop scanning.
@@ -2611,8 +2639,6 @@ fn record_structure(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &N
     }
 }
 
-/// The DrawingML main namespace (`a:blip`).
-const NS_A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
 /// The VML namespace (`v:imagedata`).
 const NS_V: &str = "urn:schemas-microsoft-com:vml";
 
@@ -4913,7 +4939,7 @@ mod tests {
     fn entity_replacement_with_markup_or_refs_marks_syntax_and_facts_incomplete() {
         let mut acc = Acc::with_limits(crate::Limits::default());
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE w:document [<!ENTITY m "<w:p/>">]><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>&m;</w:t></w:r></w:p></w:body></w:document>"#;
-        let scan = scan_part("word/document.xml", xml, PartRole::Main, &mut acc);
+        let scan = scan_part("word/document.xml", xml, PartRole::Main, GrammarScope::Wml, &mut acc);
         assert!(scan.malformed.is_none());
         assert!(!scan.syntax_complete);
         assert!(!scan.facts_complete);
@@ -4925,7 +4951,7 @@ mod tests {
         // Entity supplies begin, visible markup supplies end -> no FLD-UNBALANCED, verdict Incomplete.
         let mut acc = Acc::with_limits(crate::Limits::default());
         let balanced_via_entity = r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE w:document [<!ENTITY b "<w:fldChar w:fldCharType='begin'/>">]><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r>&b;<w:fldChar w:fldCharType="end"/></w:r></w:p></w:body></w:document>"#;
-        let _ = scan_part("word/document.xml", balanced_via_entity, PartRole::Main, &mut acc);
+        let _ = scan_part("word/document.xml", balanced_via_entity, PartRole::Main, GrammarScope::Wml, &mut acc);
         let report = acc.finish();
         assert_eq!(report.verdict, crate::Verdict::Incomplete, "{report:?}");
         assert!(!report.findings.iter().any(|f| f.rule == "FLD-UNBALANCED"), "{report:?}");
@@ -4933,7 +4959,7 @@ mod tests {
         // Extra end BEFORE unchecked replacement stays proven (1 extra end, not 2).
         let mut acc2 = Acc::with_limits(crate::Limits::default());
         let earlier_and_later = r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE w:document [<!ENTITY b "<w:fldChar w:fldCharType='begin'/>">]><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:fldChar w:fldCharType="end"/>&b;<w:fldChar w:fldCharType="end"/></w:r></w:p></w:body></w:document>"#;
-        let _ = scan_part("word/document.xml", earlier_and_later, PartRole::Main, &mut acc2);
+        let _ = scan_part("word/document.xml", earlier_and_later, PartRole::Main, GrammarScope::Wml, &mut acc2);
         let report2 = acc2.finish();
         let f = report2.findings.iter().find(|f| f.rule == "FLD-UNBALANCED").expect("earlier extra end survives");
         assert!(f.message.contains("1 w:fldChar end(s)"), "unexpected count: {f:?}");
@@ -4952,7 +4978,7 @@ mod tests {
         );
         let start = std::time::Instant::now();
         let mut acc = Acc::with_limits(crate::Limits::default());
-        let scan = scan_part("word/document.xml", &xml, PartRole::Main, &mut acc);
+        let scan = scan_part("word/document.xml", &xml, PartRole::Main, GrammarScope::Wml, &mut acc);
         assert!(scan.malformed.is_none(), "{:?}", scan.malformed);
         assert!(start.elapsed() < std::time::Duration::from_secs(2), "entity traversal took {:?}", start.elapsed());
 

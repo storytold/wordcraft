@@ -281,7 +281,9 @@ def unit_audit(name, func, header, body, semantic_json, fields, enum_variants,
     if name != 'observed.rs' and re.search(r'\.\s*(?:observed_value|observed_status)\b',code):
         errors.append(f'{name}::{func}: bypasses private observation representation')
     if 'PackageRegistryContext' in header+code or re.search(r'(?:\.|::)\s*contexts\b',code):
-        if (name,func) not in {('lib.rs','report_unreferenced_comments'),('lib.rs','check_custom_xml'),('ownership.rs','contexts')}:
+        if (name,func) not in {('lib.rs','report_unreferenced_comments'),('lib.rs','check_custom_xml'),('ownership.rs','contexts')} and not (
+            name == 'grammar.rs' and func == 'variant_has_parent' and 'PackageRegistryContext' not in header+code and header.strip() == 'fn variant_has_parent (v : & Variant , key : & str) -> bool'
+        ):
             errors.append(f'{name}::{func}: undeclared package-registry exception')
     if re.search(r'\.\s*difference\s*\(', code):
         errors.append(f'{name}::{func}: raw absence difference bypasses CompleteSet')
@@ -320,6 +322,9 @@ def unit_audit(name, func, header, body, semantic_json, fields, enum_variants,
         ('ownership.rs', 'parts', 'owners'),
         # Traversal state of the TIFF directory graph, not an observed definition set.
         ('tiff_admission.rs', 'chain_path', 'self.followed'),
+        # Static generated ECMA-376 content-model slices, not observed definition sets.
+        ('grammar.rs', 'variant_has_parent', 'v.contexts'),
+        ('grammar.rs', 'judge_num_fmt', 'NUM_FMT_VALUES'),
     }
     for access in re.finditer(MEMBERSHIP, code):
         receiver=re.sub(r'\s+', '', access.group(1))
