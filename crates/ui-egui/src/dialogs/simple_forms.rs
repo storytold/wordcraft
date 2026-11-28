@@ -191,11 +191,11 @@ const MARGIN_SIDES: [(&str, &str); 4] = [("top", "Top"), ("left", "Left"), ("bot
 fn open_cell_margins(app: &mut WordApp, ctx: &Context, parent: Option<DialogId>) -> Option<DialogId> {
     let margins = cell_margins_pt(app)?;
     let fields = DialogFields::from_pairs(MARGIN_SIDES.iter().zip(margins).map(|((key, _), v)| (*key, v)));
-    let kind = crate::options::unit_kind(app.session.units());
+    let units = crate::options::lengths(app.session.units());
     let dialog = HostedParamDialog::new(ctx, "tableCellMargins", fields, move |fields| {
         let params: Vec<Param> = MARGIN_SIDES
             .iter()
-            .map(|(key, label)| Param::number(*key, tl!(label).to_string(), 0.0, 1.0, 2).bounds(Some(0.0), Some(144.0)).unit(kind))
+            .map(|(key, label)| Param::number(*key, tl!(label).to_string(), 0.0, units.shown.step(), 2).bounds(Some(0.0), Some(144.0)).length(units))
             .collect();
         ParamDialog::command("tableCellMargins", tl!("Cell Margins").to_string(), params).values(Bind::bound(fields)).alt_resets(false)
     });
