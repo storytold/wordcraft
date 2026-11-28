@@ -1,0 +1,11 @@
+{
+  "baseline": [
+    "strict::an_uncovered_code_point_fails_strict_with_a_report_and_no_file",
+    "strict::render_strict_refuses_an_uncovered_character_on_the_page_with_no_stdout_or_file"
+  ],
+  "current": [
+    "strict::an_uncovered_code_point_fails_strict_with_a_report_and_no_file",
+    "strict::render_strict_refuses_an_uncovered_character_on_the_page_with_no_stdout_or_file"
+  ],
+  "exact_match": true
+}

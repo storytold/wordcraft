@@ -65,7 +65,7 @@ pub(crate) fn show(app: &mut WordApp, ctx: &egui::Context) {
     let mut close = false;
     let mut copied = false;
     egui::Window::new(tl!("Open link"))
-        .id(egui::Id::new("open-url-failed"))
+        .id(egui::Id::unique("open-url-failed"))
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -48.0))
@@ -95,6 +95,7 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use crate::test_harness::AppFrames as _;
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable;
     use serde_json::json;
@@ -121,7 +122,7 @@ mod tests {
     }
 
     fn harness(app: WordApp) -> Harness<'static, WordApp> {
-        Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -145,9 +146,13 @@ mod tests {
 
     fn click_discord_in_backstage(h: &mut Harness<'_, WordApp>) {
         let _ = h.state_mut().run("ui.backstage", json!({"value": true}));
-        h.run_steps(4);
+        for _ in 0..4 {
+            h.app_frame();
+        }
         h.get_by_label("Discord community").click();
-        h.run_steps(3);
+        for _ in 0..3 {
+            h.app_frame();
+        }
     }
 
     #[test]
@@ -165,7 +170,7 @@ mod tests {
     #[test]
     fn every_link_asked_of_egui_goes_to_the_host() {
         let (app, asked) = app_answering(Ok(()));
-        let mut h = Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
             |ui, app: &mut WordApp| {
                 for url in ["https://example.org/a", "mailto:someone@example.org", "file:///etc/passwd", "smb://host/share"] {
                     ui.ctx().open_url(egui::OpenUrl::new_tab(url));
@@ -176,7 +181,9 @@ mod tests {
             },
             app,
         );
-        h.run_steps(4);
+        for _ in 0..4 {
+            h.app_frame();
+        }
         assert!(opened_by_egui(&h).is_empty(), "nothing is left for egui's opener");
         let asked = asked.borrow();
         assert!(asked.contains(&"https://example.org/a".into()) && asked.contains(&"mailto:someone@example.org".into()), "{asked:?}");
@@ -187,9 +194,11 @@ mod tests {
     fn without_a_hook_egui_opens_links_as_before() {
         let app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
         let mut h = harness(app);
-        h.run_steps(3);
+        for _ in 0..3 {
+            h.app_frame();
+        }
         let _ = h.state_mut().run("ui.discord", json!({}));
-        h.step();
+        h.app_frame();
         assert_eq!(opened_by_egui(&h), [DISCORD]);
     }
 
@@ -203,10 +212,12 @@ mod tests {
         assert_eq!(*asked.borrow(), [DISCORD]);
         h.get_by_label(DISCORD);
         h.get_by_label("Copy link").click();
-        h.step();
+        h.app_frame();
         let copied = h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == DISCORD));
         assert!(copied, "{:?}", h.output().platform_output.commands);
-        h.run_steps(2);
+        for _ in 0..2 {
+            h.app_frame();
+        }
         assert!(h.query_by_label("Copy link").is_none(), "the notice closes");
     }
 
@@ -216,9 +227,11 @@ mod tests {
         let mut h = harness(WordApp::new(Session::new(wordcraft_doc::Document::new()), services));
         click_discord_in_backstage(&mut h);
         h.get_by_label(DISCORD);
-        let notice = h.ctx.memory(|m| m.area_rect(egui::Id::new("open-url-failed"))).expect("the notice is open");
+        let notice = h.ctx.memory(|m| m.area_rect(egui::Id::unique("open-url-failed"))).expect("the notice is open");
         h.query_all_by_label("Close").find(|n| notice.contains(n.rect().center())).expect("its Close button").click();
-        h.run_steps(2);
+        for _ in 0..2 {
+            h.app_frame();
+        }
         assert!(h.query_by_label(DISCORD).is_none());
     }
 }

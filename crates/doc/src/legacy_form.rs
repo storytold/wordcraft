@@ -120,13 +120,56 @@ fn attr_in(tag: &str) -> Option<String> {
     Some(unescape(rest.get(..end)?))
 }
 
-fn unescape(s: &str) -> String {
-    s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
+fn unescape(mut s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    while let Some((text, rest)) = s.split_once('&') {
+        out.push_str(text);
+        if let Some(end) = rest.find(['&', ';'])
+            && rest.as_bytes()[end] == b';'
+        {
+            let entity = &rest[..end];
+            let decoded = match entity {
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                "amp" => Some('&'),
+                _ => entity.strip_prefix('#').and_then(|n| {
+                    let value = if let Some(hex) = n.strip_prefix('x') {
+                        (!hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit())).then(|| u32::from_str_radix(hex, 16).ok()).flatten()
+                    } else {
+                        (!n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).then(|| n.parse::<u32>().ok()).flatten()
+                    }?;
+                    char::from_u32(value)
+                        .filter(|c| matches!(*c, '\t' | '\n' | '\r' | '\u{20}'..='\u{d7ff}' | '\u{e000}'..='\u{fffd}' | '\u{10000}'..='\u{10ffff}'))
+                }),
+            };
+            if let Some(c) = decoded {
+                out.push(c);
+                s = &rest[end + 1..];
+                continue;
+            }
+        }
+        out.push('&');
+        s = rest;
+    }
+    out.push_str(s);
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drop_down_entities_decode_once_including_xml_whitespace() {
+        let xml = r#"<w:ffData><w:name w:val="N&#x61;me"/><w:ddList><w:listEntry w:val="A&#10;B&#9;C&#13;D&#x1F600;&amp;#10;&lt;&gt;&quot;&apos;"/></w:ddList></w:ffData>"#;
+        let f = LegacyForm::parse(xml).unwrap();
+        assert_eq!(f.name(), "Name");
+        assert_eq!(f.shown_text(), Some("A\nB\tC\rD😀&#10;<>\"'"));
+        let malformed = r#"<w:ffData><w:ddList><w:listEntry w:val="&#0;&#xD800;&#x110000;&#-1;&#xZZ;&unknown;&amp"/></w:ddList></w:ffData>"#;
+        assert_eq!(LegacyForm::parse(malformed).unwrap().shown_text(), Some("&#0;&#xD800;&#x110000;&#-1;&#xZZ;&unknown;&amp"));
+    }
 
     #[test]
     fn check_boxes_text_fields_and_drop_downs() {
