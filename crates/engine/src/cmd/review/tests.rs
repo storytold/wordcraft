@@ -612,6 +612,37 @@ fn edits_in_the_repeated_hour_stay_separate_changes() {
     assert_eq!(change_spans(&mut s), [("insert".into(), 6, 10)], "the earlier insertion is still pending");
 }
 
+/// A change made at 08:33 UTC at UTC+8 is dated 16:33 in a Word file, as Word dates it, and 08:33
+/// UTC in an OpenDocument file, whose `dc:date` is an instant (#6851).
+#[test]
+fn a_new_change_is_dated_in_utc_in_opendocument() {
+    use crate::cmd::{TEST_NOW, TEST_ZONE};
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TEST_NOW.with(|c| c.set(None));
+            TEST_ZONE.with(|z| z.set(None));
+        }
+    }
+    let _reset = Reset;
+    TEST_ZONE.with(|z| z.set(Some(|_| 8 * 3600)));
+    TEST_NOW.with(|c| c.set(Some(1_794_818_004)));
+
+    let mut s = Session::new(Document::new());
+    s.view.proofing = false;
+    s.run("document.setText", &json!({"text": "Draft."})).unwrap();
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": " One"})).unwrap();
+    let utc = "2026-11-16T08:33:24Z";
+    let dates = |d: &Document| d.revisions.iter().map(|r| r.date.clone()).collect::<Vec<_>>();
+    for (name, date) in [("new.odt", utc), ("new.fodt", utc), ("new.docx", "2026-11-16T16:33:24Z"), ("new.xml", "2026-11-16T16:33:24Z")] {
+        let opened = crate::io::open_bytes(name, &crate::io::save_bytes(name, &s.doc).unwrap()).unwrap();
+        assert_eq!(dates(&opened), [date], "{name}");
+        assert!(opened.revisions.iter().all(|r| r.instant() == utc), "{name}: {:?}", opened.revisions);
+    }
+}
+
 /// A tracked change read from a file keeps its `w:date` and `w16du:dateUtc` as read through open
 /// and save in another zone (#6851): one without a UTC time (an older Word, another program), whose
 /// zone WordCraft doesn't guess, and one written in UTC, where the two are the same.
