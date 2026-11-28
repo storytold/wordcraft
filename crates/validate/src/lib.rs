@@ -194,9 +194,12 @@ pub struct Report {
     /// Informational notes about skipped checks and observations from completed checks,
     /// such as unattached custom XML schemas.
     pub coverage_notes: Vec<String>,
-    /// Every rule id whose check pass ran, in the documented order. Per-part skips
-    /// (such as unreadable parts, DTD-tainted parts, or inactive/conflicting grammar
-    /// scopes) are disclosed in `coverage_notes`.
+    /// Every rule id whose check pass ran, in the documented order. Coverage losses
+    /// on applicable parts (such as unreadable or over-budget parts, unsupported
+    /// encodings, or DTD-tainted grammar-scoped parts) are disclosed in
+    /// `coverage_notes` (subject to the note budget); parts outside a rule's role
+    /// or active grammar scope (including inactive or conflicting grammar scopes)
+    /// are skipped without a note.
     pub checks_run: Vec<&'static str>,
 }
 
