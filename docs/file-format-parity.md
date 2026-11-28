@@ -330,6 +330,8 @@ For field results, the engine parser treats a backslash in quoted arguments as e
 
 > 2026-11-07 · VML text boxes: `mso-layout-flow-alt:bottom-to-top` reads as `vert270` with any `layout-flow`, and `layout-flow:vertical` or `vertical-ideographic` otherwise as `vert`, so a compatibility-mode header's turned text box is drawn turned (#5193, `it::text_boxes::vml_text_boxes_keep_their_inset_fit_and_anchor`).
 
+> 2026-11-02 · Tagged PDF lists: bulleted and numbered paragraphs are written as `L` > `LI` > `Lbl` + `LBody`, nested by level; a different list right after another is a list of its own, an item without text is a label alone, and a numbered heading stays a heading (#4257).
+
 > 2026-11-03 · Section `w:chapStyle` values preserve the full unsigned-byte range, including 10, while values above 255 are rejected.
 
 | 2026-10-30 | trivial | DOCX section metadata now preserves independent printer trays, section endnote suppression, chapter numbering settings, and footnote columns through native JSON and repeated save/reopen |
@@ -342,6 +344,7 @@ For field results, the engine parser treats a backslash in quoted arguments as e
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-20 | trivial | Pictures: TIFF is supported for the compression the image decoder handles; native, fallback and web picture choosers, platform file intake and pasted picture paths recognize both `.tif` and `.tiff` (#6704). Ported routing regressions to framework file services and retained the complete upstream revision history in one continuous table. |
+| 2026-11-02 | trivial | Tagged PDF: bulleted and numbered paragraphs are written as lists (`L`, `LI`, `Lbl`, `LBody`), nested by level (#4257) |
 | 2026-11-18 | trivial | DOCX validation reports undeclared binary tombstones in coverage notes when relationship discovery establishes that no relationship targets the part. |
 | 2026-11-18 | trivial | DOCX validation excludes the content-type manifest from main-part cardinality and reports untargeted ordinary document parts in coverage when one ordinary main is established. |
 | 2026-11-18 | trivial | DOCX validation warns on an image signature mismatch when the image is unused or can be decoded in another raster format. Used, unusable images retain their error. |

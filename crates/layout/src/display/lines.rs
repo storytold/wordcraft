@@ -301,6 +301,7 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 ranges,
                 text_bg,
                 x_scale: rc.scale / 100.0,
+                list_label: false,
             });
         }
         // Decorations across the run (underline skips trailing spaces of the line). Right-to-left
@@ -548,6 +549,7 @@ fn draw_label_and_hyphen(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 ranges: Vec::new(),
                 text_bg: None,
                 x_scale: 1.0,
+                list_label: true,
             });
         }
         // Struck through or underlined once, across the whole number, in its first run's size.
@@ -588,6 +590,7 @@ fn draw_hyphen(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             ranges: Vec::new(),
             text_bg: None,
             x_scale: style.rc.scale / 100.0,
+            list_label: false,
         });
     }
 }
@@ -690,6 +693,7 @@ fn draw_rubies(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 ranges,
                 text_bg: st.rc.highlight.or(st.rc.shading),
                 x_scale: 1.0,
+                list_label: false,
             });
         }
     }
@@ -796,6 +800,7 @@ fn tab_leaders(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             ranges: Vec::new(),
             text_bg: None,
             x_scale: 1.0,
+            list_label: false,
         });
     }
 }
@@ -934,6 +939,7 @@ fn equation(items: &[MItem], x: f32, base: f32, alpha: f32, screen: bool, out: &
                 ranges: ranges.clone(),
                 text_bg: None,
                 x_scale: 1.0,
+                list_label: false,
             }),
             MItem::Rect { x: rx, y, w, h, color } => {
                 out.push(Draw::Fill { rect: Rect::new(x + rx, base - y - h, *w, *h), color: *color, alpha, text_bg: false })
