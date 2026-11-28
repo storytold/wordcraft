@@ -37,6 +37,11 @@ const ALL_CHECKS: &[&str] = &[
     "XML-MALFORMED",
     "XML-UNDECLARED-PREFIX",
     "XML-INVALID-CHAR",
+    "GRAMMAR-REQUIRED-CHILD",
+    "GRAMMAR-CHILD-NOT-ALLOWED",
+    "GRAMMAR-CHILD-TOO-MANY",
+    "GRAMMAR-ORDER",
+    "GRAMMAR-NUMFMT-VALUE",
     "STRUCT-END-P",
     "MATH-PLACEMENT",
     "PROTECTION-PASSWORD",
@@ -147,7 +152,7 @@ fn rich_document_passes() {
         r#"<w:p><w:r><w:commentReference w:id="1"/></w:r></w:p>"#,
         r#"<w:p><w:bookmarkStart w:id="1" w:name="bm"/><w:bookmarkEnd w:id="1"/></w:p>"#,
         r#"<w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr><w:r><w:t>Styled</w:t></w:r></w:p>"#,
-        r#"<w:p><w:r><wp:docPr id="1" name="pic"/></w:r></w:p>"#,
+        r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="1" cy="1"/><wp:docPr id="1" name="pic"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="1" name="pic.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip/></pic:blipFill><pic:spPr/></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#,
         r#"<w:sectPr><w:headerReference w:type="default" r:id="rIdH"/></w:sectPr>"#,
     ));
     let report = validate(&d);
@@ -1643,7 +1648,8 @@ fn struct_tc_no_p() {
 #[test]
 fn struct_end_p_cell_ending_in_nested_table() {
     let mut d = Doc::minimal();
-    let defect = "<w:tbl><w:tr><w:tc><w:p/><w:tbl><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl></w:tc></w:tr></w:tbl>";
+    let defect =
+        "<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p/><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl></w:tc></w:tr></w:tbl>";
     d.set_document(defect);
     let report = validate(&d);
     let finding = assert_finding(&report, "STRUCT-END-P", Some("word/document.xml"));
@@ -1674,7 +1680,7 @@ fn struct_end_p_paragraph_control() {
 fn struct_end_p_empty_cell_is_only_tc_no_p() {
     for cell in ["<w:tc/>", "<w:tc><w:tcPr/></w:tc>"] {
         let mut d = Doc::minimal();
-        d.set_document(&format!("<w:tbl><w:tr>{cell}</w:tr></w:tbl>"));
+        d.set_document(&format!("<w:tbl><w:tblPr/><w:tblGrid/><w:tr>{cell}</w:tr></w:tbl>"));
         let report = validate(&d);
         assert_finding(&report, "STRUCT-TC-NO-P", Some("word/document.xml"));
         assert_eq!(report.findings.len(), 1);
@@ -4338,7 +4344,10 @@ fn custom_xml_schemas_are_checked_per_owner() {
                 r#"<Relationship Id="rCx" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="../customXml/itemPropsGloss.xml"/>"#,
             )),
         );
-        d.set("word/glossary.xml", format!(r#"<?xml version="1.0"?><w:glossaryDocument xmlns:w="{W_NS}"><w:docParts/></w:glossaryDocument>"#));
+        d.set(
+            "word/glossary.xml",
+            format!(r#"<?xml version="1.0"?><w:glossaryDocument xmlns:w="{W_NS}"><w:docParts><w:docPart/></w:docParts></w:glossaryDocument>"#),
+        );
         d.set(
             "word/settingsMain.xml",
             format!(r#"<?xml version="1.0"?><w:settings xmlns:w="{W_NS}"><w:attachedSchema w:val="http://example.com/main"/></w:settings>"#),

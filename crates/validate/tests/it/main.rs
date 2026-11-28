@@ -3,6 +3,7 @@ mod common;
 
 mod ambiguous_sources;
 mod entry_point_profiles;
+mod grammar;
 mod owner_roles;
 mod partial_glossary_discovery;
 mod partial_root_discovery;

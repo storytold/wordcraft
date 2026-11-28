@@ -91,7 +91,13 @@ fn n1_p3_corrupt_owner_relationships_skip_all_three_joins() {
 fn n1_p4_mid_scan_stop_poisons_every_owned_reference_category() {
     let mut d = notes();
     d.set_document(&NOTE.replace("\"1\"", "\"5\""));
-    d.set("word/footnotes.xml", format!(r#"<w:footnotes {NS}>{}</w:footnotes>"#, depth_bomb(r#"<w:footnote w:id="5"><w:p/></w:footnote>"#)));
+    d.set(
+        "word/footnotes.xml",
+        format!(
+            r#"<w:footnotes {NS}><w:footnote w:id="1">{}</w:footnote><w:footnote w:id="5"><w:p/></w:footnote></w:footnotes>"#,
+            depth_bomb(r#"<w:p/>"#)
+        ),
+    );
     orders(d, unchanged, |r| {
         // Amendment 4: unlike a never-loaded source, this scanned prefix invalidates comments too.
         exact(r, Verdict::Incomplete, &[], &["REL-REF-MISSING"], &["REF-NOTE", "ID-COMMENT-REF"]);
