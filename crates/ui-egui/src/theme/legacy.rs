@@ -712,6 +712,16 @@ pub fn apply_animations(ctx: &egui::Context, on: bool) {
 /// Coverage exponent for light-on-dark interface text on Linux and the BSDs (see [`visuals`]).
 const DARK_TEXT_GAMMA: f32 = 0.8;
 
+/// Gives egui's dark style our lighter light-on-dark text curve on Linux and the BSDs (see [`visuals`]). The craft
+/// runtime's mode sync keeps an app's own curve for each mode (craft-libs#3589), so setting it once is enough (#7841).
+pub fn set_dark_text_curve(ctx: &egui::Context) {
+    if cfg!(all(unix, not(target_os = "macos"))) {
+        ctx.style_mut_of(egui::Theme::Dark, |s| {
+            s.visuals.text_options.color_transfer_function = egui::epaint::FontColorTransferFunction::Gamma(DARK_TEXT_GAMMA);
+        });
+    }
+}
+
 /// egui's visuals for one of our palettes.
 fn visuals(t: &Tokens) -> Visuals {
     let mut v = if t.dark { Visuals::dark() } else { Visuals::light() };
