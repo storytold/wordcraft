@@ -1,5 +1,6 @@
-use super::select::{obj_size, selected, with_obj};
-use super::{CmdError, CmdResult, InlineObject, Rgb, Session, Value, Wrap, p};
+use super::select::{edit_obj, is_shape_or_canvas, obj_size, selected, target_objects, with_obj};
+use super::{CmdError, CmdResult, InlineObject, Pos, Rgb, Session, Value, Wrap, json, p};
+use wordcraft_doc::picfx::PicFx;
 
 /// `picture.crop`: the crop, and optionally the new display size, as one edit. With a size, a
 /// floating picture positioned by offsets moves by what the crop on its left/top side on the page
@@ -69,17 +70,15 @@ pub fn cropped_original_size(s: &Session, o: &InlineObject) -> Option<(f32, f32)
     Some((orig.w * part(crop[0], crop[2]), orig.h * part(crop[1], crop[3])))
 }
 
-/// Size: `scale` is a percentage of the current size, or with `original` of what the crop leaves
-/// of the original size (`original` alone gives that back: the Size dialog's Reset); then `width`
-/// and `height`, where one alone keeps the proportions unless `lockAspect` is false.
-pub(super) fn size(s: &mut Session, v: &Value) -> CmdResult {
-    let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no object".into()))?;
+fn planned_size(s: &Session, o: &InlineObject, v: &Value) -> Result<(f32, f32), CmdError> {
     let lock = p::bool(v, "lockAspect").unwrap_or(true);
-    let (mut w, mut h) = obj_size(&o);
+    let (w0, h0) = obj_size(o);
+    let (mut w, mut h) = (w0, h0);
     let scale = p::f32(v, "scale");
-    if p::bool(v, "original").unwrap_or(false) {
+    let original = p::bool(v, "original").unwrap_or(false);
+    if original {
         let (ow, oh) =
-            cropped_original_size(s, &o).ok_or_else(|| CmdError::Disabled("only a picture whose image can be read has an original size".into()))?;
+            cropped_original_size(s, o).ok_or_else(|| CmdError::Disabled("only a picture whose image can be read has an original size".into()))?;
         let k = scale.unwrap_or(100.0) / 100.0;
         (w, h) = (ow * k, oh * k);
     } else if let Some(sc) = scale {
@@ -112,15 +111,58 @@ pub(super) fn size(s: &mut Session, v: &Value) -> CmdResult {
         (None, None) => true,
         _ => lock,
     };
-    let (w, h) = fit_size(w, h, keep);
+    // Sides set in proportion (from the original, or from a size whose sides both have a length)
+    // fit the limits together. Otherwise each side the call sets fits on its own, and a side it
+    // leaves as it was keeps its size, a straight line's 0 too.
+    if keep && (original || (w0 > 0.0 && h0 > 0.0 && (w, h) != (w0, h0))) {
+        Ok(fit_size(w, h, true))
+    } else {
+        let (fw, fh) = fit_size(w, h, false);
+        let left = |new: f32, old: f32| !original && new == old;
+        Ok((if left(w, w0) { w } else { fw }, if left(h, h0) { h } else { fh }))
+    }
+}
+
+fn size_matching(s: &mut Session, v: &Value, pred: impl Fn(&InlineObject) -> bool, empty_msg: &str) -> CmdResult {
+    let targets = target_objects(s, pred);
+    if targets.is_empty() {
+        return Err(CmdError::Disabled(empty_msg.into()));
+    }
+    let planned: Vec<(Pos, f32, f32)> =
+        targets.into_iter().map(|(pos, o)| planned_size(s, &o, v).map(|(w, h)| (pos, w, h))).collect::<Result<Vec<_>, _>>()?;
     // Any drawing: a group's members scale with its frame (its child space is kept); a chart or
     // SmartArt graphic lays itself out again at the new size.
     let theme = s.doc.settings.theme_colors.clone();
-    with_obj(s, |o| {
-        o.set_size(w, h);
-        crate::cmd::chart::redraw(o, &theme);
-        crate::cmd::smart_art::redraw(o, &theme);
-    })
+    let mut last = Value::Null;
+    for (pos, w, h) in &planned {
+        let o = edit_obj(s, pos, |o| {
+            o.set_size(*w, *h);
+            crate::cmd::chart::redraw(o, &theme);
+            crate::cmd::smart_art::redraw(o, &theme);
+        })?;
+        last = serde_json::to_value(o).unwrap_or(Value::Null);
+    }
+    Ok(json!({"object": last, "count": planned.len()}))
+}
+
+/// Size: `scale` is a percentage of the current size, or with `original` of what the crop leaves
+/// of the original size (`original` alone gives that back: the Size dialog's Reset); then `width`
+/// and `height`, where one alone keeps the proportions unless `lockAspect` is false.
+pub(super) fn size(s: &mut Session, v: &Value) -> CmdResult {
+    size_matching(
+        s,
+        v,
+        |o| match o {
+            InlineObject::Graphic { graphic, .. } => graphic.chart.is_some() || graphic.smart_art.is_some(),
+            _ => o.is_drawing(),
+        },
+        "no object",
+    )
+}
+
+/// Shape Size: resizes only selected shapes, text boxes, and drawing canvases (or the active text box).
+pub(super) fn shape_size(s: &mut Session, v: &Value) -> CmdResult {
+    size_matching(s, v, is_shape_or_canvas, "no shape selected")
 }
 
 /// An object size within 1–4000 pt. With `keep`, both sides scale by one factor, the one nearest
@@ -148,13 +190,33 @@ pub fn fit_size(w: f32, h: f32, keep: bool) -> (f32, f32) {
 pub(super) fn adjust(s: &mut Session, f: impl Fn(image::DynamicImage) -> Result<image::DynamicImage, CmdError>) -> CmdResult {
     let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
     let InlineObject::Image { media, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
-    adjust_media(s, &media, f)
+    adjust_media(s, &media, |_| {}, f)
+}
+
+/// The selected picture's pre-edit media key (itself when never edited).
+pub(super) fn original_media(s: &Session) -> Result<String, CmdError> {
+    let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
+    let InlineObject::Image { media, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
+    Ok(s.originals.get(&media).cloned().unwrap_or(media))
+}
+
+/// Drops brightness and contrast read from the file: an edit baked them from the original.
+pub(super) fn clear_lum(fx: &mut PicFx) {
+    fx.bright = 0;
+    fx.contrast = 0;
 }
 
 /// Like [`adjust`], but decodes `base` (a media key, usually the pre-edit original) instead
 /// of the picture's current bitmap. The result still chains onto the originals map, so Reset
 /// Picture keeps working.
-pub(super) fn adjust_media(s: &mut Session, base: &str, f: impl Fn(image::DynamicImage) -> Result<image::DynamicImage, CmdError>) -> CmdResult {
+/// `fx` changes the picture's brightness, contrast and transparency from the file (see
+/// [`PicFx`]) for an edit that bakes its own.
+pub(super) fn adjust_media(
+    s: &mut Session,
+    base: &str,
+    fx: impl Fn(&mut PicFx),
+    f: impl Fn(image::DynamicImage) -> Result<image::DynamicImage, CmdError>,
+) -> CmdResult {
     let bytes = s.doc.media.get(base).cloned().ok_or_else(|| CmdError::Failed("picture data missing".into()))?;
     // Within the budget pictures are drawn within, checked from the header first (#3644, #3647).
     let img = wordcraft_geom::picture::decode(&bytes, wordcraft_geom::MAX_DECODED_BYTES).map_err(|e| match e {
@@ -162,8 +224,7 @@ pub(super) fn adjust_media(s: &mut Session, base: &str, f: impl Fn(image::Dynami
         e => CmdError::Failed(format!("can't decode the picture: {e}")),
     })?;
     let out = f(img)?;
-    let mut png = Vec::new();
-    out.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).map_err(|e| CmdError::Failed(e.to_string()))?;
+    let png = wordcraft_geom::picture::encode_png(&out).map_err(CmdError::Failed)?;
     let key = s.doc.add_media(png, "png");
     // Chain onto the ultimate original (the base's, or the current picture's when the base
     // is itself derived), so Reset Picture always finds it.
@@ -179,8 +240,9 @@ pub(super) fn adjust_media(s: &mut Session, base: &str, f: impl Fn(image::Dynami
         .unwrap_or_else(|| cur.clone().unwrap_or_else(|| key.clone()));
     s.originals.entry(key.clone()).or_insert(orig);
     with_obj(s, |o| {
-        if let InlineObject::Image { media, .. } = o {
+        if let InlineObject::Image { media, fx: pic_fx, .. } = o {
             *media = key.clone();
+            fx(pic_fx);
         }
     })
 }
@@ -244,19 +306,25 @@ pub(super) fn relook(s: &mut Session, change: impl FnOnce(&mut PictureLook)) -> 
         });
     }
     let l = look.clone();
-    let out = adjust_media(s, &look.base, move |img| {
-        let mut img = match &l.effect {
-            Some(e) => artistic_effect(img, e),
-            None => img,
-        };
-        if let Some(st) = &l.style {
-            img = picture_style(img, st)?;
-        }
-        if let Some((c, w)) = l.border {
-            img = frame(img, w, [c.0, c.1, c.2, 255])?;
-        }
-        Ok(img)
-    })?;
+    // Styles, borders and effects leave the file's brightness, contrast and transparency alone.
+    let out = adjust_media(
+        s,
+        &look.base,
+        |_| {},
+        move |img| {
+            let mut img = match &l.effect {
+                Some(e) => artistic_effect(img, e),
+                None => img,
+            };
+            if let Some(st) = &l.style {
+                img = picture_style(img, st)?;
+            }
+            if let Some((c, w)) = l.border {
+                img = frame(img, w, [c.0, c.1, c.2, 255])?;
+            }
+            Ok(img)
+        },
+    )?;
     if let Some((_, InlineObject::Image { media, .. })) = selected(s)
         && let Some(drawn) = s.doc.media.get(&media).cloned()
     {
@@ -299,10 +367,13 @@ pub(super) fn reset(s: &mut Session, _: &Value) -> CmdResult {
     let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
     let InlineObject::Image { media, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
     let orig = s.originals.get(&media).cloned().unwrap_or(media);
+    // Like Word, Reset Picture discards every correction, those read from the file (`fx`:
+    // brightness, contrast, transparency, #1711, #1766) included.
     with_obj(s, |o| {
-        if let InlineObject::Image { media, crop, .. } = o {
+        if let InlineObject::Image { media, crop, fx, .. } = o {
             *media = orig.clone();
             *crop = [0.0; 4];
+            *fx = PicFx::default();
         }
     })
 }

@@ -22,23 +22,29 @@ pub(super) fn space_room(spaces: f32, word: f32) -> f32 {
     (spaces * MAX_SPACE_SHRINK).min(word.max(0.0) * MAX_WORD_OVERRUN)
 }
 
-/// Take `-slack` (an overflow) out of the line's inner spaces, in proportion to their widths and
-/// never more than [`MAX_SPACE_SHRINK`] of them. Trailing spaces hang and are left alone.
-pub(super) fn shrink_line_spaces(pl: &ParaLayout, xs: &mut [f32], c0: usize, c1: usize, content_end: f32, slack: f32) {
-    let spaces: Vec<(usize, f32)> = (c0..c1)
+/// Take `-slack` (an overflow) out of the line's inner spaces from `from` on (after the line's last
+/// left/default tab), in proportion to their widths and never more than [`MAX_SPACE_SHRINK`] of them.
+/// Trailing spaces hang and are left alone.
+///
+/// `c0` is the first cluster on the line, and `from` is where space shrinking begins (the cluster
+/// following the line's last tab, or `c0` when there are no tabs on the line). `c1` is the end of
+/// the line's cluster range.
+pub(super) fn shrink_line_spaces(pl: &ParaLayout, xs: &mut [f32], (c0, from): (usize, usize), c1: usize, content_end: f32, slack: f32) {
+    let from = from.max(c0);
+    let spaces: Vec<(usize, f32)> = (from..c1)
         .filter_map(|k| {
             let c = pl.clusters.get(k).filter(|c| c.kind == ClKind::Space)?;
             (xs.get(k - c0).copied().unwrap_or(f32::MAX) < content_end - 0.01).then_some((k, c.adv))
         })
         .collect();
     let total: f32 = spaces.iter().map(|s| s.1).sum();
-    if total <= 0.0 || !slack.is_finite() {
+    if !total.is_finite() || total <= 0.0 || !slack.is_finite() {
         return;
     }
     let ratio = (-slack / total).clamp(0.0, MAX_SPACE_SHRINK);
     let mut take = 0.0;
     let mut next = spaces.iter().peekable();
-    for k in c0..c1 {
+    for k in from..c1 {
         if let Some(v) = xs.get_mut(k - c0) {
             *v -= take;
         }

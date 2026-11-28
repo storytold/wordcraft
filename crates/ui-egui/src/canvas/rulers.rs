@@ -1,306 +1,421 @@
-use super::margins::{MarginEdge, margin_handle};
-use super::pages::page_screen_scale;
-use super::{DocLayout, Pos2, Rect, Sense, Stroke, Tokens, Ui, WordApp, json, pos2, regular, vec2};
+//! The rulers around the caret's page: the framework's `PageRulers` shows them, and this file feeds them the caret
+//! paragraph, the page's margins, the caret table's borders and the section's column gaps, and turns what they report
+//! into commands. Margins, indents and column gaps run on every step of a drag, joined into one undo step; tab stops
+//! and table borders run once, on the commit. A cancelled drag takes back what it ran.
 
-/// Horizontal and vertical rulers for the caret's page and paragraph. Each spans that page's
-/// rect on screen at the page's own scale and is clipped to its strip, whatever the layout
-/// (one column, One Page, Multiple Pages), and follows the caret to another page (#1878).
-pub(super) fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layout: &DocLayout, scale: f32) {
-    let t = Tokens::get(ui.ctx());
-    let p = ui.painter();
-    let corner = Rect::from_min_max(pos2(v.min.x, h.min.y), pos2(v.max.x, h.max.y));
-    p.rect_filled(corner, 0.0, t.canvas);
-    p.rect_filled(h, 0.0, t.canvas);
-    p.rect_filled(v, 0.0, t.canvas);
-    crate::ruler_tabs::selector(app, ui, corner);
+use craft::behavior::{EditEvents, GestureId, GesturePhase};
+use craft::pages::Margins;
+use craft::pages::ui::{PageEdges, PageRulers};
+use craft::text::ui::DocUnit;
+use craft::text::ui::ruler::{RulerValues, TabAlign as RulerAlign, TabLeader as RulerLeader, TabStop as RulerStop};
+use craft::ui::contract::Bind;
+use craft::ui::runtime::env::UnitKind;
+use serde_json::{Map, Value};
+use wordcraft_doc::props::{TAB_POS_EPS, TabAlign, TabLeader, TabStop};
+use wordcraft_engine::cmd::table_resize::Edge;
+
+use super::{DocLayout, Placed, Ui, WordApp, json};
+use crate::table_resize::ruler_params;
+
+/// The id a column gap drag runs under: the gap drag reports a phase and no gesture id, and one pointer drives one
+/// drag at a time, so a single id keeps its steps in one undo step.
+const GAP_GESTURE: GestureId = GestureId::new(u64::MAX);
+
+/// The snap step of indents, points: 1/16 inch.
+const INDENT_SNAP: f32 = 4.5;
+
+/// The narrowest text column an indent drag leaves, points.
+const MIN_INDENT_ROOM: f32 = 18.0;
+
+/// Shows the rulers of the caret's page and applies what they report. The rulers follow the caret to another page;
+/// a new paragraph is a new ruler, so an open gesture ends with the paragraph it began on.
+pub(crate) fn page_rulers(app: &mut WordApp, ui: &mut Ui, out: &craft::pages::ui::PageViewOutput, layout: &DocLayout) {
+    let Some(canvas_rect) = app.canvas.canvas_rect() else { return };
     let pi = app.session.page_hint.min(layout.pages.len().saturating_sub(1));
-    let (Some(page), Some(pr)) = (layout.pages.get(pi), rects.get(pi)) else { return };
-    let scale = page_screen_scale(*pr, page, scale);
+    let (Some(page), Some(placed)) = (layout.pages.get(pi), out.pages.iter().find(|p| p.page == pi)) else { return };
     let sect = app.session.doc.sections().get(page.section).map(|(_, s)| (*s).clone()).unwrap_or_default();
-    // Horizontal.
-    let hp = ui.painter_at(h);
-    let x0 = pr.min.x;
-    let bar = Rect::from_min_max(pos2(x0, h.min.y + 4.0), pos2(x0 + page.w * scale, h.max.y - 3.0));
-    hp.rect_filled(bar, 0.0, t.ruler_margin);
-    let text = Rect::from_min_max(pos2(x0 + page.body.x * scale, bar.min.y), pos2(x0 + page.body.right() * scale, bar.max.y));
-    hp.rect_filled(text, 0.0, t.ruler);
-    let rp = app.session.doc.para_at(&app.session.sel.focus).map(|para| app.session.doc.styles.resolve_para(&para.props));
-    // Graduations in the File › Options unit.
-    let (unit, div, step) = ruler_scale(app.session.units());
-    // The caret paragraph's reading direction anchors the whole scale (#692): for a right-to-left
-    // paragraph it runs from the page's right edge and the numbers increase right-to-left, so the
-    // ruler matches the indent and tab markers, which sit at the paragraph's start edge.
+    let focus = app.session.sel.focus.clone();
+    let rp = app.session.doc.para_at(&focus).map(|para| app.session.doc.styles.resolve_para(&para.props));
     let rtl = rp.as_ref().is_some_and(|rp| rp.bidi);
-    let origin = if rtl { page.w - page.body.right() } else { page.body.x };
-    // A distance along the reading direction (points from the page's start edge) and back.
-    let sx = |d: f32| ruler_x(d, x0, scale, page.w, rtl);
-    let s_at = |x: f32| ruler_d(x, x0, scale, page.w, rtl);
-    // The caret paragraph's column (in a table, the cell's text) and where it starts, from the
-    // page's start edge (the right edge when right-to-left).
-    let (col_x, w) = crate::table_ruler::text_area(app, layout, pi).unwrap_or((page.body.x, page.body.w));
-    let start = if rtl { page.w - (col_x + w) } else { col_x };
-    // Indents and tabs are measured from the paragraph's start edge: the right margin of a
-    // right-to-left paragraph, where the start-indent markers sit.
-    let px = |s: f32| sx(start + s);
-    let dist_at = |x: f32| s_at(x) - start;
-    // The markers the numbers keep clear of (#1878): the indents, the tab stops, a table's columns.
-    let mut keep_clear: Vec<Rect> = Vec::new();
+    // The caret paragraph's column: in a table the cell's text, else the body.
+    let (col_x, w) = text_area(app, layout, pi).unwrap_or((page.body.x, page.body.w));
+    let col_end = col_x + w;
+    let to_start = |x: f32| if rtl { col_end - x } else { x - col_x };
+    let to_page = |d: f32| if rtl { col_end - d } else { col_x + d };
+
+    let mut values = RulerValues::default();
+    let mut doc_tabs: Vec<TabStop> = Vec::new();
     if let Some(rp) = &rp {
-        let [first, left, right] = [rp.indent_left + rp.indent_first, rp.indent_left, w - rp.indent_right].map(px);
-        keep_clear.extend(indent_marker_rects(first, left, right, bar));
-        keep_clear.extend(crate::ruler_tabs::marker_rects(app, bar, &px, &rp.tabs));
+        values.stops = rp.tabs.iter().filter_map(|t| Some(RulerStop::new(t.pos, ruler_align(t.align)?, ruler_leader(t.leader)))).collect();
+        values.stops.sort_by(|a, b| a.position.total_cmp(&b.position));
+        values.left_indent = rp.indent_left;
+        values.first_line_indent = rp.indent_first;
+        values.right_indent = rp.indent_right;
+        doc_tabs = rp.tabs.iter().filter(|t| t.align != TabAlign::Clear).copied().collect();
     }
-    keep_clear.extend(crate::table_ruler::column_markers(app, ui.ctx(), layout, pi, bar, x0, scale));
-    for (d, mark) in ruler_marks(origin, page.body.w, page.w, (unit, div, step), scale) {
-        ruler_mark(&hp, pos2(sx(d), bar.center().y), mark, true, &keep_clear, &t);
-    }
-    // Margins: the edges of the white text area drag the section's margins. Registered before
-    // the indent markers, so a marker sitting on an edge keeps the pointer where they overlap.
-    let (le, re) = (x0 + page.body.x * scale, x0 + page.body.right() * scale);
-    // An even page of a mirrored layout is the odd page reflected: its left edge is the stored right margin.
+
+    let cg = super::column_ruler::column_gaps(app, layout, pi);
+    let gaps: Vec<(f32, f32)> = cg
+        .as_ref()
+        .map(|cg| cg.gaps.iter().map(|&(l, r)| if rtl { (col_end - r, col_end - l) } else { (l - col_x, r - col_x) }).collect())
+        .unwrap_or_default();
+
+    let row_cells = caret_row(app, layout, pi);
+    let borders_page: Vec<f32> =
+        row_cells.first().map(|f| std::iter::once(f.x).chain(row_cells.iter().map(|b| b.right())).collect()).unwrap_or_default();
+    // While a column marker is dragged the markers show where the preview puts their borders (the ruler draws them
+    // where it is told), so the grabbed marker follows the pointer and the ones right of it move along.
+    let mods = crate::table_resize::mods_now(ui.ctx());
+    let borders: Vec<f32> = borders_page
+        .iter()
+        .enumerate()
+        .map(|(line, &x)| to_start(app.canvas.table_resize.as_ref().and_then(|d| d.ruler_line_x(mods, line)).unwrap_or(x)))
+        .collect();
+    let row_y = row_cells.first().map_or(0.0, |b| b.y + b.h / 2.0);
+    let bottoms = row_bottoms(app, layout, pi);
+    let rows: Vec<f32> = bottoms.iter().map(|(_, b)| b.bottom()).collect();
+    // A section whose columns `column_drag` refuses shows its gaps without grips.
+    let gaps_draggable = cg.as_ref().is_none_or(|cg| super::column_ruler::draggable(&cg.sect));
+
+    let mut margins = Margins::uniform(0.0);
+    margins.top = f64::from(sect.margin_top);
+    margins.bottom = f64::from(sect.margin_bottom);
+    margins.left = f64::from(sect.margin_left);
+    margins.right = f64::from(sect.margin_right);
+    let edges = PageEdges::new(margins);
     let mirrored = app.session.doc.settings.mirror_margins && page.number.is_multiple_of(2);
-    for (edge, zone) in [
-        (MarginEdge::Left, Rect::from_min_max(pos2(le - 10.0, bar.min.y), pos2(le + 3.0, bar.max.y))),
-        (MarginEdge::Right, Rect::from_min_max(pos2(re - 3.0, bar.min.y), pos2(re + 10.0, bar.max.y))),
-    ] {
-        margin_handle(app, ui, edge, zone, |p| (p.x - x0) / scale, &sect, mirrored);
+    let unit = DocUnit::new(unit_kind(app.session.units()), 96.0);
+    let kind = ruler_align(app.canvas.tab_kind).unwrap_or_default();
+
+    let output = PageRulers::new(tl!("Rulers"), placed, Bind::given(edges), Bind::given(values.clone()))
+        .id_salt(("page_rulers", format!("{:?}{:?}", focus.story, focus.path)))
+        .column((col_x, col_end))
+        .unit(unit)
+        .kind(Some(kind))
+        .right_to_left(Some(rtl))
+        .columns(&borders)
+        .gaps(&gaps)
+        .gaps_draggable(gaps_draggable)
+        .rows(&rows)
+        .gutter(f64::from(sect.gutter))
+        .mirrored_even(mirrored)
+        .show_at(ui, canvas_rect);
+
+    if let Some(k) = output.ruler.kind {
+        app.canvas.tab_kind = doc_align(k);
     }
-    // Indent markers for the caret's paragraph.
-    if let Some(rp) = rp {
-        let first = px(rp.indent_left + rp.indent_first);
-        let left = px(rp.indent_left);
-        let right = px(w - rp.indent_right);
-        let c = t.text_dim;
-        hp.add(egui::Shape::convex_polygon(
-            vec![pos2(first - 4.5, bar.min.y), pos2(first + 4.5, bar.min.y), pos2(first, bar.min.y + 5.0)],
-            t.ruler,
-            Stroke::new(1.0, c),
-        ));
-        hp.add(egui::Shape::convex_polygon(
-            vec![pos2(left - 4.5, bar.max.y - 3.0), pos2(left + 4.5, bar.max.y - 3.0), pos2(left, bar.max.y - 8.0)],
-            t.ruler,
-            Stroke::new(1.0, c),
-        ));
-        hp.rect(
-            Rect::from_min_max(pos2(left - 4.5, bar.max.y - 3.0), pos2(left + 4.5, bar.max.y + 1.0)),
-            0.0,
-            t.ruler,
-            Stroke::new(1.0, c),
-            egui::StrokeKind::Inside,
-        );
-        hp.add(egui::Shape::convex_polygon(
-            vec![pos2(right - 4.5, bar.max.y - 1.0), pos2(right + 4.5, bar.max.y - 1.0), pos2(right, bar.max.y - 6.0)],
-            t.ruler,
-            Stroke::new(1.0, c),
-        ));
-        // Tab stops: drawn and registered before the indent markers' drags, which win where they overlap.
-        let step = unit / div as f32 / 2.0;
-        let ruler = crate::ruler_tabs::Ruler { bar, text, width: w, step, rtl, x_of: &px, dist_at: &dist_at };
-        crate::ruler_tabs::stops(app, ui, &hp, &ruler, &rp.tabs);
-        // In a table, its column borders: registered after the tab stops (whose set-a-stop zone
-        // spans the text area, so a border marker keeps its drag) and before the indent markers,
-        // which keep the pointer where they overlap.
-        crate::table_ruler::columns(app, ui, layout, pi, bar, x0, scale);
-        // Dragging the left-indent marker.
-        let id = ui.scope_id().with("ruler_left");
-        let mr = Rect::from_center_size(pos2(left, bar.max.y - 3.0), vec2(12.0, 12.0));
-        let r = ui.interact(mr, id, Sense::click_and_drag());
-        if r.dragged()
-            && let Some(pp) = r.interact_pointer_pos()
-        {
-            let pt = dist_at(pp.x).clamp(-col_x, (w - 18.0).max(-col_x));
-            let snapped = (pt / 4.5).round() * 4.5;
-            if !r.drag_started() {
-                app.session.join_next_undo();
+    if output.ruler.open_tabs_dialog {
+        let _ = app.run("para.tabs", json!({}));
+    }
+    drive(app, &output.ruler.edit.events, |app, id, v, last| {
+        if let Some(p) = indent_params(&values, v, col_x, w) {
+            live(app, id, |a| {
+                let _ = a.run("para.indents", p);
+            });
+        }
+        if last && let Some(p) = tab_commands(&doc_tabs, &doc_stops(&v.stops)) {
+            let _ = app.run("para.tabs", p);
+        }
+    });
+    drive(app, &output.margins.edit.events, |app, id, v, _| {
+        if let Some(p) = margin_params(&edges, v) {
+            live(app, id, |a| {
+                let _ = a.run_keep_view("layout.margins", p);
+            });
+        }
+    });
+
+    if let Some(g) = output.ruler.gap
+        && let Some(cg) = &cg
+    {
+        match g.phase {
+            GesturePhase::Begin => settle(app, false),
+            GesturePhase::Cancel => settle(app, true),
+            phase => {
+                let from_text_start = to_page(g.position) - cg.origin;
+                let at = if cg.sect.rtl { cg.sect.text_width() - from_text_start } else { from_text_start };
+                if let Some(p) = super::column_ruler::column_drag(&cg.sect, g.index, g.edge.into(), at) {
+                    live(app, Some(GAP_GESTURE), |a| {
+                        let _ = a.run_keep_view("layout.columns", p);
+                    });
+                }
+                if phase == GesturePhase::Commit {
+                    settle(app, false);
+                }
             }
-            let _ = app.run("para.indents", json!({"left": snapped}));
         }
-        let fr = Rect::from_center_size(pos2(first, bar.min.y + 3.0), vec2(12.0, 10.0));
-        let r = ui.interact(fr, ui.scope_id().with("ruler_first"), Sense::click_and_drag());
-        if r.dragged()
-            && let Some(pp) = r.interact_pointer_pos()
-        {
-            let pt = dist_at(pp.x) - rp.indent_left;
-            if !r.drag_started() {
-                app.session.join_next_undo();
+    }
+
+    if let Some(d) = output.ruler.column {
+        let at = borders_page.get(d.border.index).map(|&x| (x, row_y));
+        let to = (to_page(d.border.position), row_y);
+        table_drag(app, layout, pi, BorderDrag { phase: d.phase, edge: Edge::Column(d.border.index), at, to, mods: d.mods });
+    }
+    if let Some(d) = output.row {
+        let at = bottoms.get(d.index).map(|(_, b)| (b.x + b.w / 2.0, b.bottom()));
+        let edge = bottoms.get(d.index).map(|(r, _)| Edge::Row(*r));
+        if let (Some(edge), Some(at)) = (edge, at) {
+            table_drag(app, layout, pi, BorderDrag { phase: d.phase, edge, at: Some(at), to: (at.0, d.position), mods: d.mods });
+        }
+    }
+}
+
+/// One step of a table border drag as the ruler reports it: the border's edge, where it was grabbed (`None` when the
+/// border is no longer in the table) and where the pointer puts it.
+struct BorderDrag {
+    phase: GesturePhase,
+    edge: Edge,
+    at: Option<(f32, f32)>,
+    to: (f32, f32),
+    mods: craft::keymap::Mods,
+}
+
+/// One table border drag: the preview follows each step, and the commit runs `table.resizeDrag` once. A press and
+/// release without a move changes nothing, and a cancel drops the preview.
+fn table_drag(app: &mut WordApp, layout: &DocLayout, page: usize, drag: BorderDrag) {
+    let BorderDrag { phase, edge, at, to, mods } = drag;
+    let Some(at) = at else { return };
+    match phase {
+        GesturePhase::Begin => {}
+        GesturePhase::Cancel => app.canvas.table_resize = None,
+        phase => {
+            // PLAN: assumed `ruler_params(app: &mut WordApp, layout: &DocLayout, page: usize, edge: Edge, at: (f32, f32), to: (f32, f32), mods: Mods) -> Option<Value>` (canvas-w13)
+            let params = ruler_params(app, layout, page, edge, at, to, mods);
+            if phase == GesturePhase::Commit {
+                app.canvas.table_resize = None;
+                let moved = (to.0 - at.0).abs() >= 0.5 || (to.1 - at.1).abs() >= 0.5;
+                if moved
+                    && let Some(p) = params
+                    && let Err(e) = app.run_keep_view("table.resizeDrag", p)
+                {
+                    app.status(e);
+                }
             }
-            let _ = app.run("para.indents", json!({"firstLine": (pt / 4.5).round() * 4.5}));
         }
-        let rr = Rect::from_center_size(pos2(right, bar.max.y - 3.0), vec2(12.0, 12.0));
-        let r = ui.interact(rr, ui.scope_id().with("ruler_right"), Sense::click_and_drag());
-        if r.dragged()
-            && let Some(pp) = r.interact_pointer_pos()
-        {
-            let pt = w - dist_at(pp.x);
-            if !r.drag_started() {
-                app.session.join_next_undo();
+    }
+}
+
+/// Plays the events of a ruler's edit: a begin or cancel settles the drag (a cancel takes back what ran), any other
+/// event is a step with its value and gesture, and `last` marks the one that ends the gesture (a commit or a single
+/// set).
+fn drive<T>(app: &mut WordApp, events: &EditEvents<T>, mut step: impl FnMut(&mut WordApp, Option<GestureId>, &T, bool)) {
+    for ev in events.iter() {
+        match ev.phase() {
+            Some(GesturePhase::Begin) => settle(app, false),
+            Some(GesturePhase::Cancel) => settle(app, true),
+            phase => {
+                let Some(v) = ev.value() else { continue };
+                let last = phase != Some(GesturePhase::Update);
+                step(app, ev.id(), v, last);
+                if last {
+                    settle(app, false);
+                }
             }
-            let _ = app.run("para.indents", json!({"right": (pt / 4.5).round() * 4.5}));
         }
     }
-    // Vertical.
-    let vp = ui.painter_at(v);
-    let y0 = pr.min.y;
-    let vbar = Rect::from_min_max(pos2(v.min.x + 4.0, y0), pos2(v.max.x - 3.0, pr.max.y));
-    vp.rect_filled(vbar, 0.0, t.ruler_margin);
-    let (te, be) = (y0 + page.body.y * scale, y0 + page.body.bottom() * scale);
-    vp.rect_filled(Rect::from_min_max(pos2(vbar.min.x, te), pos2(vbar.max.x, be)), 0.0, t.ruler);
-    for (edge, ey) in [(MarginEdge::Top, te), (MarginEdge::Bottom, be)] {
-        let zone = Rect::from_min_max(pos2(vbar.min.x, ey - 4.0), pos2(vbar.max.x, ey + 4.0));
-        margin_handle(app, ui, edge, zone, |p| (p.y - y0) / scale, &sect, false);
-    }
-    // The same graduations down the page; the numbers keep clear of a table's row markers.
-    let keep_clear = crate::table_ruler::row_markers(app, ui.ctx(), layout, pi, vbar, y0, scale);
-    for (d, mark) in ruler_marks(page.body.y, page.body.h, page.h.min(20_000.0), (unit, div, step), scale) {
-        ruler_mark(&vp, pos2(vbar.center().x, y0 + d * scale), mark, false, &keep_clear, &t);
-    }
-    // In a table, its rows' bottom borders.
-    crate::table_ruler::rows(app, ui, layout, pi, vbar, y0, scale);
 }
 
-/// The indent markers' outlines on the horizontal ruler `bar`, each centred on its screen x:
-/// first line (a flag at the top), left and right (at the bottom).
-fn indent_marker_rects(first: f32, left: f32, right: f32, bar: Rect) -> [Rect; 3] {
-    [
-        Rect::from_min_max(pos2(first - 4.5, bar.min.y), pos2(first + 4.5, bar.min.y + 5.0)),
-        Rect::from_min_max(pos2(left - 4.5, bar.max.y - 8.0), pos2(left + 4.5, bar.max.y + 1.0)),
-        Rect::from_min_max(pos2(right - 4.5, bar.max.y - 6.0), pos2(right + 4.5, bar.max.y - 1.0)),
-    ]
-}
-
-/// One mark drawn along a ruler.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum RulerMark {
-    /// A number, `n` units from the start margin.
-    Label(i32),
-    /// A tick line, `len` screen points long.
-    Tick(f32),
-}
-
-/// A whole unit's tick where it has no number.
-pub(super) const UNIT_TICK: f32 = 7.0;
-
-/// The least room between two numbers on a ruler (screen points).
-pub(super) const RULER_LABEL_PX: f32 = 30.0;
-
-/// The least room between two ticks on a ruler (screen points).
-const RULER_TICK_PX: f32 = 4.0;
-
-/// The sparsest a ruler gets: past this it is left blank.
-pub(super) const RULER_SPARSEST: i32 = 1 << 20;
-
-/// Most marks on one ruler (page sizes come from files).
-pub(super) const RULER_MAX_MARKS: usize = 2000;
-
-/// How a ruler thins out as the page shrinks on screen (#1878).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct RulerDensity {
-    /// A number every this many units: 1, 2, 4, 8…
-    pub(super) label_every: i32,
-    /// A tick every this many of the unit's subdivisions: 1, 2, 4…
-    pub(super) tick_every: i32,
-}
-
-/// The density of a ruler whose unit takes `px_per_unit` screen points and has `div`
-/// subdivisions: the fewest units between numbers (doubling from 1) that keep them at least
-/// `RULER_LABEL_PX` apart, and the fewest subdivisions between ticks that keep those at least
-/// `RULER_TICK_PX` apart. The numbers' text keeps its size.
-pub(super) fn ruler_density(px_per_unit: f32, div: i32) -> RulerDensity {
-    let px = if px_per_unit.is_finite() { px_per_unit.max(0.0) } else { 0.0 };
-    let every = |px: f32, room: f32| {
-        let mut n = 1;
-        while px * (n as f32) < room && n < RULER_SPARSEST {
-            n *= 2;
+/// Runs one step of a drag; a step of the gesture whose first step already ran joins its undo step, and a step of
+/// another gesture starts afresh.
+fn live(app: &mut WordApp, id: Option<GestureId>, run: impl FnOnce(&mut WordApp)) {
+    if let Some(id) = id {
+        if app.canvas.ruler_gesture == Some(id) {
+            app.session.join_next_undo();
         }
-        n
-    };
-    RulerDensity { label_every: every(px, RULER_LABEL_PX), tick_every: every(px / div.max(1) as f32, RULER_TICK_PX) }
-}
-
-/// The marks of a ruler with their distance from the page's start edge (points along the
-/// reading direction): ticks from the page edge out to `width` on the grid of the start margin
-/// `origin`, numbered in whole units from that margin across the `text` area only (the margins
-/// get ticks, #1878). Whole units, halves, quarters and the rest get shorter ticks in turn, and
-/// zoomed out the numbers and ticks thin out (`ruler_density`).
-pub(super) fn ruler_marks(origin: f32, text: f32, width: f32, (unit, div, step): (f32, i32, i32), scale: f32) -> Vec<(f32, RulerMark)> {
-    let div = div.max(2);
-    let mut marks = Vec::new();
-    if !(unit.is_finite() && unit > 0.0 && origin.is_finite() && text.is_finite() && width.is_finite() && scale.is_finite()) {
-        return marks;
+        app.canvas.ruler_gesture = Some(id);
     }
-    let density = ruler_density(scale * unit, div);
-    let per_label = div.saturating_mul(density.label_every);
-    // The first subdivision at or before the page edge, on the ticks' grid.
-    let edge = ((origin / unit).ceil().clamp(-1e6, 1e6) as i32).saturating_mul(div).saturating_neg();
-    let mut k = edge.div_euclid(density.tick_every) * density.tick_every;
-    for _ in 0..RULER_MAX_MARKS {
-        let d = origin + k as f32 * unit / div as f32;
-        if d > width + 1e-3 {
-            break;
-        }
-        if d >= -1e-3 && k != 0 {
-            let in_text = k > 0 && d <= origin + text + 1e-3;
-            let mark = if k % per_label == 0 && in_text {
-                RulerMark::Label(k / div * step)
-            } else if k % div == 0 {
-                RulerMark::Tick(UNIT_TICK)
-            } else if k % (div / 2) == 0 {
-                RulerMark::Tick(5.0)
-            } else if div >= 8 && k % (div / 4) == 0 {
-                RulerMark::Tick(3.0)
-            } else {
-                RulerMark::Tick(1.5)
-            };
-            marks.push((d, mark));
-        }
-        k = k.saturating_add(density.tick_every);
+    run(app);
+}
+
+/// Ends a drag; `undo` takes back the steps it ran.
+fn settle(app: &mut WordApp, undo: bool) {
+    if app.canvas.ruler_gesture.take().is_some() && undo {
+        app.session.undo();
     }
-    marks
 }
 
-/// Draw one graduation at `at` on a ruler, across it when `horizontal`: a tick, or a number,
-/// unless its text would sit on a marker in `keep_clear`, where a whole unit's tick stands in.
-fn ruler_mark(p: &egui::Painter, at: Pos2, mark: RulerMark, horizontal: bool, keep_clear: &[Rect], t: &Tokens) {
-    let len = match mark {
-        RulerMark::Label(n) => {
-            let galley = p.layout_no_wrap(n.to_string(), regular(9.5), t.ruler_tick);
-            let r = Rect::from_center_size(at, galley.size());
-            if !keep_clear.iter().any(|o| o.intersects(r)) {
-                p.galley(r.min, galley, t.ruler_tick);
-                return;
-            }
-            UNIT_TICK
+/// `para.indents` params for the indents `v` moved from `shown`, snapped to 1/16 inch; the left indent stays within
+/// the column and leaves room for text.
+fn indent_params(shown: &RulerValues, v: &RulerValues, col_x: f32, w: f32) -> Option<Value> {
+    let moved = |a: f32, b: f32| (a - b).abs() > 1e-3;
+    let snap = |x: f32| (x / INDENT_SNAP).round() * INDENT_SNAP;
+    let mut p = Map::new();
+    if moved(shown.left_indent, v.left_indent) {
+        let most = (w - MIN_INDENT_ROOM).max(-col_x);
+        p.insert("left".into(), Value::from(snap(v.left_indent.min(most).max(-col_x))));
+    }
+    if moved(shown.first_line_indent, v.first_line_indent) {
+        p.insert("firstLine".into(), Value::from(snap(v.first_line_indent)));
+    }
+    if moved(shown.right_indent, v.right_indent) {
+        p.insert("right".into(), Value::from(snap(v.right_indent)));
+    }
+    (!p.is_empty()).then_some(Value::Object(p))
+}
+
+/// `layout.margins` params for the margins `v` moved from `shown`.
+fn margin_params(shown: &PageEdges, v: &PageEdges) -> Option<Value> {
+    let (a, b) = (&shown.margins, &v.margins);
+    let mut p = Map::new();
+    for (key, was, now) in [("left", a.left, b.left), ("right", a.right, b.right), ("top", a.top, b.top), ("bottom", a.bottom, b.bottom)] {
+        if now.is_finite() && (was - now).abs() > 1e-3 {
+            p.insert(key.into(), Value::from(now));
         }
-        RulerMark::Tick(len) => len,
-    };
-    let (a, b) = if horizontal {
-        (pos2(at.x, at.y - len / 2.0), pos2(at.x, at.y + len / 2.0))
-    } else {
-        (pos2(at.x - len / 2.0, at.y), pos2(at.x + len / 2.0, at.y))
-    };
-    p.line_segment([a, b], Stroke::new(1.0, t.ruler_tick));
+    }
+    (!p.is_empty()).then_some(Value::Object(p))
 }
 
-/// Screen x of a point `d` points from the page's start edge, on a page whose left edge sits at
-/// `x0` drawn at `scale`. A right-to-left paragraph reads from the right, so its scale mirrors.
-pub(super) fn ruler_x(d: f32, x0: f32, scale: f32, page_w: f32, rtl: bool) -> f32 {
-    if rtl { x0 + (page_w - d) * scale } else { x0 + d * scale }
+/// The `para.tabs` params that turn the stops `before` into `after`: the stops that are gone are cleared and the new
+/// ones set, so a moved stop is a clear and a set that keep its kind and leader. `None` when nothing changed.
+pub(crate) fn tab_commands(before: &[TabStop], after: &[TabStop]) -> Option<Value> {
+    let same = |a: &TabStop, b: &TabStop| (a.pos - b.pos).abs() < TAB_POS_EPS && a.align == b.align && a.leader == b.leader;
+    let cleared: Vec<f32> = before.iter().filter(|b| !after.iter().any(|a| same(a, b))).map(|b| b.pos).collect();
+    let set: Vec<TabStop> = after.iter().filter(|a| !before.iter().any(|b| same(a, b))).copied().collect();
+    let mut p = Map::new();
+    if !cleared.is_empty() {
+        p.insert("clear".into(), json!(cleared));
+    }
+    if !set.is_empty() {
+        p.insert("set".into(), json!(set));
+    }
+    (!p.is_empty()).then_some(Value::Object(p))
 }
 
-/// The inverse of [`ruler_x`]: the distance from the page's start edge under screen `x`.
-pub(super) fn ruler_d(x: f32, x0: f32, scale: f32, page_w: f32, rtl: bool) -> f32 {
-    if rtl { page_w - (x - x0) / scale } else { (x - x0) / scale }
+/// The document's stops for the ruler's.
+fn doc_stops(stops: &[RulerStop]) -> Vec<TabStop> {
+    stops.iter().map(|s| TabStop { pos: s.position, align: doc_align(s.align), leader: doc_leader(s.leader) }).collect()
 }
 
-/// A ruler's graduation for a unit: points per numbered step, divisions per step, and how much
-/// each step counts (millimetre rulers number every centimetre as 10, 20…).
-fn ruler_scale(u: wordcraft_geom::Unit) -> (f32, i32, i32) {
+/// The ruler's kind of stop for the document's; a clearing stop is not shown.
+fn ruler_align(a: TabAlign) -> Option<RulerAlign> {
+    match a {
+        TabAlign::Left => Some(RulerAlign::Left),
+        TabAlign::Center => Some(RulerAlign::Center),
+        TabAlign::Right => Some(RulerAlign::Right),
+        TabAlign::Decimal => Some(RulerAlign::Decimal),
+        TabAlign::Bar => Some(RulerAlign::Bar),
+        TabAlign::Clear => None,
+    }
+}
+
+/// The document's kind of stop for the ruler's.
+fn doc_align(a: RulerAlign) -> TabAlign {
+    match a {
+        RulerAlign::Left => TabAlign::Left,
+        RulerAlign::Center => TabAlign::Center,
+        RulerAlign::Right => TabAlign::Right,
+        RulerAlign::Decimal => TabAlign::Decimal,
+        RulerAlign::Bar => TabAlign::Bar,
+        _ => TabAlign::Left,
+    }
+}
+
+/// The ruler's leader for the document's.
+fn ruler_leader(l: TabLeader) -> RulerLeader {
+    match l {
+        TabLeader::None => RulerLeader::None,
+        TabLeader::Dot => RulerLeader::Dot,
+        TabLeader::Hyphen => RulerLeader::Hyphen,
+        TabLeader::Underscore => RulerLeader::Underscore,
+        TabLeader::MiddleDot => RulerLeader::MiddleDot,
+    }
+}
+
+/// The document's leader for the ruler's.
+fn doc_leader(l: RulerLeader) -> TabLeader {
+    match l {
+        RulerLeader::None => TabLeader::None,
+        RulerLeader::Dot => TabLeader::Dot,
+        RulerLeader::Hyphen => TabLeader::Hyphen,
+        RulerLeader::Underscore => TabLeader::Underscore,
+        RulerLeader::MiddleDot => TabLeader::MiddleDot,
+        _ => TabLeader::None,
+    }
+}
+
+/// The unit the rulers number in, from the File › Options unit.
+fn unit_kind(u: wordcraft_geom::Unit) -> UnitKind {
     use wordcraft_geom::Unit;
     match u {
-        Unit::Centimeters => (wordcraft_geom::PT_PER_CM, 4, 1),
-        Unit::Millimeters => (wordcraft_geom::PT_PER_CM, 4, 10),
-        Unit::Points => (72.0, 8, 72),
-        Unit::Picas => (72.0, 8, 6),
-        Unit::Inches => (72.0, 8, 1),
+        Unit::Inches => UnitKind::Inches,
+        Unit::Centimeters => UnitKind::Centimetres,
+        Unit::Millimeters => UnitKind::Millimetres,
+        Unit::Points => UnitKind::Points,
+        Unit::Picas => UnitKind::Picas,
+    }
+}
+
+/// The cells of the caret's table drawn on `page`: (row, cell, box in page points).
+fn cells(app: &WordApp, layout: &DocLayout, page: usize) -> Vec<(usize, usize, wordcraft_geom::Rect)> {
+    let story = app.session.sel.focus.story;
+    let (Some((tp, _, _)), Some(pg)) = (app.session.sel.focus.path.cell(), layout.pages.get(page)) else { return Vec::new() };
+    pg.items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Cell { rect, table, row, cell, story: st, .. } if *table == tp && *st == story => Some((*row, *cell, *rect)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The caret cell's text area on `page`, as (left edge, width) in page points: its box less its left and right
+/// margins. `None` when the caret isn't in a table cell drawn there.
+pub(crate) fn text_area(app: &WordApp, layout: &DocLayout, page: usize) -> Option<(f32, f32)> {
+    let story = app.session.sel.focus.story;
+    let (tp, r, c) = app.session.sel.focus.path.cell()?;
+    let (.., b) = cells(app, layout, page).into_iter().find(|(row, cell, _)| *row == r && *cell == c)?;
+    let m = wordcraft_layout::cell_margins(&app.session.doc, app.session.doc.table(story, &tp)?, r, c);
+    let (left, right) = (m[1].max(0.0), m[3].max(0.0));
+    Some((b.x + left, (b.w - left - right).max(0.0)))
+}
+
+/// The caret row's cells on `page`, left to right.
+fn caret_row(app: &WordApp, layout: &DocLayout, page: usize) -> Vec<wordcraft_geom::Rect> {
+    let Some((_, r, _)) = app.session.sel.focus.path.cell() else { return Vec::new() };
+    let mut row: Vec<wordcraft_geom::Rect> = cells(app, layout, page).into_iter().filter(|(row, ..)| *row == r).map(|(.., b)| b).collect();
+    row.sort_by(|a, b| a.x.total_cmp(&b.x));
+    row
+}
+
+/// Each row of the caret's table on `page` with the cell its bottom is taken from: its shortest box, as a vertically
+/// merged cell's box spans all its rows, and of those the leftmost.
+fn row_bottoms(app: &WordApp, layout: &DocLayout, page: usize) -> Vec<(usize, wordcraft_geom::Rect)> {
+    let mut rows: Vec<(usize, wordcraft_geom::Rect)> = Vec::new();
+    for (r, _, b) in cells(app, layout, page) {
+        match rows.iter_mut().find(|(row, _)| *row == r) {
+            Some((_, first)) if b.bottom() < first.bottom() - 0.01 || (b.bottom() <= first.bottom() + 0.01 && b.x < first.x) => *first = b,
+            Some(_) => {}
+            None => rows.push((r, b)),
+        }
+    }
+    rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stop(pos: f32, align: TabAlign, leader: TabLeader) -> TabStop {
+        TabStop { pos, align, leader }
+    }
+
+    /// A finished ruler gesture is one `para.tabs` call: set, move (keeping kind and leader), dropped where it was,
+    /// and dragged off.
+    #[test]
+    fn gestures_become_one_para_tabs_call() {
+        let left = stop(36.0, TabAlign::Left, TabLeader::None);
+        let right = stop(36.0, TabAlign::Right, TabLeader::Dot);
+        // Set.
+        assert_eq!(tab_commands(&[], &[left]), Some(json!({ "set": [left] })));
+        // Moved: cleared where it was and set again with its kind and leader.
+        let moved = stop(72.0, TabAlign::Right, TabLeader::Dot);
+        assert_eq!(tab_commands(&[right], &[moved]), Some(json!({ "clear": [36.0], "set": [moved] })));
+        // Dropped where it was: nothing.
+        assert_eq!(tab_commands(&[right], &[right]), None);
+        assert_eq!(tab_commands(&[right], &[stop(36.2, TabAlign::Right, TabLeader::Dot)]), None);
+        // Dragged off the ruler: cleared.
+        assert_eq!(tab_commands(&[right], &[]), Some(json!({ "clear": [36.0] })));
+        // A stop placed and taken off again in one gesture: nothing.
+        assert_eq!(tab_commands(&[], &[]), None);
     }
 }
