@@ -8,7 +8,7 @@ use super::{
     MAX_RECENT, SaveInFlight, Value, WordApp, applied_font, chrome, crop, dialogs, file_dialogs, i18n, json, keeps_everything, panes, printing,
     push_recent_font, system_clipboard, table_pen, theme, zotero,
 };
-use crate::colors;
+use crate::{colors, paste_picture};
 
 impl WordApp {
     /// `run` for a command a mouse drag on a table sends: the view stays where it is.
@@ -64,6 +64,15 @@ impl WordApp {
         // All ordinary Paste controls use the same system clipboard formats.
         let mut params = params;
         if let Some(r) = system_clipboard::fill(self, id, &mut params) {
+            return r;
+        }
+        // Paste without system clipboard text: a picture there is newer than our own copy (copying
+        // here replaces it with text), so it wins (#45). Image+HTML with no plain text also takes
+        // this path, so a browser bitmap is not replaced by its HTML fallback (#2909, #5859).
+        if id == "edit.paste"
+            && params.get("text").is_none()
+            && let Some(r) = paste_picture::paste(self)
+        {
             return r;
         }
         let applied = applied_font(id, &params);
