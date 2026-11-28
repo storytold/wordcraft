@@ -548,6 +548,8 @@ pub struct WordApp {
     pub(crate) dialog_answers: Vec<(craft::ui::dialog::DialogId, String, serde_json::Value)>,
     /// Field gestures as undo steps ([`undo_marks`]).
     pub(crate) edits: craft::ui::edit::GestureHost<WordApp>,
+    /// Active gesture id and whether an edit was applied for it ([`undo_marks`]).
+    pub(crate) edits_gesture: Option<(craft::behavior::GestureId, bool)>,
     /// The Equation tab's symbol set.
     pub(crate) equation_symbol_set: usize,
     /// The gradient variation memory of Format Shape.
@@ -578,6 +580,8 @@ pub(crate) fn rust_sources(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     files
 }
 
+#[cfg(test)]
+mod file_browser;
 #[cfg(test)]
 mod test_harness;
 #[cfg(test)]

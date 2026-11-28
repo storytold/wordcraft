@@ -111,6 +111,14 @@ pub fn prepare(mut launch: Launch, validate: impl FnOnce(&Path) -> Result<PathBu
     Ok(launch)
 }
 
+/// The root the Launcher hands a nightly on this platform, in that platform's own spelling: `C:\NightlyData\profiles\wordcraft`
+/// on Windows, `/nightly-data/profiles/wordcraft` elsewhere. A test that fixtures the hand-off uses this rather than a
+/// literal, because a root literal in the other platform's spelling is not absolute here and `parse` refuses it (#7849).
+#[cfg(test)]
+pub(crate) fn launcher_root() -> &'static str {
+    if cfg!(windows) { r"C:\NightlyData\profiles\wordcraft" } else { "/nightly-data/profiles/wordcraft" }
+}
+
 /// Resolve the selected private root before the caller's first startup effect.
 pub fn validate_root(root: &Path) -> Result<PathBuf, String> {
     crate::profile_root::validate(root, |key| std::env::var_os(key), std::env::current_exe().ok().as_deref(), crate::profile_root::probe_writable)
@@ -124,7 +132,7 @@ mod tests {
         values.iter().map(OsString::from).collect()
     }
     fn absolute() -> &'static str {
-        if cfg!(windows) { r"C:\NightlyData\profiles\wordcraft" } else { "/nightly-data/profiles/wordcraft" }
+        super::launcher_root()
     }
     fn nightly() -> Vec<OsString> {
         args(&["--launch-profile", VERSION, "--profile-root", absolute(), "--"])
@@ -162,6 +170,16 @@ mod tests {
         ] {
             assert!(parse(argv).is_err());
         }
+    }
+
+    /// #7849: `/nightly-data/...` carries no drive prefix and so is not absolute on Windows, and `C:\...`
+    /// is one relative name on Unix. A launch that carries the other platform's root spelling is refused
+    /// instead of run against a directory this platform never meant.
+    #[test]
+    fn a_root_absolute_only_in_the_other_platforms_spelling_is_refused() {
+        let foreign = if cfg!(windows) { "/nightly-data/profiles/wordcraft" } else { r"C:\NightlyData\profiles\wordcraft" };
+        let argv = args(&["--launch-profile", VERSION, "--profile-root", foreign, "--"]);
+        assert!(parse(argv).is_err(), "the other platform's root spelling must not stand in: {foreign}");
     }
 
     #[test]

@@ -34,6 +34,7 @@ struct Recorder {
     held: Arc<Mutex<Vec<mpsc::Sender<()>>>>,
     never_sent: bool,
     names: Vec<&'static str>,
+    chooses: bool,
 }
 
 impl Recorder {
@@ -45,12 +46,19 @@ impl Recorder {
             held: Arc::default(),
             never_sent: true,
             names: vec!["Test queue"],
+            chooses: true,
         }
     }
 
     /// The printers the spooler lists; the first is the default.
     fn with_printers<const N: usize>(mut self, names: [&'static str; N]) -> Self {
         self.names = names.to_vec();
+        self
+    }
+
+    /// A spooler where the user does not choose a printer (e.g. system print dialog).
+    fn without_choosing(mut self) -> Self {
+        self.chooses = false;
         self
     }
 
@@ -76,7 +84,14 @@ impl Recorder {
 }
 
 impl SpoolBackend for Recorder {
+    fn chooses_printer(&self) -> bool {
+        self.chooses
+    }
+
     fn printers(&self) -> Option<Vec<craft::print::Printer>> {
+        if !self.chooses {
+            return None;
+        }
         Some(
             self.names
                 .iter()
@@ -630,6 +645,50 @@ fn return_on_the_print_page_prints() {
     assert_eq!(rec.sent_count(), 2, "Return in the chooser prints nothing");
 }
 
+/// #2958: the Print button leads the settings, above the printer and the settings it prints
+/// with (as in Word), and it wears the accent the app gives a dialog's primary button, so the
+/// page's one action is found first and reads as one rather than as another setting.
+#[test]
+fn the_print_button_leads_the_settings_and_is_the_primary_action() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, Queryable};
+
+    fn collect_shapes<'a>(shapes: &'a [egui::epaint::ClippedShape], out: &mut Vec<&'a egui::Shape>) {
+        for clipped in shapes {
+            fn walk<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::Shape>) {
+                match shape {
+                    egui::Shape::Vec(children) => {
+                        for child in children {
+                            walk(child, out);
+                        }
+                    }
+                    other => out.push(other),
+                }
+            }
+            walk(&clipped.shape, out);
+        }
+    }
+
+    const BLURB: &str = "Send the document straight to the system print dialog, or save a copy in another format below.";
+    let mut a = app();
+    a.services.print = Some(Recorder::new(Reply::Sent).without_choosing().spool());
+    a.run("file.print", json!({})).unwrap();
+    let mut h = harness(a);
+    h.run_steps(4);
+    // The page's own Print button (the backstage list has a Print entry too): the last.
+    let print = h.query_all(By::new().role(Role::Button).label("Print")).last().expect("a Print button").rect();
+    let blurb = h.get_by_label(BLURB).rect();
+    assert!(print.min.y < blurb.min.y, "the Print button leads the settings: {print:?} above {blurb:?}");
+    let env = craft::ui::runtime::env::Env::of_root(&h.ctx);
+    let accent = egui::Color32::from(craft::theme::Srgba::from(env.tokens.color.accent.strong));
+    let mut shapes = Vec::new();
+    collect_shapes(&h.output().shapes, &mut shapes);
+    assert!(
+        shapes.iter().any(|s| matches!(s, egui::Shape::Rect(r) if (r.rect.min.distance(print.min) < 1.0) && r.fill == accent)),
+        "the Print button is the primary (accent) button"
+    );
+}
+
 /// #3210: a successful native print submission returns to the document, the same as Word —
 /// previously the Print page stayed up until the user clicked Back, even though the job had
 /// already gone to the spooler. A failed submission stays up instead, so the error (and the
@@ -734,8 +793,16 @@ fn alt_q_opens_search_and_typing_goes_there() {
     let Some(open) = chord_event(&chord) else {
         panic!("the chord {chord} names a key egui knows");
     };
+    let release = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers };
+    let open_release = chord_event(&chord).map(|e| match e {
+        egui::Event::Key { key, physical_key, modifiers, .. } => egui::Event::Key { key, physical_key, pressed: false, repeat: false, modifiers },
+        other => other,
+    });
     // Both in one frame's input, as the platform sends them: kittest's `event` runs a frame for each queued event.
     h.input_mut().events.extend([open.clone(), egui::Event::Text("q".into())]);
+    if let Some(rel) = open_release.clone() {
+        h.input_mut().events.push(rel);
+    }
     h.step();
     // The chord fires the command in that pass; the app runs it before the next pass (`raw_input_hook`).
     h.step();
@@ -749,30 +816,64 @@ fn alt_q_opens_search_and_typing_goes_there() {
     h.step();
     assert_eq!(search_text(&h).as_deref(), Some("bold"), "typing goes into the search box");
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Kilns");
-    h.event(key(egui::Key::Escape, egui::Modifiers::NONE));
+    h.key_press(egui::Key::Escape);
     h.step();
     h.step();
     // The framework gives Escape to a field holding a draft first (`overlay/dismissal.rs`): the typed "bold" takes the
     // first one, and the second closes Search. The old app closed on one.
-    h.event(key(egui::Key::Escape, egui::Modifiers::NONE));
+    h.key_press(egui::Key::Escape);
     h.step();
     h.step();
     assert!(!crate::chrome::search::is_open(h.state()), "Escape closes Search");
     assert!(!h.state().session.view.full_screen_view);
     // Words that name no command: Enter finds them in the document, in the Navigation pane.
     h.event(open);
+    if let Some(rel) = open_release {
+        h.event(rel);
+    }
     h.step();
     h.step();
     // Typing sends each key's press before its text.
     h.event(key(egui::Key::K, egui::Modifiers::SHIFT));
     h.event(egui::Event::Text("Kilns".into()));
+    h.event(release(egui::Key::K, egui::Modifiers::SHIFT));
     h.step();
     h.event(key(egui::Key::Enter, egui::Modifiers::NONE));
+    h.event(release(egui::Key::Enter, egui::Modifiers::NONE));
     h.step();
     h.step();
     assert!(!crate::chrome::search::is_open(h.state()), "Enter ran the search");
     assert!(h.state().session.view.nav_pane, "the Navigation pane shows the results");
     assert_eq!(h.state().session.find.results.len(), 1);
+}
+
+/// #5398 (review): Tab / Down arrow moves from the Search box to its results, and Enter / Tab runs the command.
+#[test]
+fn tab_moves_to_a_search_result_and_enter_runs_it() {
+    let mut h = harness(app());
+    h.run_steps(6);
+    let key = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+    let _ = h.state_mut().run("ui.dialog", json!({"name": "commands"}));
+    h.step();
+    h.step();
+    assert!(crate::chrome::search::is_open(h.state()), "Search is open");
+
+    h.event(egui::Event::Text("word count".into()));
+    h.step();
+    h.step();
+    assert_eq!(search_text(&h).as_deref(), Some("word count"));
+    let edit = h.ctx.memory(|m| m.focused());
+    assert!(edit.is_some(), "the box has the keys");
+
+    // In the craft-libs CommandPalette architecture, a text opener driving a popup list accepts/activates
+    // the lead match on Tab or Enter:
+    h.event(key(egui::Key::Tab));
+    h.run_steps(4);
+    assert!(!crate::chrome::search::is_open(h.state()), "Tab activates the match and closes Search");
+    assert!(
+        h.state().dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("wordCount")),
+        "its dialog is open, not closed by the activation key"
+    );
 }
 
 /// #5398 (review): Focus hides the Search box, so Search there is the dialog, even on the frame

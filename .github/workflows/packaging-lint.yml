@@ -70,3 +70,5 @@ jobs:
         run: bash packaging/linux/nightly-arch-tar-test.sh
       - name: Render and run the Nightly tar launcher (no build)
         run: bash packaging/linux/nightly-package-test.sh
+      - name: Check the flat Nightly tar's shared template launcher (no build)
+        run: bash packaging/linux/nightly-tar-launch-test.sh

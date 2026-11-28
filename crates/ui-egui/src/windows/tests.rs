@@ -544,3 +544,70 @@ fn nul_in_the_document_title_never_reaches_an_os_window_title() {
         }
     }
 }
+
+/// Issue #117: a viewport command schedules a repaint, so resending an unchanged window title every
+/// frame would keep the app redrawing at the monitor's refresh rate while idle. WordCraft supplies
+/// a stable `window_title()` to `AppShell` every frame so `craft-libs` (`ui-contract` windows
+/// `native.rs`) deduplicates `SetTitle` per viewport and idle frames emit no
+/// `ViewportCommand::Title`.
+#[test]
+fn window_title_is_sent_only_when_it_changes() {
+    let mut rig = Rig::new();
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    let titles = |rig: &mut Rig, a: &mut WordApp| -> Vec<(ViewportId, String)> {
+        rig.frame(a);
+        rig.commands
+            .iter()
+            .filter_map(|(v, c)| match c {
+                ViewportCommand::Title(t) => Some((*v, t.clone())),
+                _ => None,
+            })
+            .collect()
+    };
+    let initial_title = a.window_title();
+    // The title goes out on the first frame that sets it.
+    assert_eq!(titles(&mut rig, &mut a), vec![(ViewportId::ROOT, initial_title.clone())], "first frame sends the window title");
+    assert!(titles(&mut rig, &mut a).is_empty(), "subsequent idle frame sends no title");
+    assert!(titles(&mut rig, &mut a).is_empty(), "steady idle sends no title");
+    a.run("text.insert", json!({"text": "edit"})).unwrap();
+    let dirty_title = a.window_title();
+    assert_ne!(dirty_title, initial_title, "editing the document changes the window title");
+    assert_eq!(titles(&mut rig, &mut a), vec![(ViewportId::ROOT, dirty_title)], "dirty document changes the title stem, sending it once");
+    assert!(titles(&mut rig, &mut a).is_empty(), "steady state after edit sends no title");
+}
+
+/// When the root window closes and WordCraft promotes another open window into the root viewport,
+/// `WordApp::paint_window` supplies the promoted window's `window_title()` every frame so
+/// `ViewportId::ROOT` receives the new title once and emits no further `ViewportCommand::Title`
+/// while idle (per-viewport deduplication lives in `craft-libs` `ui-contract` windows `native.rs`).
+#[test]
+fn root_viewport_receives_promoted_windows_title_after_root_closes() {
+    let mut rig = Rig::new();
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    rig.frames(&mut a, 2);
+    assert_eq!(a.window_title(), super::title("Document1", false));
+
+    a.run("file.new", json!({})).unwrap();
+    let promoted = a.windows.shown();
+    let promoted_title = a.window_title();
+    assert_eq!(promoted_title, super::title("Document2", false));
+    rig.frames(&mut a, 2);
+    assert_eq!(a.window_count(), 2);
+
+    rig.close(ViewportId::ROOT);
+    rig.frame(&mut a);
+    assert_eq!((a.window_count(), a.windows.root.get()), (1, promoted), "the remaining window moves into the root viewport");
+    let root_titles: Vec<&str> = rig
+        .commands
+        .iter()
+        .filter_map(|(v, c)| match c {
+            ViewportCommand::Title(t) if *v == ViewportId::ROOT => Some(t.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(root_titles, [promoted_title.as_str()], "root viewport receives the promoted window's title");
+
+    rig.frame(&mut a);
+    let idle_titles = rig.commands.iter().filter(|(v, c)| *v == ViewportId::ROOT && matches!(c, ViewportCommand::Title(_))).count();
+    assert_eq!(idle_titles, 0, "idle frame after promotion sends no duplicate title");
+}

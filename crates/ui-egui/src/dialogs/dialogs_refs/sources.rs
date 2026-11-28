@@ -313,11 +313,11 @@ impl WordForm for SourceManagerForm {
             .show_items(ui, &source, &mut |i, _| ListRow::new(Label::from(rows.get(*i).cloned().unwrap_or_default())));
         for event in shown.events {
             match event {
-                CollectionEvent::Selection(SelectionChange::Set(keys)) => self.selected = keys.last().copied(),
-                CollectionEvent::Selection(SelectionChange::Toggle(key)) => {
+                CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => self.selected = keys.last().copied(),
+                CollectionEvent::Selection { change: SelectionChange::Toggle(key), .. } => {
                     self.selected = if self.selected == Some(key) { None } else { Some(key) };
                 }
-                CollectionEvent::Selection(SelectionChange::Clear) => self.selected = None,
+                CollectionEvent::Selection { change: SelectionChange::Clear, .. } => self.selected = None,
                 _ => {}
             }
         }

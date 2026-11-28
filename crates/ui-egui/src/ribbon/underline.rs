@@ -1,7 +1,9 @@
 use craft::menu::CommandRef;
 use craft::ui::contract::{Props as _, Show as _};
 use craft::ui::display::Divider;
+use craft::ui::list::ThumbAspect;
 use craft::ui::menu::{Menu, MenuItem};
+use craft::ui::primitives::FacePaint;
 
 use egui::{Rect, Stroke, pos2};
 
@@ -23,12 +25,12 @@ pub(super) const UNDERLINE_STYLES: [(&str, &str); 8] = [
 /// Home › Font › Underline's drop-down (#2738): a sample of each line, Words only, None, More
 /// Underlines… (the Font dialog) and Underline Color.
 pub(super) fn underline_menu(ui: &mut Ui, app: &mut WordApp) {
-    for (style, name) in UNDERLINE_STYLES {
+    for (idx, (style, name)) in UNDERLINE_STYLES.into_iter().enumerate() {
         // The sample stands for the label; the name is the tooltip and what assistive technology reads.
         MenuItem::command(CommandRef::with_params("format.underline", json!({"style": style})))
             .label(tl!(name).to_string())
             .tooltip(tl!(name).to_string())
-            .sample(move |cx, r| paint_underline(&cx.painter, r, style, cx.ink()))
+            .sample(ThumbAspect::new(4, 1), FacePaint::new(idx as u64, move |cx, r| paint_underline(&cx.painter, r, style, cx.ink())))
             .sample_only()
             .hide_shortcut()
             .show(ui);

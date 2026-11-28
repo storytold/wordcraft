@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use craft::keymap::Overrides;
+use craft::ui::runtime::commands::CommandSet as _;
 use craft::ui::runtime::commands::{
     AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandState, CommandStates, FireSource, Scope, TypingRule,
 };
@@ -139,6 +140,13 @@ fn gate_registered(app: &WordApp, id: &str) -> (bool, Option<&'static str>) {
     (reason.is_none(), reason)
 }
 
+/// The framework edit commands the app's engine commands of the same id run through: the linked set owns their
+/// definition, the engine owns their chords.
+const LINKED_EDIT: [craft::ui::runtime::commands::EditCommands; 5] = {
+    use craft::ui::runtime::commands::EditCommands::{Copy, Cut, Paste, Redo, Undo};
+    [Cut, Copy, Paste, Undo, Redo]
+};
+
 impl WordApp {
     /// The app's commands as the keymap knows them: every engine command with its default
     /// chords, then the interface commands. The interface commands come last because a tie in the
@@ -171,7 +179,9 @@ impl WordApp {
                 }
                 defs.push(def);
             }
-            for spec in registry.all().iter().filter(|spec| seen.insert(spec.id)) {
+            // The framework's edit set defines Cut, Copy, Paste, Undo and Redo: a catalog def for them is shadowed (and
+            // warned about), so their chords go in as the set's replaced defaults (the `LINKED_EDIT` fold below).
+            for spec in registry.all().iter().filter(|spec| seen.insert(spec.id) && !LINKED_EDIT.iter().any(|c| c.id() == spec.id)) {
                 let mut def = CommandDef::new(CommandRef::new(spec.id), tl!(spec.label), Scope::app());
                 for binding in default_bindings(spec.shortcut) {
                     def = def.with_default(binding);
@@ -191,6 +201,8 @@ impl WordApp {
                 interface(CommandRef::new("ui.collapseRibbon"), "Collapse the Ribbon", "Mod+Alt+R");
             }
             interface(CommandRef::new("ui.resetInterfaceSize"), "Reset Interface Size", "Mod+Shift+0");
+            // The File keytips fire it (one badge per page); without an entry it shows its id as its label.
+            defs.push(CommandDef::new(CommandRef::new("ui.backstage"), tl!("File"), Scope::app()));
             for (id, label) in GATED_UI_COMMANDS {
                 defs.push(CommandDef::new(CommandRef::new(*id), tl!(*label), Scope::app()));
             }
@@ -204,6 +216,10 @@ impl WordApp {
             match AppCatalog::new(defs, generation) {
                 Ok(catalog) => {
                     let catalog = catalog.typing_rule(TypingRule::PlainKeysWait);
+                    let catalog = LINKED_EDIT.iter().fold(catalog, |catalog, command| {
+                        let chords = registry.get(command.id()).map(|spec| default_bindings(spec.shortcut).collect()).unwrap_or_default();
+                        catalog.replace_defaults(command.id(), chords)
+                    });
                     self.command_catalog = Some((registry, with_word_chords(catalog)));
                 }
                 Err(error) => {
@@ -234,53 +250,13 @@ impl WordApp {
             input = input.catalog(catalog);
         }
         let lang = crate::i18n::current().code();
-        let fresh_cache = !self.command_states_cache.as_ref().is_some_and(|cache| cache.matches(&registry, lang));
-        let mut cache = if fresh_cache {
-            CommandStatesCache::new(registry, lang)
-        } else {
-            self.command_states_cache.take().unwrap_or_else(|| CommandStatesCache::new(registry, lang))
+        let (mut cache, fresh_cache) = match self.command_states_cache.take() {
+            Some(cache) if cache.matches(&registry, lang) => (cache, false),
+            _ => (CommandStatesCache::new(registry, lang), true),
         };
 
-        if fresh_cache {
-            let mut states = CommandStates::new();
-            for i in 0..cache.registered.len() {
-                let (id, location, label, _, _) = cache.registered[i];
-                let current = gate_registered(self, id);
-                cache.registered[i].4 = Some(current);
-                let mut state = CommandState::new().enabled(current.0);
-                if let Some(hint) = cache.hint_for(i, location, label, current.1) {
-                    state = state.hint(hint);
-                }
-                states.set(cache.registered[i].3.clone(), state);
-            }
-            for i in 0..cache.ui_commands.len() {
-                let id = cache.ui_commands[i].0;
-                let enabled = command_enabled(self, id);
-                cache.ui_commands[i].2 = Some(enabled);
-                states.set(cache.ui_commands[i].1.clone(), CommandState::new().enabled(enabled));
-            }
-            for i in 0..cache.unimplemented.len() {
-                let id = cache.unimplemented[i].0;
-                let enabled = command_enabled(self, id);
-                cache.unimplemented[i].2 = Some(enabled);
-                let mut state = CommandState::new().enabled(enabled);
-                if let Some(hint) = cache.unavailable_hint.as_ref() {
-                    state = state.hint(Arc::clone(hint));
-                }
-                states.set(cache.unimplemented[i].1.clone(), state);
-            }
-            let dialog_enabled = command_enabled(self, "ui.dialog");
-            cache.commands_dialog.1 = Some(dialog_enabled);
-            states.set(cache.commands_dialog.0.clone(), CommandState::new().enabled(dialog_enabled));
-            if *self.command_states != states {
-                self.command_states.edit(|kept| *kept = states);
-            }
-            self.command_states_cache = Some(cache);
-            return input.states(&self.command_states);
-        }
-
-        // Steady-state path: re-evaluate every gate without allocating, and only touch
-        // `self.command_states` when at least one command's gate actually changed.
+        // Re-evaluate every command's gate without allocating on idle frames. A fresh cache has
+        // `None` in every `last` slot, so the same compare pass collects every entry for it.
         let mut reg_changes: Vec<(usize, bool, Option<&'static str>)> = Vec::new();
         for (i, &(id, _, _, _, last)) in cache.registered.iter().enumerate() {
             let current = gate_registered(self, id);
@@ -305,8 +281,9 @@ impl WordApp {
         let dialog_enabled = command_enabled(self, "ui.dialog");
         let dialog_changed = cache.commands_dialog.1 != Some(dialog_enabled);
 
-        if !reg_changes.is_empty() || !ui_changes.is_empty() || !unimpl_changes.is_empty() || dialog_changed {
-            self.command_states.edit(|kept| {
+        let any_changed = !reg_changes.is_empty() || !ui_changes.is_empty() || !unimpl_changes.is_empty() || dialog_changed;
+        if fresh_cache || any_changed {
+            let apply = |kept: &mut CommandStates| {
                 for (i, enabled, reason) in reg_changes {
                     let (_, location, label, _, _) = cache.registered[i];
                     cache.registered[i].4 = Some((enabled, reason));
@@ -332,7 +309,16 @@ impl WordApp {
                     cache.commands_dialog.1 = Some(dialog_enabled);
                     kept.set(cache.commands_dialog.0.clone(), CommandState::new().enabled(dialog_enabled));
                 }
-            });
+            };
+            if fresh_cache {
+                let mut states = CommandStates::new();
+                apply(&mut states);
+                if *self.command_states != states {
+                    self.command_states.edit(|kept| *kept = states);
+                }
+            } else {
+                self.command_states.edit(apply);
+            }
         }
         self.command_states_cache = Some(cache);
         input.states(&self.command_states)
@@ -358,6 +344,7 @@ impl WordApp {
                 let mut host = std::mem::take(&mut self.edits);
                 host.before_undo(ctx, self);
                 self.edits = host;
+                self.edits_gesture = None;
             }
             let result = if fired.source == FireSource::Automation { self.execute(id, params) } else { self.run(id, params) };
             if from_key && result.is_ok() {
@@ -427,11 +414,13 @@ mod tests {
         app.run_fired(&ctx, &output);
         let after_undo = app.session.undo_depth();
         assert_eq!(after_undo + 1, before, "the gesture left no step, and Undo took the one from before it");
+        assert!(app.edits_gesture.is_none(), "Undo clears running edit gesture state");
 
         let mut end = EditEvents::new();
         end.push(EditEvent::commit(id, Mixed::Same(11.0_f32), 20.0_f32));
         crate::undo_marks::apply_edits(&mut app, end, apply);
         assert_eq!(app.session.undo_depth(), after_undo, "the late Commit of the taken-back gesture adds no step");
+        assert!(app.edits_gesture.is_none());
     }
 
     /// #7310: unimplemented Word feature catalog commands publish a disabled state so ribbon
@@ -486,5 +475,27 @@ mod tests {
         app.command_states_cache = None;
         let _ = app.command_input();
         assert_eq!(*app.command_states, incremental, "incremental cache matches full rebuild exactly");
+
+        // Swapping the registry rebuilds `command_states` cleanly and drops commands that are no
+        // longer registered.
+        app.no_document = None;
+        let full_registry = app.session.registry.clone();
+        app.session.registry = std::sync::Arc::new(wordcraft_engine::Registry::new(vec![wordcraft_engine::CommandSpec::new(
+            "test.ephemeral",
+            "Ephemeral",
+            "Home",
+            |_, _| Ok(json!({})),
+        )]));
+        let _ = app.command_input();
+        assert!(
+            app.command_states.get(&CommandRef::new("test.ephemeral")).is_some_and(|s| s.is_enabled()),
+            "custom registry command is published when registered"
+        );
+        app.session.registry = full_registry;
+        let _ = app.command_input();
+        assert!(
+            app.command_states.get(&CommandRef::new("test.ephemeral")).is_none(),
+            "swapping back to the default registry clears removed commands from command_states"
+        );
     }
 }

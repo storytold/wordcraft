@@ -114,7 +114,7 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui) {
                 run = Some(("readAloud.previous", json!({})));
             }
             let (icon, tip) = if state == State::Playing { ("pause", tl!("Pause")) } else { ("play", tl!("Play")) };
-            if IconButton::new(crate::icons::id(icon)).label(tip).tooltip(tip).show(ui).clicked() {
+            if IconButton::new(crate::icons::spec(icon)).label(tip).tooltip(tip).show(ui).clicked() {
                 run = Some(("readAloud.playPause", json!({})));
             }
             let next = IconButton::new(IconId::new("step_forward"))
@@ -175,5 +175,37 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui) {
         app.ui.read_aloud_rate = app.session.read_aloud.rate();
         app.ui.read_aloud_skip_citations = app.session.read_aloud.skip_citations;
         ui.ctx().request_repaint();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, Queryable};
+
+    fn harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
+        crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        )
+    }
+
+    /// #1885: The Read Aloud player opens as a modeless dialog and closes from its title bar close action.
+    #[test]
+    fn read_aloud_player_closes_from_title_bar() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.session.read_aloud.open = true;
+        let mut h = harness(app);
+        h.run_steps(4);
+        assert!(h.state().session.read_aloud.open, "the player is open");
+        let close = h.query_all(By::new().role(Role::Button).label("Close")).next().expect("close button on player");
+        close.click();
+        h.run_steps(3);
+        assert!(!h.state().session.read_aloud.open, "the player stops and closes");
     }
 }

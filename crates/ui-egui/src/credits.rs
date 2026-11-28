@@ -163,3 +163,58 @@ mod nightly_about_tests {
         assert_eq!(name, "WordCraft");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use craft::ui::contract::Role;
+    use craft::ui::dialog::DialogHost;
+    use craft::ui::testing::Fixture;
+
+    use super::*;
+
+    fn column_header(fixture: &Fixture, label: &str) -> egui::Rect {
+        fixture
+            .by_role(Role::COLUMN_HEADER)
+            .into_iter()
+            .find(|cell| fixture.tree().name_of(cell.node) == Some(label))
+            .unwrap_or_else(|| panic!("missing column header {label:?}"))
+            .rect
+    }
+
+    fn table_rect(fixture: &Fixture) -> egui::Rect {
+        fixture.by_role(Role::TABLE).first().expect("the credits table shows").rect
+    }
+
+    /// Verifies that WordCraft's `about(AboutTab::Models)` (`AboutLayout::Listed` with the baked
+    /// `MODELS` table) fits within the dialog and refits its `Company` column when narrowed.
+    /// The original drag-then-content-change refit check (#5588) belongs in `craft-libs` and is
+    /// tracked in `storytold/craft-libs#3372`.
+    #[test]
+    fn models_table_refits_to_narrower_window() {
+        let wide = egui::vec2(1400.0, 800.0);
+        let narrow = egui::vec2(660.0, 800.0);
+
+        let host = Rc::new(RefCell::new(DialogHost::new()));
+        let shown_host = Rc::clone(&host);
+        let mut fixture = Fixture::new(move |ui| shown_host.borrow_mut().run(ui));
+        fixture.room(wide);
+        host.borrow_mut().open(about(AboutTab::Models));
+        fixture.settle();
+
+        let wide_table = table_rect(&fixture);
+        let wide_company = column_header(&fixture, "Company");
+        let wide_last = column_header(&fixture, "Lines +/\u{2212}");
+        assert!(wide_last.right() <= wide_table.right() + 1.0, "the table opens fitted to the dialog: {wide_last:?} in {wide_table:?}");
+
+        fixture.room(narrow).settle();
+        let slim_table = table_rect(&fixture);
+        let slim_company = column_header(&fixture, "Company");
+        let slim_last = column_header(&fixture, "Lines +/\u{2212}");
+        assert!(slim_table.width() < wide_table.width() - 1.0, "hosted About shrinks with window: {slim_table:?} vs {wide_table:?}");
+        assert!(slim_company.width() < wide_company.width() - 1.0, "hosted About refits its Company column: {slim_company:?} vs {wide_company:?}");
+        assert!(slim_last.right() <= slim_table.right() + 1.0, "the narrower table still fits its last column: {slim_last:?} in {slim_table:?}");
+    }
+}

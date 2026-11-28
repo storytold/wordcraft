@@ -54,6 +54,23 @@ pub fn identity() -> AppIdentity {
 mod tests {
     use super::*;
 
+    /// Every type the button claims is included in identity, and plain text/Markdown are never claimed.
+    #[test]
+    fn xdg_mime_sets_every_word_type_in_one_call() {
+        let id = identity();
+        assert_eq!(id.desktop_id, "ai.storyteller.wordcraft.desktop");
+        assert_eq!(id.registered_name, "WordCraft");
+        for t in [
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/msword",
+            "application/rtf",
+            "application/vnd.oasis.opendocument.text",
+        ] {
+            assert!(id.mime_types.iter().any(|a| a == t), "{t}");
+        }
+        assert!(!id.mime_types.iter().any(|a| a == "text/plain" || a == "text/markdown"), "plain text and Markdown are never claimed");
+    }
+
     /// Every type the button claims is one the desktop entry declares, or desktops ignore it.
     #[test]
     fn the_desktop_entry_declares_every_claimed_type() {

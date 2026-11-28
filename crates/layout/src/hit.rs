@@ -279,6 +279,19 @@ fn story_items(page: &Page, story: StoryRef) -> Box<dyn Iterator<Item = &Placed>
     }
 }
 
+/// The topmost uncovered table cell in `story` under `(x, y)` on `page`.
+fn story_cell_at(page: &Page, story: StoryRef, x: f32, y: f32) -> Option<(&Path, usize, usize)> {
+    let pt = Point::new(x, y);
+    story_items(page, story)
+        .filter_map(|it| match it {
+            Placed::Cell { rect, table, row, cell, story: s, covered: false, .. } if *s == story && rect.contains(pt) => Some((table, *row, *cell)),
+            _ => None,
+        })
+        // Nested tables emit their cells before the enclosing cell, so prefer the deepest match
+        // and keep the last (topmost) cell on ties at the same nesting level.
+        .max_by_key(|(table, _, _)| table.0.len())
+}
+
 /// Whether header/footer part `id` has text near (x, y) on the page (its header or footer
 /// lines). Used so an object behind the header text is only grabbed where there's no text,
 /// mirroring `text_at` for the body.
@@ -317,6 +330,14 @@ pub fn page_lines(page: &Page, story: StoryRef) -> Vec<LineHit<'_>> {
                 let top = y + (l.top - first.top);
                 v.push(LineHit { story: *s, path, para, li, x: *x, top, bottom: top + l.height, left: x + l.left, right: x + l.right });
             }
+        }
+    }
+    // A paragraph going on from the last line of one whose mark is hidden shares that line
+    // (#3986): the first one's part of it ends where the second one's text starts.
+    let joins: Vec<(f32, f32, f32)> = v.iter().filter(|l| l.para.shares_line() && l.li == 0).map(|l| (l.top, l.bottom, l.left)).collect();
+    for (top, bottom, left) in joins {
+        for l in v.iter_mut().filter(|l| l.top < bottom && top < l.bottom && l.left < left && left < l.right) {
+            l.right = left;
         }
     }
     v
@@ -443,17 +464,31 @@ impl DocLayout {
         // other text on the page: below one, it goes to the text beside or after it (#2038).
         let floats = if story == StoryRef::Body { float_table_areas(p) } else { Vec::new() };
         let away = |path: &Path| floats.iter().any(|(t, r)| path.0.len() > t.0.len() && path.0.starts_with(&t.0) && !r.contains(Point::new(x, y)));
-        // Turned cell text takes a click up to 2pt outside it, so outside a floating table too.
-        if let Some(pos) = turned_hit(p, story, x, y, &away) {
+        let cell = story_cell_at(p, story, x, y);
+        let in_cell = |path: &Path, table: &Path, row: usize, col: usize| {
+            path.0.starts_with(&table.0) && path.0.get(table.0.len()) == Some(&(row as u32)) && path.0.get(table.0.len() + 1) == Some(&(col as u32))
+        };
+        // Turned cell text takes a click up to 2pt outside it, so outside a floating table too,
+        // but a click inside one table cell must never be stolen by a neighbouring cell's text.
+        let skip_turned = |path: &Path| away(path) || cell.is_some_and(|(table, row, col)| !in_cell(path, table, row, col));
+        if let Some(pos) = turned_hit(p, story, x, y, &skip_turned) {
             return Some(pos);
         }
         let lines = page_lines(p, story);
+        let nearest = |a: &&LineHit, b: &&LineHit| score(a, x, y).total_cmp(&score(b, x, y));
+        let at = |l: &LineHit| Pos { story: l.story, path: l.path.clone(), off: l.para.off_at_x(l.li, x - l.x) };
+        if let Some((table, row, col)) = cell {
+            if let Some(best) = lines.iter().filter(|l| in_cell(l.path, table, row, col)).min_by(nearest) {
+                return Some(at(best));
+            }
+            if let Some(pos) = nearest_turned(p, story, x, y, &|path| !in_cell(path, table, row, col)) {
+                return Some(pos);
+            }
+        }
         if lines.is_empty() {
             // A page of turned text (a vertical section): the nearest turned line.
             return nearest_turned(p, story, x, y, &away).or_else(|| nearest_turned(p, story, x, y, &|_: &Path| false));
         }
-        let nearest = |a: &&LineHit, b: &&LineHit| score(a, x, y).total_cmp(&score(b, x, y));
-        let at = |l: &LineHit| Pos { story: l.story, path: l.path.clone(), off: l.para.off_at_x(l.li, x - l.x) };
         if let Some(best) = lines.iter().filter(|l| !away(l.path)).min_by(nearest) {
             return Some(at(best));
         }
