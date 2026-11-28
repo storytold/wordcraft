@@ -893,3 +893,202 @@ fn catalog_postscript_names() {
     assert!(!has(&db.families(), "SysfontSans-Bold"));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// Diagram fallback matches the primary font's serif/sans classification while body-text
+/// fallback preserves loaded order (#5672), and changing user fonts invalidates run fallbacks.
+#[test]
+fn fallback_order_matches_primary_font_serif_nature() {
+    // #5672: When picking fallback faces for diagrams, sans-serif primary fonts prefer sans-serif
+    // fallback fonts, and serif primary fonts prefer serif fallback fonts. Body text fallback
+    // order remains unaffected.
+    use crate::fontdb::fallback_data::fallback_order;
+    let dir = font_dir("serif-sans-fallback");
+    std::fs::write(dir.join("TestMincho.ttf"), mapping("SourceSans3-Regular.ttf", "Test Mincho 1", 0xF_0010, 0xF_0011)).unwrap();
+    std::fs::write(dir.join("TestGothic.ttf"), mapping("SourceSans3-Regular.ttf", "Test Gothic 1", 0xF_0010, 0xF_0011)).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    db.set_system_fallback(false);
+    let mincho = db.face("Test Mincho 1", "Regular");
+    let gothic = db.face("Test Gothic 1", "Regular");
+    assert!(mincho.is_serif(), "Mincho is serif");
+    assert!(!gothic.is_serif(), "Gothic is sans");
+
+    let sans_primary = db.face("Source Sans 3", "Regular");
+    let serif_primary = db.face("Source Serif 4", "Regular");
+
+    // Diagram fallback: matches serif/sans nature of primary font.
+    let diag_run = ['\u{F0010}', '\u{F0011}'];
+    let diag_sans = db.fallback_for_diagram(&diag_run, sans_primary.id(), sans_primary.is_serif()).unwrap();
+    assert_eq!(diag_sans.family, "Test Gothic 1", "sans-serif diagram prefers sans-serif fallback (Gothic)");
+    let diag_serif = db.fallback_for_diagram(&diag_run, serif_primary.id(), serif_primary.is_serif()).unwrap();
+    assert_eq!(diag_serif.family, "Test Mincho 1", "serif diagram prefers serif fallback (Mincho)");
+
+    // Body text fallback: fallback_order is not altered by the primary font's serif/sans nature.
+    let faces = db.read_faces();
+    let for_sans = fallback_order(&faces, sans_primary.id(), false, None);
+    let for_serif = fallback_order(&faces, serif_primary.id(), false, None);
+    let mincho_sans = for_sans.iter().position(|f| f.family == "Test Mincho 1").unwrap();
+    let gothic_sans = for_sans.iter().position(|f| f.family == "Test Gothic 1").unwrap();
+    let mincho_serif = for_serif.iter().position(|f| f.family == "Test Mincho 1").unwrap();
+    let gothic_serif = for_serif.iter().position(|f| f.family == "Test Gothic 1").unwrap();
+    assert_eq!(mincho_sans < gothic_sans, mincho_serif < gothic_serif, "body text fallback order does not invert between sans and serif primaries");
+    drop(faces);
+
+    // Replacing a user font with another of the same face count invalidates both fallbacks and run_fallbacks.
+    db.install_font("UserGothic.ttf", &mapping("SourceSans3-Regular.ttf", "User1 Gothic1", 0xF_0001, 0xF_0002)).unwrap();
+    let run = ['\u{F0001}', '\u{F0002}'];
+    let first_char = db.fallback_for('\u{F0001}', serif_primary.id()).unwrap();
+    assert_eq!(first_char.family, "User1 Gothic1");
+    assert_eq!(db.fallbacks.read().unwrap().generation, db.generation());
+    let first = db.fallback_for_run(&run, serif_primary.id(), false, false).unwrap();
+    assert_eq!(first.family, "User1 Gothic1");
+    let face_count = db.read_faces().len();
+    db.remove_user_font("User1 Gothic1").unwrap();
+    db.install_font("UserMincho.ttf", &mapping("SourceSans3-Regular.ttf", "User2 Mincho2", 0xF_0001, 0xF_0002)).unwrap();
+    assert_eq!(db.read_faces().len(), face_count);
+    let updated_char = db.fallback_for('\u{F0001}', serif_primary.id()).unwrap();
+    assert_eq!(updated_char.family, "User2 Mincho2");
+    assert_eq!(db.fallbacks.read().unwrap().generation, db.generation());
+    let updated = db.fallback_for_run(&run, serif_primary.id(), false, false).unwrap();
+    assert_eq!(updated.family, "User2 Mincho2");
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn diagram_fallback_checks_system_fonts_when_loaded_face_mismatches_serif() {
+    let dir = font_dir("diag-mismatch");
+    let regular = "SourceSans3-Regular.ttf";
+    // Put a preferred non-covering family ("Malgun Gothic") and an alphabetically earlier serif
+    // font ("AA Sys Mincho") in the directory alongside the matching sans CJK candidate
+    // ("Sys Gothic 11"). Neither the non-covering preferred family nor the earlier serif font may
+    // short-circuit the search just because a mismatched loaded face already covers the chars.
+    std::fs::write(dir.join("00_MalgunGothic.ttf"), mapping(regular, "Malgun Gothic", 0x0041, 0x005A)).unwrap();
+    std::fs::write(dir.join("AA_SysMincho.ttf"), mapping(regular, "AA Sys Mincho", 0xF_0020, 0xF_0021)).unwrap();
+    std::fs::write(dir.join("SysGothic.ttf"), mapping(regular, "Sys Gothic 11", 0xF_0020, 0xF_0021)).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    // Pre-load a serif font covering the same characters into db as a document font.
+    db.add_document_fonts(vec![(mapping(regular, "Load Mincho 1", 0xF_0020, 0xF_0021), "Load Mincho 1".to_string())]);
+    let mincho = db.face("Load Mincho 1", "Regular");
+    assert!(mincho.is_serif());
+
+    // 1. Single-character sans-serif diagram: loaded face is serif (mismatched), so search_diagram
+    // must check past Malgun Gothic (non-covering preferred family) and AA Sys Mincho (earlier
+    // serif cataloged file) to find & load "Sys Gothic 11" (sans-serif).
+    let single = ['\u{F0020}'];
+    let sans = db.fallback_for_diagram(&single, 0, false).unwrap();
+    assert_eq!(sans.family, "Sys Gothic 11", "sans diagram checks system fonts to find matching sans candidate");
+    assert!(!sans.is_serif());
+
+    // 2. Multi-character run also resolves to the matching sans candidate.
+    let run = ['\u{F0020}', '\u{F0021}'];
+    let sans_run = db.fallback_for_diagram(&run, 0, false).unwrap();
+    assert_eq!(sans_run.family, "Sys Gothic 11");
+
+    // 3. When no matching candidate covers the run, retain the mismatched loaded face.
+    let uncataloged_run = ['\u{F0020}'];
+    let retained = db.fallback_for_diagram(&uncataloged_run, sans.id(), false).unwrap();
+    assert_eq!(retained.family, "Load Mincho 1", "retains loaded face when no matching candidate covers the run");
+
+    db.remove_document_fonts(&["Load Mincho 1"]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn diagram_fallback_caches_a_mismatched_loaded_face_after_system_search() {
+    let dir = font_dir("diag-fallback-cache");
+    let regular = "SourceSans3-Regular.ttf";
+    std::fs::write(dir.join("CacheGothic.ttf"), mapping(regular, "Cache Gothic1", 0xF_0030, 0xF_0031)).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    db.add_document_fonts(vec![(mapping(regular, "Loaded Gothic", 0xF_0030, 0xF_0031), "Loaded Gothic".to_string())]);
+    let primary = db.face("Source Serif 4", "Regular");
+    let run = ['\u{F0030}', '\u{F0031}'];
+
+    let first = db.fallback_for_diagram(&run, primary.id(), true).unwrap();
+    assert_eq!(first.family, "Loaded Gothic", "retain the loaded mismatched face when no serif face covers the run");
+    let reads = db.coverage.lock().unwrap().reads;
+    assert!(reads > 0, "the initial search reaches the system-font coverage index");
+    assert_eq!(db.diagram_searches.load(std::sync::atomic::Ordering::Relaxed), 1);
+
+    assert_eq!(db.fallback_for_diagram(&run, primary.id(), true).unwrap().id(), first.id());
+    assert_eq!(db.diagram_searches.load(std::sync::atomic::Ordering::Relaxed), 1, "the redraw reuses the diagram fallback");
+    assert_eq!(db.coverage.lock().unwrap().reads, reads);
+
+    db.install_font("UserMincho.ttf", &mapping(regular, "User Mincho 1", 0xF_0030, 0xF_0031)).unwrap();
+    assert_eq!(db.fallback_for_diagram(&run, primary.id(), true).unwrap().family, "User Mincho 1");
+    assert_eq!(db.diagram_searches.load(std::sync::atomic::Ordering::Relaxed), 2, "adding a user font invalidates the cached result");
+
+    let face_count = db.read_faces().len();
+    db.remove_user_font("User Mincho 1").unwrap();
+    db.install_font("UserMincho.ttf", &mapping(regular, "User Mincho 2", 0xF_0030, 0xF_0031)).unwrap();
+    assert_eq!(db.read_faces().len(), face_count);
+    assert_eq!(db.fallback_for_diagram(&run, primary.id(), true).unwrap().family, "User Mincho 2");
+    assert_eq!(db.diagram_searches.load(std::sync::atomic::Ordering::Relaxed), 3, "generation invalidates the cache when face count stays unchanged");
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn diagram_fallback_skips_stale_cache_publish_when_add_font_arrives_between_selection_and_publication() {
+    let dir = font_dir("diag-concurrent-add-font");
+    let regular = "SourceSans3-Regular.ttf";
+    let italic = "SourceSans3-It.ttf";
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    let primary = db.face("Source Sans 3", "Regular");
+    assert!(!primary.is_serif());
+
+    // 1. A matching sans face arrives via `add_font` (no generation bump) after `search_diagram`
+    //    selects the loaded mismatched serif face and before `search_diagram` returns its count.
+    assert!(db.add_font(mapping(regular, "Load Mincho A", 0xF_0040, 0xF_0041)) > 0);
+    let arriving_a = mapping(regular, "New Gothic AA", 0xF_0040, 0xF_0041);
+    *db.diagram_search_hook.lock().unwrap() = Some(Box::new(move |db| {
+        assert!(db.add_font(arriving_a) > 0);
+    }));
+    let gen_before = db.generation();
+    let run_a = ['\u{F0040}', '\u{F0041}'];
+    let first_a = db.fallback_for_diagram(&run_a, primary.id(), false).unwrap();
+    assert_eq!(first_a.family, "Load Mincho A");
+    assert_eq!(db.generation(), gen_before, "add_font does not change generation");
+    assert_ne!(
+        db.diagram_fallbacks.read().unwrap().faces,
+        db.read_faces().len(),
+        "stale selection from before add_font must not be cached under the newer face count"
+    );
+    let second_a = db.fallback_for_diagram(&run_a, primary.id(), false).unwrap();
+    assert_eq!(second_a.family, "New Gothic AA", "subsequent lookup sees the newly added matching face");
+    assert_eq!(db.diagram_fallbacks.read().unwrap().faces, db.read_faces().len());
+    let searches_after_a = db.diagram_searches.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(db.fallback_for_diagram(&run_a, primary.id(), false).unwrap().id(), second_a.id());
+    assert_eq!(db.diagram_searches.load(std::sync::atomic::Ordering::Relaxed), searches_after_a);
+
+    // 2. Fast-path match (no system search): an upright sans face arrives via `add_font` after
+    //    `loaded_diagram_covering` picks an italic sans face and before `search_diagram` returns.
+    assert!(db.add_font(mapping(italic, "Load Gothic C", 0xF_0060, 0xF_0061)) > 0);
+    let arriving_c = mapping(regular, "New Gothic CC", 0xF_0060, 0xF_0061);
+    *db.diagram_search_hook.lock().unwrap() = Some(Box::new(move |db| {
+        assert!(db.add_font(arriving_c) > 0);
+    }));
+    let run_c = ['\u{F0060}', '\u{F0061}'];
+    let first_c = db.fallback_for_diagram(&run_c, primary.id(), false).unwrap();
+    assert_eq!(first_c.family, "Load Gothic C");
+    assert_eq!(db.generation(), gen_before);
+    assert_ne!(db.diagram_fallbacks.read().unwrap().faces, db.read_faces().len());
+    let second_c = db.fallback_for_diagram(&run_c, primary.id(), false).unwrap();
+    assert_eq!(second_c.family, "New Gothic CC", "fast-path selection also avoids caching under a newer face count");
+
+    // 3. A matching sans face arrives via `add_font` after `search_diagram` returns and before
+    //    `diagram_fallbacks.write()` publishes the entry.
+    assert!(db.add_font(mapping(regular, "Load Mincho B", 0xF_0050, 0xF_0051)) > 0);
+    let arriving_b = mapping(regular, "New Gothic BB", 0xF_0050, 0xF_0051);
+    *db.diagram_publish_hook.lock().unwrap() = Some(Box::new(move |db| {
+        assert!(db.add_font(arriving_b) > 0);
+    }));
+    let run_b = ['\u{F0050}', '\u{F0051}'];
+    let first_b = db.fallback_for_diagram(&run_b, primary.id(), false).unwrap();
+    assert_eq!(first_b.family, "Load Mincho B");
+    assert_eq!(db.generation(), gen_before);
+    assert_ne!(db.diagram_fallbacks.read().unwrap().faces, db.read_faces().len());
+    let second_b = db.fallback_for_diagram(&run_b, primary.id(), false).unwrap();
+    assert_eq!(second_b.family, "New Gothic BB");
+
+    let _ = std::fs::remove_dir_all(dir);
+}

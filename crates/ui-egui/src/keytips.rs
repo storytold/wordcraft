@@ -3,8 +3,10 @@
 //! machine, badges, claimed keys) is the framework's `Keytips`; this module gives it WordCraft's
 //! tabs, controls, legacy sequences and regions.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
+use craft::behavior::overlay::MinWidth;
 use craft::keymap::CommandRef;
 use craft::menu::{KeytipControl, Keytips, RibbonOutput};
 use craft::ui::contract::Bind;
@@ -33,10 +35,58 @@ pub(crate) fn backstage_region() -> egui::Id {
     egui::Id::unique("wc_keytips_backstage_region")
 }
 
-/// The key of the inspected region the screen bar (Focus, Full Screen View) records; the legacy hint hangs from
-/// its first element when no ribbon shows.
-pub(crate) fn screen_bar_region() -> egui::Id {
-    egui::Id::unique("wc_keytips_screen_bar_region")
+/// Per-context map of ribbon `menu_button` widget ids to the command id each opens a menu for,
+/// so [`Keytips`] places badges on menu buttons without binding them to fire on pointer click.
+fn menu_buttons_id() -> egui::Id {
+    egui::Id::unique("wc_keytips_menu_buttons")
+}
+
+/// Records (or clears) the command id associated with a ribbon `menu_button` widget id so
+/// [`show`] can attach `CommandRef` to its inspected element for language-independent badge placement.
+pub(crate) fn note_menu_button(ctx: &egui::Context, widget_id: egui::Id, command_id: Option<&str>) {
+    let existing = ctx.data(|d| d.get_temp::<Arc<HashMap<egui::Id, CommandRef>>>(menu_buttons_id()));
+    let unchanged = match (&existing, command_id) {
+        (Some(map), Some(id)) => map.get(&widget_id).is_some_and(|cmd| cmd.id == id && cmd.params.is_null()),
+        (Some(map), None) => !map.contains_key(&widget_id),
+        (None, None) => true,
+        (None, Some(_)) => false,
+    };
+    if unchanged {
+        return;
+    }
+    ctx.data_mut(|d| {
+        let mut map = d.get_temp::<Arc<HashMap<egui::Id, CommandRef>>>(menu_buttons_id()).map(|a| (*a).clone()).unwrap_or_default();
+        match command_id {
+            Some(id) => {
+                map.insert(widget_id, CommandRef::new(id));
+            }
+            None => {
+                map.remove(&widget_id);
+            }
+        }
+        d.insert_temp(menu_buttons_id(), Arc::new(map));
+    });
+}
+
+/// Attaches noted `menu_button` commands to uncommanded root elements of a ribbon `Recorded`
+/// snapshot so `craft::menu::Keytips` places badges on menu buttons regardless of translation.
+fn with_menu_commands(ctx: &egui::Context, recorded: Arc<Recorded>) -> Arc<Recorded> {
+    let Some(commands) = ctx.data(|d| d.get_temp::<Arc<HashMap<egui::Id, CommandRef>>>(menu_buttons_id())) else {
+        return recorded;
+    };
+    if commands.is_empty() || !recorded.elements.iter().any(|e| e.part.is_none() && e.command.is_none() && commands.contains_key(&e.id)) {
+        return recorded;
+    }
+    let mut patched = (*recorded).clone();
+    for element in &mut patched.elements {
+        if element.part.is_none()
+            && element.command.is_none()
+            && let Some(cmd) = commands.get(&element.id)
+        {
+            element.command = Some(cmd.clone());
+        }
+    }
+    Arc::new(patched)
 }
 
 /// Word's tab letters, as Word for Windows shows them after Alt (File F, Design G, References S,
@@ -64,29 +114,50 @@ pub const SEARCH_LETTER: &str = "Q";
 /// Legacy menu keys (#1697): Word 2003 menu sequences Word for Windows still takes after Alt,
 /// observed there. Hidden, as in Word: no badges, not in Customize Keyboard. They start only on
 /// letters no tab keytip or Search uses (see the test).
-fn legacy() -> Vec<(&'static str, CommandRef)> {
-    let cmd = CommandRef::new;
-    let dialog = |name: &str| CommandRef::with_params("ui.dialog", serde_json::json!({ "name": name }));
-    vec![
-        ("VU", cmd("view.fullScreenView")),
-        ("VP", cmd("view.printLayout")),
-        ("VW", cmd("view.webLayout")),
-        ("VO", cmd("view.outline")),
-        ("VN", cmd("view.draft")),
-        ("VD", cmd("view.navigationPane")),
-        ("VL", cmd("view.ruler")),
-        ("VZ", dialog("zoom")),
-        ("EL", cmd("select.all")),
-        ("EF", dialog("find")),
-        ("EE", dialog("replace")),
-        ("EG", dialog("goto")),
-        ("IS", dialog("symbol")),
-        ("IPF", cmd("insert.picture")),
-        ("OF", dialog("font")),
-        ("OP", dialog("paragraph")),
-        ("TW", cmd("review.wordCount")),
-        ("AIT", dialog("insertTable")),
-    ]
+fn legacy() -> &'static [(&'static str, CommandRef)] {
+    static LEGACY: OnceLock<Vec<(&'static str, CommandRef)>> = OnceLock::new();
+    LEGACY.get_or_init(|| {
+        let cmd = CommandRef::new;
+        let dialog = |name: &str| CommandRef::with_params("ui.dialog", serde_json::json!({ "name": name }));
+        vec![
+            ("VU", cmd("view.fullScreenView")),
+            ("VP", cmd("view.printLayout")),
+            ("VW", cmd("view.webLayout")),
+            ("VO", cmd("view.outline")),
+            ("VN", cmd("view.draft")),
+            ("VD", cmd("view.navigationPane")),
+            ("VL", cmd("view.ruler")),
+            ("VZ", dialog("zoom")),
+            ("EL", cmd("select.all")),
+            ("EF", dialog("find")),
+            ("EE", dialog("replace")),
+            ("EG", dialog("goto")),
+            ("IS", dialog("symbol")),
+            ("IPF", cmd("insert.picture")),
+            ("OF", dialog("font")),
+            ("OP", dialog("paragraph")),
+            ("TW", cmd("review.wordCount")),
+            ("AIT", dialog("insertTable")),
+        ]
+    })
+}
+
+/// Cached `Phase::Tabs` keytip sequences (`SEARCH_LETTER` when Backstage is closed, plus Word
+/// 2003 legacy menu keys on non-macOS).
+fn sequences(backstage: bool) -> &'static [(&'static str, CommandRef)] {
+    static WITH_SEARCH: OnceLock<Vec<(&'static str, CommandRef)>> = OnceLock::new();
+    static SEARCH_ONLY: OnceLock<[(&'static str, CommandRef); 1]> = OnceLock::new();
+
+    match (cfg!(target_os = "macos"), backstage) {
+        (true, true) => &[],
+        (true, false) => SEARCH_ONLY.get_or_init(|| [(SEARCH_LETTER, CommandRef::new("tools.search"))]),
+        (false, true) => legacy(),
+        (false, false) => WITH_SEARCH.get_or_init(|| {
+            let mut v = legacy().to_vec();
+            v.push((SEARCH_LETTER, CommandRef::new("tools.search")));
+            v
+        }),
+    }
 }
 
 /// The letter badge for a tab (empty when it has none).
@@ -384,41 +455,75 @@ fn controls(tab: &str) -> Vec<Control> {
     }
 }
 
-/// A control with the letters it asks for.
-struct Row {
-    control: Control,
-    letters: Option<String>,
+/// Maps an ASCII alphanumeric keytip letter to a static single-character `&'static str`, avoiding
+/// per-control `String` allocations when caching [`KeytipControl`].
+fn ascii_upper_str(c: char) -> Option<&'static str> {
+    const CHARS: &str = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let idx = CHARS.find(c.to_ascii_uppercase())?;
+    CHARS.get(idx..idx + 1)
 }
 
-/// A tab's controls with the shortcut letter each keeps, when its command has an Alt+letter shortcut.
-fn rows(app: &WordApp, tab: &str) -> Vec<Row> {
-    controls(tab)
-        .into_iter()
-        .map(|control| {
-            let letters = shortcut_letter(app, &control.command.id).map(String::from);
-            Row { control, letters }
-        })
-        .collect()
+/// Cached keytip controls and reserved shortcut letters per engine registry and active ribbon tab,
+/// avoiding per-frame `registry.all()` scans and `KeytipControl` / `CommandRef` allocations while
+/// idle.
+pub(crate) struct KeytipCache {
+    registry: Arc<wordcraft_engine::Registry>,
+    reserved: Vec<char>,
+    tab: String,
+    tab_controls: Vec<KeytipControl<'static>>,
 }
 
-/// The Search box: its badge is Alt, Q on every tab.
-fn search_row() -> Row {
-    Row { control: Control { tip: "Search", command: CommandRef::new("tools.search") }, letters: Some(SEARCH_LETTER.to_string()) }
+impl KeytipCache {
+    fn build_tab_controls(app: &WordApp, tab: &str) -> Vec<KeytipControl<'static>> {
+        let mut out: Vec<KeytipControl<'static>> = controls(tab)
+            .into_iter()
+            .map(|control| {
+                let letters = shortcut_letter(app, &control.command.id).and_then(ascii_upper_str);
+                KeytipControl::new(control.command, control.tip, letters)
+            })
+            .collect();
+        out.push(KeytipControl::new(CommandRef::new("tools.search"), "Search", Some(SEARCH_LETTER)));
+        out
+    }
+
+    fn new(app: &WordApp, tab: &str) -> Self {
+        KeytipCache {
+            registry: app.session.registry.clone(),
+            reserved: reserved_letters(app),
+            tab: tab.to_owned(),
+            tab_controls: Self::build_tab_controls(app, tab),
+        }
+    }
+
+    fn sync(&mut self, app: &WordApp, tab: &str) {
+        let reg_changed = !Arc::ptr_eq(&self.registry, &app.session.registry);
+        if reg_changed {
+            self.registry = app.session.registry.clone();
+            self.reserved = reserved_letters(app);
+        }
+        if reg_changed || self.tab != tab {
+            self.tab.clear();
+            self.tab.push_str(tab);
+            self.tab_controls = Self::build_tab_controls(app, tab);
+        }
+    }
 }
 
-/// The Backstage's pages, one badge each: the first letter its page has in `KEYTIPS`.
-fn backstage_rows() -> Vec<Row> {
-    crate::backstage::KEYTIPS
-        .iter()
-        .map(|(page, letter)| Row {
-            control: Control { tip: page, command: CommandRef::with_params("ui.backstage", serde_json::json!({ "page": page })) },
-            letters: Some(letter.to_string()),
-        })
-        .collect()
+/// The Backstage's pages as cached static keytip controls.
+fn backstage_controls() -> &'static [KeytipControl<'static>] {
+    static CONTROLS: OnceLock<Vec<KeytipControl<'static>>> = OnceLock::new();
+    CONTROLS.get_or_init(|| {
+        crate::backstage::KEYTIPS
+            .iter()
+            .map(|(page, letter)| {
+                KeytipControl::new(CommandRef::with_params("ui.backstage", serde_json::json!({ "page": page })), page, Some(letter))
+            })
+            .collect()
+    })
 }
 
-/// Shows the keytips after the ribbon and the regions they place badges on, and acts on what the keys chose.
-pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>) {
+/// Shows the keytips after the shell and the regions they place badges on, and acts on what the keys chose.
+pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>, screen_bar: Option<Rect>) {
     let ctx = ui.ctx().clone();
     // Alt during an object drag is part of the drag (Alt moves an object freely), not a keytip tap.
     // PLAN: `CanvasState::object_gesture` is canvas-w9's (cv.A10).
@@ -431,14 +536,15 @@ pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>
         .filter_map(|t| ribbon.tab_ids.iter().find(|(name, _)| name == t).map(|(_, id)| (Label::from(t), tab_letter(t), *id)))
         .collect();
 
-    let mut rows = if app.ui.backstage { backstage_rows() } else { rows(app, &app.ui.tab) };
-    if !app.ui.backstage {
-        rows.push(search_row());
-    }
-    let controls: Vec<KeytipControl<'_>> =
-        rows.iter().map(|r| KeytipControl::new(r.control.command.clone(), r.control.tip, r.letters.as_deref())).collect();
-
-    let sequences = if cfg!(target_os = "macos") { Vec::new() } else { legacy() };
+    let cache = match app.keytip_cache.take() {
+        Some(mut cache) => {
+            cache.sync(app, &app.ui.tab);
+            cache
+        }
+        None => KeytipCache::new(app, &app.ui.tab),
+    };
+    let controls: &[KeytipControl<'_>] = if app.ui.backstage { backstage_controls() } else { &cache.tab_controls };
+    let sequences = sequences(app.ui.backstage);
     // A hidden toolbar has no badges, and a disabled command's button has none to press.
     let digits: Vec<CommandRef> = if app.ui.quick_access_toolbar {
         app.session
@@ -452,18 +558,25 @@ pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>
     } else {
         Vec::new()
     };
-    let reserved = reserved_letters(app);
 
     let mut places: Vec<Arc<Recorded>> = Vec::new();
-    places.extend(ribbon.controls.clone());
+    let patch_menu_places = enabled && (app.keytips_active || !ctx.input(|i| i.events.is_empty()));
+    places.extend(ribbon.controls.clone().map(|recorded| if patch_menu_places { with_menu_commands(&ctx, recorded) } else { recorded }));
     places.extend(inspect::recorded(&ctx, qat_region()));
     places.extend(inspect::recorded(&ctx, search_region()));
     if app.ui.backstage {
         places.extend(inspect::recorded(&ctx, backstage_region()));
     }
 
-    let out =
-        Keytips::new(enabled).tabs(&tabs).controls(&controls).sequences(&sequences).digits(&digits).reserved(&reserved).places(&places).show_over(ui);
+    let out = Keytips::new(enabled)
+        .tabs(&tabs)
+        .controls(controls)
+        .sequences(sequences)
+        .digits(&digits)
+        .reserved(&cache.reserved)
+        .places(&places)
+        .show_over(ui);
+    app.keytip_cache = Some(cache);
     // PLAN: `WordApp::keytips_active` is app-hub's (rb.A11).
     app.keytips_active = out.active;
     if let Some(tab) = out.tab.as_deref().and_then(tab_of_badge) {
@@ -471,7 +584,6 @@ pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>
     }
     if let Some(pending) = &out.pending {
         // With no ribbon showing (Focus, Full Screen View) the hint hangs under the screen bar.
-        let screen_bar = inspect::recorded(&ctx, screen_bar_region()).and_then(|r| r.rect_in(&ctx, 0, ui.layer_id()));
         if let Some(anchor) = ribbon.tabs.or(screen_bar) {
             legacy_hint(ui, pending, anchor);
         }
@@ -483,9 +595,11 @@ fn legacy_hint(ui: &mut Ui, pending: &str, anchor: Rect) {
     let keys: Vec<String> = pending.chars().map(String::from).collect();
     let text = crate::i18n::fmt(tl!("Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel."), &[("keys", &keys.join(", "))]);
     let mut open = true;
-    Popover::new(tl!("Old menu keys"), Bind::bound(&mut open)).overlay(|overlay| overlay.anchor(Anchor::Rect(anchor))).show(ui, |ui, _| {
-        Text::new(text.clone()).show(ui);
-    });
+    Popover::new(tl!("Old menu keys"), Bind::bound(&mut open))
+        .overlay(|overlay| overlay.anchor(Anchor::Rect(anchor)).min_width(MinWidth::None))
+        .show(ui, |ui, _| {
+            Text::new(text.clone()).show(ui);
+        });
 }
 
 #[cfg(test)]

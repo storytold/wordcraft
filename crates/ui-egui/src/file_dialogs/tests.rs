@@ -455,7 +455,7 @@ fn failed_web_saves_restore_the_save_stamps() {
             assert_eq!(a.session.path, path_before, "{id}: {name}");
         }
         // The browser takes the download: the scripted host files its bytes under the name it answers with.
-        let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![PathBuf::from("draft.docx")])]).in_browser());
+        let files = Arc::new(ScriptedFiles::answering([Picked::Saved { path: PathBuf::from("draft.docx"), file_type: None }]).in_browser());
         let mut a = app_over(&files, wordcraft_doc::Document::from_text(UNSAVED));
         a.session.dirty = true;
         let revision_before = a.session.doc.core.revision;
@@ -488,7 +488,7 @@ fn web_pdf_export_keeps_an_existing_suffix_in_any_case() {
         ("Report", "Report.pdf"),
     ] {
         // The browser takes the download: the scripted host files its bytes under the name it answers with.
-        files.queue(Picked::Paths(vec![PathBuf::from(expected)]));
+        files.queue(Picked::Saved { path: PathBuf::from(expected), file_type: None });
         let result = a.execute("file.exportPdf", json!({"path": name})).unwrap();
         assert_eq!(result["downloaded"], expected, "{name}");
         assert!(files.file(std::path::Path::new(expected)).is_some_and(|b| b.starts_with(b"%PDF")), "{name}");
@@ -922,4 +922,74 @@ fn many_failed_fonts_end_with_a_count() {
     let fonts: Vec<(String, Value)> = (0..5).map(|i| format!("/nonexistent/f{i}.ttf")).map(|p| (p.clone(), json!({"path": p}))).collect();
     a.add_fonts(fonts).unwrap();
     assert_eq!(status_text(&a), "Added 0 fonts; 5 couldn't be read: f0.ttf, f1.ttf, f2.ttf and 2 more");
+}
+
+/// Drawn entries have names and selection state, and choosing one still picks its path (#576, #6790).
+#[test]
+fn entries_expose_names_selection_and_picking() {
+    use craft::browse::places::{FakeDirectories, FolderCache};
+    use craft::dialogs::Answer;
+    use craft::dialogs::ui::FileChooser;
+    use craft::host::{ManualJobs, Wake};
+    use craft::ui::dialog::DialogResult;
+    use egui::accesskit::Role;
+    use egui::vec2;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    let fake = Arc::new(FakeDirectories::new().folder("/d/Drafts").file("/d/chapter.docx"));
+    let jobs = Arc::new(ManualJobs::new());
+    let folders = FolderCache::new(fake, jobs.clone(), Wake::none());
+
+    let a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    let mut h = crate::test_harness::builder().with_size(vec2(760.0, 520.0)).build_eframe(|_| a);
+
+    let req = PickRequest::open("document").directory("/d").fallback(true);
+    h.state_mut().dialog_host.open(FileChooser::new(req, None, folders));
+
+    let step = |h: &mut egui_kittest::Harness<'_, WordApp>, count: usize| {
+        for _ in 0..count {
+            jobs.run_all();
+            h.step();
+        }
+    };
+    let chooser_fields = |h: &egui_kittest::Harness<'_, WordApp>| {
+        h.state()
+            .dialog_host
+            .open_dialogs()
+            .into_iter()
+            .find_map(|d| d.fields.filter(|f| f.get("listed").is_some()))
+            .expect("FileChooser fields are exposed")
+    };
+
+    step(&mut h, 6);
+    assert_eq!(chooser_fields(&h)["listed"], json!(true), "folder finished listing");
+
+    // Both entries are exposed with ListItem role and start unselected.
+    for name in ["Drafts", "chapter.docx"] {
+        assert_eq!(h.get_by_role_and_label(Role::ListItem, name).accesskit_node().is_selected(), Some(false), "{name} starts unselected");
+    }
+
+    // Selecting the folder marks Drafts selected, leaves chapter.docx unselected, and leaves the name box empty.
+    h.get_by_role_and_label(Role::ListItem, "Drafts").click();
+    step(&mut h, 3);
+    assert_eq!(h.get_by_role_and_label(Role::ListItem, "Drafts").accesskit_node().is_selected(), Some(true));
+    assert_eq!(h.get_by_role_and_label(Role::ListItem, "chapter.docx").accesskit_node().is_selected(), Some(false));
+    assert_eq!(chooser_fields(&h)["selection"], json!(["Drafts"]));
+    assert_eq!(chooser_fields(&h)["name"], json!(""));
+
+    // Selecting chapter.docx moves selection from Drafts to chapter.docx and fills the File name box.
+    h.get_by_role_and_label(Role::ListItem, "chapter.docx").click();
+    step(&mut h, 3);
+    assert_eq!(h.get_by_role_and_label(Role::ListItem, "Drafts").accesskit_node().is_selected(), Some(false));
+    assert_eq!(h.get_by_role_and_label(Role::ListItem, "chapter.docx").accesskit_node().is_selected(), Some(true));
+    assert_eq!(chooser_fields(&h)["selection"], json!(["chapter.docx"]));
+    assert_eq!(chooser_fields(&h)["name"], json!("chapter.docx"));
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "File name").accesskit_node().value().as_deref(), Some("chapter.docx"));
+
+    // Open button confirms the pick.
+    h.get_by_role_and_label(Role::Button, "Open").click();
+    step(&mut h, 3);
+
+    let answer = h.state_mut().dialog_host.take::<FileChooser>();
+    assert_eq!(answer, Some(DialogResult::Ok(Answer::Paths(vec![PathBuf::from("/d/chapter.docx")]))));
 }

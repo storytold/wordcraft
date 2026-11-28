@@ -892,3 +892,50 @@ fn file_open_recent_list_has_no_thumbnail_letterboxing() {
     let row = recent_row(&h2, "sample.docx").expect("recent row renders");
     assert!(row.rect().height() > 0.0, "recent row has non-zero height: {:?}", row.rect());
 }
+
+/// #2931: File › New › Blank document with a document open returns to the editor without
+/// AccessKit losing the focused node; and so does Home's Blank document tile and Escape.
+#[test]
+fn blank_document_from_the_file_page_with_accessibility_on() {
+    let work = || {
+        let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Work")), Services::default());
+        harness(a, egui::vec2(1440.0, 900.0))
+    };
+    for page in ["new", "home"] {
+        // A fresh "Work" document each time, so each path must really make a blank one.
+        let mut h = work();
+        h.state_mut().run("ui.backstage", json!({"value": true, "page": page})).unwrap();
+        h.run_steps(4);
+        h.get_by_label("Blank document").click();
+        h.run_steps(4);
+        assert!(!h.state().ui.backstage, "{page}: Blank document returns to the editor");
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "", "{page}: a new blank document");
+        assert!(h.state().dialog_host.is_empty(), "{page}: nothing asks first");
+    }
+    let mut h = work();
+    h.state_mut().run("ui.backstage", json!({"value": true})).unwrap();
+    h.run_steps(4);
+    h.get_by_label("Back").click();
+    h.run_steps(4);
+    assert!(!h.state().ui.backstage, "the Back button closes the File page");
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Work", "Back keeps the document");
+}
+
+/// #3041: clicking the plain sidebar background next to the back arrow must not also close
+/// the File page — only the button itself does (#2972, #3041).
+#[test]
+fn clicking_beside_the_back_arrow_does_not_close_the_file_page() {
+    let a = new_app();
+    let mut h = harness(a, egui::vec2(1440.0, 900.0));
+    h.state_mut().run("ui.backstage", json!({"value": true})).unwrap();
+    h.run_steps(4);
+    assert!(h.state().ui.backstage, "File page opened");
+    let back = h.get_by_label("Back").rect();
+    // Well clear of the back button but still inside the side menu rail.
+    let beside = egui::pos2(back.max.x + 50.0, back.center().y);
+    h.event(egui::Event::PointerMoved(beside));
+    h.event(egui::Event::PointerButton { pos: beside, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.event(egui::Event::PointerButton { pos: beside, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(4);
+    assert!(h.state().ui.backstage, "clicking beside the arrow leaves the File page open");
+}

@@ -231,6 +231,24 @@ fn dragging_across_cells_selects_their_rectangle() {
     assert!(!crate::mini_toolbar::visible(h.state()));
 }
 
+/// The "+" left of a row border adds a row there and selects it, in one undo step; over it
+/// the pointer is the plain arrow.
+#[test]
+fn the_plus_button_adds_a_row() {
+    let mut h = table_window();
+    let a = cell(&mut h, 0, 0);
+    let depth = h.state().session.undo_depth();
+    let at = screen(&mut h, a.x - 10.0, a.bottom());
+    h.event(egui::Event::PointerMoved(at));
+    steps(&mut h, 2);
+    assert_eq!(arrow_toward(&h), None, "over the insert button the pointer is the plain arrow");
+    click(&mut h, at);
+    let rows = h.state().session.doc.body.iter().find_map(|b| b.as_table()).map(|t| t.rows.len());
+    assert_eq!(rows, Some(3));
+    assert_eq!(h.state().session.cell_range().map(|r| (r.rows, r.cols)), Some(((1, 1), (0, 2))), "the new row is selected");
+    assert_eq!(h.state().session.undo_depth(), depth + 1);
+}
+
 /// A double-click along a cell's left edge selects its row, as in Word.
 #[test]
 fn a_double_click_by_a_cells_edge_selects_its_row() {

@@ -176,7 +176,7 @@ pub(crate) fn show(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
         match command {
             BackstagePageCommand::Back => {
                 let _ = app.run("ui.backstage", json!({"value": false}));
-                app.canvas.focus_page(&ctx);
+                app.canvas.focus_page_after_pass();
             }
             // PLAN: `print_requested(app, ctx)` is chrome-w10's new `pub(crate)` fn in print_page.rs (S-L263).
             BackstagePageCommand::Print if app.ui.backstage_page == "print" => crate::print_page::print_requested(app, &ctx),
@@ -209,7 +209,7 @@ pub(crate) fn show(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
         });
     });
     if let Some(id) = choice.page.take() {
-        go_to_page(app, id, &ctx);
+        go_to_page(app, id);
     }
     if choice.about.get() {
         let _ = crate::dialogs::open(app, "about", &json!({}));
@@ -309,7 +309,7 @@ fn page_rows(ui: &mut Ui, current: &str, has_document: bool, choice: &MenuChoice
         let on = has_document || works_without_document(id);
         let row = Button::new(label(name))
             .id_salt(("backstage-page", id))
-            .icon(crate::icons::id(icon))
+            .icon(crate::icons::spec(icon))
             .variant(Variant::GHOST)
             .sizing(Sizing::FillWidth)
             // Icon and name at the reading start of the full-width row, as production's menu.
@@ -325,7 +325,7 @@ fn page_rows(ui: &mut Ui, current: &str, has_document: bool, choice: &MenuChoice
 
 /// Opens a side-menu page, as a click on it (or its keytip) does. Without a document only the
 /// pages that work without one open.
-pub(crate) fn go_to_page(app: &mut WordApp, id: &str, ctx: &egui::Context) {
+pub(crate) fn go_to_page(app: &mut WordApp, id: &str) {
     if !app.has_document() && !works_without_document(id) {
         return;
     }
@@ -340,7 +340,7 @@ pub(crate) fn go_to_page(app: &mut WordApp, id: &str, ctx: &egui::Context) {
             let r = app.run("file.save", json!({}));
             if r.is_ok_and(|v| v.get("saved").and_then(serde_json::Value::as_bool) == Some(true) || v.get("downloaded").is_some()) {
                 app.ui.backstage = false;
-                app.canvas.focus_page(ctx);
+                app.canvas.focus_page_after_pass();
             } else {
                 app.ui.backstage_page = "saveAs".into();
             }
@@ -391,10 +391,10 @@ fn matching_personal(query: &str, list: &[PersonalTemplate]) -> Vec<PersonalTemp
 
 /// Make a new document from the personal template at `path` and close File; a template that
 /// can't be read keeps File open so the gallery can say why.
-fn open_personal(app: &mut WordApp, path: &str, ctx: &egui::Context) -> Result<(), String> {
+fn open_personal(app: &mut WordApp, path: &str) -> Result<(), String> {
     app.run("file.newFromTemplate", json!({"path": path}))?;
     app.ui.backstage = false;
-    app.canvas.focus_page(ctx);
+    app.canvas.focus_page_after_pass();
     Ok(())
 }
 

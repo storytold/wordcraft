@@ -33,6 +33,7 @@ pub mod packs;
 pub mod page;
 pub mod para;
 pub mod paste;
+pub mod paste_cells;
 pub mod phonetic;
 pub mod protect;
 pub mod references;

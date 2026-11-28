@@ -94,7 +94,7 @@ fn tabs(app: &mut WordApp, ui: &mut Ui) {
 /// The key a selection event picked, if it picked one row.
 fn picked_row(event: &CollectionEvent<usize, RowEvent>) -> Option<usize> {
     match event {
-        CollectionEvent::Selection(SelectionChange::Set(keys)) => keys.first().copied(),
+        CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => keys.first().copied(),
         CollectionEvent::Activate(key) => Some(*key),
         _ => None,
     }

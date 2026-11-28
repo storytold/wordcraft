@@ -62,12 +62,12 @@ fn pick_name(ui: &mut egui::Ui, label: &str, names: &[String], current: &str) ->
     let mut activated = false;
     for e in response.events {
         match e {
-            CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+            CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
                 if let Some(n) = keys.first().and_then(|k| names.get(*k)) {
                     picked = Some(n.clone());
                 }
             }
-            CollectionEvent::Selection(SelectionChange::Toggle(k)) => {
+            CollectionEvent::Selection { change: SelectionChange::Toggle(k), .. } => {
                 if let Some(n) = names.get(k) {
                     picked = Some(n.clone());
                 }

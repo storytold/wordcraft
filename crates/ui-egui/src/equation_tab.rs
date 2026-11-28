@@ -208,7 +208,7 @@ fn builtin_menu(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
 pub fn insert_button(ui: &mut Ui, app: &mut WordApp) {
     SplitButton::<bool>::command("insert.equation", SplitMenu::Body(Box::new(|ui, cx| builtin_menu(ui, cx, app))))
         .label(tl!("Equation").to_string())
-        .icon(IconId::new("equation"))
+        .icon(crate::icons::spec("equation"))
         .arrangement(Arrangement::Stacked)
         .show(ui);
 }
@@ -279,22 +279,22 @@ pub fn show(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     let numbered = info.is_some_and(|(_, linear)| linear.contains('#'));
     let latex = app.session.math_latex;
     let normal_text = app.session.math_normal_text;
-    row.group(RibbonGroup::new("tools", tl!("Tools").to_string(), IconId::new("equation").into()), |ui| {
+    row.group(RibbonGroup::new("tools", tl!("Tools").to_string(), crate::icons::spec("equation")), |ui| {
         math_menu_button(ui, EQUATION_PICTURE, "Equation", |ui, cx| builtin_menu(ui, cx, app));
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             ToggleButton::command(CommandRef::with_params("equation.inputFormat", json!({"format": "unicode"})))
                 .label(tl!("Unicode").to_string())
-                .icon(IconId::new("equation"))
+                .icon(crate::icons::spec("equation"))
                 .tooltip(tl!("Type equations in the linear format (UnicodeMath)").to_string())
                 .selected(!latex)
                 .show(ui);
             ToggleButton::command(CommandRef::with_params("equation.inputFormat", json!({"format": "latex"})))
                 .label(tl!("LaTeX").to_string())
-                .icon(IconId::new("formula"))
+                .icon(crate::icons::spec("formula"))
                 .tooltip(tl!("Type equations in LaTeX").to_string())
                 .selected(latex)
                 .show(ui);
-            let face = Button::new(tl!("Convert").to_string()).icon(IconId::new("replace"));
+            let face = Button::new(tl!("Convert").to_string()).icon(crate::icons::spec("replace"));
             let _ = menu_button(ui, face, tl!("Convert").to_string(), None, |ui, _| {
                 for (label, to, all) in [
                     ("Current - Professional", "professional", false),
@@ -311,20 +311,20 @@ pub fn show(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             ToggleButton::command(CommandRef::new("equation.normalText"))
                 .label(tl!("Normal Text").to_string())
-                .icon(IconId::new("case"))
+                .icon(crate::icons::spec("case"))
                 .tooltip(tl!("Type normal (non-math) text in the equation").to_string())
                 .selected(normal_text)
                 .show(ui);
         });
     });
-    row.group(RibbonGroup::new("symbols", tl!("Symbols").to_string(), IconId::new("symbol").into()), |ui| symbols(ui, app));
-    row.group(RibbonGroup::new("structures", tl!("Structures").to_string(), IconId::new("equation").into()), |ui| {
+    row.group(RibbonGroup::new("symbols", tl!("Symbols").to_string(), crate::icons::spec("symbol")), |ui| symbols(ui, app));
+    row.group(RibbonGroup::new("structures", tl!("Structures").to_string(), crate::icons::spec("equation")), |ui| {
         for g in STRUCTURES {
             let id = g.id;
             math_menu_button(ui, button_picture(id), g.label, |ui, cx| structure_menu(ui, cx, app, id));
         }
     });
-    row.group(RibbonGroup::new("equationOptions", tl!("Equation Options").to_string(), IconId::new("equation").into()), |ui| {
+    row.group(RibbonGroup::new("equationOptions", tl!("Equation Options").to_string(), crate::icons::spec("equation")), |ui| {
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             ToggleButton::command(CommandRef::with_params("equation.display", json!({"value": true})))
                 .label(tl!("Display").to_string())
@@ -340,7 +340,7 @@ pub fn show(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 .show(ui);
             ToggleButton::command(CommandRef::new("equation.number"))
                 .label(tl!("Number").to_string())
-                .icon(IconId::new("numbering"))
+                .icon(crate::icons::spec("numbering"))
                 .tooltip(tl!("Number the equation; the number sits at the right margin (or type # then the number)").to_string())
                 .selected(numbered)
                 .show(ui);

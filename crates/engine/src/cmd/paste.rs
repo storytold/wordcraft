@@ -49,10 +49,12 @@ fn clip_text(s: &Session, v: &Value) -> Option<String> {
     }
 }
 
+/// Whether the string starts with an RTF file header.
 fn looks_like_rtf(t: &str) -> bool {
     t.trim_start().starts_with("{\\rtf")
 }
 
+/// Whether the string looks like an HTML fragment.
 fn looks_like_html(t: &str) -> bool {
     let t = t.trim_start();
     t.starts_with('<') && (t.contains("</") || t.contains("/>"))
@@ -65,18 +67,53 @@ fn owns_clipboard(v: &Value) -> bool {
     p::bool(v, "privateClipboard").unwrap_or(true)
 }
 
+/// Accommodate macOS arboard wrapping: `<html><head>...</head><body>...</body></html>`.
+fn extract_body(html: &str) -> Option<&str> {
+    let lower = html.to_ascii_lowercase();
+    let body_start = lower.find("<body")?;
+    let after_body = html.get(body_start..)?;
+    let tag_end_rel = after_body.find('>')?;
+    let tag_end = body_start.checked_add(tag_end_rel)?.checked_add(1)?;
+    let end = lower.rfind("</body>")?;
+    if tag_end <= end { html.get(tag_end..end) } else { None }
+}
+
+/// Whether the supplied HTML string matches WordCraft's session clipboard HTML,
+/// accounting for macOS arboard wrapping.
+fn html_matches_clipboard(h: &str, clip: &str) -> bool {
+    if h == clip {
+        return true;
+    }
+    if clip.is_empty() {
+        return false;
+    }
+    extract_body(h).is_some_and(|body| body == clip || body.trim() == clip.trim())
+}
+
+/// Whether the clipboard payload matches WordCraft's session clipboard copy, so the session's
+/// formatted fragment can be used.
+pub(crate) fn matches_session_clipboard(s: &Session, v: &Value) -> bool {
+    let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
+    let html = p::str(v, "html");
+    let rtf = p::str(v, "rtf");
+    let has_rich = html.is_some_and(|h| !h.is_empty()) || rtf.is_some_and(|r| !r.is_empty());
+    let html_matches = html.is_none_or(|h| html_matches_clipboard(h, &s.clipboard_html));
+    let rtf_matches = rtf.is_none_or(|r| r == s.clipboard_rtf);
+
+    owns_clipboard(v)
+        && s.clipboard.as_ref().is_some_and(|f| {
+            text.as_ref().is_none_or(|t| f.clipboard_text() == *t || (t.is_empty() && has_rich))
+                && html_matches
+                && rtf_matches
+                && (text.is_some() || has_rich || (html.is_none() && rtf.is_none()))
+        })
+}
+
 /// The source for a format, if the clipboard has it.
 fn source(s: &Session, v: &Value, fmt: &str) -> Option<String> {
     let non_empty = |t: String| if t.is_empty() { None } else { Some(t) };
     match fmt {
-        "formatted" if owns_clipboard(v) => {
-            let f = s.clipboard.as_ref()?;
-            // System clipboard text that isn't our own copy means someone else copied since.
-            match p::str(v, "text") {
-                Some(t) if f.clipboard_text() != t.replace("\r\n", "\n") => None,
-                _ => Some(String::new()),
-            }
-        }
+        "formatted" if matches_session_clipboard(s, v) => Some(String::new()),
         "formatted" => None,
         "rtf" => p::str(v, "rtf").map(str::to_string).or_else(|| clip_text(s, v).filter(|t| looks_like_rtf(t))).and_then(non_empty),
         "html" => p::str(v, "html").map(str::to_string).or_else(|| clip_text(s, v).filter(|t| looks_like_html(t))).and_then(non_empty),
@@ -289,17 +326,15 @@ pub fn paste_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
 }
 
 fn clipboard_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
-    let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
-    if owns_clipboard(v)
+    if matches_session_clipboard(s, v)
         && let Some(f) = &s.clipboard
-        && text.as_ref().is_none_or(|t| f.clipboard_text() == *t)
-        && (text.is_some() || (p::str(v, "html").is_none() && p::str(v, "rtf").is_none()))
     {
         return Ok(Pasted::Fragment(f.clone()));
     }
     if let Some(f) = rich_fragment(s, v) {
         return Ok(Pasted::Fragment(f));
     }
+    let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
     match text {
         Some(t) if !t.is_empty() => Ok(Pasted::Text(t)),
         _ => Err(CmdError::Failed("the clipboard is empty".into())),
@@ -365,8 +400,19 @@ pub fn merge_formatting(s: &Session, frag: &mut Fragment) {
     }
 }
 
-/// Replace the selection with `frag`, marking it as an insertion under Track Changes.
-pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
+/// Paste `frag` at the selection. A copied table pasted with the caret in a table cell goes the way
+/// Word's Paste does it (rows inserted or cells overwritten, #6739; see [`super::paste_cells`]);
+/// anything else is [`insert_as_is`].
+pub fn insert(s: &mut Session, frag: Fragment) -> Result<(), CmdError> {
+    if super::paste_cells::paste_cells(s, &frag)? {
+        return Ok(());
+    }
+    insert_as_is(s, frag)
+}
+
+/// Replace the selection with `frag`, marking it as an insertion under Track Changes. A table pasted
+/// with the caret in a cell nests in that cell (Word's Paste as Nested Table).
+pub fn insert_as_is(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
     // The pasted text keeps its own formatting; what Backspace carried over is not for after it (#6518).
     s.forget_carried();
     super::controls::prepare_edit(s)?;
@@ -392,7 +438,11 @@ pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
             });
         }
     }
+    let before_props = track.then(|| s.doc.para_at(&at).map(|p| p.props.clone())).flatten();
     let end = s.doc.insert_fragment(&at, &frag)?;
+    if track && let Some(before) = before_props {
+        crate::cmd::fmt_revisions::record_para_props(s, at.story, &at.path, &before)?;
+    }
     // The paragraph marks the paste added are inserted too, so rejecting it joins the
     // paragraphs again. The last paragraph ends with the original mark and keeps it.
     if let Some(r) = rid
@@ -449,10 +499,23 @@ pub(crate) fn unlink_sections(blocks: &mut [Block]) {
 /// lists and styles it refers to (renumbered so they can't collide with ours).
 fn adopt(s: &mut Session, src: Document) -> Fragment {
     let mut frag = s.doc.adopt(src);
-    // Pasted pictures fit our text width, like Insert › Pictures (layout keeps their size).
-    let max_w = crate::io::text_width(&s.doc);
+    // Pasted pictures fit the room where they go, like Insert › Pictures: the table cell, the
+    // column, its own section (#5428; layout keeps their size). Measured (a layout) only when
+    // the fragment holds an inline picture.
+    let mut has_picture = false;
     for b in &mut frag.blocks {
-        crate::io::fit_block_pictures(b, max_w);
+        each_para(b, 0, &mut |p| {
+            has_picture |= p
+                .objects
+                .iter()
+                .any(|o| matches!(o, wordcraft_doc::InlineObject::Image { float, .. } if float.wrap == wordcraft_doc::para::Wrap::Inline));
+        });
+    }
+    if has_picture {
+        let max_w = s.room_at(&s.sel.ordered().0);
+        for b in &mut frag.blocks {
+            crate::io::fit_block_pictures(b, max_w);
+        }
     }
     unlink_sections(&mut frag.blocks);
     frag

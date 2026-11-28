@@ -9,6 +9,7 @@ use serde_json::Value;
 use crate::WordApp;
 
 mod bookmarks;
+pub(crate) mod chrome;
 mod customize_keyboard;
 mod enclose;
 mod find;

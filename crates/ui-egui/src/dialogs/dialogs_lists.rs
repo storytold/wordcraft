@@ -272,7 +272,7 @@ impl ListForm {
                     .show_items(ui, &source, &mut |at, _| ListRow::new((*at + 1).to_string()))
                     .events;
                 for event in events {
-                    if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                    if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                         && let Some(chosen) = keys.last()
                     {
                         self.level = *chosen;
