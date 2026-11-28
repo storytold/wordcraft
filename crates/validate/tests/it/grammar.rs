@@ -510,9 +510,10 @@ fn grammar_verdict_invariance_ab_probe_default_limits_large_ordinary_notes() {
 }
 
 #[test]
-fn grammar_required_child_suppressed_by_unexpanded_entity_only_on_affected_parent() {
-    // Finding 2 (UncheckedReplacement): table 1 gets w:tblPr via an unexpanded markup-bearing entity
-    // (must NOT emit GRAMMAR-REQUIRED-CHILD); unaffected table 2 and unaffected nested table STILL fire.
+fn grammar_required_child_suppressed_by_dtd_taint_and_external_entity() {
+    // Internal-subset DOCTYPE taints the entire part for grammar: no table in the part emits
+    // GRAMMAR-REQUIRED-CHILD (neither the entity-bearing table nor other tables in the tainted part),
+    // and the DTD taint is disclosed once on the grammar note channel.
     let mut d = Doc::minimal();
     d.set(
         "word/document.xml",
@@ -529,13 +530,39 @@ fn grammar_required_child_suppressed_by_unexpanded_entity_only_on_affected_paren
         ),
     );
     let report = validate(&d);
-    let hits = rule_findings(&report, "GRAMMAR-REQUIRED-CHILD");
-    assert_eq!(hits.len(), 2, "only unaffected inner and second tables should fire: {hits:?}");
-    assert!(!hits.iter().any(|f| f.message.contains("at w:document/w:body[1]/w:tbl[1] ")), "{hits:?}");
-    assert!(hits.iter().any(|f| f.message.contains("at w:document/w:body[1]/w:tbl[1]/w:tr[>=1]/w:tc[1]/w:tbl[1] ")), "{hits:?}");
-    assert!(hits.iter().any(|f| f.message.contains("at w:document/w:body[1]/w:tbl[2] ")), "{hits:?}");
+    assert!(rule_findings(&report, "GRAMMAR-REQUIRED-CHILD").is_empty(), "{:?}", report.findings);
+    assert!(
+        report.coverage_notes.iter().any(|n| n == "DTD present in word/document.xml; grammar checks are incomplete here"),
+        "{:?}",
+        report.coverage_notes
+    );
 
-    // Class generalization (UnresolvedSubset): external DOCTYPE subset leaves &ext; unexpanded.
+    // Even a plain-text internal entity carries an internal subset, so the coarse DTD-taint gate
+    // suppresses GRAMMAR-REQUIRED-CHILD in that part and discloses the taint.
+    let mut d = Doc::minimal();
+    d.set(
+        "word/document.xml",
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:document [<!ENTITY txt "hello">]>"#,
+                r#"<w:document xmlns:w="{w}"><w:body>"#,
+                r#"<w:tbl>&txt;<w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>"#,
+                r#"</w:body></w:document>"#,
+            ),
+            w = W_NS,
+        ),
+    );
+    let report = validate(&d);
+    assert!(rule_findings(&report, "GRAMMAR-REQUIRED-CHILD").is_empty(), "{:?}", report.findings);
+    assert!(
+        report.coverage_notes.iter().any(|n| n == "DTD present in word/document.xml; grammar checks are incomplete here"),
+        "{:?}",
+        report.coverage_notes
+    );
+
+    // External-only DOCTYPE (no internal subset) is not DTD-tainted: &ext; suppresses required-child
+    // on the affected table via mark_child_set_incomplete, while the unaffected second table still fires.
     let mut d = Doc::minimal();
     d.set(
         "word/document.xml",
@@ -555,26 +582,6 @@ fn grammar_required_child_suppressed_by_unexpanded_entity_only_on_affected_paren
     let hits = rule_findings(&report, "GRAMMAR-REQUIRED-CHILD");
     assert_eq!(hits.len(), 1, "{hits:?}");
     assert!(hits[0].message.contains("at w:document/w:body[1]/w:tbl[2] "), "{hits:?}");
-
-    // Control: a plain-text internal entity cannot supply child elements, so absence still fires.
-    let mut d = Doc::minimal();
-    d.set(
-        "word/document.xml",
-        format!(
-            concat!(
-                r#"<?xml version="1.0"?>"#,
-                r#"<!DOCTYPE w:document [<!ENTITY txt "hello">]>"#,
-                r#"<w:document xmlns:w="{w}"><w:body>"#,
-                r#"<w:tbl>&txt;<w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>"#,
-                r#"</w:body></w:document>"#,
-            ),
-            w = W_NS,
-        ),
-    );
-    let report = validate(&d);
-    let hits = rule_findings(&report, "GRAMMAR-REQUIRED-CHILD");
-    assert_eq!(hits.len(), 1, "{hits:?}");
-    assert!(hits[0].message.contains("at w:document/w:body[1]/w:tbl[1] "), "{hits:?}");
 }
 
 #[test]
@@ -641,8 +648,13 @@ fn grammar_numfmt_delivers_internal_entities_and_distinguishes_missing_vs_unread
     let hits = rule_findings(&report, "GRAMMAR-NUMFMT-VALUE");
     assert_eq!(hits.len(), 2, "{hits:?}");
     assert!(hits.iter().all(|f| f.severity == Severity::Warning));
-    assert!(hits.iter().any(|f| f.message.contains("\"notAFormat\"") && f.message.contains("w:numFmt[1]")), "{hits:?}");
-    assert!(hits.iter().any(|f| f.message.contains("\"decimal\t\"") && f.message.contains("w:numFmt[4]")), "{hits:?}");
+    assert!(hits.iter().any(|f| f.message.contains("\"notAFormat\"") && f.message.contains("w:numFmt[>=1]")), "{hits:?}");
+    assert!(hits.iter().any(|f| f.message.contains("\"decimal\t\"") && f.message.contains("w:numFmt[>=4]")), "{hits:?}");
+    assert!(
+        report.coverage_notes.iter().any(|n| n == "DTD present in word/numbering.xml; grammar checks are incomplete here"),
+        "{:?}",
+        report.coverage_notes
+    );
 
     // Unreadable entity-bearing attribute (nested entity): no false NUMFMT warning, but disclosed via grammar note.
     let mut d = Doc::minimal();
@@ -842,7 +854,10 @@ fn preexisting_mc_ignorable_delivery_is_unchanged_by_grammar_attribute_bound() {
         serde_json::to_string(undeclared[0]).unwrap(),
         r#"{"rule":"XML-UNDECLARED-PREFIX","severity":"Corrupt","evidence":"ByConstruction","part":"word/document.xml","message":"the namespace prefix `lostprefix` used in word/document.xml is not declared"}"#
     );
-    assert!(report.coverage_notes.is_empty(), "pre-existing mc:Ignorable consumer must not emit unread note: {:?}", report.coverage_notes);
+    // Ordinary coverage notes remain empty (no mc:Ignorable unread note); only the grammar DTD-taint note is recorded.
+    let ordinary_notes: Vec<_> = report.coverage_notes.iter().filter(|n| !n.starts_with("DTD present in ")).collect();
+    assert!(ordinary_notes.is_empty(), "pre-existing mc:Ignorable consumer must not emit unread note: {:?}", report.coverage_notes);
+    assert_eq!(report.coverage_notes, vec!["DTD present in word/document.xml; grammar checks are incomplete here".to_string()]);
 
     // Grammar-side bound still applies to w:numFmt/@w:val without touching ordinary consumers or verdict.
     let mut d2 = Doc::minimal();
@@ -892,14 +907,14 @@ fn grammar_paths_and_counts_use_lower_bounds_after_loss_and_mark_unknown_namespa
     let hits = rule_findings(&report, "GRAMMAR-CHILD-TOO-MANY");
     assert_eq!(hits.len(), 1, "{hits:?}");
     assert!(
-        hits[0].message.contains("at w:document/w:body[1]/w:tbl[1]/w:tblPr[>=2] ") && hits[0].message.contains("has at least 2 w:tblPr elements"),
+        hits[0].message.contains("at w:document/w:body[>=1]/w:tbl[>=1]/w:tblPr[>=2] ") && hits[0].message.contains("has at least 2 w:tblPr elements"),
         "{:?}",
         hits[0]
     );
     assert!(!hits[0].message.contains("w:tblPr[2]"), "{:?}", hits[0]);
     assert!(!hits[0].message.contains("has 2 w:tblPr"), "{:?}", hits[0]);
 
-    // Class generalization: skipped mc:AlternateContent before two literal <w:tblPr/> children.
+    // Class generalization: skipped mc:AlternateContent before two literal <w:tblPr/> children (no DTD).
     let mut d = Doc::minimal();
     d.set(
         "word/document.xml",
@@ -924,14 +939,16 @@ fn grammar_paths_and_counts_use_lower_bounds_after_loss_and_mark_unknown_namespa
     );
 
     // Class generalization: unresolved-namespace sibling with matching local name (<u:tblPr>)
-    // turns subsequent w:tblPr ordinals and counts into lower bounds, while unrelated local names stay exact.
+    // turns subsequent w:tblPr ordinals and counts into lower bounds; under an external-only DOCTYPE
+    // (not DTD-tainted), unrelated local names stay exact, while under an internal-subset DOCTYPE
+    // all ordinals and counts become lower bounds.
     let mut d = Doc::minimal();
     d.set(
         "word/document.xml",
         format!(
             concat!(
                 r#"<?xml version="1.0"?>"#,
-                r#"<!DOCTYPE w:document [<!ENTITY wns "{w}">]>"#,
+                r#"<!DOCTYPE w:document SYSTEM "ext.dtd">"#,
                 r#"<w:document xmlns:w="{w}"><w:body>"#,
                 r#"<w:tbl><u:tblPr xmlns:u="&wns;"/><w:tblPr/><w:tblPr/><w:tblGrid/><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>"#,
                 r#"</w:body></w:document>"#,
@@ -953,8 +970,33 @@ fn grammar_paths_and_counts_use_lower_bounds_after_loss_and_mark_unknown_namespa
         "{tbl_grid:?}"
     );
 
-    // Class generalization: unexpanded entity inside an UNMODELLED wrapper still marks downstream
-    // sibling ordinals inside that wrapper as lower bounds.
+    // Same document with an internal subset: DTD taint makes every ordinal and count a lower bound.
+    let mut d = Doc::minimal();
+    d.set(
+        "word/document.xml",
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:document [<!ENTITY wns "{w}">]>"#,
+                r#"<w:document xmlns:w="{w}"><w:body>"#,
+                r#"<w:tbl><u:tblPr xmlns:u="&wns;"/><w:tblPr/><w:tblPr/><w:tblGrid/><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>"#,
+                r#"</w:body></w:document>"#,
+            ),
+            w = W_NS,
+        ),
+    );
+    let report = validate(&d);
+    let hits = rule_findings(&report, "GRAMMAR-CHILD-TOO-MANY");
+    assert_eq!(hits.len(), 2, "{hits:?}");
+    let tbl_grid = hits.iter().find(|f| f.message.contains("w:tblGrid")).expect("tblGrid too-many");
+    assert!(
+        tbl_grid.message.contains("at w:document/w:body[>=1]/w:tbl[>=1]/w:tblGrid[>=2] ")
+            && tbl_grid.message.contains("has at least 2 w:tblGrid elements"),
+        "{tbl_grid:?}"
+    );
+
+    // Class generalization: unexpanded entity inside an UNMODELLED wrapper in a tainted part
+    // keeps lower-bound ordinals and counts throughout the tainted part.
     let mut d = Doc::minimal();
     d.set(
         "word/document.xml",
@@ -973,8 +1015,8 @@ fn grammar_paths_and_counts_use_lower_bounds_after_loss_and_mark_unknown_namespa
     let hits = rule_findings(&report, "GRAMMAR-CHILD-TOO-MANY");
     assert_eq!(hits.len(), 1, "{hits:?}");
     assert!(
-        hits[0].message.contains("at w:document/w:body[1]/{urn:foreign}wrapper[1]/w:tbl[>=1]/w:tblPr[2] ")
-            && hits[0].message.contains("has 2 w:tblPr elements"),
+        hits[0].message.contains("at w:document/w:body[>=1]/{urn:foreign}wrapper[>=1]/w:tbl[>=1]/w:tblPr[>=2] ")
+            && hits[0].message.contains("has at least 2 w:tblPr elements"),
         "{:?}",
         hits[0]
     );
@@ -1001,13 +1043,12 @@ fn grammar_paths_and_counts_use_lower_bounds_after_loss_and_mark_unknown_namespa
     let hits = rule_findings(&report, "GRAMMAR-NUMFMT-VALUE");
     assert_eq!(hits.len(), 3, "{hits:?}");
     let prefixed = hits.iter().find(|f| f.message.contains("\"bad\"")).expect("prefixed unresolved ancestor");
-    assert!(prefixed.message.contains("at w:document/w:body[1]/{?}wrapper[?]/w:numFmt[1] "), "{prefixed:?}");
+    assert!(prefixed.message.contains("at w:document/w:body[>=1]/{?}wrapper[?]/w:numFmt[>=1] "), "{prefixed:?}");
     assert!(!prefixed.message.contains("/wrapper["), "{prefixed:?}");
     let default_ns = hits.iter().find(|f| f.message.contains("\"bad2\"")).expect("default unresolved ancestor");
-    assert!(default_ns.message.contains("at w:document/w:body[1]/{?}wrapper[?]/w:numFmt[1] "), "{default_ns:?}");
+    assert!(default_ns.message.contains("at w:document/w:body[>=1]/{?}wrapper[?]/w:numFmt[>=1] "), "{default_ns:?}");
     let plain = hits.iter().find(|f| f.message.contains("\"bad3\"")).expect("true no-namespace ancestor");
-    // Prior unresolved-namespace siblings with local name "wrapper" make bare wrapper's ordinal a lower bound.
-    assert!(plain.message.contains("at w:document/w:body[1]/wrapper[>=1]/w:numFmt[1] "), "{plain:?}");
+    assert!(plain.message.contains("at w:document/w:body[>=1]/wrapper[>=1]/w:numFmt[>=1] "), "{plain:?}");
 }
 
 #[test]
@@ -1071,4 +1112,381 @@ fn grammar_numfmt_distinguishes_unresolved_attribute_identity_from_unreadable_va
         "{:?}",
         report2.coverage_notes
     );
+}
+
+#[test]
+fn grammar_rels_named_content_part_with_skipped_entity_emits_no_absence_or_exact_claim() {
+    // Round-3 Finding 1 exact probe: a linked footer named `word/footer.rels` with CT_FOOTER and
+    // an internal entity expanding to `<w:tblPr/>` must NEVER emit a false absence claim, exact
+    // count, or exact ordinal, and must disclose DTD taint on the grammar note channel.
+    let build = |table_inner: &str| {
+        let mut d = Doc::minimal();
+        d.add_with_override(
+            "word/footer.rels",
+            CT_FOOTER,
+            format!(
+                concat!(
+                    r#"<?xml version="1.0"?>"#,
+                    r#"<!DOCTYPE w:ftr [<!ENTITY one "<w:tblPr/>">]>"#,
+                    r#"<w:ftr xmlns:w="{w}"><w:tbl>{inner}</w:tbl></w:ftr>"#,
+                ),
+                w = W_NS,
+                inner = table_inner,
+            ),
+        );
+        d.set_doc_rels(
+            r#"<Relationship Id="rF" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer.rels"/>"#,
+        );
+        d
+    };
+
+    // Case 1: `&one;` supplies the sole `w:tblPr` -> zero GRAMMAR-REQUIRED-CHILD, taint note present.
+    let report = validate(&build("&one;<w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr>"));
+    assert!(rule_findings(&report, "GRAMMAR-REQUIRED-CHILD").is_empty(), "{:?}", report.findings);
+    assert!(
+        report.coverage_notes.iter().any(|n| n == "DTD present in word/footer.rels; grammar checks are incomplete here"),
+        "{:?}",
+        report.coverage_notes
+    );
+
+    // Case 2: `&one;` followed by two literal `<w:tblPr/>` -> TOO-MANY uses lower-bound count and ordinal.
+    let report2 = validate(&build("&one;<w:tblPr/><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr>"));
+    assert!(rule_findings(&report2, "GRAMMAR-REQUIRED-CHILD").is_empty(), "{:?}", report2.findings);
+    let too_many = rule_findings(&report2, "GRAMMAR-CHILD-TOO-MANY");
+    assert_eq!(too_many.len(), 1, "{too_many:?}");
+    assert!(
+        too_many[0].message.contains("at w:ftr/w:tbl[>=1]/w:tblPr[>=2] ") && too_many[0].message.contains("has at least 2 w:tblPr elements"),
+        "{:?}",
+        too_many[0]
+    );
+    assert!(!too_many[0].message.contains("w:tblPr[2]"), "{:?}", too_many[0]);
+    assert!(!too_many[0].message.contains("has 2 w:tblPr"), "{:?}", too_many[0]);
+    assert!(
+        report2.coverage_notes.iter().any(|n| n == "DTD present in word/footer.rels; grammar checks are incomplete here"),
+        "{:?}",
+        report2.coverage_notes
+    );
+
+    // Case 3: external-only DOCTYPE on a `.rels`-named content part proves grammar's loss state comes
+    // from its own GeneralRef stream rather than `rels_content_modelled`.
+    let mut d3 = Doc::minimal();
+    d3.add_with_override(
+        "word/footer.rels",
+        CT_FOOTER,
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:ftr SYSTEM "ext.dtd">"#,
+                r#"<w:ftr xmlns:w="{w}"><w:tbl>&ext;<w:tblPr/><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl></w:ftr>"#,
+            ),
+            w = W_NS,
+        ),
+    );
+    d3.set_doc_rels(
+        r#"<Relationship Id="rF" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer.rels"/>"#,
+    );
+    let report3 = validate(&d3);
+    assert!(rule_findings(&report3, "GRAMMAR-REQUIRED-CHILD").is_empty(), "{:?}", report3.findings);
+    let too_many3 = rule_findings(&report3, "GRAMMAR-CHILD-TOO-MANY");
+    assert_eq!(too_many3.len(), 1, "{too_many3:?}");
+    assert!(too_many3[0].message.contains("w:tblPr[>=2] ") && too_many3[0].message.contains("has at least 2 w:tblPr elements"), "{:?}", too_many3[0]);
+}
+
+#[test]
+fn grammar_attlist_suppresses_absence_structural_and_numfmt_claims_while_entity_only_keeps_positives() {
+    // Round-3 Finding 2 exact probe: ATTLIST-defaulted `xmlns` on `<tblPr/>` in `word/footer1.xml`
+    // must NOT report a false absence for `w:tblPr`, and must disclose ATTLIST taint on the grammar note channel.
+    let mut d = Doc::minimal();
+    d.add_with_override(
+        "word/footer1.xml",
+        CT_FOOTER,
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:ftr [<!ATTLIST tblPr xmlns CDATA "{w}">]>"#,
+                r#"<w:ftr xmlns:w="{w}"><w:tbl><tblPr/><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl></w:ftr>"#,
+            ),
+            w = W_NS,
+        ),
+    );
+    d.set_doc_rels(
+        r#"<Relationship Id="rF" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>"#,
+    );
+    let report = validate(&d);
+    assert_eq!(report.verdict, Verdict::Pass, "{report:?}");
+    assert!(grammar_findings(&report).is_empty(), "{:?}", report.findings);
+    assert!(
+        report.coverage_notes.iter().any(|n| n == "DTD present in word/footer1.xml (with ATTLIST); grammar checks are incomplete here"),
+        "{:?}",
+        report.coverage_notes
+    );
+
+    // ATTLIST overriding `xmlns:w` on structural children must also suppress TOO-MANY, CHILD-NOT-ALLOWED, and ORDER.
+    let mut d_struct = Doc::minimal();
+    d_struct.add_with_override(
+        "word/footer1.xml",
+        CT_FOOTER,
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:ftr [<!ATTLIST w:tblPr xmlns:w CDATA "urn:other"><!ATTLIST w:r xmlns:w CDATA "urn:other"><!ATTLIST w:rFonts xmlns:w CDATA "urn:other">]>"#,
+                r#"<w:ftr xmlns:w="{w}">"#,
+                r#"<w:tbl><w:tblPr/><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:pPr><w:r/></w:pPr><w:r><w:rPr><w:sz w:val="20"/><w:rFonts w:ascii="Calibri"/></w:rPr><w:t>x</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+                r#"</w:ftr>"#,
+            ),
+            w = W_NS,
+        ),
+    );
+    let report_struct = validate(&d_struct);
+    assert!(grammar_findings(&report_struct).is_empty(), "{:?}", report_struct.findings);
+
+    // ATTLIST default on `w:val` suppresses NUMFMT across the entire ATTLIST-bearing part
+    // (both defaulted `<w:numFmt/>` and literal/entity `w:val` in the same part).
+    let mut d_att_numfmt = Doc::minimal();
+    d_att_numfmt.add_with_override(
+        "word/numbering.xml",
+        CT_NUMBERING,
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:numbering [<!ENTITY bad "notAFormat"><!ATTLIST w:numFmt w:val CDATA "notAFormat">]>"#,
+                r#"<w:numbering xmlns:w="{w}"><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0">"#,
+                r#"<w:numFmt/><w:numFmt w:val="alsoBad"/><w:numFmt w:val="&bad;"/>"#,
+                r#"</w:lvl></w:abstractNum></w:numbering>"#,
+            ),
+            w = W_NS,
+        ),
+    );
+    let report_att_numfmt = validate(&d_att_numfmt);
+    assert!(rule_findings(&report_att_numfmt, "GRAMMAR-NUMFMT-VALUE").is_empty(), "{:?}", report_att_numfmt.findings);
+    assert!(
+        report_att_numfmt.coverage_notes.iter().any(|n| n == "DTD present in word/numbering.xml (with ATTLIST); grammar checks are incomplete here"),
+        "{:?}",
+        report_att_numfmt.coverage_notes
+    );
+
+    // Tainted part WITHOUT ATTLIST: delivered internal-entity NUMFMT AND positive structural checks
+    // (CHILD-NOT-ALLOWED, ORDER, TOO-MANY as at-least) still fire with uncertain paths.
+    let mut d_no_att = Doc::minimal();
+    d_no_att.add_with_override(
+        "word/footer1.xml",
+        CT_FOOTER,
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:ftr [<!ENTITY bad "notAFormat">]>"#,
+                r#"<w:ftr xmlns:w="{w}">"#,
+                r#"<w:p><w:pPr><w:r/></w:pPr><w:r><w:rPr><w:sz w:val="20"/><w:rFonts w:ascii="Calibri"/></w:rPr><w:t>x</w:t></w:r></w:p>"#,
+                r#"<w:tbl><w:tblPr/><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>"#,
+                r#"</w:ftr>"#,
+            ),
+            w = W_NS,
+        ),
+    );
+    d_no_att.add_with_override(
+        "word/numbering.xml",
+        CT_NUMBERING,
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:numbering [<!ENTITY bad "notAFormat">]>"#,
+                r#"<w:numbering xmlns:w="{w}"><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:numFmt w:val="&bad;"/></w:lvl></w:abstractNum></w:numbering>"#,
+            ),
+            w = W_NS,
+        ),
+    );
+    let report_no_att = validate(&d_no_att);
+    let numfmt = rule_findings(&report_no_att, "GRAMMAR-NUMFMT-VALUE");
+    assert_eq!(numfmt.len(), 1, "{numfmt:?}");
+    assert!(numfmt[0].message.contains("\"notAFormat\"") && numfmt[0].message.contains("w:numFmt[>=1] "), "{:?}", numfmt[0]);
+    let disallowed = rule_findings(&report_no_att, "GRAMMAR-CHILD-NOT-ALLOWED");
+    assert_eq!(disallowed.len(), 1, "{disallowed:?}");
+    assert!(disallowed[0].message.contains("w:p[>=1]/w:pPr[>=1]/w:r[>=1] "), "{:?}", disallowed[0]);
+    let order = rule_findings(&report_no_att, "GRAMMAR-ORDER");
+    assert_eq!(order.len(), 1, "{order:?}");
+    assert!(order[0].message.contains("w:rPr[>=1]/w:rFonts[>=1] "), "{:?}", order[0]);
+    let too_many = rule_findings(&report_no_att, "GRAMMAR-CHILD-TOO-MANY");
+    assert_eq!(too_many.len(), 1, "{too_many:?}");
+    assert!(
+        too_many[0].message.contains("w:tbl[>=1]/w:tblPr[>=2] ") && too_many[0].message.contains("has at least 2 w:tblPr elements"),
+        "{:?}",
+        too_many[0]
+    );
+    assert!(
+        report_no_att.coverage_notes.iter().any(|n| n == "DTD present in word/footer1.xml; grammar checks are incomplete here"),
+        "{:?}",
+        report_no_att.coverage_notes
+    );
+    assert!(
+        report_no_att.coverage_notes.iter().any(|n| n == "DTD present in word/numbering.xml; grammar checks are incomplete here"),
+        "{:?}",
+        report_no_att.coverage_notes
+    );
+}
+
+#[test]
+fn grammar_attribute_8192_byte_bound_applies_identically_across_literal_charref_and_entity() {
+    // Round-3 Finding 3 exact probe: 8,193 ASCII 'z' characters delivered as all-literal,
+    // trailing numeric character reference `&#122;`, or leading internal entity `&z;` must all
+    // take the identical unreadable-value path (zero NUMFMT warnings, unreadable-value note).
+    let z8193 = "z".repeat(8193);
+    let z8192 = "z".repeat(8192);
+    let z8191 = "z".repeat(8191);
+
+    let footer_over = |doctype: &str, attr_spelling: &str| {
+        let mut d = Doc::minimal();
+        d.add_with_override(
+            "word/footer1.xml",
+            CT_FOOTER,
+            format!(r#"<?xml version="1.0"?>{doctype}<w:ftr xmlns:w="{W_NS}"><w:p><w:numFmt w:val="{attr_spelling}"/></w:p></w:ftr>"#),
+        );
+        d
+    };
+
+    for (label, doctype, spelling) in [
+        ("literal 8193", "", z8193.as_str()),
+        ("charref 8193", "", &format!("{z8192}&#122;")),
+        ("entity 8193", r#"<!DOCTYPE w:ftr [<!ENTITY z "z">]>"#, &format!("&z;{z8192}")),
+    ] {
+        let report = validate(&footer_over(doctype, spelling));
+        assert!(
+            rule_findings(&report, "GRAMMAR-NUMFMT-VALUE").is_empty(),
+            "{label} must take unreadable-value path, not emit NUMFMT: {:?}",
+            report.findings
+        );
+        assert!(
+            report
+                .coverage_notes
+                .iter()
+                .any(|n| n.contains("word/footer1.xml has a w:numFmt/@w:val attribute") && n.contains("whose value could not be delivered")),
+            "{label} must emit unreadable-value note: {:?}",
+            report.coverage_notes
+        );
+    }
+
+    // Exact boundary (8,192 bytes): all three spellings deliver the 8,192-byte value and fire NUMFMT identically.
+    for (label, doctype, spelling) in [
+        ("literal 8192", "", z8192.as_str()),
+        ("charref 8192", "", &format!("{z8191}&#122;")),
+        ("entity 8192", r#"<!DOCTYPE w:ftr [<!ENTITY z "z">]>"#, &format!("&z;{z8191}")),
+    ] {
+        let report = validate(&footer_over(doctype, spelling));
+        let hits = rule_findings(&report, "GRAMMAR-NUMFMT-VALUE");
+        assert_eq!(hits.len(), 1, "{label} at 8,192 bytes must fire NUMFMT: {:?}", report.findings);
+        assert!(hits[0].message.contains(&format!("\"{z8192}\"")), "{label}");
+        assert!(
+            !report.coverage_notes.iter().any(|n| n.contains("whose value could not be delivered")),
+            "{label} at 8,192 bytes must not emit unreadable-value note: {:?}",
+            report.coverage_notes
+        );
+    }
+}
+
+#[test]
+fn ordinary_output_stays_byte_identical_on_astras_two_differential_packages() {
+    // Differential 1: mc:Ignorable with entity `&props;` + 8,200 spaces (no table).
+    // Verdict, ordered non-grammar findings, and ordinary (non-grammar) notes stay byte-identical
+    // to pre-port base (Fail, XML-DOCTYPE + XML-UNDECLARED-PREFIX, zero ordinary notes).
+    let spaces = " ".repeat(8200);
+    let mut d1 = Doc::minimal();
+    d1.set(
+        "word/document.xml",
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:document [<!ENTITY props "lostprefix ">]>"#,
+                r#"<w:document xmlns:w="{w}" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="&props;{spaces}">"#,
+                r#"<w:body><w:p/></w:body></w:document>"#,
+            ),
+            w = W_NS,
+            spaces = spaces,
+        ),
+    );
+    let r1 = validate(&d1);
+    assert_eq!(r1.verdict, Verdict::Fail, "{r1:?}");
+    let ord_findings_1: Vec<String> =
+        r1.findings.iter().filter(|f| !f.rule.starts_with("GRAMMAR-")).map(|f| serde_json::to_string(f).unwrap()).collect();
+    assert_eq!(
+        ord_findings_1,
+        vec![
+            r#"{"rule":"XML-DOCTYPE","severity":"Error","evidence":"Observed","part":"word/document.xml","message":"word/document.xml contains a DOCTYPE declaration; see corpus/EVIDENCE.md for measured outcomes"}"#,
+            r#"{"rule":"XML-UNDECLARED-PREFIX","severity":"Corrupt","evidence":"ByConstruction","part":"word/document.xml","message":"the namespace prefix `lostprefix` used in word/document.xml is not declared"}"#,
+        ]
+    );
+    assert!(grammar_findings(&r1).is_empty(), "{:?}", r1.findings);
+    let ord_notes_1: Vec<&String> = r1.coverage_notes.iter().filter(|n| !n.starts_with("DTD present in ")).collect();
+    assert!(ord_notes_1.is_empty(), "{:?}", r1.coverage_notes);
+    assert_eq!(r1.coverage_notes, vec!["DTD present in word/document.xml; grammar checks are incomplete here"]);
+
+    // Differential 2: Astra's reference/field footer differential — linked footer with DOCTYPE,
+    // two `w:tblGrid` children (one carrying unresolved-prefix `u:val`, one carrying unreadable `w:val`),
+    // a dangling relationship ID (`r:embed="rIdMissing"`), an unmatched field end (`w:fldCharType="end"`),
+    // and an undeclared element prefix (`nope:x`).
+    let mut d2 = Doc::minimal();
+    d2.add_with_override(
+        "word/footer1.xml",
+        CT_FOOTER,
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:ftr [<!ENTITY ns "urn:foreign"><!ENTITY inner "bad"><!ENTITY outer "&inner;">]>"#,
+                r#"<w:ftr xmlns:w="{w}" xmlns:a="{a}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
+                r#"<w:tbl><w:tblPr/><w:tblGrid xmlns:u="&ns;" u:val="bad"/><w:tblGrid w:val="&outer;"/><w:tr><w:tc>"#,
+                r#"<w:p><w:r><w:fldChar w:fldCharType="end"/><a:blip r:embed="rIdMissing"/><nope:x/></w:r></w:p>"#,
+                r#"</w:tc></w:tr></w:tbl></w:ftr>"#,
+            ),
+            w = W_NS,
+            a = A_NS,
+        ),
+    );
+    d2.set_doc_rels(
+        r#"<Relationship Id="rF" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>"#,
+    );
+    let r2 = validate(&d2);
+    assert_eq!(r2.verdict, Verdict::Fail, "{r2:?}");
+    let ord_findings_2: Vec<String> =
+        r2.findings.iter().filter(|f| !f.rule.starts_with("GRAMMAR-")).map(|f| serde_json::to_string(f).unwrap()).collect();
+    assert_eq!(
+        ord_findings_2,
+        vec![
+            r#"{"rule":"FLD-UNBALANCED","severity":"Error","evidence":"Observed","part":"word/footer1.xml","message":"word/footer1.xml has 1 w:fldChar end(s) with no open begin"}"#,
+            r#"{"rule":"REL-REF-MISSING","severity":"Error","evidence":"Inferred","part":"word/footer1.xml","message":"the r:embed value rIdMissing in word/footer1.xml does not resolve to a relationship in that part's .rels"}"#,
+            r#"{"rule":"XML-DOCTYPE","severity":"Error","evidence":"Observed","part":"word/footer1.xml","message":"word/footer1.xml contains a DOCTYPE declaration; see corpus/EVIDENCE.md for measured outcomes"}"#,
+            r#"{"rule":"XML-UNDECLARED-PREFIX","severity":"Corrupt","evidence":"ByConstruction","part":"word/footer1.xml","message":"the namespace prefix `nope` used in word/footer1.xml is not declared"}"#,
+        ]
+    );
+    let ord_notes_2: Vec<&String> = r2.coverage_notes.iter().filter(|n| !n.starts_with("DTD present in ")).collect();
+    assert!(ord_notes_2.is_empty(), "{:?}", r2.coverage_notes);
+    let too_many_2 = rule_findings(&r2, "GRAMMAR-CHILD-TOO-MANY");
+    assert_eq!(too_many_2.len(), 1, "{too_many_2:?}");
+    assert!(
+        too_many_2[0].message.contains("at w:ftr/w:tbl[>=1]/w:tblGrid[>=2] ") && too_many_2[0].message.contains("has at least 2 w:tblGrid elements"),
+        "{:?}",
+        too_many_2[0]
+    );
+    assert_eq!(r2.coverage_notes, vec!["DTD present in word/footer1.xml; grammar checks are incomplete here"]);
+
+    // Non-DOCTYPE control (does not exercise changed grammar paths): zero grammar notes and exact ordinary output.
+    let mut d3 = Doc::minimal();
+    d3.add_with_override(
+        "word/footer1.xml",
+        CT_FOOTER,
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<w:ftr xmlns:w="{w}" xmlns:a="{a}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
+                r#"<w:p><w:r><w:fldChar w:fldCharType="end"/><a:blip r:embed="rIdMissing"/><nope:x/></w:r></w:p>"#,
+                r#"</w:ftr>"#,
+            ),
+            w = W_NS,
+            a = A_NS,
+        ),
+    );
+    d3.set_doc_rels(
+        r#"<Relationship Id="rF" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>"#,
+    );
+    let r3 = validate(&d3);
+    assert_eq!(r3.verdict, Verdict::Fail, "{r3:?}");
+    assert!(r3.coverage_notes.is_empty(), "non-DOCTYPE part must emit zero grammar notes: {:?}", r3.coverage_notes);
+    assert!(grammar_findings(&r3).is_empty(), "{:?}", r3.findings);
 }

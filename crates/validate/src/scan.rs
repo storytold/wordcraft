@@ -11,7 +11,7 @@ use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::{Namespace, NamespaceResolver, QName, ResolveResult};
 
-use crate::grammar::{ElementEvent, GrammarAttrValue, GrammarScope, GrammarWalk};
+use crate::grammar::{DtdTaint, ElementEvent, GrammarAttrValue, GrammarScope, GrammarWalk};
 use crate::observed::{CompleteSet, Completeness, Observed};
 use crate::{Acc, NS_A, NS_DS, NS_M, NS_MC, NS_R, NS_W, NS_W14, NS_W15, NS_W16CID, NS_WP};
 
@@ -1162,7 +1162,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, scope: GrammarSc
                     &attrs,
                     reader.resolver(),
                     scope,
-                    was_suppressed,
+                    was_suppressed || grammar.is_attlist_tainted(),
                     (&state.declared, &[], complete_entities.as_ref().map(|_| &entity_decls)),
                 );
                 let ev = ElementEvent {
@@ -1221,7 +1221,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, scope: GrammarSc
                     &attrs,
                     reader.resolver(),
                     scope,
-                    was_suppressed,
+                    was_suppressed || grammar.is_attlist_tainted(),
                     (&state.declared, &decls, complete_entities.as_ref().map(|_| &entity_decls)),
                 );
                 let ev = ElementEvent {
@@ -1278,6 +1278,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, scope: GrammarSc
                     break;
                 }
                 doctype_seen = true;
+                grammar.note_doctype(doctype_grammar_taint(e.as_ref()), part, acc);
                 let (declared, decl_texts) = parse_doctype_entities(e.as_ref(), acc.limits.facts);
                 complete_entities = declared.into_complete_set();
                 entity_decls = decl_texts;
@@ -1288,25 +1289,20 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, scope: GrammarSc
                 } else {
                     None
                 };
-                if handle_general_ref_event(
-                    part,
-                    outside_err,
-                    (&mut entity_notes, &mut state.fld_state_unknown, &mut grammar),
-                    &mut out,
-                    acc,
-                    |acc| match scan_general_ref(
-                        part,
-                        e.as_ref(),
-                        complete_entities.as_ref(),
-                        &entity_decls,
-                        &mut entity_status,
-                        &mut entity_work,
-                        acc,
-                    ) {
+                if handle_general_ref_event(part, outside_err, (&mut entity_notes, &mut state.fld_state_unknown), &mut out, acc, |acc| {
+                    let outcome =
+                        scan_general_ref(part, e.as_ref(), complete_entities.as_ref(), &entity_decls, &mut entity_status, &mut entity_work, acc);
+                    // Grammar never reads expanded content from `package::load_rels`, so its
+                    // loss signal must come directly from its own event stream, never from
+                    // `rels_content_modelled`.
+                    if matches!(outcome, GeneralRefOutcome::UnresolvedSubset | GeneralRefOutcome::UncheckedReplacement) {
+                        grammar.mark_child_set_incomplete();
+                    }
+                    match outcome {
                         GeneralRefOutcome::UncheckedReplacement if rels_content_modelled => GeneralRefOutcome::Ok,
-                        outcome => outcome,
-                    },
-                ) {
+                        other => other,
+                    }
+                }) {
                     break;
                 }
             }
@@ -1382,9 +1378,9 @@ fn numfmt_attr(
     observation_contract! {
         rules: "-";
         collections: "type.BTreeMap*1,type.Vec*1";
-        scope: "w:numFmt/@w:val attribute read in unsuppressed Wml-scope parts";
-        loss: "unresolvable DOCTYPE subset, nested/markup entity reference, or 8192-byte grammar output bound (ValueUnreadable); unresolved attribute namespace prefix on matching local name (IdentityUnresolved)";
-        fallback: "returns Missing outside unsuppressed Wml w:numFmt; distinguishes Missing, Present(delivered value), ValueUnreadable, and IdentityUnresolved on w:numFmt";
+        scope: "w:numFmt/@w:val attribute read in unsuppressed, non-ATTLIST-tainted Wml-scope parts";
+        loss: "delivered value longer than 8192 UTF-8 bytes across every spelling (literal, character reference, or entity fallback), unresolvable DOCTYPE subset, or nested/markup entity reference (ValueUnreadable); unresolved attribute namespace prefix on matching local name (IdentityUnresolved)";
+        fallback: "returns Missing outside unsuppressed non-ATTLIST Wml w:numFmt; distinguishes Missing, Present(delivered value <= 8192 bytes), ValueUnreadable, and IdentityUnresolved on w:numFmt";
         package_loss: "independent";
     }
 
@@ -1399,7 +1395,7 @@ fn numfmt_attr(
 fn handle_general_ref_event(
     part: &str,
     outside_err: Option<&'static str>,
-    (entity_notes, fld_state_unknown, grammar): (&mut (bool, bool), &mut bool, &mut GrammarWalk),
+    (entity_notes, fld_state_unknown): (&mut (bool, bool), &mut bool),
     out: &mut PartScan,
     acc: &mut Acc,
     resolve: impl FnOnce(&mut Acc) -> GeneralRefOutcome,
@@ -1422,7 +1418,6 @@ fn handle_general_ref_event(
                 acc.set_incomplete();
                 entity_notes.0 = true;
             }
-            grammar.mark_child_set_incomplete();
             false
         }
         GeneralRefOutcome::UncheckedReplacement => {
@@ -1432,7 +1427,6 @@ fn handle_general_ref_event(
                 entity_notes.1 = true;
             }
             *fld_state_unknown = true;
-            grammar.mark_child_set_incomplete();
             false
         }
     }
@@ -3330,33 +3324,37 @@ fn push_normalized_attr_text_bounded(out: &mut String, text: &str, max_len: usiz
     Some(())
 }
 
+/// Maximum UTF-8 byte length of a normalized attribute value delivered to
+/// grammar checks across every delivery path (literal, character reference, and
+/// internal-entity fallback). Values longer than this take `ValueUnreadable`.
+const GRAMMAR_ATTR_MAX_LEN: usize = 8192;
+
 /// The value of a grammar attribute as an XML 1.0 parser delivers it, when it holds references
 /// only to predefined entities, characters, and plain-text internal entities of a resolved DOCTYPE
-/// subset (bounded to 8,192 bytes across all expansions and literal segments, with XML 1.0 §3.3.3
-/// attribute-value whitespace normalization); `None` otherwise. Kept separate from
-/// [`delivered_attribute_value`] so grammar bounds never alter pre-existing consumers.
+/// subset (bounded to [`GRAMMAR_ATTR_MAX_LEN`] UTF-8 bytes across all expansions and literal
+/// segments, with XML 1.0 §3.3.3 attribute-value whitespace normalization); `None` otherwise. Kept
+/// separate from [`delivered_attribute_value`] so grammar bounds never alter pre-existing consumers.
 fn delivered_grammar_attribute_value(raw: &[u8], decls: &BTreeMap<String, String>) -> Option<String> {
     observation_contract! {
         rules: "-";
         collections: "type.BTreeMap*1";
         scope: "one grammar attribute value and the declarations of a resolved internal subset with XML 1.0 attribute-value whitespace normalization";
-        loss: "a reference to anything but a predefined, character or plain internal entity; 8192-byte output bound on both expansions and trailing text";
+        loss: "a reference to anything but a predefined, character or plain internal entity; 8192-byte UTF-8 output bound on both expansions and trailing text";
         fallback: "return no value so caller distinguishes ValueUnreadable without affecting pre-existing consumers or setting Incomplete";
         package_loss: "independent";
     }
 
-    const MAX_LEN: usize = 8192;
     let text = std::str::from_utf8(raw).ok()?;
     let mut out = String::new();
     let mut rest = text;
     while let Some(at) = rest.find('&') {
-        push_normalized_attr_text_bounded(&mut out, rest.get(..at)?, MAX_LEN)?;
+        push_normalized_attr_text_bounded(&mut out, rest.get(..at)?, GRAMMAR_ATTR_MAX_LEN)?;
         let after = rest.get(at + 1..)?;
         let semi = after.find(';')?;
         let name = after.get(..semi)?;
         match name {
             "lt" | "gt" | "amp" | "apos" | "quot" => {
-                if out.len() >= MAX_LEN {
+                if out.len() >= GRAMMAR_ATTR_MAX_LEN {
                     return None;
                 }
                 out.push(match name {
@@ -3374,19 +3372,19 @@ fn delivered_grammar_attribute_value(raw: &[u8], decls: &BTreeMap<String, String
                         None => number.parse().ok()?,
                     };
                     let ch = char::from_u32(code)?;
-                    if out.len().saturating_add(ch.len_utf8()) > MAX_LEN {
+                    if out.len().saturating_add(ch.len_utf8()) > GRAMMAR_ATTR_MAX_LEN {
                         return None;
                     }
                     out.push(ch);
                 } else {
                     let expansion = decls.get(name).filter(|text| text.find(['&', '<']).is_none())?;
-                    push_normalized_attr_text_bounded(&mut out, expansion, MAX_LEN)?;
+                    push_normalized_attr_text_bounded(&mut out, expansion, GRAMMAR_ATTR_MAX_LEN)?;
                 }
             }
         }
         rest = after.get(semi + 1..)?;
     }
-    push_normalized_attr_text_bounded(&mut out, rest, MAX_LEN)?;
+    push_normalized_attr_text_bounded(&mut out, rest, GRAMMAR_ATTR_MAX_LEN)?;
     Some(out)
 }
 
@@ -3582,10 +3580,11 @@ fn namespace_unresolved(id: &ElemId, declared: &[Vec<String>], extra: &[String])
 
 /// Read a namespaced attribute for grammar evaluation, preserving the distinction
 /// between a missing attribute, a present target attribute whose XML-delivered value
-/// was resolved (including plain-text internal entities of a resolved DOCTYPE subset),
-/// a present target attribute whose value could not be delivered (`ValueUnreadable`),
-/// and an attribute with the same local name whose namespace prefix is unresolved
-/// (`IdentityUnresolved`).
+/// was resolved within [`GRAMMAR_ATTR_MAX_LEN`] UTF-8 bytes (across ordinary
+/// normalization, character references, and plain-text internal entities of a resolved
+/// DOCTYPE subset), a present target attribute whose value exceeded the bound or could
+/// not be delivered (`ValueUnreadable`), and an attribute with the same local name
+/// whose namespace prefix is unresolved (`IdentityUnresolved`).
 fn attr_ns_grammar(
     attrs: &[Attribute],
     res: &NamespaceResolver,
@@ -3597,17 +3596,16 @@ fn attr_ns_grammar(
         rules: "-";
         collections: "type.BTreeMap*1,type.Vec*1";
         scope: "namespaced grammar attribute read over one XML element's attributes and resolved internal entities";
-        loss: "unresolvable DOCTYPE subset, nested/markup entity reference, or 8192-byte grammar output bound (ValueUnreadable); unresolved attribute namespace prefix on matching local name (IdentityUnresolved)";
-        fallback: "distinguishes Missing, Present(delivered value), ValueUnreadable, and IdentityUnresolved without altering pre-existing consumers or setting Incomplete";
+        loss: "delivered value longer than 8192 UTF-8 bytes across every spelling (literal, character reference, or entity fallback), unresolvable DOCTYPE subset, or nested/markup entity reference (ValueUnreadable); unresolved attribute namespace prefix on matching local name (IdentityUnresolved)";
+        fallback: "distinguishes Missing, Present(delivered value <= 8192 bytes), ValueUnreadable, and IdentityUnresolved without altering pre-existing consumers or setting Incomplete";
         package_loss: "independent";
     }
 
     if let Some(a) = attrs.iter().find(|a| ns_matches(res.resolve_attribute(a.key).0, uri) && a.key.local_name().as_ref() == name) {
-        let delivered = a
-            .normalized_value(quick_xml::XmlVersion::Implicit1_0)
-            .ok()
-            .map(|v| v.into_owned())
-            .or_else(|| entities.and_then(|decls| delivered_grammar_attribute_value(&a.value, decls)));
+        let delivered = match a.normalized_value(quick_xml::XmlVersion::Implicit1_0) {
+            Ok(v) => (v.len() <= GRAMMAR_ATTR_MAX_LEN).then(|| v.into_owned()),
+            Err(_) => entities.and_then(|decls| delivered_grammar_attribute_value(&a.value, decls)),
+        };
         return match delivered {
             Some(v) => GrammarAttrValue::Present(v),
             None => GrammarAttrValue::ValueUnreadable,
@@ -3708,6 +3706,85 @@ fn find_decl_end(bytes: &[u8], start: usize) -> Option<usize> {
         i += 1;
     }
     None
+}
+
+/// Classify a part's `Event::DocType` prolog event for the grammar DTD-taint
+/// gate: `None` when no internal subset (`[...]`) is present; `InternalSubset`
+/// when an internal subset is present with only `<!ENTITY>`, `<!ELEMENT>`,
+/// `<!NOTATION>`, comments, and PIs; and `InternalSubsetWithAttlist` when the
+/// internal subset contains `<!ATTLIST` or a parameter-entity / unterminated /
+/// unparseable construct where `ATTLIST` cannot be ruled out.
+fn doctype_grammar_taint(raw: &[u8]) -> DtdTaint {
+    let text = String::from_utf8_lossy(raw);
+    let bytes = text.as_bytes();
+    let mut quote: Option<u8> = None;
+    let mut open_bracket = None;
+    let mut i = 0;
+    while let Some(&b) = bytes.get(i) {
+        if let Some(q) = quote {
+            if b == q {
+                quote = None;
+            }
+        } else if b == b'"' || b == b'\'' {
+            quote = Some(b);
+        } else if b == b'[' {
+            open_bracket = Some(i);
+            break;
+        }
+        i += 1;
+    }
+    if quote.is_some() {
+        return DtdTaint::InternalSubsetWithAttlist;
+    }
+    let Some(open) = open_bracket else {
+        return DtdTaint::None;
+    };
+    let Some(close) = text.rfind(']').filter(|&c| c > open) else {
+        return DtdTaint::InternalSubsetWithAttlist;
+    };
+    if text.get(close + 1..).is_some_and(|tail| !tail.trim().is_empty()) {
+        return DtdTaint::InternalSubsetWithAttlist;
+    }
+    let subset = text.get(open + 1..close).unwrap_or_default();
+    let sb = subset.as_bytes();
+    let mut pos = 0;
+    while let Some(&b) = sb.get(pos) {
+        if b.is_ascii_whitespace() {
+            pos += 1;
+            continue;
+        }
+        if sb.get(pos..pos + 4) == Some(b"<!--") {
+            let Some(rel_end) = subset.get(pos + 4..).and_then(|s| s.find("-->")) else {
+                return DtdTaint::InternalSubsetWithAttlist;
+            };
+            pos += 4 + rel_end + 3;
+            continue;
+        }
+        if sb.get(pos..pos + 2) == Some(b"<?") {
+            let Some(rel_end) = subset.get(pos + 2..).and_then(|s| s.find("?>")) else {
+                return DtdTaint::InternalSubsetWithAttlist;
+            };
+            pos += 2 + rel_end + 2;
+            continue;
+        }
+        if b == b'%' {
+            return DtdTaint::InternalSubsetWithAttlist;
+        }
+        if sb.get(pos..pos + 2) == Some(b"<!") {
+            let Some(decl_end) = find_decl_end(sb, pos + 2) else {
+                return DtdTaint::InternalSubsetWithAttlist;
+            };
+            let decl = subset.get(pos + 2..decl_end).unwrap_or_default();
+            let is_safe_decl = matches!(decl.split_once(|c: char| c.is_ascii_whitespace()), Some(("ENTITY" | "ELEMENT" | "NOTATION", _)));
+            if !is_safe_decl {
+                return DtdTaint::InternalSubsetWithAttlist;
+            }
+            pos = decl_end + 1;
+            continue;
+        }
+        return DtdTaint::InternalSubsetWithAttlist;
+    }
+    DtdTaint::InternalSubset
 }
 
 /// Extract declared general entities and their replacement text from a part's DOCTYPE internal subset.
@@ -5186,5 +5263,30 @@ mod tests {
         let found = next_named_entity_ref(&text, 0);
         assert_eq!(found, Some(("target", text.len())));
         assert!(start.elapsed() < std::time::Duration::from_millis(200), "scanning took {:?}", start.elapsed());
+    }
+
+    #[test]
+    fn doctype_grammar_taint_classifies_internal_subsets_and_attlist() {
+        assert!(doctype_grammar_taint(b"w:document") == DtdTaint::None);
+        assert!(doctype_grammar_taint(br#"w:document SYSTEM "ext.dtd""#) == DtdTaint::None);
+        assert!(doctype_grammar_taint(br#"w:document PUBLIC "-//X//Y//EN" "ext[1].dtd""#) == DtdTaint::None);
+
+        assert!(doctype_grammar_taint(br#"w:document []"#) == DtdTaint::InternalSubset);
+        assert!(doctype_grammar_taint(br#"w:document [<!ENTITY a "b">]"#) == DtdTaint::InternalSubset);
+        assert!(doctype_grammar_taint(br#"w:document SYSTEM "ext.dtd" [<!ENTITY a "b">]"#) == DtdTaint::InternalSubset);
+        assert!(doctype_grammar_taint(br#"w:document [<!-- <!ATTLIST fake> --><!ENTITY a "<!ATTLIST fake>">]"#) == DtdTaint::InternalSubset);
+        assert!(doctype_grammar_taint(br#"w:document [<!ELEMENT x EMPTY><!NOTATION n SYSTEM "u">]"#) == DtdTaint::InternalSubset);
+
+        assert!(
+            doctype_grammar_taint(br#"w:ftr [<!ATTLIST tblPr xmlns CDATA "http://schemas.openxmlformats.org/wordprocessingml/2006/main">]"#)
+                == DtdTaint::InternalSubsetWithAttlist
+        );
+        assert!(
+            doctype_grammar_taint(br#"w:numbering [<!ENTITY bad "x"><!ATTLIST w:numFmt w:val CDATA "decimal">]"#)
+                == DtdTaint::InternalSubsetWithAttlist
+        );
+        assert!(doctype_grammar_taint(br#"w:ftr [<!ENTITY % pe "<!ATTLIST x a CDATA '1'>"> %pe;]"#) == DtdTaint::InternalSubsetWithAttlist);
+        assert!(doctype_grammar_taint(br#"w:ftr [<!ENTITY a "b""#) == DtdTaint::InternalSubsetWithAttlist);
+        assert!(doctype_grammar_taint(br#"w:ftr SYSTEM "unclosed [<!ATTLIST x a CDATA '1'>]"#) == DtdTaint::InternalSubsetWithAttlist);
     }
 }

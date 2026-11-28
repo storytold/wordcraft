@@ -45,6 +45,27 @@ use std::collections::{HashMap, HashSet};
 use crate::model::{ChildSpec, Compositor, MaxOccurs, NUM_FMT_VALUES, TypeModel, Variant, element_model, transitional_type_model, type_model};
 use crate::{Acc, NS_A, NS_B, NS_C, NS_M, NS_PIC, NS_W, NS_WP};
 
+/// DTD-taint state for one grammar-scoped XML part, driven solely by the
+/// part's own `Event::DocType` prolog event.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum DtdTaint {
+    /// No DOCTYPE internal subset was present in this part.
+    #[default]
+    None,
+    /// A DOCTYPE with an internal subset was present, without `<!ATTLIST` or
+    /// parameter-entity/unparseable constructs that could synthesize attribute
+    /// or namespace defaults. Required-child absence/shortfall claims are
+    /// suppressed and all sibling ordinals and TOO-MANY counts are lower bounds.
+    InternalSubset,
+    /// A DOCTYPE with an internal subset containing `<!ATTLIST` (or a parameter
+    /// entity / unterminated / unparseable subset where `ATTLIST` cannot be
+    /// ruled out). Because `ATTLIST` can synthesize attribute defaults and
+    /// override `xmlns`/`xmlns:*` bindings on any element, all grammar checks
+    /// (including attribute-value and structural claims) are suppressed in this
+    /// part.
+    InternalSubsetWithAttlist,
+}
+
 /// Which modelled vocabularies a part enables. Conflicting declarations from
 /// content types and relationships never pick a scope by traversal order.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -482,9 +503,9 @@ pub(crate) fn close(frame: &GFrame, part: &str, path: &str, acc: &mut Acc) {
     observation_contract! {
         rules: "GRAMMAR-REQUIRED-CHILD";
         collections: "-";
-        scope: "closed modelled element's direct children in a grammar-scoped XML part";
-        loss: "fallback selection, skipped mc:AlternateContent child, unresolved-namespace direct child, or unexpanded entity reference in element content";
-        fallback: "skip required-child check when the element's child set is incomplete; emit Warning only and never set Incomplete";
+        scope: "closed modelled element's direct children in a non-DTD-tainted grammar-scoped XML part";
+        loss: "DTD internal subset (part-level DTD taint), fallback selection, skipped mc:AlternateContent child, unresolved-namespace direct child, or unexpanded entity reference in element content";
+        fallback: "skip required-child check when the part is DTD-tainted or the element's child set is incomplete; emit Warning only and never set Incomplete";
         package_loss: "independent";
     }
 
@@ -589,9 +610,9 @@ pub(crate) fn judge_child(frame: &mut GFrame, child: &str, part: &str, child_pat
     observation_contract! {
         rules: "GRAMMAR-CHILD-NOT-ALLOWED,GRAMMAR-CHILD-TOO-MANY";
         collections: "-";
-        scope: "direct modelled child of an open modelled element in a grammar-scoped XML part";
-        loss: "fallback parents have no single model; Transitional overrides veto Strict-only offences; prior unexpanded entity, skipped mc:AlternateContent, or matching-local unresolved-namespace sibling in parent makes child counts a lower bound";
-        fallback: "fallback parents check union membership only and skip cardinality/order; GRAMMAR-CHILD-TOO-MANY reports at least N when child counts are a lower bound; emits Warning only";
+        scope: "direct modelled child of an open modelled element in a grammar-scoped XML part (suppressed in ATTLIST-tainted parts)";
+        loss: "DTD internal subset (taint forces lower-bound counts, and ATTLIST suppresses structural checks because xmlns defaults can alter element identities), fallback parents have no single model, Transitional overrides veto Strict-only offences, prior unexpanded entity, skipped mc:AlternateContent, or matching-local unresolved-namespace sibling in parent makes child counts a lower bound";
+        fallback: "fallback parents check union membership only and skip cardinality/order; GRAMMAR-CHILD-TOO-MANY reports at least N when DTD-tainted or child counts are a lower bound; emits Warning only";
         package_loss: "independent";
     }
 
@@ -715,9 +736,9 @@ pub(crate) fn judge_num_fmt(val: &GrammarAttrValue, part: &str, path: &str, acc:
     observation_contract! {
         rules: "GRAMMAR-NUMFMT-VALUE";
         collections: "-";
-        scope: "w:numFmt/@w:val in Wml-scope parts against the 63-value ST_NumberFormat table";
-        loss: "missing w:val attribute carries no value; bound w:val with undeliverable value (ValueUnreadable) cannot be read; unresolved-prefix val attribute (IdentityUnresolved) has uncertain namespace identity";
-        fallback: "exact case-sensitive membership check on delivered values; missing attribute stays silent; ValueUnreadable and IdentityUnresolved skip NUMFMT and return distinct skip reasons for truthful grammar coverage disclosure without Incomplete";
+        scope: "w:numFmt/@w:val in Wml-scope parts (excluding ATTLIST-tainted parts) against the 63-value ST_NumberFormat table";
+        loss: "ATTLIST-tainted DOCTYPE subset suppresses grammar attribute claims for the part; missing w:val attribute carries no value; bound w:val exceeding 8192 delivered bytes or with undeliverable value (ValueUnreadable) cannot be read; unresolved-prefix val attribute (IdentityUnresolved) has uncertain namespace identity";
+        fallback: "exact case-sensitive membership check on delivered values up to 8192 bytes; missing attribute stays silent; ValueUnreadable and IdentityUnresolved skip NUMFMT and return distinct skip reasons for truthful grammar coverage disclosure without Incomplete";
         package_loss: "independent";
     }
 
@@ -807,6 +828,8 @@ impl WalkFrame {
 /// active [`GrammarScope`].
 pub(crate) struct GrammarWalk {
     scope: GrammarScope,
+    dtd_taint: DtdTaint,
+    dtd_taint_noted: bool,
     frames: Vec<WalkFrame>,
     fallback_noted: HashSet<String>,
     cap_noted: bool,
@@ -820,7 +843,7 @@ impl GrammarWalk {
         observation_contract! {
             rules: "-";
             collections: "type.HashSet*1,type.Vec*1";
-            scope: "per-part streaming grammar element stack and deduplication sets";
+            scope: "per-part streaming grammar element stack, DTD-taint state, and deduplication sets";
             loss: "inactive or conflicting part scope disables grammar checks for this part";
             fallback: "zero-cost no-op when scope is inactive; never sets Incomplete";
             package_loss: "independent";
@@ -828,12 +851,51 @@ impl GrammarWalk {
 
         Self {
             scope,
+            dtd_taint: DtdTaint::None,
+            dtd_taint_noted: false,
             frames: Vec::new(),
             fallback_noted: HashSet::new(),
             cap_noted: false,
             unreadable_attr_noted: false,
             unresolved_attr_noted: false,
         }
+    }
+
+    /// Record DTD-taint state observed from the part's own `Event::DocType`
+    /// prolog event and disclose the taint once per grammar-scoped part on the
+    /// grammar note channel.
+    pub(crate) fn note_doctype(&mut self, taint: DtdTaint, part: &str, acc: &mut Acc) {
+        if !self.scope.is_active() || taint == DtdTaint::None {
+            return;
+        }
+        self.dtd_taint = match (self.dtd_taint, taint) {
+            (DtdTaint::InternalSubsetWithAttlist, _) | (_, DtdTaint::InternalSubsetWithAttlist) => DtdTaint::InternalSubsetWithAttlist,
+            (DtdTaint::InternalSubset, _) | (_, DtdTaint::InternalSubset) => DtdTaint::InternalSubset,
+            (DtdTaint::None, DtdTaint::None) => DtdTaint::None,
+        };
+        if !self.dtd_taint_noted {
+            self.dtd_taint_noted = true;
+            let msg = match self.dtd_taint {
+                DtdTaint::InternalSubset => format!("DTD present in {part}; grammar checks are incomplete here"),
+                DtdTaint::InternalSubsetWithAttlist => {
+                    format!("DTD present in {part} (with ATTLIST); grammar checks are incomplete here")
+                }
+                DtdTaint::None => return,
+            };
+            acc.note_grammar(msg);
+        }
+    }
+
+    /// Whether the part carries a DOCTYPE internal subset (tainted for grammar).
+    fn is_dtd_tainted(&self) -> bool {
+        self.dtd_taint != DtdTaint::None
+    }
+
+    /// Whether the part's DOCTYPE internal subset contains `<!ATTLIST` (or
+    /// unparseable / parameter-entity constructs where `ATTLIST` cannot be
+    /// ruled out), suppressing all grammar attribute and structural claims.
+    pub(crate) fn is_attlist_tainted(&self) -> bool {
+        self.dtd_taint == DtdTaint::InternalSubsetWithAttlist
     }
 
     /// Mark the currently open element's direct-child stream as incomplete (for
@@ -846,12 +908,12 @@ impl GrammarWalk {
             rules: "-";
             collections: "field.frames*1";
             scope: "currently open element in a grammar-scoped XML part (modelled or unmodelled)";
-            loss: "unexpanded entity reference in element content";
-            fallback: "suppresses GRAMMAR-REQUIRED-CHILD on the affected open modelled element and marks subsequent sibling ordinals and child counts under this element as lower bounds; unaffected elements stay exact; never sets Incomplete";
+            loss: "unexpanded entity reference in element content, driven directly by grammar's own event stream";
+            fallback: "suppresses GRAMMAR-REQUIRED-CHILD on the affected open modelled element and marks subsequent sibling ordinals and child counts under this element as lower bounds; unaffected elements stay exact unless the part is DTD-tainted; never sets Incomplete";
             package_loss: "independent";
         }
 
-        if !self.scope.is_active() {
+        if !self.scope.is_active() || self.is_attlist_tainted() {
             return;
         }
         if let Some(frame) = self.frames.last_mut()
@@ -867,20 +929,22 @@ impl GrammarWalk {
     /// Compute the occurrence path for an element about to open under the
     /// current top frame. Elements whose namespace is unknown/unresolved render
     /// `{?}local[?]` (or `{?}local` at root). Known-namespace elements retain
-    /// exact 1-based `[n]` ordinals while no child-stream loss occurred in the
-    /// parent; after parent loss they render lower-bound `[>=n]`; unmodelled
-    /// names past [`PATH_ORDINAL_CAP`] or overflowing `u32` render `[?]`.
+    /// exact 1-based `[n]` ordinals while the part is not DTD-tainted and no
+    /// child-stream loss occurred in the parent; in a DTD-tainted part or after
+    /// parent loss they render lower-bound `[>=n]`; unmodelled names past
+    /// [`PATH_ORDINAL_CAP`] or overflowing `u32` render `[?]`.
     fn next_path(&mut self, ev: &ElementEvent<'_>) -> String {
         observation_contract! {
             rules: "-";
             collections: "field.child_counts*3,field.frames*1";
             scope: "1-based sibling occurrence path from the part root for grammar findings";
-            loss: "distinct unmodelled sibling names capped at 1024 per parent frame; u32 ordinal overflow; unknown/unresolved element namespace; prior unexpanded entity, skipped mc:AlternateContent, or matching-local unresolved-namespace sibling in parent frame";
-            fallback: "modelled sibling names are never capped and retain exact [n] ordinals when no parent child-stream loss occurred; after parent loss, subsequent known-namespace siblings render lower-bound [>=n]; elements with unknown/unresolved namespaces render {?}local[?] (or {?}local at root) instead of bare no-namespace names; unmodelled names past the cap or overflowing u32 render [?]";
+            loss: "DTD internal subset (part-level DTD taint); distinct unmodelled sibling names capped at 1024 per parent frame; u32 ordinal overflow; unknown/unresolved element namespace; prior unexpanded entity, skipped mc:AlternateContent, or matching-local unresolved-namespace sibling in parent frame";
+            fallback: "modelled sibling names are never capped and retain exact [n] ordinals when not DTD-tainted and no parent child-stream loss occurred; when DTD-tainted or after parent loss, known-namespace siblings render lower-bound [>=n]; elements with unknown/unresolved namespaces render {?}local[?] (or {?}local at root) instead of bare no-namespace names; unmodelled names past the cap or overflowing u32 render [?]";
             package_loss: "independent";
         }
 
         let display = display_name(ev.ns, ev.local, ev.ns_unknown);
+        let dtd_tainted = self.is_dtd_tainted();
         match self.frames.last_mut() {
             None => display,
             Some(parent) => {
@@ -904,7 +968,7 @@ impl GrammarWalk {
                         None
                     }
                 };
-                let lower_bound = parent.is_child_count_lower_bound(ev.local);
+                let lower_bound = dtd_tainted || parent.is_child_count_lower_bound(ev.local);
                 match (ordinal, lower_bound) {
                     (Some(n), false) => format!("{}/{display}[{n}]", parent.path),
                     (Some(n), true) => format!("{}/{display}[>={n}]", parent.path),
@@ -921,12 +985,12 @@ impl GrammarWalk {
             rules: "-";
             collections: "field.fallback_noted*1,field.frames*2";
             scope: "streaming grammar evaluation for one XML start/empty event";
-            loss: "suppressed mc:AlternateContent subtrees, unresolved namespaces, undeliverable w:val values, unresolved-prefix val attributes, or >32 unmodelled child names";
-            fallback: "records distinct isolated informational grammar notes for undeliverable values vs unresolved attribute identity, propagates parent lower-bound uncertainty for mc:AlternateContent and unresolved-namespace children, never calls set_incomplete(), emits Warning only";
+            loss: "DTD internal subset (taint forces lower-bound counts/ordinals and ATTLIST suppresses all grammar checks), suppressed mc:AlternateContent subtrees, unresolved namespaces, undeliverable w:val values, unresolved-prefix val attributes, or >32 unmodelled child names";
+            fallback: "records distinct isolated informational grammar notes for DTD taint, undeliverable values, and unresolved attribute identity, propagates parent lower-bound uncertainty for DTD taint, mc:AlternateContent, and unresolved-namespace children, never calls set_incomplete(), emits Warning only";
             package_loss: "independent";
         }
 
-        if ev.suppressed {
+        if ev.suppressed || self.is_attlist_tainted() {
             return None;
         }
         if self.scope == GrammarScope::Wml && ev.ns == Some(NS_W.as_bytes()) && ev.local == "numFmt" {
@@ -947,8 +1011,9 @@ impl GrammarWalk {
             }
         }
         let child = display_name(ev.ns, ev.local, ev.ns_unknown);
+        let dtd_tainted = self.is_dtd_tainted();
         if let Some(parent) = self.frames.last_mut() {
-            let count_lower_bound = parent.is_child_count_lower_bound(ev.local);
+            let count_lower_bound = dtd_tainted || parent.is_child_count_lower_bound(ev.local);
             if ev.is_alt {
                 parent.all_ordinals_lower_bound = true;
             }
@@ -997,12 +1062,12 @@ impl GrammarWalk {
             rules: "-";
             collections: "field.frames*1,type.HashMap*1,type.Vec*1";
             scope: "push one XML start-element frame onto the per-part grammar stack";
-            loss: "inactive or conflicting scope is a no-op";
+            loss: "inactive/conflicting scope or ATTLIST-tainted DOCTYPE is a no-op";
             fallback: "suppressed subtrees keep stack balance without emitting grammar findings";
             package_loss: "independent";
         }
 
-        if !self.scope.is_active() {
+        if !self.scope.is_active() || self.is_attlist_tainted() {
             return;
         }
         let path = if ev.suppressed { String::new() } else { self.next_path(ev) };
@@ -1020,11 +1085,13 @@ impl GrammarWalk {
 
     /// Process an empty tag (`Event::Empty`): opens and closes immediately.
     pub(crate) fn empty(&mut self, ev: &ElementEvent<'_>, part: &str, acc: &mut Acc) {
-        if !self.scope.is_active() {
+        if !self.scope.is_active() || self.is_attlist_tainted() {
             return;
         }
         let path = if ev.suppressed { String::new() } else { self.next_path(ev) };
-        if let Some(g) = self.enter_element(ev, part, &path, acc) {
+        if let Some(g) = self.enter_element(ev, part, &path, acc)
+            && !self.is_dtd_tainted()
+        {
             close(&g, part, &path, acc);
         }
     }
@@ -1035,16 +1102,17 @@ impl GrammarWalk {
             rules: "-";
             collections: "field.frames*1";
             scope: "pop one XML end-element frame and judge its closed required children";
-            loss: "inactive or conflicting scope is a no-op";
-            fallback: "prefix-established on closed elements; emits Warning only";
+            loss: "inactive/conflicting scope or DTD-tainted part skips required-child checks";
+            fallback: "prefix-established on closed elements in non-tainted parts; emits Warning only";
             package_loss: "independent";
         }
 
-        if !self.scope.is_active() {
+        if !self.scope.is_active() || self.is_attlist_tainted() {
             return;
         }
         if let Some(f) = self.frames.pop()
             && !f.suppressed
+            && !self.is_dtd_tainted()
             && let Some(g) = &f.grammar
         {
             close(g, part, &f.path, acc);
