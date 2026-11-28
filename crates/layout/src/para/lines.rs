@@ -430,19 +430,15 @@ impl<'e> Breaker<'e> {
                 let table_h = if matches!(self.rp.line_spacing, LineSpacing::Exactly(_)) { self.table_h } else { v.height };
                 let row = (self.top, v.height, table_h);
                 let spans = row_spans(self.exclusions, row, (sc.row_lo, self.base_right), self.tight_indent);
-                let current = spans.as_ref().ok().and_then(|spans| {
-                    spans.iter().position(|(left, right)| *left <= sc.left + 0.01 && *right >= sc.right_edge - 0.01)
-                });
+                let current = spans
+                    .as_ref()
+                    .ok()
+                    .and_then(|spans| spans.iter().position(|(left, right)| *left <= sc.left + 0.01 && *right >= sc.right_edge - 0.01));
                 if let Some(current) = current {
                     // Keep the remaining spans, updated for the measured height. In a joined
                     // paragraph they can include the area continuing below the shared line.
                     self.row_h = v.height;
-                    self.row_rest = spans
-                        .as_ref()
-                        .ok()
-                        .into_iter()
-                        .flat_map(|spans| spans.iter().skip(current + 1).copied())
-                        .collect();
+                    self.row_rest = spans.as_ref().ok().into_iter().flat_map(|spans| spans.iter().skip(current + 1).copied()).collect();
                 } else {
                     self.top = match spans {
                         Err(below) => below,
