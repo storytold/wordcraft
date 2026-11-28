@@ -17,8 +17,8 @@
 
 use std::sync::OnceLock;
 
+use vello_cpu::Resources;
 use vello_cpu::kurbo::{self, Affine, BezPath};
-use vello_cpu::{RenderContext, Resources};
 use wordcraft_doc::props::Rgb;
 
 use crate::Rendered;
@@ -633,7 +633,7 @@ fn flatten(d: &str) -> Result<Vec<(Vec<[f32; 2]>, bool)>, String> {
 /// Rasterise `icon` into a transparent `px`×`px` image in `ink` (premultiplied RGBA).
 pub fn render(icon: &Icon, px: u32, ink: Rgb) -> Rendered {
     let side = px.clamp(8, 4096) as u16;
-    let mut ctx = RenderContext::new_with(side, side, vello_cpu::RenderSettings { num_threads: crate::default_threads(), ..Default::default() });
+    let mut ctx = crate::context_pool::CONTEXTS.take(side, side);
     ctx.set_transform(Affine::scale(side as f64 / GRID as f64));
     ctx.set_paint(crate::color(ink, 1.0));
     ctx.set_stroke(kurbo::Stroke::new(STROKE as f64).with_caps(kurbo::Cap::Round).with_join(kurbo::Join::Round));
@@ -658,6 +658,7 @@ pub fn render(icon: &Icon, px: u32, ink: Rgb) -> Rendered {
     if let Some(pm) = vello_cpu::PixmapMut::new(side, side, &mut pixels) {
         ctx.render(pm, &mut res);
     }
+    crate::context_pool::CONTEXTS.give_back(ctx);
     Rendered { width: side as u32, height: side as u32, pixels }
 }
 

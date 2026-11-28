@@ -12,6 +12,12 @@ workspace = true
 wordcraft-doc = { workspace = true }
 wordcraft-engine = { workspace = true }
 wordcraft-render = { workspace = true }
-wordcraft-control-key = { workspace = true }
+craft-mcp-server = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+
+# The bridge to a running app (`Remote`): the control channel's authenticate-once client and token
+# lookup, which do not build for wasm32.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wordcraft-control-key = { workspace = true }
+craft = { workspace = true, features = ["automation"] }

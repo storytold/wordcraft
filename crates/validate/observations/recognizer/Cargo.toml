@@ -1,0 +1,19 @@
+[package]
+name = "observation-recognizer"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Standalone audit tooling: no dependency enters the validator or its WASM build.
+[workspace]
+
+[dependencies]
+syn = { version = "=2.0.119", features = ["full", "visit", "parsing", "extra-traits"] }
+proc-macro2 = "=1.0.107"
+quote = "=1.0.47"
+serde_json = "=1.0.154"
+
+# This parser is exercised repeatedly by the ordinary contract test.
+[profile.dev]
+opt-level = 3

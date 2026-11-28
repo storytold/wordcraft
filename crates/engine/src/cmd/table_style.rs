@@ -97,6 +97,14 @@ fn build_new(s: &Session, v: &Value) -> Result<Style, CmdError> {
     };
     let id = s.doc.styles.new_id(&name);
     let mut st = Style { id, name, kind: StyleKind::Table, based_on, priority: Some(99), ..Default::default() };
+    // Bands of one row and one column unless the style it's based on sets them: Word, like us,
+    // reads a style with no band size as having no bands (#3415).
+    let base = st.based_on.as_deref().and_then(|b| s.doc.styles.table_style(b)).map(|t| t.parts).unwrap_or_default();
+    if base.band_size.is_none() || base.col_band_size.is_none() {
+        let parts = st.table.get_or_insert_with(TableStyleParts::default);
+        parts.band_size = base.band_size.is_none().then_some(1);
+        parts.col_band_size = base.col_band_size.is_none().then_some(1);
+    }
     edit(&mut st, v)?;
     Ok(st)
 }
@@ -104,7 +112,7 @@ fn build_new(s: &Session, v: &Value) -> Result<Style, CmdError> {
 fn new_style(s: &mut Session, v: &Value) -> CmdResult {
     let st = build_new(s, v)?;
     let id = st.id.clone();
-    s.doc.styles.upsert(st);
+    Arc::make_mut(&mut s.doc.styles).upsert(st);
     s.dirty = true;
     if p::bool(v, "apply").unwrap_or(true) {
         apply(s, &id)?;
@@ -123,7 +131,7 @@ fn target(s: &Session, v: &Value) -> Result<String, CmdError> {
 fn modify_style(s: &mut Session, v: &Value) -> CmdResult {
     let st = build_modified(s, v)?;
     let id = st.id.clone();
-    s.doc.styles.upsert(st);
+    Arc::make_mut(&mut s.doc.styles).upsert(st);
     s.dirty = true;
     if p::bool(v, "apply").unwrap_or(false) {
         apply(s, &id)?;
@@ -181,7 +189,7 @@ pub fn preview(s: &Session, v: &Value) -> Option<TableStyleProps> {
         build_new(s, &v).ok()?
     };
     let id = st.id.clone();
-    let mut sheet = s.doc.styles.clone();
+    let mut sheet = (*s.doc.styles).clone();
     sheet.upsert(st);
     sheet.table_style(&id)
 }
@@ -206,7 +214,7 @@ pub fn delete(s: &mut Session, id: &str) -> CmdResult {
         return Err(CmdError::Failed(format!("`{}` is a built-in table style and can't be deleted", st.name)));
     }
     let mut rebased = Vec::new();
-    for child in s.doc.styles.styles.iter_mut().filter(|c| c.based_on.as_deref() == Some(id.as_str())) {
+    for child in Arc::make_mut(&mut s.doc.styles).styles.iter_mut().filter(|c| c.based_on.as_deref() == Some(id.as_str())) {
         let mut para = st.para.clone();
         para.overlay(&child.para);
         child.para = para;
@@ -223,7 +231,7 @@ pub fn delete(s: &mut Session, id: &str) -> CmdResult {
         child.based_on = st.based_on.clone();
         rebased.push(child.id.clone());
     }
-    s.doc.styles.styles.retain(|x| x.id != id);
+    Arc::make_mut(&mut s.doc.styles).styles.retain(|x| x.id != id);
     let fallback = table_style_id(s, "TableGrid");
     let mut tables = restyle(&mut s.doc.body, &id, fallback.as_deref(), 0);
     for part in s.doc.parts.values_mut() {
