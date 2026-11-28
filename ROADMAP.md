@@ -374,6 +374,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-10-28: Convert Notes walks reference offsets and formatting runs together instead of rescanning all references for every run (#4750). Note text, IDs, custom marks, styles, history and saved content retain their behavior. Synthetic scaling, CLI/MCP and native/DOCX reopen coverage; readiness estimates unchanged.
 - 2026-10-28: RTF import keeps pictures stored as Windows Metafiles (`\wmetafile8`, as Word writes a pasted or floating picture) and Enhanced Metafiles (`\emfblip`); they were dropped, so such a document opened without its pictures. They are drawn by the metafile renderer, saved to .docx as `.wmf`/`.emf` media, and saved to .rtf as metafiles again (RTF export dropped them too). (#4259)
 - 2026-10-28: A window restored to a place no monitor covers now opens centred on the primary monitor. Before, a monitor replaced by one of the same size left the window off screen, and the app seemed to close as soon as it started.
+- 2026-10-25: Review › Accept and Reject and Home › Paste are split buttons: a click on the icon runs Accept and Move to Next, Reject and Move to Next or Paste, and a click on the label opens the menu. Before, a click anywhere on these buttons only opened the menu.
 - 2026-10-27: File › Options › Proofing › AutoCorrect Options opens with no document open (#4585). On the Start screen, or after closing the last document, the button did nothing: AutoCorrect wasn't among the commands allowed without a document. Its options are user preferences, so changes made there are kept for the next document.
 - 2026-10-27: File › Print: Return prints, as in Word, where ⌘P opens on Print as the default button; a field or list on the page keeps Return while it has the keyboard.
 - 2026-10-26: Thirteen dialogs group related settings in theme-aware panels with indented contents; tall dialogs scroll only when needed (#4035, #4038).
@@ -1074,6 +1075,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-01 | trivial | Progress log: SEQ, STYLEREF and REF fields show fresh results in output |
 | 2026-11-01 | trivial | Progress log: Language packs install from File › Options › Language and the missing-pack bar once language-packs-1 is published (CP4) |
 | 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |
+| 2026-10-25 | trivial | Progress log: Accept, Reject and Paste are split buttons |
 | 2026-11-01 | trivial | Progress log: arrowheads keep their kind, width and length and are drawn at Word's sizes |
 | 2026-11-01 | trivial | Progress log: columns for selected text draw their line between (#5178) |
 | 2026-11-01 | trivial | Progress log: a middle or bottom cell of a row split across pages lines up on the first page |
