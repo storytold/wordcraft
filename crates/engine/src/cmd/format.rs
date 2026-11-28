@@ -21,7 +21,7 @@ pub fn specs() -> Vec<CommandSpec> {
             toggle(
                 s,
                 v,
-                |r| r.bold,
+                shown_bold,
                 |c, on| {
                     c.bold = Some(on);
                     c.bold_cs = Some(on);
@@ -34,7 +34,7 @@ pub fn specs() -> Vec<CommandSpec> {
             toggle(
                 s,
                 v,
-                |r| r.italic,
+                shown_italic,
                 |c, on| {
                     c.italic = Some(on);
                     c.italic_cs = Some(on);
@@ -138,6 +138,17 @@ pub fn specs() -> Vec<CommandSpec> {
             apply(s, &|c| c.position = Some(x))
         })
         .params(r#"{"points": number}"#),
+        // Font › Emphasis mark: a mark over (or under) each character.
+        CommandSpec::new("format.emphasisMark", "Emphasis Mark", "Home › Font › Font", |s, v| {
+            use wordcraft_doc::props::EmphasisMark;
+            let name = p::str(v, "mark").unwrap_or("dot");
+            let mark = EmphasisMark::ALL
+                .into_iter()
+                .find(|m| m.ooxml().eq_ignore_ascii_case(name.trim()))
+                .ok_or_else(|| CmdError::Params(format!("unknown emphasis mark `{name}` (none, dot, comma, circle, underDot)")))?;
+            apply(s, &|c| c.emphasis = Some(mark))
+        })
+        .params(r#"{"mark"?: "none" | "dot" | "comma" | "circle" | "underDot"}"#),
         CommandSpec::new("format.charStyle", "Apply Character Style", "Home › Styles", char_style).params(r#"{"style": string}"#),
         CommandSpec::new("format.set", "Set Character Formatting", "Home › Font › Font", set).params(r#"{"props": CharProps}"#),
         CommandSpec::new("format.fontDialog", "Font Dialog", "Home › Font", |s, _| {
@@ -270,7 +281,10 @@ fn resolved(s: &Session) -> Vec<ResolvedChar> {
             return out;
         }
     }
-    let Some((a, b)) = selected_text_box(s).or_else(|| target(s)) else {
+    // Formatting waiting at a caret is what the caret shows, also inside a word: after Backspace
+    // it is the deleted character's (#6518), as Word's buttons show it.
+    let waiting = s.sel.is_collapsed() && s.waiting().is_some();
+    let Some((a, b)) = selected_text_box(s).or_else(|| target(s)).filter(|_| !waiting) else {
         let f = &s.sel.focus;
         let style = s.doc.para_at(f).and_then(|p| p.props.style.clone());
         out.push(s.doc.styles.resolve_char(style.as_deref(), &s.typing_props()));
@@ -299,6 +313,18 @@ fn resolved(s: &Session) -> Vec<ResolvedChar> {
     out
 }
 
+/// Bold as drawn: a run marked complex script (`w:cs`) or right to left (`w:rtl`) shows its
+/// complex-script bold.
+fn shown_bold(r: &ResolvedChar) -> bool {
+    if r.cs || r.rtl { r.bold_cs } else { r.bold }
+}
+
+/// Italic as drawn: a run marked complex script (`w:cs`) or right to left (`w:rtl`) shows its
+/// complex-script italic.
+fn shown_italic(r: &ResolvedChar) -> bool {
+    if r.cs || r.rtl { r.italic_cs } else { r.italic }
+}
+
 fn toggle(s: &mut Session, v: &Value, get: fn(&ResolvedChar) -> bool, set: fn(&mut CharProps, bool)) -> CmdResult {
     let on = match p::bool(v, "value") {
         Some(b) => b,
@@ -325,7 +351,7 @@ fn font(s: &mut Session, v: &Value) -> CmdResult {
         let Some(n) = v.get(k) else { return Ok(None) };
         let n = n.as_str().map(str::trim).unwrap_or("");
         if n.is_empty() || n.len() > 128 {
-            return Err(CmdError::Params(format!("bad font name `{k}`")));
+            return Err(CmdError::Params(format!("`{k}` must be a non-empty font name of at most 128 bytes")));
         }
         Ok(Some(n.to_string()))
     };
@@ -866,12 +892,18 @@ pub fn state(s: &Session) -> Value {
     let at = selected_text_box(s).map_or_else(|| s.sel.focus.clone(), |(a, _)| a);
     let style = s.doc.para_at(&at).and_then(|p| p.props.style.clone()).unwrap_or_else(|| "Normal".into());
     let style_name = s.doc.styles.get(&style).map(|st| st.name.clone()).unwrap_or(style.clone());
+    let font = same(&|r| json!(r.font));
+    // The font's substitute when it isn't installed: the face its text is drawn in, apart from
+    // characters the substitute lacks. `font.missing` lists every face the shown text is drawn
+    // in, fallback faces too, and which fonts change the layout.
+    let shown_as = font.as_str().and_then(|f| crate::cmd::font::shown_as(&s.doc, f));
     json!({
-        "font": same(&|r| json!(r.font)),
+        "font": font,
+        "fontShownAs": shown_as,
         "fontEastAsia": same(&|r| json!(r.font_ea)),
         "size": same(&|r| json!(r.size)),
-        "bold": all.iter().all(|r| r.bold),
-        "italic": all.iter().all(|r| r.italic),
+        "bold": all.iter().all(shown_bold),
+        "italic": all.iter().all(shown_italic),
         "underline": all.iter().all(|r| r.underline != Underline::None),
         "underlineColor": same(&|r| json!(r.underline_color.map_or_else(|| "auto".to_string(), |c| c.hex()))),
         "strike": all.iter().all(|r| r.strike),
@@ -882,6 +914,7 @@ pub fn state(s: &Session) -> Value {
         "caps": all.iter().all(|r| r.caps),
         "hidden": all.iter().all(|r| r.hidden),
         "spacing": same(&|r| json!(r.spacing)),
+        "emphasisMark": same(&|r| json!(r.emphasis.ooxml())),
         // Kerning for fonts: the smallest kerned size, points; 0 = off.
         "kern": same(&|r| json!(r.kern)),
         "color": same(&|r| json!(match r.color { TextColor::Auto => "auto".to_string(), TextColor::Rgb(c) => c.hex() })),
