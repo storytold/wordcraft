@@ -9,6 +9,7 @@ use craft::behavior::{EditEvent, MotionMode, keyed};
 use craft::ui::buttons::Button;
 use craft::ui::contract::{Bind, Entry, Props as _, Show, ShowCollection, ShowContainer};
 use craft::ui::display::{Elide, Shade, Text};
+use craft::ui::form::{SliderField, SliderFieldLayout};
 use craft::ui::layout_components::Row;
 use craft::ui::list::{List, ListRow};
 use craft::ui::patterns::preferences::{GroupSpec, PageSpec, PrefValue, PreferencesModel, PreferencesPage, RowKind, RowSpec};
@@ -302,7 +303,6 @@ impl PreferencesModel for OptionsModel<'_> {
         use crate::StatusCount;
         use crate::scroll::ScrollSpeed;
         use crate::theme::{Animations, Appearance};
-        use wordcraft_engine::speech::{MAX_RATE, MIN_RATE};
         let app = &*self.app;
         let s = &self.strings;
         let prefs = &app.session.prefs;
@@ -375,7 +375,8 @@ impl PreferencesModel for OptionsModel<'_> {
                         b("display.spaces", tl!("Spaces"), marks.spaces),
                         b("display.paragraphs", tl!("Paragraph marks"), marks.paragraphs),
                         b("display.hidden", tl!("Hidden text"), marks.hidden),
-                        b("display.allMarks", tl!("Show all formatting marks"), app.session.view.marks),
+                        b("display.allMarks", tl!("Show all formatting marks"), app.session.view.marks)
+                            .help(tl!("These marks show even when Show/Hide ¶ is off.")),
                     ],
                 ),
                 GroupSpec::new(
@@ -404,8 +405,7 @@ impl PreferencesModel for OptionsModel<'_> {
                     ],
                 ),
             ],
-        )
-        .footnote(tl!("These marks show even when Show/Hide ¶ is off."));
+        );
 
         let proofing = page_of(
             "proofing",
@@ -445,7 +445,11 @@ impl PreferencesModel for OptionsModel<'_> {
                 GroupSpec::new(Some(tl!("Save documents")), {
                     // The browser can't write to the user's files, so AutoSave can't be turned on there (#176).
                     let row = b("save.autosave", tl!("AutoSave documents you have saved in WordCraft"), app.autosave && !browser).enabled(!browser);
-                    vec![if browser { row.help(&s.autosave_reason) } else { row }]
+                    vec![row.help(if browser {
+                        &s.autosave_reason
+                    } else {
+                        tl!("AutoSave writes your changes to the file a moment after you stop typing.")
+                    })]
                 }),
                 // The open document's `file.privacyOptions` (#1062): saved with it, honoured when it is saved.
                 GroupSpec::new(
@@ -460,12 +464,12 @@ impl PreferencesModel for OptionsModel<'_> {
                             "save.removeDateTime",
                             tl!("Leave out the date and time of comments and tracked changes when saving"),
                             settings.remove_date_time,
-                        ),
+                        )
+                        .help(tl!("The document you are editing keeps the names and dates; only the saved file leaves them out.")),
                     ],
                 ),
             ],
-        )
-        .footnote(tl!("AutoSave writes your changes to the file a moment after you stop typing."));
+        );
 
         let language = page_of(
             "language",
@@ -486,11 +490,7 @@ impl PreferencesModel for OptionsModel<'_> {
                 GroupSpec::new(
                     Some(tl!("Dictionaries")),
                     vec![
-                        RowSpec::new(
-                            "language.dictionariesFolder",
-                            tl!("Dictionaries folder:"),
-                            RowKind::Text(prefs.dictionaries_folder.as_deref().unwrap_or("")),
-                        )
+                        RowSpec::new("language.dictionariesFolder", tl!("Dictionaries folder:"), RowKind::Custom)
                         .help(tl!("Hunspell .aff and .dic files here (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) are used before the system's.\nAn installed Language pack is used after this folder.")),
                         custom("language.dictionaryFiles", tl!("Dictionary files")),
                     ],
@@ -523,12 +523,7 @@ impl PreferencesModel for OptionsModel<'_> {
                 GroupSpec::new(
                     Some(tl!("Read Aloud")),
                     vec![
-                        RowSpec::new(
-                            "accessibility.readAloudSpeed",
-                            tl!("Speed"),
-                            RowKind::float(app.session.read_aloud.rate() as f64, (MIN_RATE as f64)..=(MAX_RATE as f64), 2),
-                        )
-                        .step(0.05),
+                        RowSpec::new("accessibility.readAloudSpeed", tl!("Speed"), RowKind::Custom),
                         b("accessibility.skipCitations", tl!("Skip citations & bibliography"), app.session.read_aloud.skip_citations),
                     ],
                 ),
@@ -586,12 +581,8 @@ impl PreferencesModel for OptionsModel<'_> {
             groups.push(GroupSpec::new(
                 Some(tl!("File locations")),
                 vec![
-                    RowSpec::new(
-                        "advanced.templatesFolder",
-                        tl!("User templates:"),
-                        RowKind::Text(prefs.user_templates_folder.as_deref().unwrap_or("")),
-                    )
-                    .help(tl!("File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.")),
+                    RowSpec::new("advanced.templatesFolder", tl!("User templates:"), RowKind::Custom)
+                        .help(tl!("File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.")),
                 ],
             ));
         }
@@ -710,6 +701,15 @@ impl PreferencesModel for OptionsModel<'_> {
             "general.defaultApp" => default_app_row(self.app, ui),
             "proofing.autoCorrect" => self.command_button(ui, tl!("AutoCorrect Options"), "tools.autocorrect"),
             "proofing.customDictionaryFile" => self.custom_dictionary_file(ui),
+            "language.dictionariesFolder" => {
+                let saved = self.app.session.prefs.dictionaries_folder.clone().unwrap_or_default();
+                self.folder_row(ui, key, tl!("Dictionaries folder:"), saved, tl!("Not set: the system's usual places").to_string())
+            }
+            "advanced.templatesFolder" => {
+                let saved = self.app.session.prefs.user_templates_folder.clone().unwrap_or_default();
+                let default = self.app.services.templates_dir.as_ref().map(|d| d.to_string_lossy().into_owned());
+                self.folder_row(ui, key, tl!("User templates:"), saved, default.unwrap_or_else(|| tl!("Not set").to_string()))
+            }
             "proofing.customDictionary" => self.custom_dictionary(ui),
             "language.proofingLanguage" => {
                 Text::new(self.strings.proofing_language.clone()).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
@@ -724,6 +724,7 @@ impl PreferencesModel for OptionsModel<'_> {
                 dictionary_files(ui);
                 false
             }
+            "accessibility.readAloudSpeed" => self.read_aloud_speed(ui),
             "advanced.customizeKeyboard" => self.command_button(ui, tl!("Customize…"), "tools.customizeKeyboard"),
             "advanced.customizeRibbon" => self.command_button(ui, tl!("Customize…"), "tools.customizeRibbon"),
             _ => false,
@@ -732,7 +733,6 @@ impl PreferencesModel for OptionsModel<'_> {
 
     fn custom_page(&mut self, ui: &mut Ui, page: &str) -> bool {
         if page == "agents" {
-            Text::new(tl!("Agents")).role(TypeRole::Heading).show(ui);
             Text::new(tl!("Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel."))
                 .show(ui);
         }
@@ -767,6 +767,56 @@ impl OptionsModel<'_> {
             self.run(command, json!({}));
         }
         clicked
+    }
+
+    /// The Read Aloud speed: a slider with its number, as the player's.
+    fn read_aloud_speed(&mut self, ui: &mut Ui) -> bool {
+        use wordcraft_engine::speech::{MAX_RATE, MIN_RATE};
+        let rate = f64::from(self.app.session.read_aloud.rate());
+        let out = SliderField::new(tl!("Speed"), Bind::given(rate), f64::from(MIN_RATE)..=f64::from(MAX_RATE))
+            .step(0.05)
+            .layout(SliderFieldLayout::Inline)
+            .short(true)
+            .unit(tl!("×"))
+            .show(ui);
+        // Committed, not live, so a drag doesn't restart the sentence on every frame.
+        let committed = out.edit.events.committed().copied();
+        if let Some(v) = committed {
+            self.set("accessibility.readAloudSpeed", PrefValue::Float(v));
+        }
+        committed.is_some()
+    }
+
+    /// A folder setting (v0.19.1's): the saved path or a placeholder, Apply (or Enter) saves the typed path,
+    /// Clear returns to the default. The draft follows the saved path whenever that changes.
+    fn folder_row(&mut self, ui: &mut Ui, key: &str, label: &'static str, saved: String, placeholder: String) -> bool {
+        #[derive(Clone, Default)]
+        struct Draft {
+            text: String,
+            seen: Option<String>,
+        }
+        let mut changed = false;
+        Row::new().id_salt(key).show(ui, |ui, cx| {
+            let draft = &mut cx.keep::<Draft>();
+            if draft.seen.as_deref() != Some(saved.as_str()) {
+                draft.text = saved.clone();
+                draft.seen = Some(saved.clone());
+            }
+            let out = TextField::new(label, Bind::bound(&mut draft.text)).limit(None).placeholder(placeholder.clone()).submits().show(ui);
+            let typed = draft.text.trim().to_string();
+            let differs = typed != saved;
+            let apply = Button::new(tl!("Apply")).enabled(differs).show(ui).clicked() || (out.submitted && differs);
+            let clear = Button::new(tl!("Clear")).enabled(!saved.is_empty()).show(ui).clicked();
+            if apply {
+                self.set(key, PrefValue::Text(typed));
+                changed = true;
+            } else if clear {
+                self.set(key, PrefValue::Text(String::new()));
+                draft.text.clear();
+                changed = true;
+            }
+        });
+        changed
     }
 
     fn custom_dictionary_file(&mut self, ui: &mut Ui) -> bool {
