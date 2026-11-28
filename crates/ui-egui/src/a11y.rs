@@ -30,6 +30,16 @@ use craft::pages::ui::access::{AccessBuilder, AccessDescriber, AccessNode, Acces
 /// Where floating pictures sit on a page, by (paragraph path, byte offset of the anchor character).
 type Pictures = HashMap<(Vec<u32>, usize), Rect>;
 
+/// Give the focused widget an AccessKit node, drawn this frame or not. egui names the focused
+/// widget in every tree update, and AccessKit panics when that node is missing from it: focus
+/// left on a widget that is no longer shown (the ribbon after a tab change, the canvas under the
+/// Start screen) crashed the app with a screen reader or UI Automation client attached.
+pub fn ensure_focus_node(ctx: &egui::Context) {
+    if let Some(id) = ctx.memory(|m| m.focused()) {
+        ctx.accesskit_node_builder(id, |_| {});
+    }
+}
+
 /// Describes the document the pages are drawn from, and its selection.
 pub(crate) struct DocumentDescriber {
     doc: Arc<Document>,
@@ -606,5 +616,32 @@ mod tests {
         describer.describe(&placed, &mut out);
         assert!(!out.is_empty() && out.len() <= MAX_NODES);
         assert!(describer.selection().is_some(), "an offset past the end lands at the end");
+    }
+    /// Focus left on a widget that is not shown this frame (the ribbon after a tab change, the
+    /// canvas under the Start screen) must still have a node in the update: AccessKit panics on a
+    /// focus id it does not know, which crashed the app with a screen reader attached.
+    #[test]
+    fn focused_widget_that_is_not_shown_still_has_a_node() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let ghost = egui::Id::unique("a widget that was removed from the screen");
+        ctx.memory_mut(|m| m.request_focus(ghost));
+        for pass in 0..2 {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                time: Some(0.1 * (pass as f64 + 1.0)),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                super::ensure_focus_node(ui.ctx());
+            });
+            out.textures_delta.clear();
+            let update = out.platform_output.accesskit_update.take().expect("AccessKit output");
+            let focus = update.focus;
+            assert!(
+                focus == egui::accesskit_root_id().accesskit_id() || update.nodes.iter().any(|(id, _)| *id == focus),
+                "the update focuses {focus:?}, which it does not describe"
+            );
+        }
     }
 }

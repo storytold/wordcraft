@@ -28,6 +28,15 @@ impl Session {
         }
     }
 
+    /// The view a window opens with: One Page, one page per row fitted to the window, like other
+    /// word processors (#1867). Interactive hosts call this at start-up; [`Session::new`] keeps
+    /// the neutral view that tests, the CLI and headless renders rely on.
+    pub fn open_on_one_page(&mut self) {
+        self.view.fit = "onePage".into();
+        self.view.single_column = true;
+        self.view.multi_page = false;
+    }
+
     /// Start an editing session at the document beginning with empty history and
     /// default view, preferences and a yellow highlighter independent of document undo.
     pub fn new(doc: Document) -> Self {

@@ -8290,6 +8290,18 @@ fn page_and_table_gridlines_toggle_independently() {
     assert_eq!(state["tableGridlines"], false);
 }
 
+/// Issue #1867: an interactive window opens on One Page, and Multiple Pages stays one command away.
+#[test]
+fn interactive_session_opens_on_one_page() {
+    let mut s = s();
+    assert!(s.view.fit.is_empty(), "the bare session stays neutral for tests and headless tools");
+    s.open_on_one_page();
+    assert_eq!(s.view.fit, "onePage");
+    assert!(s.view.single_column && !s.view.multi_page);
+    run(&mut s, "view.multiplePages", json!({}));
+    assert!(s.view.multi_page && !s.view.single_column);
+}
+
 #[test]
 fn focus_and_full_screen_replace_each_other() {
     // #1678: Focus and Full Screen View are separate screen states; one on turns the other off.

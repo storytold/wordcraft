@@ -414,6 +414,7 @@ impl WordApp {
         } else {
             self.window_ui(ui);
         }
+        crate::a11y::ensure_focus_node(ui.ctx());
     }
 
     /// Lay out the drawn window. A command that brings another window's state in (New, Open,

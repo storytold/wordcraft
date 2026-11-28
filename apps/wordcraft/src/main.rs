@@ -731,6 +731,7 @@ fn main() -> eframe::Result {
             let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_engine::blank_document(&region) };
             let mut session = Session::new(doc);
             session.system_region = region;
+            session.open_on_one_page();
             // The custom dictionary's words (#40) count as loaded settings.
             if prefs::enabled()
                 && let Some(path) = prefs::user_dict_path()

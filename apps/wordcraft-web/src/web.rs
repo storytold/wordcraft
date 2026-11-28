@@ -118,6 +118,7 @@ pub fn start() {
                     let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_engine::blank_document(&region) };
                     let mut session = Session::new(doc);
                     session.system_region = region;
+                    session.open_on_one_page();
                     let messages = Rc::new(RefCell::new(Vec::new()));
                     let mut services = services(&host, ctx.clone(), dirty, messages.clone(), intake);
                     if let Some(bridge) = &app_bridge {
