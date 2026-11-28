@@ -132,6 +132,13 @@ pub(crate) fn count_key(ns: Option<&[u8]>, local: &str) -> String {
     }
 }
 
+/// Display/count key for one XML element event: `{?}local` when the element's
+/// namespace could not be resolved or its prefix is undeclared (never collapsing
+/// an unknown namespace into bare no-namespace `local`), otherwise [`count_key`].
+pub(crate) fn display_name(ns: Option<&[u8]>, local: &str, ns_unknown: bool) -> String {
+    if ns_unknown { format!("{{?}}{local}") } else { count_key(ns, local) }
+}
+
 /// How an element's parent context presents itself to model selection.
 pub(crate) enum Parent<'a> {
     /// The element is the part's root: the canonical variant is used.
@@ -573,14 +580,18 @@ pub(crate) fn is_modelled(name: &str) -> bool {
 }
 
 /// Judge one observed child of an open element (`GRAMMAR-CHILD-NOT-ALLOWED`,
-/// `GRAMMAR-CHILD-TOO-MANY`, and `GRAMMAR-ORDER` inside `w:rPr`).
-pub(crate) fn judge_child(frame: &mut GFrame, child: &str, part: &str, child_path: &str, acc: &mut Acc) {
+/// `GRAMMAR-CHILD-TOO-MANY`, and `GRAMMAR-ORDER` inside `w:rPr`). When
+/// `count_lower_bound` is `true` (because an earlier unexpanded entity, skipped
+/// `mc:AlternateContent`, or unresolved-namespace sibling with matching local
+/// name may also contribute instances of `child`), `GRAMMAR-CHILD-TOO-MANY`
+/// reports a lower bound (`at least {n}`) rather than an exact count.
+pub(crate) fn judge_child(frame: &mut GFrame, child: &str, part: &str, child_path: &str, count_lower_bound: bool, acc: &mut Acc) {
     observation_contract! {
         rules: "GRAMMAR-CHILD-NOT-ALLOWED,GRAMMAR-CHILD-TOO-MANY";
         collections: "-";
         scope: "direct modelled child of an open modelled element in a grammar-scoped XML part";
-        loss: "fallback parents have no single model; Transitional overrides veto Strict-only offences";
-        fallback: "fallback parents check union membership only and skip cardinality/order; emits Warning only";
+        loss: "fallback parents have no single model; Transitional overrides veto Strict-only offences; prior unexpanded entity, skipped mc:AlternateContent, or matching-local unresolved-namespace sibling in parent makes child counts a lower bound";
+        fallback: "fallback parents check union membership only and skip cardinality/order; GRAMMAR-CHILD-TOO-MANY reports at least N when child counts are a lower bound; emits Warning only";
         package_loss: "independent";
     }
 
@@ -623,10 +634,11 @@ pub(crate) fn judge_child(frame: &mut GFrame, child: &str, part: &str, child_pat
                 None => member_of(o, child),
             });
             if !vetoed {
+                let observed = if count_lower_bound { format!("at least {n}") } else { n.to_string() };
                 acc.add_grammar(
                     "GRAMMAR-CHILD-TOO-MANY",
                     Some(part.to_string()),
-                    format!("{} at {child_path} in {part} has {n} {child} elements; {} allows at most {max}", frame.name, model.key),
+                    format!("{} at {child_path} in {part} has {observed} {child} elements; {} allows at most {max}", frame.name, model.key),
                 );
             }
         }
@@ -666,34 +678,51 @@ fn judge_order(frame: &mut GFrame, model: &TypeModel, child: &str, part: &str, c
     }
 }
 
-/// Outcome of reading one XML attribute for grammar evaluation, preserving the
-/// distinction between a missing attribute, a present attribute whose
-/// XML-delivered value was resolved, and a present attribute whose value could
-/// not be delivered (or whose namespace prefix is unresolved).
+/// Outcome of reading one XML attribute for grammar evaluation, keeping
+/// uncertain attribute identity separate from uncertain value delivery.
 #[derive(PartialEq, Eq)]
 pub(crate) enum GrammarAttrValue {
-    /// The attribute is missing on this element.
+    /// No target attribute (and no unresolved-prefix attribute with the same
+    /// local name) is present on this element.
     Missing,
-    /// The attribute is present and its delivered value is known.
+    /// The target namespaced attribute is present and its XML-delivered value
+    /// was resolved.
     Present(String),
-    /// The attribute is present, but its value could not be delivered.
-    Unreadable,
+    /// The target namespaced attribute is present, but its XML-delivered value
+    /// could not be resolved (nested/markup entity, unresolvable DOCTYPE subset,
+    /// or grammar output bound).
+    ValueUnreadable,
+    /// No bound target attribute is present, but an attribute with the same
+    /// local name has an unresolved namespace prefix, so whether it identifies
+    /// the target attribute cannot be established.
+    IdentityUnresolved,
 }
 
-/// Judge one `w:numFmt` format value (`GRAMMAR-NUMFMT-VALUE`). Returns `true`
-/// when the attribute was present but its value could not be delivered.
-pub(crate) fn judge_num_fmt(val: &GrammarAttrValue, part: &str, path: &str, acc: &mut Acc) -> bool {
+/// Why `GRAMMAR-NUMFMT-VALUE` could not evaluate a `w:numFmt` element.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NumFmtSkip {
+    /// `w:numFmt/@w:val` is present, but its delivered value could not be read.
+    ValueUnreadable,
+    /// `w:numFmt` carries a `val` attribute whose namespace prefix is unresolved,
+    /// so whether it is `w:val` could not be established.
+    IdentityUnresolved,
+}
+
+/// Judge one `w:numFmt` format value (`GRAMMAR-NUMFMT-VALUE`). Returns
+/// `Some(NumFmtSkip)` when checking was skipped due to an undeliverable value
+/// or an unresolved attribute namespace identity.
+pub(crate) fn judge_num_fmt(val: &GrammarAttrValue, part: &str, path: &str, acc: &mut Acc) -> Option<NumFmtSkip> {
     observation_contract! {
         rules: "GRAMMAR-NUMFMT-VALUE";
         collections: "-";
         scope: "w:numFmt/@w:val in Wml-scope parts against the 63-value ST_NumberFormat table";
-        loss: "missing w:val attribute carries no value; unreadable entity-bearing or namespace-unresolved w:val value cannot be delivered";
-        fallback: "exact case-sensitive membership check on delivered values; missing attribute stays silent; unreadable attribute is disclosed by grammar coverage note without false warning or Incomplete";
+        loss: "missing w:val attribute carries no value; bound w:val with undeliverable value (ValueUnreadable) cannot be read; unresolved-prefix val attribute (IdentityUnresolved) has uncertain namespace identity";
+        fallback: "exact case-sensitive membership check on delivered values; missing attribute stays silent; ValueUnreadable and IdentityUnresolved skip NUMFMT and return distinct skip reasons for truthful grammar coverage disclosure without Incomplete";
         package_loss: "independent";
     }
 
     match val {
-        GrammarAttrValue::Missing => false,
+        GrammarAttrValue::Missing => None,
         GrammarAttrValue::Present(v) => {
             if !NUM_FMT_VALUES.contains(&v.as_str()) {
                 acc.add_grammar(
@@ -702,9 +731,10 @@ pub(crate) fn judge_num_fmt(val: &GrammarAttrValue, part: &str, path: &str, acc:
                     format!("numFmt format \"{v}\" at {path} in {part} is not an ST_NumberFormat value"),
                 );
             }
-            false
+            None
         }
-        GrammarAttrValue::Unreadable => true,
+        GrammarAttrValue::ValueUnreadable => Some(NumFmtSkip::ValueUnreadable),
+        GrammarAttrValue::IdentityUnresolved => Some(NumFmtSkip::IdentityUnresolved),
     }
 }
 
@@ -714,6 +744,7 @@ pub(crate) struct ElementEvent<'a> {
     pub local: &'a str,
     pub is_alt: bool,
     pub unresolved: bool,
+    pub ns_unknown: bool,
     pub suppressed: bool,
     pub numfmt_val: &'a GrammarAttrValue,
 }
@@ -723,8 +754,53 @@ struct WalkFrame {
     path: String,
     child_counts: HashMap<String, Option<u32>>,
     unmodelled_path_names: usize,
+    all_ordinals_lower_bound: bool,
+    uncertain_locals: Vec<String>,
     grammar: Option<GFrame>,
     suppressed: bool,
+}
+
+impl WalkFrame {
+    /// Whether sibling ordinals and direct-child counts for elements with local
+    /// name `local` under this parent are only lower bounds (due to a prior
+    /// unexpanded entity, skipped `mc:AlternateContent`, or unresolved-namespace
+    /// direct child with the same local name).
+    fn is_child_count_lower_bound(&self, local: &str) -> bool {
+        observation_contract! {
+            rules: "-";
+            collections: "field.uncertain_locals*1";
+            scope: "direct-child lower-bound uncertainty state on one open WalkFrame";
+            loss: "distinct unresolved-namespace local names capped at 1024 per parent frame, promoting to all_ordinals_lower_bound";
+            fallback: "conservatively returns true for all local names once promoted; never claims exactness after loss";
+            package_loss: "independent";
+        }
+
+        self.all_ordinals_lower_bound || self.uncertain_locals.iter().any(|l| l == local)
+    }
+
+    /// Record that a direct child with an unresolved namespace had local name
+    /// `local`, making subsequent counts and ordinals for `local` lower bounds
+    /// (promoting to `all_ordinals_lower_bound` past [`PATH_ORDINAL_CAP`]).
+    fn mark_local_uncertain(&mut self, local: &str) {
+        observation_contract! {
+            rules: "-";
+            collections: "field.uncertain_locals*4";
+            scope: "direct-child unresolved-namespace local-name set on one open WalkFrame";
+            loss: "distinct unresolved-namespace local names capped at 1024 per parent frame";
+            fallback: "past 1024 distinct unresolved local names, clears the set and promotes to all_ordinals_lower_bound so no uncertainty is dropped";
+            package_loss: "independent";
+        }
+
+        if self.all_ordinals_lower_bound || self.uncertain_locals.iter().any(|l| l == local) {
+            return;
+        }
+        if self.uncertain_locals.len() < PATH_ORDINAL_CAP {
+            self.uncertain_locals.push(local.to_string());
+        } else {
+            self.all_ordinals_lower_bound = true;
+            self.uncertain_locals.clear();
+        }
+    }
 }
 
 /// Per-part streaming grammar walk, inactive (zero work) when the part has no
@@ -735,6 +811,7 @@ pub(crate) struct GrammarWalk {
     fallback_noted: HashSet<String>,
     cap_noted: bool,
     unreadable_attr_noted: bool,
+    unresolved_attr_noted: bool,
 }
 
 impl GrammarWalk {
@@ -749,19 +826,28 @@ impl GrammarWalk {
             package_loss: "independent";
         }
 
-        Self { scope, frames: Vec::new(), fallback_noted: HashSet::new(), cap_noted: false, unreadable_attr_noted: false }
+        Self {
+            scope,
+            frames: Vec::new(),
+            fallback_noted: HashSet::new(),
+            cap_noted: false,
+            unreadable_attr_noted: false,
+            unresolved_attr_noted: false,
+        }
     }
 
-    /// Mark the currently open element's direct-child set as incomplete (for
-    /// example, after an unexpanded entity reference in element content) so
-    /// required-child absence is never inferred from partial child evidence.
+    /// Mark the currently open element's direct-child stream as incomplete (for
+    /// example, after an unexpanded entity reference in element content):
+    /// suppresses required-child absence on a modelled parent and marks all
+    /// subsequent sibling ordinals and child counts under this element as lower
+    /// bounds.
     pub(crate) fn mark_child_set_incomplete(&mut self) {
         observation_contract! {
             rules: "-";
             collections: "field.frames*1";
-            scope: "currently open modelled element in a grammar-scoped XML part";
+            scope: "currently open element in a grammar-scoped XML part (modelled or unmodelled)";
             loss: "unexpanded entity reference in element content";
-            fallback: "suppresses GRAMMAR-REQUIRED-CHILD on the affected open element only; unaffected closed elements still run; never sets Incomplete";
+            fallback: "suppresses GRAMMAR-REQUIRED-CHILD on the affected open modelled element and marks subsequent sibling ordinals and child counts under this element as lower bounds; unaffected elements stay exact; never sets Incomplete";
             package_loss: "independent";
         }
 
@@ -770,35 +856,42 @@ impl GrammarWalk {
         }
         if let Some(frame) = self.frames.last_mut()
             && !frame.suppressed
-            && let Some(pg) = &mut frame.grammar
         {
-            pg.child_set_incomplete = true;
+            frame.all_ordinals_lower_bound = true;
+            if let Some(pg) = &mut frame.grammar {
+                pg.child_set_incomplete = true;
+            }
         }
     }
 
-    /// Compute the 1-based occurrence path for an element about to open under
-    /// the current top frame. Modelled (and parent-known) sibling names always
-    /// retain exact 1-based ordinals; unmodelled names beyond [`PATH_ORDINAL_CAP`]
-    /// render `[?]` instead of fabricating an ordinal.
-    fn next_path(&mut self, ns: Option<&[u8]>, local: &str) -> String {
+    /// Compute the occurrence path for an element about to open under the
+    /// current top frame. Elements whose namespace is unknown/unresolved render
+    /// `{?}local[?]` (or `{?}local` at root). Known-namespace elements retain
+    /// exact 1-based `[n]` ordinals while no child-stream loss occurred in the
+    /// parent; after parent loss they render lower-bound `[>=n]`; unmodelled
+    /// names past [`PATH_ORDINAL_CAP`] or overflowing `u32` render `[?]`.
+    fn next_path(&mut self, ev: &ElementEvent<'_>) -> String {
         observation_contract! {
             rules: "-";
             collections: "field.child_counts*3,field.frames*1";
             scope: "1-based sibling occurrence path from the part root for grammar findings";
-            loss: "distinct unmodelled sibling names capped at 1024 per parent frame; modelled sibling names are never capped";
-            fallback: "modelled sibling names retain exact 1-based ordinals; unmodelled sibling names past the cap render [?] instead of fabricating an ordinal";
+            loss: "distinct unmodelled sibling names capped at 1024 per parent frame; u32 ordinal overflow; unknown/unresolved element namespace; prior unexpanded entity, skipped mc:AlternateContent, or matching-local unresolved-namespace sibling in parent frame";
+            fallback: "modelled sibling names are never capped and retain exact [n] ordinals when no parent child-stream loss occurred; after parent loss, subsequent known-namespace siblings render lower-bound [>=n]; elements with unknown/unresolved namespaces render {?}local[?] (or {?}local at root) instead of bare no-namespace names; unmodelled names past the cap or overflowing u32 render [?]";
             package_loss: "independent";
         }
 
-        let display = count_key(ns, local);
+        let display = display_name(ev.ns, ev.local, ev.ns_unknown);
         match self.frames.last_mut() {
             None => display,
             Some(parent) => {
+                if ev.ns_unknown {
+                    return format!("{}/{display}[?]", parent.path);
+                }
                 let ordinal = if let Some(slot) = parent.child_counts.get_mut(&display) {
                     *slot = slot.and_then(|c| c.checked_add(1));
                     *slot
                 } else {
-                    let modelled = prefixed_name(ns, local).is_some_and(|p| is_modelled(&p))
+                    let modelled = prefixed_name(ev.ns, ev.local).is_some_and(|p| is_modelled(&p))
                         || parent.grammar.as_ref().is_some_and(|g| g.is_known_child(&display));
                     if modelled {
                         parent.child_counts.insert(display.clone(), Some(1));
@@ -811,9 +904,11 @@ impl GrammarWalk {
                         None
                     }
                 };
-                match ordinal {
-                    Some(n) => format!("{}/{display}[{n}]", parent.path),
-                    None => format!("{}/{display}[?]", parent.path),
+                let lower_bound = parent.is_child_count_lower_bound(ev.local);
+                match (ordinal, lower_bound) {
+                    (Some(n), false) => format!("{}/{display}[{n}]", parent.path),
+                    (Some(n), true) => format!("{}/{display}[>={n}]", parent.path),
+                    (None, _) => format!("{}/{display}[?]", parent.path),
                 }
             }
         }
@@ -826,44 +921,57 @@ impl GrammarWalk {
             rules: "-";
             collections: "field.fallback_noted*1,field.frames*2";
             scope: "streaming grammar evaluation for one XML start/empty event";
-            loss: "suppressed mc:AlternateContent subtrees, unresolved namespaces, unreadable grammar attributes, or >32 unmodelled child names";
-            fallback: "records isolated informational grammar notes only, never calls set_incomplete(), emits Warning only";
+            loss: "suppressed mc:AlternateContent subtrees, unresolved namespaces, undeliverable w:val values, unresolved-prefix val attributes, or >32 unmodelled child names";
+            fallback: "records distinct isolated informational grammar notes for undeliverable values vs unresolved attribute identity, propagates parent lower-bound uncertainty for mc:AlternateContent and unresolved-namespace children, never calls set_incomplete(), emits Warning only";
             package_loss: "independent";
         }
 
         if ev.suppressed {
             return None;
         }
-        if self.scope == GrammarScope::Wml
-            && ev.ns == Some(NS_W.as_bytes())
-            && ev.local == "numFmt"
-            && judge_num_fmt(ev.numfmt_val, part, path, acc)
-            && !self.unreadable_attr_noted
-        {
-            self.unreadable_attr_noted = true;
-            acc.note_grammar(format!(
-                "{part} has a w:numFmt/@w:val attribute at {path} whose value could not be delivered; format value was not checked"
-            ));
+        if self.scope == GrammarScope::Wml && ev.ns == Some(NS_W.as_bytes()) && ev.local == "numFmt" {
+            match judge_num_fmt(ev.numfmt_val, part, path, acc) {
+                Some(NumFmtSkip::ValueUnreadable) if !self.unreadable_attr_noted => {
+                    self.unreadable_attr_noted = true;
+                    acc.note_grammar(format!(
+                        "{part} has a w:numFmt/@w:val attribute at {path} whose value could not be delivered; format value was not checked"
+                    ));
+                }
+                Some(NumFmtSkip::IdentityUnresolved) if !self.unresolved_attr_noted => {
+                    self.unresolved_attr_noted = true;
+                    acc.note_grammar(format!(
+                        "{part} has a val attribute with an unresolved namespace prefix on w:numFmt at {path}; whether it is w:val could not be established, so format value was not checked"
+                    ));
+                }
+                _ => {}
+            }
         }
-        let child = count_key(ev.ns, ev.local);
-        if let Some(parent) = self.frames.last_mut()
-            && let Some(pg) = &mut parent.grammar
-        {
-            if ev.is_alt || ev.unresolved {
-                pg.child_set_incomplete = true;
+        let child = display_name(ev.ns, ev.local, ev.ns_unknown);
+        if let Some(parent) = self.frames.last_mut() {
+            let count_lower_bound = parent.is_child_count_lower_bound(ev.local);
+            if ev.is_alt {
+                parent.all_ordinals_lower_bound = true;
             }
-            if pg.observe(&child) && !self.cap_noted {
-                self.cap_noted = true;
-                acc.note_grammar(format!(
-                    "{part} has an element with more than {UNKNOWN_CAP} distinct unmodelled child names; further unmodelled names were not tracked for grammar"
-                ));
+            if ev.unresolved {
+                parent.mark_local_uncertain(ev.local);
             }
-            if let Some(prefix) = prefix_for(ev.ns)
-                && self.scope.allows(prefix)
-                && let Some(display) = prefixed_name(ev.ns, ev.local)
-                && is_modelled(&display)
-            {
-                judge_child(pg, &display, part, path, acc);
+            if let Some(pg) = &mut parent.grammar {
+                if ev.is_alt || ev.unresolved {
+                    pg.child_set_incomplete = true;
+                }
+                if pg.observe(&child) && !self.cap_noted {
+                    self.cap_noted = true;
+                    acc.note_grammar(format!(
+                        "{part} has an element with more than {UNKNOWN_CAP} distinct unmodelled child names; further unmodelled names were not tracked for grammar"
+                    ));
+                }
+                if let Some(prefix) = prefix_for(ev.ns)
+                    && self.scope.allows(prefix)
+                    && let Some(display) = prefixed_name(ev.ns, ev.local)
+                    && is_modelled(&display)
+                {
+                    judge_child(pg, &display, part, path, count_lower_bound, acc);
+                }
             }
         }
         let parent = match self.frames.last() {
@@ -887,7 +995,7 @@ impl GrammarWalk {
     pub(crate) fn open(&mut self, ev: &ElementEvent<'_>, part: &str, acc: &mut Acc) {
         observation_contract! {
             rules: "-";
-            collections: "field.frames*1,type.HashMap*1";
+            collections: "field.frames*1,type.HashMap*1,type.Vec*1";
             scope: "push one XML start-element frame onto the per-part grammar stack";
             loss: "inactive or conflicting scope is a no-op";
             fallback: "suppressed subtrees keep stack balance without emitting grammar findings";
@@ -897,9 +1005,17 @@ impl GrammarWalk {
         if !self.scope.is_active() {
             return;
         }
-        let path = self.next_path(ev.ns, ev.local);
+        let path = if ev.suppressed { String::new() } else { self.next_path(ev) };
         let grammar = self.enter_element(ev, part, &path, acc);
-        self.frames.push(WalkFrame { path, child_counts: HashMap::new(), unmodelled_path_names: 0, grammar, suppressed: ev.suppressed });
+        self.frames.push(WalkFrame {
+            path,
+            child_counts: HashMap::new(),
+            unmodelled_path_names: 0,
+            all_ordinals_lower_bound: false,
+            uncertain_locals: Vec::new(),
+            grammar,
+            suppressed: ev.suppressed,
+        });
     }
 
     /// Process an empty tag (`Event::Empty`): opens and closes immediately.
@@ -907,7 +1023,7 @@ impl GrammarWalk {
         if !self.scope.is_active() {
             return;
         }
-        let path = self.next_path(ev.ns, ev.local);
+        let path = if ev.suppressed { String::new() } else { self.next_path(ev) };
         if let Some(g) = self.enter_element(ev, part, &path, acc) {
             close(&g, part, &path, acc);
         }
@@ -1050,7 +1166,7 @@ mod tests {
         let frame = opened.frame.as_mut().expect("modelled frame");
         let mut acc = Acc::default();
         frame.observe(child);
-        judge_child(frame, child, "word/document.xml", "w:document/w:body[1]/child[1]", &mut acc);
+        judge_child(frame, child, "word/document.xml", "w:document/w:body[1]/child[1]", false, &mut acc);
         acc.findings.iter().map(|f| f.rule.to_string()).collect()
     }
 
@@ -1073,40 +1189,70 @@ mod tests {
         let mut acc = Acc::default();
         for i in 1..=3 {
             frame.observe("w:tblPr");
-            judge_child(frame, "w:tblPr", "word/document.xml", &format!("w:document/w:body[1]/w:tbl[1]/w:tblPr[{i}]"), &mut acc);
+            judge_child(frame, "w:tblPr", "word/document.xml", &format!("w:document/w:body[1]/w:tbl[1]/w:tblPr[{i}]"), false, &mut acc);
         }
         let hits: Vec<_> = acc.findings.iter().filter(|f| f.rule == "GRAMMAR-CHILD-TOO-MANY").collect();
         assert_eq!(hits.len(), 1, "{:?}", acc.findings);
         assert_eq!(hits[0].severity, Severity::Warning);
-        assert!(hits[0].message.contains("w:tblPr[2]"), "{:?}", hits[0]);
+        assert!(hits[0].message.contains("w:tblPr[2]") && hits[0].message.contains("has 2 w:tblPr elements"), "{:?}", hits[0]);
+
+        // Lower-bound count reports "has at least 2" instead of exact "has 2".
+        let mut opened_lb = select("w:tbl", Some("w:CT_Body"), GrammarScope::Wml);
+        let frame_lb = opened_lb.frame.as_mut().expect("tbl frame");
+        let mut acc_lb = Acc::default();
+        for i in 1..=2 {
+            frame_lb.observe("w:tblPr");
+            judge_child(frame_lb, "w:tblPr", "word/document.xml", &format!("w:document/w:body[1]/w:tbl[1]/w:tblPr[>={i}]"), true, &mut acc_lb);
+        }
+        let hits_lb: Vec<_> = acc_lb.findings.iter().filter(|f| f.rule == "GRAMMAR-CHILD-TOO-MANY").collect();
+        assert_eq!(hits_lb.len(), 1, "{:?}", acc_lb.findings);
+        assert!(hits_lb[0].message.contains("w:tblPr[>=2]") && hits_lb[0].message.contains("has at least 2 w:tblPr elements"), "{:?}", hits_lb[0]);
     }
 
     #[test]
     fn judge_num_fmt_domain() {
         let mut acc = Acc::default();
         for ok in ["decimal", "custom", "hebrew1", "arabicAlpha", "hindiNumbers", "thaiCounting", "bahtText"] {
-            assert!(!judge_num_fmt(
-                &GrammarAttrValue::Present(ok.to_string()),
+            assert!(
+                judge_num_fmt(
+                    &GrammarAttrValue::Present(ok.to_string()),
+                    "word/numbering.xml",
+                    "w:numbering/w:abstractNum[1]/w:lvl[1]/w:numFmt[1]",
+                    &mut acc,
+                )
+                .is_none()
+            );
+        }
+        assert!(
+            judge_num_fmt(&GrammarAttrValue::Missing, "word/numbering.xml", "w:numbering/w:abstractNum[1]/w:lvl[1]/w:numFmt[1]", &mut acc).is_none()
+        );
+        assert!(matches!(
+            judge_num_fmt(&GrammarAttrValue::ValueUnreadable, "word/numbering.xml", "w:numbering/w:abstractNum[1]/w:lvl[1]/w:numFmt[1]", &mut acc),
+            Some(NumFmtSkip::ValueUnreadable)
+        ));
+        assert!(matches!(
+            judge_num_fmt(&GrammarAttrValue::IdentityUnresolved, "word/numbering.xml", "w:numbering/w:abstractNum[1]/w:lvl[1]/w:numFmt[1]", &mut acc,),
+            Some(NumFmtSkip::IdentityUnresolved)
+        ));
+        assert!(acc.findings.is_empty(), "{:?}", acc.findings);
+        assert!(
+            judge_num_fmt(
+                &GrammarAttrValue::Present("Decimal".to_string()),
                 "word/numbering.xml",
                 "w:numbering/w:abstractNum[1]/w:lvl[1]/w:numFmt[1]",
                 &mut acc,
-            ));
-        }
-        assert!(!judge_num_fmt(&GrammarAttrValue::Missing, "word/numbering.xml", "w:numbering/w:abstractNum[1]/w:lvl[1]/w:numFmt[1]", &mut acc));
-        assert!(judge_num_fmt(&GrammarAttrValue::Unreadable, "word/numbering.xml", "w:numbering/w:abstractNum[1]/w:lvl[1]/w:numFmt[1]", &mut acc));
-        assert!(acc.findings.is_empty(), "{:?}", acc.findings);
-        assert!(!judge_num_fmt(
-            &GrammarAttrValue::Present("Decimal".to_string()),
-            "word/numbering.xml",
-            "w:numbering/w:abstractNum[1]/w:lvl[1]/w:numFmt[1]",
-            &mut acc,
-        ));
-        assert!(!judge_num_fmt(
-            &GrammarAttrValue::Present("banana".to_string()),
-            "word/numbering.xml",
-            "w:numbering/w:abstractNum[1]/w:lvl[2]/w:numFmt[1]",
-            &mut acc,
-        ));
+            )
+            .is_none()
+        );
+        assert!(
+            judge_num_fmt(
+                &GrammarAttrValue::Present("banana".to_string()),
+                "word/numbering.xml",
+                "w:numbering/w:abstractNum[1]/w:lvl[2]/w:numFmt[1]",
+                &mut acc,
+            )
+            .is_none()
+        );
         let hits: Vec<_> = acc.findings.iter().filter(|f| f.rule == "GRAMMAR-NUMFMT-VALUE").collect();
         assert_eq!(hits.len(), 2, "{:?}", acc.findings);
         assert!(hits.iter().all(|f| f.severity == Severity::Warning));
@@ -1118,11 +1264,11 @@ mod tests {
         let frame = opened.frame.as_mut().expect("rPr frame");
         let mut acc = Acc::default();
         frame.observe("w:sz");
-        judge_child(frame, "w:sz", "word/document.xml", "w:document/w:body[1]/w:p[1]/w:r[1]/w:rPr[1]/w:sz[1]", &mut acc);
+        judge_child(frame, "w:sz", "word/document.xml", "w:document/w:body[1]/w:p[1]/w:r[1]/w:rPr[1]/w:sz[1]", false, &mut acc);
         frame.observe("w:rFonts");
-        judge_child(frame, "w:rFonts", "word/document.xml", "w:document/w:body[1]/w:p[1]/w:r[1]/w:rPr[1]/w:rFonts[1]", &mut acc);
+        judge_child(frame, "w:rFonts", "word/document.xml", "w:document/w:body[1]/w:p[1]/w:r[1]/w:rPr[1]/w:rFonts[1]", false, &mut acc);
         frame.observe("w:b");
-        judge_child(frame, "w:b", "word/document.xml", "w:document/w:body[1]/w:p[1]/w:r[1]/w:rPr[1]/w:b[1]", &mut acc);
+        judge_child(frame, "w:b", "word/document.xml", "w:document/w:body[1]/w:p[1]/w:r[1]/w:rPr[1]/w:b[1]", false, &mut acc);
         let hits: Vec<_> = acc.findings.iter().filter(|f| f.rule == "GRAMMAR-ORDER").collect();
         assert_eq!(hits.len(), 1, "{:?}", acc.findings);
         assert_eq!(hits[0].severity, Severity::Warning);
@@ -1131,9 +1277,9 @@ mod tests {
         let frame = opened.frame.as_mut().expect("rPr frame");
         let mut acc = Acc::default();
         frame.observe("w:rFonts");
-        judge_child(frame, "w:rFonts", "word/document.xml", "w:document/w:body[1]/w:p[1]/w:r[1]/w:rPr[1]/w:rFonts[1]", &mut acc);
+        judge_child(frame, "w:rFonts", "word/document.xml", "w:document/w:body[1]/w:p[1]/w:r[1]/w:rPr[1]/w:rFonts[1]", false, &mut acc);
         frame.observe("w:sz");
-        judge_child(frame, "w:sz", "word/document.xml", "w:document/w:body[1]/w:p[1]/w:r[1]/w:rPr[1]/w:sz[1]", &mut acc);
+        judge_child(frame, "w:sz", "word/document.xml", "w:document/w:body[1]/w:p[1]/w:r[1]/w:rPr[1]/w:sz[1]", false, &mut acc);
         assert!(acc.findings.is_empty(), "{:?}", acc.findings);
     }
 
@@ -1143,13 +1289,13 @@ mod tests {
         assert!(opened.fallback);
         let mut frame = opened.frame.expect("fallback frame");
         let mut acc = Acc::default();
-        judge_child(&mut frame, "w:p", "word/document.xml", "w:document/w:body[1]/w:sdtContent[1]/w:p[1]", &mut acc);
-        judge_child(&mut frame, "w:tc", "word/document.xml", "w:document/w:body[1]/w:sdtContent[1]/w:tc[1]", &mut acc);
+        judge_child(&mut frame, "w:p", "word/document.xml", "w:document/w:body[1]/w:sdtContent[1]/w:p[1]", false, &mut acc);
+        judge_child(&mut frame, "w:tc", "word/document.xml", "w:document/w:body[1]/w:sdtContent[1]/w:tc[1]", false, &mut acc);
         for _ in 0..3 {
-            judge_child(&mut frame, "w:p", "word/document.xml", "w:document/w:body[1]/w:sdtContent[1]/w:p[2]", &mut acc);
+            judge_child(&mut frame, "w:p", "word/document.xml", "w:document/w:body[1]/w:sdtContent[1]/w:p[2]", false, &mut acc);
         }
         assert!(acc.findings.is_empty(), "{:?}", acc.findings);
-        judge_child(&mut frame, "w:sectPr", "word/document.xml", "w:document/w:body[1]/w:sdtContent[1]/w:sectPr[1]", &mut acc);
+        judge_child(&mut frame, "w:sectPr", "word/document.xml", "w:document/w:body[1]/w:sdtContent[1]/w:sectPr[1]", false, &mut acc);
         assert_eq!(acc.findings.len(), 1, "{:?}", acc.findings);
         assert_eq!(acc.findings[0].rule, "GRAMMAR-CHILD-NOT-ALLOWED");
         assert_eq!(acc.findings[0].severity, Severity::Warning);

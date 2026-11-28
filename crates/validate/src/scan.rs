@@ -1170,6 +1170,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, scope: GrammarSc
                     local: &id.local,
                     is_alt,
                     unresolved: id.unresolved,
+                    ns_unknown: id.unknown.is_some(),
                     suppressed: was_suppressed,
                     numfmt_val: &numfmt_val,
                 };
@@ -1228,6 +1229,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, scope: GrammarSc
                     local: &id.local,
                     is_alt,
                     unresolved: id.unresolved,
+                    ns_unknown: id.unknown.is_some(),
                     suppressed: was_suppressed,
                     numfmt_val: &numfmt_val,
                 };
@@ -1367,7 +1369,8 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, scope: GrammarSc
 }
 
 /// Extract `w:numFmt/@w:val` for `GRAMMAR-NUMFMT-VALUE` when scanning an unsuppressed WML part,
-/// preserving the distinction between missing, delivered, and unreadable attribute values.
+/// preserving the distinction between missing, delivered, value-unreadable, and identity-unresolved
+/// attribute states.
 fn numfmt_attr(
     id: &ElemId,
     attrs: &[Attribute],
@@ -1380,8 +1383,8 @@ fn numfmt_attr(
         rules: "-";
         collections: "type.BTreeMap*1,type.Vec*1";
         scope: "w:numFmt/@w:val attribute read in unsuppressed Wml-scope parts";
-        loss: "unresolvable DOCTYPE subset, nested/markup entity reference, output bound, or unresolved attribute namespace prefix";
-        fallback: "returns Missing outside unsuppressed Wml w:numFmt; preserves Missing vs Present vs Unreadable on w:numFmt";
+        loss: "unresolvable DOCTYPE subset, nested/markup entity reference, or 8192-byte grammar output bound (ValueUnreadable); unresolved attribute namespace prefix on matching local name (IdentityUnresolved)";
+        fallback: "returns Missing outside unsuppressed Wml w:numFmt; distinguishes Missing, Present(delivered value), ValueUnreadable, and IdentityUnresolved on w:numFmt";
         package_loss: "independent";
     }
 
@@ -3251,28 +3254,6 @@ fn unresolved_roles(id: &ElemId) -> u8 {
     }
 }
 
-/// Append literal attribute text (or plain entity replacement text) with XML 1.0 §3.3.3
-/// attribute-value whitespace normalization (`\r\n`, `\r`, `\n`, `\t` -> `' '`).
-fn push_normalized_attr_text(out: &mut String, text: &str) {
-    let mut prev_cr = false;
-    for ch in text.chars() {
-        if prev_cr {
-            prev_cr = false;
-            if ch == '\n' {
-                continue;
-            }
-        }
-        match ch {
-            '\r' => {
-                out.push(' ');
-                prev_cr = true;
-            }
-            '\n' | '\t' => out.push(' '),
-            _ => out.push(ch),
-        }
-    }
-}
-
 /// The value of an attribute as a parser delivers it, when it holds references only to predefined entities, characters
 /// and plain-text internal entities of a resolved DOCTYPE subset (a bounded, non-recursive expansion); `None` otherwise.
 fn delivered_attribute_value(raw: &[u8], decls: &BTreeMap<String, String>) -> Option<String> {
@@ -3289,7 +3270,7 @@ fn delivered_attribute_value(raw: &[u8], decls: &BTreeMap<String, String>) -> Op
     let mut out = String::new();
     let mut rest = text;
     while let Some(at) = rest.find('&') {
-        push_normalized_attr_text(&mut out, rest.get(..at)?);
+        out.push_str(rest.get(..at)?);
         let after = rest.get(at + 1..)?;
         let semi = after.find(';')?;
         let name = after.get(..semi)?;
@@ -3300,16 +3281,16 @@ fn delivered_attribute_value(raw: &[u8], decls: &BTreeMap<String, String>) -> Op
             "apos" => out.push('\''),
             "quot" => out.push('"'),
             _ => {
-                if let Some(number) = name.strip_prefix('#') {
+                let expansion = if let Some(number) = name.strip_prefix('#') {
                     let code = match number.strip_prefix(['x', 'X']) {
                         Some(hex) => u32::from_str_radix(hex, 16).ok()?,
                         None => number.parse().ok()?,
                     };
-                    out.push(char::from_u32(code)?);
+                    char::from_u32(code)?.to_string()
                 } else {
-                    let expansion = decls.get(name).filter(|text| text.find(['&', '<']).is_none())?;
-                    push_normalized_attr_text(&mut out, expansion);
-                }
+                    decls.get(name).filter(|text| text.find(['&', '<']).is_none())?.clone()
+                };
+                out.push_str(&expansion);
             }
         }
         if out.len() > 8192 {
@@ -3317,10 +3298,95 @@ fn delivered_attribute_value(raw: &[u8], decls: &BTreeMap<String, String>) -> Op
         }
         rest = after.get(semi + 1..)?;
     }
-    push_normalized_attr_text(&mut out, rest);
-    if out.len() > 8192 {
-        return None;
+    out.push_str(rest);
+    Some(out)
+}
+
+/// Append literal attribute text (or plain entity replacement text) with XML 1.0 §3.3.3
+/// attribute-value whitespace normalization (`\r\n`, `\r`, `\n`, `\t` -> `' '`), returning
+/// `None` if `out.len()` would exceed `max_len`.
+fn push_normalized_attr_text_bounded(out: &mut String, text: &str, max_len: usize) -> Option<()> {
+    let mut prev_cr = false;
+    for ch in text.chars() {
+        if prev_cr {
+            prev_cr = false;
+            if ch == '\n' {
+                continue;
+            }
+        }
+        let emitted = match ch {
+            '\r' => {
+                prev_cr = true;
+                ' '
+            }
+            '\n' | '\t' => ' ',
+            _ => ch,
+        };
+        if out.len().saturating_add(emitted.len_utf8()) > max_len {
+            return None;
+        }
+        out.push(emitted);
     }
+    Some(())
+}
+
+/// The value of a grammar attribute as an XML 1.0 parser delivers it, when it holds references
+/// only to predefined entities, characters, and plain-text internal entities of a resolved DOCTYPE
+/// subset (bounded to 8,192 bytes across all expansions and literal segments, with XML 1.0 §3.3.3
+/// attribute-value whitespace normalization); `None` otherwise. Kept separate from
+/// [`delivered_attribute_value`] so grammar bounds never alter pre-existing consumers.
+fn delivered_grammar_attribute_value(raw: &[u8], decls: &BTreeMap<String, String>) -> Option<String> {
+    observation_contract! {
+        rules: "-";
+        collections: "type.BTreeMap*1";
+        scope: "one grammar attribute value and the declarations of a resolved internal subset with XML 1.0 attribute-value whitespace normalization";
+        loss: "a reference to anything but a predefined, character or plain internal entity; 8192-byte output bound on both expansions and trailing text";
+        fallback: "return no value so caller distinguishes ValueUnreadable without affecting pre-existing consumers or setting Incomplete";
+        package_loss: "independent";
+    }
+
+    const MAX_LEN: usize = 8192;
+    let text = std::str::from_utf8(raw).ok()?;
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find('&') {
+        push_normalized_attr_text_bounded(&mut out, rest.get(..at)?, MAX_LEN)?;
+        let after = rest.get(at + 1..)?;
+        let semi = after.find(';')?;
+        let name = after.get(..semi)?;
+        match name {
+            "lt" | "gt" | "amp" | "apos" | "quot" => {
+                if out.len() >= MAX_LEN {
+                    return None;
+                }
+                out.push(match name {
+                    "lt" => '<',
+                    "gt" => '>',
+                    "amp" => '&',
+                    "apos" => '\'',
+                    _ => '"',
+                });
+            }
+            _ => {
+                if let Some(number) = name.strip_prefix('#') {
+                    let code = match number.strip_prefix(['x', 'X']) {
+                        Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+                        None => number.parse().ok()?,
+                    };
+                    let ch = char::from_u32(code)?;
+                    if out.len().saturating_add(ch.len_utf8()) > MAX_LEN {
+                        return None;
+                    }
+                    out.push(ch);
+                } else {
+                    let expansion = decls.get(name).filter(|text| text.find(['&', '<']).is_none())?;
+                    push_normalized_attr_text_bounded(&mut out, expansion, MAX_LEN)?;
+                }
+            }
+        }
+        rest = after.get(semi + 1..)?;
+    }
+    push_normalized_attr_text_bounded(&mut out, rest, MAX_LEN)?;
     Some(out)
 }
 
@@ -3515,10 +3581,11 @@ fn namespace_unresolved(id: &ElemId, declared: &[Vec<String>], extra: &[String])
 }
 
 /// Read a namespaced attribute for grammar evaluation, preserving the distinction
-/// between a missing attribute, a present attribute whose XML-delivered value was
-/// resolved (including plain-text internal entities of a resolved DOCTYPE subset),
-/// and a present attribute whose value could not be delivered or whose namespace
-/// prefix is unresolved.
+/// between a missing attribute, a present target attribute whose XML-delivered value
+/// was resolved (including plain-text internal entities of a resolved DOCTYPE subset),
+/// a present target attribute whose value could not be delivered (`ValueUnreadable`),
+/// and an attribute with the same local name whose namespace prefix is unresolved
+/// (`IdentityUnresolved`).
 fn attr_ns_grammar(
     attrs: &[Attribute],
     res: &NamespaceResolver,
@@ -3530,8 +3597,8 @@ fn attr_ns_grammar(
         rules: "-";
         collections: "type.BTreeMap*1,type.Vec*1";
         scope: "namespaced grammar attribute read over one XML element's attributes and resolved internal entities";
-        loss: "unresolvable DOCTYPE subset, nested/markup entity reference, output bound, or unresolved attribute namespace prefix";
-        fallback: "distinguishes Missing, Present(delivered value), and Unreadable without setting Incomplete";
+        loss: "unresolvable DOCTYPE subset, nested/markup entity reference, or 8192-byte grammar output bound (ValueUnreadable); unresolved attribute namespace prefix on matching local name (IdentityUnresolved)";
+        fallback: "distinguishes Missing, Present(delivered value), ValueUnreadable, and IdentityUnresolved without altering pre-existing consumers or setting Incomplete";
         package_loss: "independent";
     }
 
@@ -3540,10 +3607,10 @@ fn attr_ns_grammar(
             .normalized_value(quick_xml::XmlVersion::Implicit1_0)
             .ok()
             .map(|v| v.into_owned())
-            .or_else(|| entities.and_then(|decls| delivered_attribute_value(&a.value, decls)));
+            .or_else(|| entities.and_then(|decls| delivered_grammar_attribute_value(&a.value, decls)));
         return match delivered {
             Some(v) => GrammarAttrValue::Present(v),
-            None => GrammarAttrValue::Unreadable,
+            None => GrammarAttrValue::ValueUnreadable,
         };
     }
     if attrs.iter().any(|a| {
@@ -3553,7 +3620,7 @@ fn attr_ns_grammar(
                 _ => false,
             }
     }) {
-        return GrammarAttrValue::Unreadable;
+        return GrammarAttrValue::IdentityUnresolved;
     }
     GrammarAttrValue::Missing
 }

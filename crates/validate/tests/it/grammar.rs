@@ -532,7 +532,7 @@ fn grammar_required_child_suppressed_by_unexpanded_entity_only_on_affected_paren
     let hits = rule_findings(&report, "GRAMMAR-REQUIRED-CHILD");
     assert_eq!(hits.len(), 2, "only unaffected inner and second tables should fire: {hits:?}");
     assert!(!hits.iter().any(|f| f.message.contains("at w:document/w:body[1]/w:tbl[1] ")), "{hits:?}");
-    assert!(hits.iter().any(|f| f.message.contains("at w:document/w:body[1]/w:tbl[1]/w:tr[1]/w:tc[1]/w:tbl[1] ")), "{hits:?}");
+    assert!(hits.iter().any(|f| f.message.contains("at w:document/w:body[1]/w:tbl[1]/w:tr[>=1]/w:tc[1]/w:tbl[1] ")), "{hits:?}");
     assert!(hits.iter().any(|f| f.message.contains("at w:document/w:body[1]/w:tbl[2] ")), "{hits:?}");
 
     // Class generalization (UnresolvedSubset): external DOCTYPE subset leaves &ext; unexpanded.
@@ -668,7 +668,8 @@ fn grammar_numfmt_delivers_internal_entities_and_distinguishes_missing_vs_unread
         report.coverage_notes
     );
 
-    // Unresolved namespace prefix on val attribute: also disclosed as unreadable, not silently missing.
+    // Unresolved namespace prefix on val attribute: disclosed as uncertain attribute identity,
+    // never claiming w:numFmt/@w:val exists or that its value could not be delivered.
     let mut d = Doc::minimal();
     d.add_with_override(
         "word/numbering.xml",
@@ -687,8 +688,13 @@ fn grammar_numfmt_delivers_internal_entities_and_distinguishes_missing_vs_unread
     let report = validate(&d);
     assert!(rule_findings(&report, "GRAMMAR-NUMFMT-VALUE").is_empty(), "{:?}", report.findings);
     assert!(
-        report.coverage_notes.iter().any(|n| n.contains("w:numFmt/@w:val") && n.contains("could not be delivered")),
+        report.coverage_notes.iter().any(|n| n.contains("unresolved namespace prefix") && n.contains("whether it is w:val could not be established")),
         "{:?}",
+        report.coverage_notes
+    );
+    assert!(
+        !report.coverage_notes.iter().any(|n| n.contains("w:numFmt/@w:val")),
+        "unresolved prefix must not claim w:numFmt/@w:val exists: {:?}",
         report.coverage_notes
     );
 
@@ -802,4 +808,267 @@ fn grammar_footer_deep_nested_tables_and_numfmt_boundary_spellings() {
     assert!(hits.iter().any(|f| f.message.contains("numFmt format \"\"") && f.message.contains("w:numFmt[4]")), "{hits:?}");
     assert!(hits.iter().any(|f| f.message.contains("numFmt format \"Decimal\"") && f.message.contains("w:numFmt[5]")), "{hits:?}");
     assert!(hits.iter().any(|f| f.message.contains("numFmt format \"decimal \"") && f.message.contains("w:numFmt[6]")), "{hits:?}");
+}
+
+#[test]
+fn preexisting_mc_ignorable_delivery_is_unchanged_by_grammar_attribute_bound() {
+    // Round-2 Finding 1 regression: an entity reference followed by 8,200 spaces in mc:Ignorable
+    // must still be delivered to check_prefixes and emit the exact pre-port XML-UNDECLARED-PREFIX
+    // finding (never starved into "prefixes were not checked").
+    let spaces = " ".repeat(8200);
+    let mut d = Doc::minimal();
+    d.set(
+        "word/document.xml",
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:document [<!ENTITY props "lostprefix ">]>"#,
+                r#"<w:document xmlns:w="{w}" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="&props;{spaces}">"#,
+                r#"<w:body><w:p/></w:body></w:document>"#,
+            ),
+            w = W_NS,
+            spaces = spaces,
+        ),
+    );
+    let report = validate(&d);
+    assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
+    let undeclared = rule_findings(&report, "XML-UNDECLARED-PREFIX");
+    assert_eq!(undeclared.len(), 1, "mc:Ignorable finding must not disappear: {:?}", report.findings);
+    assert_eq!(undeclared[0].severity, Severity::Corrupt);
+    assert_eq!(undeclared[0].evidence, Evidence::ByConstruction);
+    assert_eq!(undeclared[0].part.as_deref(), Some("word/document.xml"));
+    assert_eq!(undeclared[0].message, "the namespace prefix `lostprefix` used in word/document.xml is not declared");
+    assert_eq!(
+        serde_json::to_string(undeclared[0]).unwrap(),
+        r#"{"rule":"XML-UNDECLARED-PREFIX","severity":"Corrupt","evidence":"ByConstruction","part":"word/document.xml","message":"the namespace prefix `lostprefix` used in word/document.xml is not declared"}"#
+    );
+    assert!(report.coverage_notes.is_empty(), "pre-existing mc:Ignorable consumer must not emit unread note: {:?}", report.coverage_notes);
+
+    // Grammar-side bound still applies to w:numFmt/@w:val without touching ordinary consumers or verdict.
+    let mut d2 = Doc::minimal();
+    d2.add_with_override(
+        "word/numbering.xml",
+        CT_NUMBERING,
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:numbering [<!ENTITY bad "notAFormat">]>"#,
+                r#"<w:numbering xmlns:w="{w}"><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0">"#,
+                r#"<w:numFmt w:val="&bad;{spaces}"/>"#,
+                r#"</w:lvl></w:abstractNum></w:numbering>"#,
+            ),
+            w = W_NS,
+            spaces = spaces,
+        ),
+    );
+    let report2 = validate(&d2);
+    assert!(rule_findings(&report2, "GRAMMAR-NUMFMT-VALUE").is_empty(), "{:?}", report2.findings);
+    assert!(
+        report2.coverage_notes.iter().any(|n| n.contains("w:numFmt/@w:val") && n.contains("could not be delivered")),
+        "{:?}",
+        report2.coverage_notes
+    );
+}
+
+#[test]
+fn grammar_paths_and_counts_use_lower_bounds_after_loss_and_mark_unknown_namespaces() {
+    // Round-2 Finding 2(a) exact probe: entity expanding to <w:tblPr/> before two literal <w:tblPr/>
+    // children must report lower-bound path w:tblPr[>=2] and count "has at least 2", never exact w:tblPr[2] / "has 2".
+    let mut d = Doc::minimal();
+    d.set(
+        "word/document.xml",
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:document [<!ENTITY one "<w:tblPr/>">]>"#,
+                r#"<w:document xmlns:w="{w}"><w:body>"#,
+                r#"<w:tbl>&one;<w:tblPr/><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>"#,
+                r#"</w:body></w:document>"#,
+            ),
+            w = W_NS,
+        ),
+    );
+    let report = validate(&d);
+    let hits = rule_findings(&report, "GRAMMAR-CHILD-TOO-MANY");
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(
+        hits[0].message.contains("at w:document/w:body[1]/w:tbl[1]/w:tblPr[>=2] ") && hits[0].message.contains("has at least 2 w:tblPr elements"),
+        "{:?}",
+        hits[0]
+    );
+    assert!(!hits[0].message.contains("w:tblPr[2]"), "{:?}", hits[0]);
+    assert!(!hits[0].message.contains("has 2 w:tblPr"), "{:?}", hits[0]);
+
+    // Class generalization: skipped mc:AlternateContent before two literal <w:tblPr/> children.
+    let mut d = Doc::minimal();
+    d.set(
+        "word/document.xml",
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<w:document xmlns:w="{w}" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><w:body>"#,
+                r#"<w:tbl><mc:AlternateContent><mc:Choice Requires="w"><w:tblPr/></mc:Choice><mc:Fallback><w:tblPr/></mc:Fallback></mc:AlternateContent>"#,
+                r#"<w:tblPr/><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>"#,
+                r#"</w:body></w:document>"#,
+            ),
+            w = W_NS,
+        ),
+    );
+    let report = validate(&d);
+    let hits = rule_findings(&report, "GRAMMAR-CHILD-TOO-MANY");
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(
+        hits[0].message.contains("at w:document/w:body[1]/w:tbl[1]/w:tblPr[>=2] ") && hits[0].message.contains("has at least 2 w:tblPr elements"),
+        "{:?}",
+        hits[0]
+    );
+
+    // Class generalization: unresolved-namespace sibling with matching local name (<u:tblPr>)
+    // turns subsequent w:tblPr ordinals and counts into lower bounds, while unrelated local names stay exact.
+    let mut d = Doc::minimal();
+    d.set(
+        "word/document.xml",
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:document [<!ENTITY wns "{w}">]>"#,
+                r#"<w:document xmlns:w="{w}"><w:body>"#,
+                r#"<w:tbl><u:tblPr xmlns:u="&wns;"/><w:tblPr/><w:tblPr/><w:tblGrid/><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>"#,
+                r#"</w:body></w:document>"#,
+            ),
+            w = W_NS,
+        ),
+    );
+    let report = validate(&d);
+    let hits = rule_findings(&report, "GRAMMAR-CHILD-TOO-MANY");
+    assert_eq!(hits.len(), 2, "{hits:?}");
+    let tbl_pr = hits.iter().find(|f| f.message.contains("w:tblPr")).expect("tblPr too-many");
+    assert!(
+        tbl_pr.message.contains("at w:document/w:body[1]/w:tbl[1]/w:tblPr[>=2] ") && tbl_pr.message.contains("has at least 2 w:tblPr elements"),
+        "{tbl_pr:?}"
+    );
+    let tbl_grid = hits.iter().find(|f| f.message.contains("w:tblGrid")).expect("tblGrid too-many");
+    assert!(
+        tbl_grid.message.contains("at w:document/w:body[1]/w:tbl[1]/w:tblGrid[2] ") && tbl_grid.message.contains("has 2 w:tblGrid elements"),
+        "{tbl_grid:?}"
+    );
+
+    // Class generalization: unexpanded entity inside an UNMODELLED wrapper still marks downstream
+    // sibling ordinals inside that wrapper as lower bounds.
+    let mut d = Doc::minimal();
+    d.set(
+        "word/document.xml",
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:document [<!ENTITY extra "<w:tbl><w:tblPr/><w:tblGrid/></w:tbl>">]>"#,
+                r#"<w:document xmlns:w="{w}" xmlns:x="urn:foreign"><w:body>"#,
+                r#"<x:wrapper>&extra;<w:tbl><w:tblPr/><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl></x:wrapper>"#,
+                r#"</w:body></w:document>"#,
+            ),
+            w = W_NS,
+        ),
+    );
+    let report = validate(&d);
+    let hits = rule_findings(&report, "GRAMMAR-CHILD-TOO-MANY");
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(
+        hits[0].message.contains("at w:document/w:body[1]/{urn:foreign}wrapper[1]/w:tbl[>=1]/w:tblPr[2] ")
+            && hits[0].message.contains("has 2 w:tblPr elements"),
+        "{:?}",
+        hits[0]
+    );
+
+    // Round-2 Finding 2(b) exact probe: unresolved-namespace ancestor renders {?}wrapper[?],
+    // never bare wrapper[1] (which would falsely assert no namespace and an exact ordinal).
+    let mut d = Doc::minimal();
+    d.set(
+        "word/document.xml",
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:document [<!ENTITY ns "urn:foreign">]>"#,
+                r#"<w:document xmlns:w="{w}"><w:body>"#,
+                r#"<u:wrapper xmlns:u="&ns;"><w:numFmt w:val="bad"/></u:wrapper>"#,
+                r#"<wrapper xmlns="&ns;"><w:numFmt w:val="bad2"/></wrapper>"#,
+                r#"<wrapper><w:numFmt w:val="bad3"/></wrapper>"#,
+                r#"</w:body></w:document>"#,
+            ),
+            w = W_NS,
+        ),
+    );
+    let report = validate(&d);
+    let hits = rule_findings(&report, "GRAMMAR-NUMFMT-VALUE");
+    assert_eq!(hits.len(), 3, "{hits:?}");
+    let prefixed = hits.iter().find(|f| f.message.contains("\"bad\"")).expect("prefixed unresolved ancestor");
+    assert!(prefixed.message.contains("at w:document/w:body[1]/{?}wrapper[?]/w:numFmt[1] "), "{prefixed:?}");
+    assert!(!prefixed.message.contains("/wrapper["), "{prefixed:?}");
+    let default_ns = hits.iter().find(|f| f.message.contains("\"bad2\"")).expect("default unresolved ancestor");
+    assert!(default_ns.message.contains("at w:document/w:body[1]/{?}wrapper[?]/w:numFmt[1] "), "{default_ns:?}");
+    let plain = hits.iter().find(|f| f.message.contains("\"bad3\"")).expect("true no-namespace ancestor");
+    // Prior unresolved-namespace siblings with local name "wrapper" make bare wrapper's ordinal a lower bound.
+    assert!(plain.message.contains("at w:document/w:body[1]/wrapper[>=1]/w:numFmt[1] "), "{plain:?}");
+}
+
+#[test]
+fn grammar_numfmt_distinguishes_unresolved_attribute_identity_from_unreadable_value() {
+    // Round-2 Finding 3 exact probe: foreign-namespace u:val via unexpanded entity must NOT claim
+    // "has a w:numFmt/@w:val attribute" or "whose value could not be delivered".
+    let mut d = Doc::minimal();
+    d.set(
+        "word/document.xml",
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:document [<!ENTITY ns "urn:foreign">]>"#,
+                r#"<w:document xmlns:w="{w}"><w:body><w:p>"#,
+                r#"<w:numFmt xmlns:u="&ns;" u:val="bad"/>"#,
+                r#"</w:p></w:body></w:document>"#,
+            ),
+            w = W_NS,
+        ),
+    );
+    let report = validate(&d);
+    assert!(rule_findings(&report, "GRAMMAR-NUMFMT-VALUE").is_empty(), "{:?}", report.findings);
+    assert!(
+        report.coverage_notes.iter().any(|n| n.contains("val attribute with an unresolved namespace prefix on w:numFmt")
+            && n.contains("whether it is w:val could not be established")),
+        "{:?}",
+        report.coverage_notes
+    );
+    assert!(
+        !report.coverage_notes.iter().any(|n| n.contains("w:numFmt/@w:val") || n.contains("whose value could not be delivered")),
+        "{:?}",
+        report.coverage_notes
+    );
+
+    // Both conditions in the same part produce both distinct disclosures independently.
+    let mut d2 = Doc::minimal();
+    d2.add_with_override(
+        "word/numbering.xml",
+        CT_NUMBERING,
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>"#,
+                r#"<!DOCTYPE w:numbering [<!ENTITY ns "urn:foreign"><!ENTITY inner "bad"><!ENTITY outer "&inner;">]>"#,
+                r#"<w:numbering xmlns:w="{w}"><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0">"#,
+                r#"<w:numFmt xmlns:u="&ns;" u:val="bad"/>"#,
+                r#"<w:numFmt w:val="&outer;"/>"#,
+                r#"</w:lvl></w:abstractNum></w:numbering>"#,
+            ),
+            w = W_NS,
+        ),
+    );
+    let report2 = validate(&d2);
+    assert!(rule_findings(&report2, "GRAMMAR-NUMFMT-VALUE").is_empty(), "{:?}", report2.findings);
+    assert!(
+        report2.coverage_notes.iter().any(|n| n.contains("val attribute with an unresolved namespace prefix on w:numFmt")),
+        "{:?}",
+        report2.coverage_notes
+    );
+    assert!(
+        report2.coverage_notes.iter().any(|n| n.contains("w:numFmt/@w:val") && n.contains("whose value could not be delivered")),
+        "{:?}",
+        report2.coverage_notes
+    );
 }
