@@ -2,18 +2,21 @@
 //! (Review › Tracking). Each fills a form from the session and ends in one command
 //! (`list.define`, `review.trackingOptions`), so agents get the same result without the dialog.
 
-use craft::behavior::{EditEvents, Selection, SelectionChange, keyed};
+use craft::behavior::{EditEvents, Mixed, Selection, SelectionChange, keyed};
 use craft::ui::buttons::Button;
 use craft::ui::choice::{Checkbox, Radio, RadioGroup};
-use craft::ui::contract::{Bind, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, clicked};
+use craft::ui::contract::{
+    Bind, CollectionEvent, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing, clicked,
+};
 use craft::ui::dialog::DialogId;
 use craft::ui::display::{Picture, PictureSize, Text};
 use craft::ui::form::{Field, FieldGroup};
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::list::{List, ListRow, ThumbAspect, ThumbSize};
 use craft::ui::patterns::form_dialogs::FormCx;
+use craft::ui::pickers::Select;
 use craft::ui::primitives::{ContentPainterCx, TextRun};
-use craft::ui::runtime::env::{Label, LengthUnits, UnitKind};
+use craft::ui::runtime::env::{Env, Label, LengthUnits, UnitKind};
 use craft::ui::sections::Section;
 use craft::ui::style::{Corners, SurfaceKind, TypeRole};
 use craft::ui::text::{NumberField, TextField};
@@ -527,99 +530,170 @@ fn number_styles() -> impl Iterator<Item = (&'static str, &'static str)> {
     STYLES.into_iter().filter(|(k, _)| *k != "bullet")
 }
 
+fn rgba_c32(c: craft::theme::Rgba) -> Color32 {
+    Color32::from_rgba_unmultiplied(c.0[0], c.0[1], c.0[2], c.0[3])
+}
+
+fn set_text_cursor(ctx: &egui::Context, id: egui::Id, char_idx: usize) {
+    let mut state = egui::text_edit::TextEditState::load(ctx, id).unwrap_or_default();
+    state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(char_idx))));
+    state.store(ctx, id);
+}
+
 /// The number format box as Word shows it: the text before the number, the number itself (the
-/// style's first value on grey, not typed over), the text after it. Delete or Backspace on the
-/// number, Delete at the end of the text before it or Backspace at the start of the text after it
-/// deletes the number, and the style becomes none: then the box is plain text.
-fn number_format_box(ui: &mut Ui, f: &mut NumberForm) {
-    let width = 230.0;
-    let height = ui.spacing().interact_size.y;
-    if ui.is_sizing_pass() {
-        ui.allocate_exact_size(vec2(width, height), Sense::hover());
-        return;
-    }
-    let t = crate::theme::Tokens::get(ui.ctx());
+/// style's first value on a highlighted background, not typed over), the text after it. Clicking
+/// before the number or moving left from the text after it moves focus before the number so prefix
+/// text can be typed freely. Delete or Backspace on the number, Delete at the end of the text
+/// before it or Backspace at the start of the text after it deletes the number, and the style
+/// becomes none: then the box is plain text.
+fn number_format_box(ui: &mut Ui, field_id: egui::Id, f: &mut NumberForm) {
+    let tokens = Env::of(ui).tokens.clone();
+    let min_width = tokens.size.length.field.md.max(180.0);
+    let width = if ui.is_sizing_pass() { min_width } else { ui.available_width().max(min_width) };
+    let height = tokens.size.control.md.max(ui.spacing().interact_size.y);
     if f.format == "none" || !f.text.contains("%1") {
-        let r = ui.add(egui::TextEdit::singleline(&mut f.text).char_limit(64).desired_width(width).min_size(vec2(0.0, height)));
-        ui.ctx().accesskit_node_builder(r.id, |node| node.set_label(tl!("Number format:")));
+        TextField::new(word(tl!("Number format:")), Bind::bound(&mut f.text)).sizing(Sizing::FillWidth).show(ui);
+        if f.text.chars().count() > 64 {
+            f.text = f.text.chars().take(64).collect();
+        }
         return;
     }
+    let (outer, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    if ui.is_sizing_pass() {
+        return;
+    }
+    let colors = tokens.color;
+    let bg = rgba_c32(colors.surface.sunken);
+    let border = rgba_c32(colors.line.control_edge);
+    let text_color = rgba_c32(colors.text.normal);
+    let chip_bg = rgba_c32(colors.state.selected);
+    let chip_fg = rgba_c32(colors.text.on_selected);
+    let focus_bg = rgba_c32(colors.accent.strong);
+    let focus_fg = rgba_c32(colors.text.on_strong);
+    let sel_bg = rgba_c32(colors.state.text_selection);
+    let radius = tokens.shape.radius.control;
+    ui.painter().rect_filled(outer, radius, bg);
+    ui.painter().rect_stroke(outer, radius, egui::Stroke::new(1.0, border), egui::StrokeKind::Inside);
+
     let (mut before, mut after) = f.text.split_once("%1").map(|(a, b)| (a.to_string(), b.to_string())).unwrap_or_default();
     let font = egui::TextStyle::Body.resolve(ui.style());
-    let measure = |ui: &Ui, s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), t.text).size().x;
+    let measure = |ui: &Ui, s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), text_color).size().x;
     let pressed = |ui: &Ui, k: egui::Key| ui.input(|i| i.key_pressed(k));
     let cursor =
         |ui: &Ui, id: egui::Id| egui::text_edit::TextEditState::load(ui.ctx(), id).and_then(|s| s.cursor.char_range()).map(|r| r.primary.index.0);
     let mut remove = false;
-    // As tall as the Number style box beside it: a field's height less the frame's margin and border.
-    let row = (ui.spacing().interact_size.y - 6.0).max(12.0);
-    egui::Frame::new()
-        .fill(t.input)
-        .stroke(egui::Stroke::new(1.0, t.input_border))
-        .corner_radius(3.0)
-        .inner_margin(egui::Margin { left: 2, right: 4, top: 2, bottom: 2 })
-        .show(ui, |ui| {
-            ui.allocate_ui_with_layout(vec2(width - 8.0, row), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.set_min_size(vec2(width - 8.0, row));
-                ui.spacing_mut().item_spacing.x = 1.0;
-                // A text field is at least a field's height (egui's theme floor): these frameless
-                // pieces sit inside the box's frame, so they take the row's.
-                ui.spacing_mut().interact_size.y = row;
-                let id = ui.scope_id().with("dnf_before");
-                let before_id = id;
-                let at = cursor(ui, id);
-                // Empty, it takes no room: the number starts the box, as in Word.
-                let w = if before.is_empty() { 1.0 } else { measure(ui, &before) + 2.0 };
-                let r = ui.add(
-                    egui::TextEdit::singleline(&mut before)
-                        .id(id)
-                        .frame(egui::Frame::NONE)
-                        .char_limit(30)
-                        .desired_width(w)
-                        .margin(egui::Margin::ZERO),
-                );
-                ui.ctx().accesskit_node_builder(r.id, |node| node.set_label(tl!("Text before the number")));
-                if r.has_focus() && pressed(ui, egui::Key::Delete) && at == Some(before.chars().count()) {
-                    remove = true;
-                }
-                let sample = NumFormat::from_ooxml(&f.format).format(1);
-                let (rect, num) = ui.allocate_exact_size(vec2(measure(ui, &sample) + 8.0, row), Sense::click());
-                num.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Number")));
-                if num.clicked() {
-                    num.request_focus();
-                }
-                // Left and Right are this piece's own (below), not egui's move-focus keys.
-                ui.memory_mut(|m| m.set_focus_lock_filter(num.id, egui::EventFilter { horizontal_arrows: true, ..Default::default() }));
-                let fill = if num.has_focus() { t.selection } else { t.ruler_margin };
-                ui.painter().rect_filled(rect, 2.0, fill);
-                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, &sample, font.clone(), t.text);
-                if num.has_focus() && (pressed(ui, egui::Key::Delete) || pressed(ui, egui::Key::Backspace)) {
-                    remove = true;
-                }
-                let id = ui.scope_id().with("dnf_after");
-                // From the number, Left or Home goes to the text before it, Right or End to after.
-                if num.has_focus() {
-                    if pressed(ui, egui::Key::ArrowLeft) || pressed(ui, egui::Key::Home) {
-                        ui.memory_mut(|m| m.request_focus(before_id));
-                    } else if pressed(ui, egui::Key::ArrowRight) || pressed(ui, egui::Key::End) {
-                        ui.memory_mut(|m| m.request_focus(id));
-                    }
-                }
-                let at = cursor(ui, id);
-                let r = ui.add(
-                    egui::TextEdit::singleline(&mut after)
-                        .id(id)
-                        .frame(egui::Frame::NONE)
-                        .char_limit(30)
-                        .desired_width(f32::INFINITY)
-                        .margin(egui::Margin::ZERO),
-                );
-                ui.ctx().accesskit_node_builder(r.id, |node| node.set_label(tl!("Text after the number")));
-                if r.has_focus() && pressed(ui, egui::Key::Backspace) && at == Some(0) {
-                    remove = true;
-                }
-            });
-        });
+    let pad_x = (tokens.space.pad.control * 0.5).clamp(6.0, 10.0);
+    let inner = outer.shrink2(vec2(pad_x, 2.0));
+    let click_pos = ui.input(|i| i.pointer.primary_clicked().then(|| i.pointer.interact_pos()).flatten());
+    ui.scope_builder(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
+        ui.visuals_mut().override_text_color = Some(text_color);
+        ui.visuals_mut().text_cursor.stroke.color = text_color;
+        ui.visuals_mut().selection.bg_fill = sel_bg;
+        ui.visuals_mut().selection.stroke.color = text_color;
+        ui.spacing_mut().item_spacing.x = 0.0;
+        // Frameless pieces sit inside the painted field box, on one shared vertical centre line.
+        ui.spacing_mut().interact_size.y = inner.height();
+        let before_id = ui.scope_id().with("dnf_before");
+        let after_id = ui.scope_id().with("dnf_after");
+        let before_chars = before.chars().count();
+        let at_before = cursor(ui, before_id);
+        let at_after = cursor(ui, after_id);
+        // Empty, leave a tiny caret slot so the number still sits near the box's start; clicking
+        // anywhere in the left padding before the number also focuses this field (below).
+        let w = if before.is_empty() { 2.0 } else { measure(ui, &before) + 2.0 };
+        let before_resp = ui.add(
+            egui::TextEdit::singleline(&mut before)
+                .id(before_id)
+                .frame(egui::Frame::NONE)
+                .font(font.clone())
+                .text_color(text_color)
+                .align(egui::Align2::LEFT_CENTER)
+                .char_limit(30)
+                .desired_width(w)
+                .margin(egui::Margin::ZERO),
+        );
+        ui.ctx().accesskit_node_builder(before_resp.id, |node| node.set_label(tl!("Text before the number")));
+        if before_resp.has_focus() && pressed(ui, egui::Key::Delete) && at_before == Some(before_chars) {
+            remove = true;
+        }
+        let sample = NumFormat::from_ooxml(&f.format).format(1);
+        let sample_w = measure(ui, &sample);
+        let (rect, num) = ui.allocate_exact_size(vec2(sample_w + 2.0, inner.height()), Sense::click());
+        num.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Number")));
+        if num.clicked() {
+            num.request_focus();
+        }
+        // Clicking anywhere in the box to the left of the number focuses the prefix field so users
+        // can type before `1.` without having to hit a 2 px sliver.
+        if let Some(pos) = click_pos
+            && outer.contains(pos)
+            && pos.x < rect.left()
+        {
+            ui.memory_mut(|m| m.request_focus(before_id));
+            set_text_cursor(ui.ctx(), before_id, before.chars().count());
+        }
+        // Left and Right are this piece's own (below), not egui's move-focus keys.
+        ui.memory_mut(|m| m.set_focus_lock_filter(num.id, egui::EventFilter { horizontal_arrows: true, ..Default::default() }));
+        let (fill, chip_text) = if num.has_focus() { (focus_bg, focus_fg) } else { (chip_bg, chip_fg) };
+        let galley = ui.painter().layout_no_wrap(sample, font.clone(), chip_text);
+        let text_y = rect.center().y - galley.size().y / 2.0;
+        craft::ui::layout::record_control_baseline(ui, field_id, (text_y - outer.top()) + galley.size().y * 0.8);
+        let highlight = Rect::from_min_size(pos2(rect.left(), text_y - 1.0), vec2(galley.size().x + 2.0, galley.size().y + 2.0));
+        ui.painter().rect_filled(highlight, 1.5, fill);
+        ui.painter().galley(pos2(rect.left() + 1.0, text_y), galley, chip_text);
+        if num.has_focus() && (pressed(ui, egui::Key::Delete) || pressed(ui, egui::Key::Backspace)) {
+            remove = true;
+        }
+        // Arrow/Home/End navigation across `before` <-> `Number` <-> `after`.
+        let mut focus_num = false;
+        if before_resp.has_focus() {
+            if pressed(ui, egui::Key::ArrowRight) && at_before == Some(before_chars) {
+                focus_num = true;
+            } else if pressed(ui, egui::Key::End) {
+                ui.memory_mut(|m| m.request_focus(after_id));
+                set_text_cursor(ui.ctx(), after_id, after.chars().count());
+            }
+        } else if num.has_focus() {
+            if pressed(ui, egui::Key::ArrowLeft) {
+                ui.memory_mut(|m| m.request_focus(before_id));
+                set_text_cursor(ui.ctx(), before_id, before.chars().count());
+            } else if pressed(ui, egui::Key::Home) {
+                ui.memory_mut(|m| m.request_focus(before_id));
+                set_text_cursor(ui.ctx(), before_id, 0);
+            } else if pressed(ui, egui::Key::ArrowRight) {
+                ui.memory_mut(|m| m.request_focus(after_id));
+                set_text_cursor(ui.ctx(), after_id, 0);
+            } else if pressed(ui, egui::Key::End) {
+                ui.memory_mut(|m| m.request_focus(after_id));
+                set_text_cursor(ui.ctx(), after_id, after.chars().count());
+            }
+        }
+        let after_resp = ui.add(
+            egui::TextEdit::singleline(&mut after)
+                .id(after_id)
+                .frame(egui::Frame::NONE)
+                .font(font.clone())
+                .text_color(text_color)
+                .align(egui::Align2::LEFT_CENTER)
+                .char_limit(30)
+                .desired_width(f32::INFINITY)
+                .margin(egui::Margin::ZERO),
+        );
+        ui.ctx().accesskit_node_builder(after_resp.id, |node| node.set_label(tl!("Text after the number")));
+        if after_resp.has_focus() {
+            if pressed(ui, egui::Key::Backspace) && at_after == Some(0) {
+                remove = true;
+            } else if pressed(ui, egui::Key::ArrowLeft) && at_after == Some(0) {
+                focus_num = true;
+            } else if pressed(ui, egui::Key::Home) {
+                ui.memory_mut(|m| m.request_focus(before_id));
+                set_text_cursor(ui.ctx(), before_id, 0);
+            }
+        }
+        if focus_num {
+            num.request_focus();
+        }
+    });
     f.text = format!("{before}%1{after}");
     if remove {
         f.remove_number();
@@ -628,45 +702,76 @@ fn number_format_box(ui: &mut Ui, f: &mut NumberForm) {
 
 /// A page with three numbered paragraphs in the form's style, format, font and alignment
 /// (numbers aligned at one point, text in grey bars after them), between grey lines of text.
-fn number_preview(f: &NumberForm) -> Picture<'static> {
+fn number_preview(f: &NumberForm, target_w: f32, target_h: f32) -> Picture<'static> {
     let samples = [f.sample(1), f.sample(2), f.sample(3)];
     let align = f.align.clone();
     let (bold, italic, rgb) = f.look();
     let ink = rgb.map_or(Color32::BLACK, crate::theme::c32);
     let size = f.preview_size();
     let font = if bold { crate::theme::semibold(size) } else { egui::FontId::proportional(size) };
-    Picture::painter(word(tl!("Preview")), ThumbAspect::new(300, 132), move |cx: &ContentPainterCx, rect: Rect| {
+    let aspect = ThumbAspect::new(target_w.round().clamp(1.0, f32::from(u16::MAX)) as u16, target_h.round().clamp(1.0, f32::from(u16::MAX)) as u16);
+    Picture::painter(word(tl!("Preview")), aspect, move |cx: &ContentPainterCx, rect: Rect| {
+        let ppp = cx.pixels_per_point();
+        let snap = |v: f32| (v * ppp).round() / ppp;
+        let r = Rect::from_min_max(pos2(snap(rect.left()), snap(rect.top())), pos2(snap(rect.right()), snap(rect.bottom())));
+        let border_w = (1.0 * ppp).round().max(1.0) / ppp;
         let mut shapes = vec![
-            egui::Shape::rect_filled(rect, 2.0, Color32::WHITE),
-            egui::Shape::rect_stroke(rect, 2.0, egui::Stroke::new(1.0, Color32::from_gray(160)), egui::StrokeKind::Inside),
+            egui::Shape::rect_filled(r, 2.0, Color32::WHITE),
+            egui::Shape::rect_stroke(r, 2.0, egui::Stroke::new(border_w, Color32::from_gray(160)), egui::StrokeKind::Inside),
         ];
-        for edge_y in [rect.top() + 14.0, rect.bottom() - 14.0] {
-            let r = Rect::from_min_max(pos2(rect.left() + 14.0, edge_y - 2.0), pos2(rect.right() - 14.0, edge_y + 2.0));
-            shapes.push(egui::Shape::rect_filled(r, 1.0, Color32::from_gray(205)));
+        let pad = 14.0_f32.min(r.width() * 0.08);
+        for edge_y in [r.top() + r.height() * 0.14, r.bottom() - r.height() * 0.14] {
+            let cy = snap(edge_y);
+            let bar = Rect::from_min_max(pos2(snap(r.left() + pad), snap(cy - 2.0)), pos2(snap(r.right() - pad), snap(cy + 2.0)));
+            shapes.push(egui::Shape::rect_filled(bar, 1.0, Color32::from_gray(205)));
         }
         cx.data_shapes(shapes);
-        let at = rect.left() + 66.0;
-        let text_x = rect.left() + 104.0;
+        let galleys: Vec<_> = samples
+            .iter()
+            .map(|sample| {
+                let mut job = egui::text::LayoutJob::default();
+                let format = egui::TextFormat { font_id: font.clone(), color: ink, italics: italic, ..Default::default() };
+                job.append(sample, 0.0, format);
+                cx.painter.layout_job(job)
+            })
+            .collect();
+        let max_w = galleys.iter().map(|g| g.size().x).fold(0.0_f32, f32::max);
+        let left_margin = r.left() + pad;
+        let (at, text_x) = match align.as_str() {
+            "center" => {
+                let anchor = (left_margin + 36.0).max(left_margin + max_w / 2.0 + 4.0);
+                (anchor, (anchor + max_w / 2.0 + 10.0).max(left_margin + 56.0))
+            }
+            "right" => {
+                let anchor = (left_margin + 44.0).max(left_margin + max_w + 4.0);
+                (anchor, anchor + 10.0)
+            }
+            _ => {
+                let anchor = left_margin + 22.0;
+                (anchor, (anchor + max_w + 10.0).max(left_margin + 56.0))
+            }
+        };
         let mut bars = Vec::new();
-        for (i, sample) in samples.iter().enumerate() {
-            let y = rect.top() + 40.0 + 26.0 * i as f32;
-            let mut job = egui::text::LayoutJob::default();
-            let format = egui::TextFormat { font_id: font.clone(), color: ink, italics: italic, ..Default::default() };
-            job.append(sample, 0.0, format);
-            let galley = cx.painter.layout_job(job);
+        for (i, galley) in galleys.into_iter().enumerate() {
+            let y = snap(r.top() + r.height() * (0.32 + 0.18 * i as f32));
             let w = galley.size().x;
             let x = match align.as_str() {
                 "center" => at - w / 2.0,
                 "right" => at - w,
                 _ => at,
-            };
-            cx.painter.galley(pos2(x, y - galley.size().y / 2.0), galley, ink);
-            let bar = Rect::from_min_max(pos2(text_x.max(x + w + 4.0), y - 2.5), pos2(rect.right() - 14.0, y + 2.5));
-            bars.push(egui::Shape::rect_filled(bar, 1.0, Color32::from_gray(90)));
+            }
+            .max(left_margin);
+            cx.painter.galley(pos2(snap(x), snap(y - galley.size().y / 2.0)), galley, ink);
+            let bar_left = snap(text_x.max(x + w + 8.0));
+            let bar_right = snap(r.right() - pad);
+            if bar_right > bar_left {
+                let bar = Rect::from_min_max(pos2(bar_left, snap(y - 2.0)), pos2(bar_right, snap(y + 2.0)));
+                bars.push(egui::Shape::rect_filled(bar, 1.0, Color32::from_gray(90)));
+            }
         }
         cx.data_shapes(bars);
     })
-    .extent(PictureSize::Thumb(ThumbSize::Large))
+    .extent(PictureSize::Sample(ThumbSize::Large))
 }
 
 impl WordForm for NumberForm {
@@ -679,38 +784,50 @@ impl WordForm for NumberForm {
     }
 
     fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, asks: &mut Vec<Asks>) -> bool {
-        Text::new(word(tl!("Number format"))).show(ui);
         let styles: Vec<(&'static str, &'static str)> = number_styles().collect();
-        let style_names: Vec<Label> = styles.iter().map(|(_, s)| if s.is_empty() { word(tl!("(none)")) } else { word(tl!(s)) }).collect();
+        let style_entries: Vec<Entry<usize>> =
+            styles.iter().enumerate().map(|(at, (_, s))| Entry::new(at, if s.is_empty() { word(tl!("(none)")) } else { word(tl!(s)) })).collect();
         let current = styles.iter().position(|(k, _)| *k == self.format);
-        Row::new().show(ui, |ui, _| {
-            if let Some(at) = pick(ui, "dnf_style", word(tl!("Number style:")), &style_names, current, true)
-                && let Some((k, _)) = styles.get(at)
-            {
-                self.set_style(k);
-            }
-            // Word's Font… beside the style: the app's own Font dialog formatting the number.
-            if clicked(&Button::new(word(tl!("Font…"))).show(ui)) {
-                asks.push(Asks::Font(FontRequest::number(self.clone())));
-            }
-        });
-        Field::new(word(tl!("Number format:"))).id_salt("dnf_format").show(ui, |ui, _| {
-            number_format_box(ui, self);
-        });
-        FieldGroup::new(word(tl!("Alignment:"))).show(ui, |ui, _| {
-            let group = RadioGroup::new(word(tl!("Alignment:")), Bind::given(self.align.clone())).show(ui, |ui, _| {
-                Row::new().show(ui, |ui, _| {
-                    for (v, s) in [("right", "Right"), ("center", "Center"), ("left", "Left")] {
-                        Radio::new(v.to_string()).label(word(tl!(s))).show(ui);
+        let shown = current.map_or(Mixed::Mixed, Mixed::Same);
+        FieldGroup::new(word(tl!("Number format"))).show(ui, |ui, _| {
+            Field::new(word(tl!("Number style:"))).id_salt("dnf_style").show(ui, |ui, _| {
+                Row::new().fill_width().show(ui, |ui, _| {
+                    if let Some(at) = Select::new(word(tl!("Number style:")), Bind::given(shown), &style_entries)
+                        .sizing(Sizing::FillWidth)
+                        .show(ui)
+                        .value()
+                        .copied()
+                        && let Some((k, _)) = styles.get(at)
+                    {
+                        self.set_style(k);
+                    }
+                    // Word's Font… beside the style: the app's own Font dialog formatting the number.
+                    if clicked(&Button::new(word(tl!("Font…"))).show(ui)) {
+                        asks.push(Asks::Font(FontRequest::number(self.clone())));
                     }
                 });
             });
-            if let Some(a) = group.output.value().cloned() {
-                self.align = a;
-            }
+            Field::new(word(tl!("Number format:"))).id_salt("dnf_format").show(ui, |ui, cx| {
+                number_format_box(ui, cx.resolved.id, self);
+            });
+            Field::new(word(tl!("Alignment:"))).id_salt("dnf_align").show(ui, |ui, _| {
+                let group = RadioGroup::new(word(tl!("Alignment:")), Bind::given(self.align.clone())).show(ui, |ui, _| {
+                    Row::new().show(ui, |ui, _| {
+                        for (v, s) in [("left", "Left"), ("center", "Center"), ("right", "Right")] {
+                            Radio::new(v.to_string()).label(word(tl!(s))).show(ui);
+                        }
+                    });
+                });
+                if let Some(a) = group.output.value().cloned() {
+                    self.align = a;
+                }
+            });
         });
-        FieldGroup::new(word(tl!("Preview"))).show(ui, |ui, _| {
-            number_preview(self).show(ui);
+        section(ui, word(tl!("Preview")), |ui| {
+            let tokens = Env::of(ui).tokens.clone();
+            let h = tokens.size.thumb.sample.lg.max(96.0);
+            let w = if ui.is_sizing_pass() { tokens.size.dialog.least.max(240.0) } else { ui.available_width().max(240.0) };
+            number_preview(self, w, h).show(ui);
         });
         true
     }
@@ -1119,6 +1236,24 @@ mod tests {
         h.run_steps(4);
         assert!(h.state().dialog_host.is_empty());
         assert_eq!(h.state().session.doc, doc);
+    }
+
+    /// #2787: from the text after the number, Home or ArrowLeft crosses the number into the prefix
+    /// field so users can type text before `1.`.
+    #[test]
+    fn number_format_box_moves_across_number_into_prefix() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(app());
+        assert_eq!(h.state_mut().run("para.defineNumber", json!({})).unwrap(), json!({"pending": "defineNumber"}));
+        let id = opened(h.state(), "defineNumber");
+        h.run_steps(4);
+        h.get_by_label("Text after the number").click();
+        h.run_steps(2);
+        h.key_press(egui::Key::Home);
+        h.run_steps(2);
+        h.input_mut().events.push(egui::Event::Text("Step ".into()));
+        h.run_steps(3);
+        assert_eq!(number_form(h.state(), id).text, "Step %1.");
     }
 
     /// #2787: the number's Font… opens on the number's kerning, not the selected text's; a size
