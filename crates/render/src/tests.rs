@@ -671,6 +671,39 @@ fn picture_brightness_contrast_transparency() {
     assert!(!top.iter().any(|p| p[0] == 100));
 }
 
+#[test]
+fn cropped_picture_feather_changes_the_edge_without_changing_shared_pixels() {
+    use wordcraft_doc::picfx::PicFx;
+    use wordcraft_geom::Rect;
+
+    let mut doc = Document::new();
+    let png = wordcraft_geom::picture::encode_format(
+        &image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(12, 8, image::Rgba([200, 25, 20, 128]))),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
+    let media = doc.add_media(png.clone(), "png");
+    let area = Rect::new(0.0, 0.0, 144.0, 96.0);
+    let render = |soft_edge_emu| {
+        let pic = Draw::Image {
+            rect: area,
+            media: media.clone(),
+            crop: [0.25, 0.125, 0.125, 0.0],
+            alpha: 0.75,
+            fx: PicFx { soft_edge_emu, ..Default::default() },
+            alt: String::new(),
+            decorative: false,
+        };
+        render_items(&doc, &[pic], area, 2.0, &RenderOptions::default())
+    };
+    let plain = render(None);
+    let feathered = render(Some(12 * 12_700));
+    assert!(feathered.pixel(2, 96)[3] < plain.pixel(2, 96)[3]);
+    assert!(feathered.pixel(144, 2)[3] < plain.pixel(144, 2)[3]);
+    assert_eq!(feathered.pixel(144, 96), plain.pixel(144, 96));
+    assert_eq!(doc.media[&media].as_slice(), png);
+}
+
 /// A letterhead's page frame (a `frame` shape in the header) is drawn as a border with a hole,
 /// not a filled box over the whole page.
 #[test]

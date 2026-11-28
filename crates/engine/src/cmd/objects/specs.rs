@@ -1,6 +1,8 @@
 use super::arrange::{MAX_OFFSET, bounds, copy_to, move_with_text, unalign};
 use super::group::{add_object, group, ungroup};
-use super::picture::{adjust, adjust_media, clear_lum, crop, original_media, recolor, relook, remove_background, reset, shape_size, size};
+use super::picture::{
+    adjust, adjust_media, clear_lum, crop, original_media, recolor, relook, relook_with_fx, remove_background, reset, shape_size, size,
+};
 use super::select::{
     all_objects, alt_text, can_group, edit_obj, has_any_movable, has_any_shape, has_floating, has_group, has_movable, has_object, has_picture,
     has_placeable, has_shape, has_shape_or_canvas, has_sizable, is_shape_or_canvas, obj_size, objects_list, selected_or_text_box, target_objects,
@@ -186,10 +188,14 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("picture.style", "Picture Styles", "Picture Format › Picture Styles", |s, v| {
             // A style replaces the picture's style and border, as Word's gallery does (#2052).
             let style = p::str(v, "style").unwrap_or("simpleFrame").to_string();
-            relook(s, move |l| {
-                l.style = Some(style);
-                l.border = None;
-            })
+            relook_with_fx(
+                s,
+                move |l| {
+                    l.style = Some(style);
+                    l.border = None;
+                },
+                |fx| fx.soft_edge_emu = None,
+            )
         })
         .params(r#"{"style": "simpleFrame|thickFrame|rounded|softEdge|shadow"} (replaces the picture's style and border)"#)
         .when(has_picture),

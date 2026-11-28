@@ -286,6 +286,10 @@ pub struct PictureLook {
 /// Change the selected picture's effect, style or border and draw it again from the bitmap
 /// under them (effect, then style, then border).
 pub(super) fn relook(s: &mut Session, change: impl FnOnce(&mut PictureLook)) -> CmdResult {
+    relook_with_fx(s, change, |_| {})
+}
+
+pub(super) fn relook_with_fx(s: &mut Session, change: impl FnOnce(&mut PictureLook), change_fx: impl Fn(&mut PicFx)) -> CmdResult {
     let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
     let InlineObject::Image { media, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
     let cur = s.doc.media.get(&media).cloned();
@@ -300,31 +304,27 @@ pub(super) fn relook(s: &mut Session, change: impl FnOnce(&mut PictureLook)) -> 
         // Nothing left on it: the bitmap as it was.
         let base = look.base.clone();
         return with_obj(s, |o| {
-            if let InlineObject::Image { media, .. } = o {
+            if let InlineObject::Image { media, fx, .. } = o {
                 *media = base.clone();
+                change_fx(fx);
             }
         });
     }
     let l = look.clone();
     // Styles, borders and effects leave the file's brightness, contrast and transparency alone.
-    let out = adjust_media(
-        s,
-        &look.base,
-        |_| {},
-        move |img| {
-            let mut img = match &l.effect {
-                Some(e) => artistic_effect(img, e),
-                None => img,
-            };
-            if let Some(st) = &l.style {
-                img = picture_style(img, st)?;
-            }
-            if let Some((c, w)) = l.border {
-                img = frame(img, w, [c.0, c.1, c.2, 255])?;
-            }
-            Ok(img)
-        },
-    )?;
+    let out = adjust_media(s, &look.base, change_fx, move |img| {
+        let mut img = match &l.effect {
+            Some(e) => artistic_effect(img, e),
+            None => img,
+        };
+        if let Some(st) = &l.style {
+            img = picture_style(img, st)?;
+        }
+        if let Some((c, w)) = l.border {
+            img = frame(img, w, [c.0, c.1, c.2, 255])?;
+        }
+        Ok(img)
+    })?;
     if let Some((_, InlineObject::Image { media, .. })) = selected(s)
         && let Some(drawn) = s.doc.media.get(&media).cloned()
     {
@@ -367,8 +367,7 @@ pub(super) fn reset(s: &mut Session, _: &Value) -> CmdResult {
     let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
     let InlineObject::Image { media, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
     let orig = s.originals.get(&media).cloned().unwrap_or(media);
-    // Like Word, Reset Picture discards every correction, those read from the file (`fx`:
-    // brightness, contrast, transparency, #1711, #1766) included.
+    // Like Word, Reset Picture discards every correction, including colour, transparency and soft edges read from the file.
     with_obj(s, |o| {
         if let InlineObject::Image { media, crop, fx, .. } = o {
             *media = orig.clone();

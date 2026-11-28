@@ -180,3 +180,40 @@ fn frame_preset_opens_and_saves_as_a_frame() {
     check(&doc);
     check(&wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap());
 }
+
+#[test]
+fn picture_soft_edge_survives_the_docx_model_bridge() {
+    use wordcraft_doc::para::{Float, InlineObject};
+    use wordcraft_doc::picfx::PicFx;
+
+    let mut doc = wordcraft_doc::Document::new();
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 25, 20, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let media = doc.add_media(png.clone(), "png");
+    let mut para = wordcraft_doc::Paragraph::new();
+    let fx = PicFx { soft_edge_emu: Some(76_200), ..PicFx::new(20_000, -5_000, 7_000) };
+    para.insert_object(
+        0,
+        InlineObject::Image { media, w: 72.0, h: 48.0, alt: String::new(), float: Float::default(), crop: [0.0; 4], fx, ole: None },
+        &Default::default(),
+    )
+    .unwrap();
+    doc.body = vec![wordcraft_doc::para_block(para)];
+    let xml = String::from_utf8(wordcraft_docx::write_flat(&doc).unwrap()).unwrap();
+    let close = "</pic:spPr>";
+    assert!(xml.contains(close));
+    let effect = r#"<a:effectLst><a:softEdge rad="76200"/></a:effectLst></pic:spPr>"#;
+    doc = wordcraft_docx::read_xml(xml.replacen(close, effect, 1).as_bytes()).unwrap();
+    for _ in 0..2 {
+        let wordcraft_doc::Block::Para(para) = doc.body[0].as_ref() else { panic!("picture paragraph") };
+        let InlineObject::Image { media, fx: read_fx, .. } = &para.objects[0] else { panic!("picture") };
+        assert_eq!(*read_fx, fx);
+        assert_eq!(doc.media[media].as_slice(), png);
+        let saved = wordcraft_docx::write(&doc).unwrap();
+        let saved_xml = String::from_utf8(wordcraft_docx::write_flat(&doc).unwrap()).unwrap();
+        assert!(saved_xml.contains(r#"<a:softEdge rad="76200""#));
+        doc = wordcraft_docx::read(&saved).unwrap();
+    }
+}

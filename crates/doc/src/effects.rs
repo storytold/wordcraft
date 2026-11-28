@@ -199,9 +199,65 @@ pub fn bands(from: f32, to: f32, opacity: f32) -> Vec<(f32, f32)> {
         .collect()
 }
 
+/// A bounded picture soft edge; absent, zero, negative and non-finite values are plain.
+pub fn picture_soft_edge(radius: Option<f32>) -> Option<f32> {
+    radius.filter(|r| r.is_finite() && *r > 0.0).map(|r| r.min(MAX_SOFT_EDGE))
+}
+
+/// Separable alpha-mask stops over one displayed picture axis. The Gaussian-like inward
+/// feather keeps the fill sharp and both renderers use the same bounded (at most 67) stops.
+/// This approximates the blur, rather than claiming pixel-identical output from every Office
+/// version. Masks act after crop in display points, independently of source resolution.
+pub fn picture_soft_edge_stops(size: f32, radius: f32) -> Vec<(f32, f32)> {
+    let Some(radius) = picture_soft_edge(Some(radius)) else { return Vec::new() };
+    if !size.is_finite() || size <= 0.0 {
+        return Vec::new();
+    }
+    let coverage = |d: f32| {
+        let cdf = |x: f32| 0.5 + 0.5 * (0.797_884_6 * (x + 0.044_715 * x * x * x)).tanh();
+        let floor = cdf(-0.9 / 0.35);
+        ((cdf((d / radius - 0.9) / 0.35) - floor) / (1.0 - floor)).clamp(0.0, 1.0)
+    };
+    let reach = (2.0 * radius).min(size / 2.0);
+    let mut stops = Vec::with_capacity(67);
+    for i in 0..=32 {
+        let d = reach * i as f32 / 32.0;
+        stops.push((d / size, coverage(d) * coverage(size - d)));
+    }
+    if reach < size / 2.0 {
+        stops.push((0.5, coverage(size / 2.0).powi(2)));
+    }
+    for i in (0..=32).rev() {
+        let d = reach * i as f32 / 32.0;
+        let offset = 1.0 - d / size;
+        if stops.last().is_none_or(|(o, _)| *o < offset) {
+            stops.push((offset, coverage(d) * coverage(size - d)));
+        }
+    }
+    stops
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn picture_masks_are_bounded_for_hostile_and_small_inputs() {
+        for v in [f32::NAN, f32::INFINITY, -1.0, 0.0] {
+            assert_eq!(picture_soft_edge(Some(v)), None);
+        }
+        assert_eq!(picture_soft_edge(Some(f32::MAX)), Some(MAX_SOFT_EDGE));
+        for size in [0.01, 1.0, 20.0, 144.0, 10_000.0] {
+            let stops = picture_soft_edge_stops(size, 25.0);
+            assert!(stops.len() <= 67);
+            assert_eq!(stops.first(), Some(&(0.0, 0.0)));
+            assert_eq!(stops.last(), Some(&(1.0, 0.0)));
+            assert!(stops.windows(2).all(|w| w[0].0 < w[1].0));
+            assert!(stops.iter().all(|(o, a)| o.is_finite() && a.is_finite() && (0.0..=1.0).contains(a)));
+        }
+        assert!(picture_soft_edge_stops(f32::NAN, 6.0).is_empty());
+        assert!(picture_soft_edge_stops(0.0, 6.0).is_empty());
+    }
 
     #[test]
     fn bands_ramp_to_the_requested_opacity() {

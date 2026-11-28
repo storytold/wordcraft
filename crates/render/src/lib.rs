@@ -871,30 +871,53 @@ fn draw_mark_text(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
 
 fn draw_image(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
     let Draw::Image { rect, media, crop, alpha, fx, .. } = it else { return };
-    let (doc, view) = (fr.doc, fr.view);
+    let view = fr.view;
     let r = kurbo_rect(rect);
-    if !r.overlaps(*fr.visible) {
+    if !r.is_finite() || !r.overlaps(*fr.visible) {
         return;
     }
+    if let Some(radius) = fx.soft_edge_points().filter(|_| r.width() > 0.0 && r.height() > 0.0) {
+        ctx.set_transform(view);
+        ctx.push_clip_layer(&r.to_path(0.1));
+        draw_picture(ctx, fr, &r, media, *crop, *alpha, *fx);
+        ctx.set_transform(view);
+        for (size, end) in [(rect.w, (r.x1, r.y0)), (rect.h, (r.x0, r.y1))] {
+            let stops: Vec<_> = wordcraft_doc::effects::picture_soft_edge_stops(size, radius)
+                .into_iter()
+                .map(|(offset, alpha)| peniko::ColorStop::from((offset, color(Rgb::WHITE, alpha))))
+                .collect();
+            ctx.push_blend_layer(peniko::BlendMode { mix: peniko::Mix::Normal, compose: peniko::Compose::DestIn });
+            ctx.set_paint(peniko::Gradient::new_linear((r.x0, r.y0), end).with_stops(stops.as_slice()));
+            ctx.fill_rect(&r);
+            ctx.pop_layer();
+        }
+        ctx.pop_layer();
+        return;
+    }
+    draw_picture(ctx, fr, &r, media, *crop, *alpha, *fx);
+}
+
+fn draw_picture(ctx: &mut RenderContext, fr: &Frame, r: &kurbo::Rect, media: &str, crop: [f32; 4], alpha: f32, fx: wordcraft_doc::picfx::PicFx) {
+    let (doc, view) = (fr.doc, fr.view);
     if let Some(v) = vector_for(doc, media) {
-        draw_vector(ctx, &v, &r, crop, *alpha, view);
+        draw_vector(ctx, &v, r, &crop, alpha, view);
         return;
     }
-    let pm = match pixmap_for(doc, media, *fx) {
+    let pm = match pixmap_for(doc, media, fx) {
         Ok(pm) => pm,
         Err(refusal) => {
             ctx.set_transform(view);
             ctx.set_paint(color(fr.opts.ink(Rgb(0xD0, 0xD0, 0xD0)), 1.0));
-            ctx.fill_rect(&r);
+            ctx.fill_rect(r);
             // Say why when the picture is fine but too large to decode (#5637).
             if let wordcraft_geom::picture::Refusal::TooLarge { width, height } = refusal {
-                draw_box_label(ctx, fr, view, &r, &too_large_label(width, height));
+                draw_box_label(ctx, fr, view, r, &too_large_label(width, height));
             }
             return;
         }
     };
     let (pw, ph) = (pm.width().max(1) as f64, pm.height().max(1) as f64);
-    let [cl, ct, vis_w, vis_h] = wordcraft_layout::crop_window(*crop);
+    let [cl, ct, vis_w, vis_h] = wordcraft_layout::crop_window(crop);
     let sx = r.width() / (pw * vis_w);
     let sy = r.height() / (ph * vis_h);
     ctx.set_transform(view);
@@ -909,7 +932,7 @@ fn draw_image(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
         sampler: peniko::ImageSampler::default().with_quality(peniko::ImageQuality::Medium),
     });
     ctx.set_paint_transform(Affine::translate((r.x0 - cl * pw * sx, r.y0 - ct * ph * sy)) * Affine::scale_non_uniform(sx, sy));
-    ctx.fill_rect(&r);
+    ctx.fill_rect(r);
     ctx.reset_paint_transform();
     if faded {
         ctx.pop_layer();
