@@ -1,4 +1,4 @@
-# Exercise the native print host and all UI tests on PRs; the broad FreeBSD/ARM64 gates
+# Exercise the native print host and all UI tests on Windows and macOS on PRs; the broad FreeBSD/ARM64 gates
 # stay on their existing nightly/release schedule.
 name: Printing
 
@@ -30,31 +30,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The print host and UI tests on Linux, Windows and macOS, through the suite's shared gate: it
-  # checks out craft-i18n (craft-i18n.rev) and craft-fonts, and installs the Ubuntu packages through
-  # install-apt-packages, which falls back to mirrors outside ubuntu.com (as on 11 Nov 2026).
+  # The print host and UI tests on Windows and macOS, through the suite's shared gate: it checks out
+  # craft-i18n (craft-i18n.rev) and craft-fonts. Linux is not repeated here: ci.yml's gate runs
+  # `cargo xtask ci` there, which already covers fmt, workspace clippy, every test and the wasm build.
   native:
     name: Print
     # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
-      os: '["ubuntu-24.04","windows-latest","macos-latest"]'
+      os: '["windows-latest","macos-latest"]'
       timeout-minutes: 90
       # The catalogs include CJK interface languages, so the UI tests need the suite's fonts, as in
       # the gate (same commit as ci.yml and release.yml).
       craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
-      packages: >-
-        pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev
-        libxi-dev libgtk-3-dev libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers
       # No nextest: the tests run with cargo test, as before.
       tools: ""
       # Its own cache, apart from ci.yml's gate, which builds the whole workspace.
       cache-version: v1-printing
-      command: |
-        cargo fmt --all -- --check
+      # Test binaries without debug info: they link faster and shrink to about a third, and panics
+      # keep their file:line.
+      dev-strip: true
+      # Clippy on its own leg beside the tests, off their critical path. fmt is platform-independent
+      # and runs in ci.yml. The web app's wasm build, once: ci.yml's `cargo xtask wasm` checks the
+      # library crates and ui-egui, not apps/wordcraft-web.
+      lint-command: |
         cargo clippy -p wordcraft -p wordcraft-ui-egui --all-targets --locked -- -D warnings
-        cargo test -p wordcraft -p wordcraft-ui-egui --locked
-        # Browser compatibility, once.
-        if [ "$RUNNER_OS" = Linux ]; then
+        if [ "$RUNNER_OS" = macOS ]; then
           cargo check -p wordcraft-web --target wasm32-unknown-unknown --locked
         fi
+      command: cargo test -p wordcraft -p wordcraft-ui-egui --locked

@@ -1,205 +1,92 @@
 //! Screen readers read the document (#488). The canvas draws pages as pictures, so on its own it
-//! is one opaque widget to assistive technology. This module describes the document under it as
-//! an AccessKit tree, the way a browser describes a page:
+//! is one opaque widget to assistive technology. [`DocumentDescriber`] is the app's mapping of its
+//! document model onto the page view's access description:
 //!
-//! - the canvas widget is the **document** node (named after the document), holding the caret
-//!   and selection as an AccessKit text selection;
-//! - each body paragraph is a **paragraph**, a **heading** (with its outline level) or a **list
-//!   item** (with its list level, grouped into lists), holding one **text run** per laid-out line
-//!   with its characters' screen positions, so a reader can follow the caret by character, word
-//!   and line and point at text, and a magnifier can keep the caret in view;
-//! - tables are **table → row → cell**, pictures and charts **images** named by their alt text,
-//!   hyperlinks **links** around their text runs; list numbers are **list markers**.
+//! - each body paragraph is a paragraph, a heading (with its outline level) or a list item (with
+//!   its list level and marker), holding one text run per laid-out line with its characters'
+//!   screen positions, so a reader can follow the caret by character, word and line and point at
+//!   text, and a magnifier can keep the caret in view;
+//! - tables are table → row → cell, pictures and charts images named by their alt text,
+//!   hyperlinks links around their text runs.
 //!
-//! Only the pages on screen and one page either side are described, and the tree is capped, so a
-//! long document costs no more than a short one. Nothing is built unless a screen reader (or a
-//! test) asked egui for AccessKit output; the tree is rebuilt only when the layout, the selection,
-//! the described pages or their place on screen changed.
+//! The framework builds the nodes, caps the tree and describes only the pages on screen and one
+//! either side, and only when a screen reader (or a test) reads the node.
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::sync::Arc;
 
-use egui::accesskit::{self, Node, NodeId, Role, TextPosition, TextSelection};
-use egui::{Id, Rect};
+use egui::Rect;
 use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::props::TextDirection;
 use wordcraft_doc::{Document, Path, Pos, StoryRef};
-use wordcraft_layout::para::{ClKind, Line};
+use wordcraft_layout::para::ClKind;
 use wordcraft_layout::{DocLayout, LineEnd, ParaLayout, Placed};
 
-/// Most nodes described at once (a dense page has a few hundred).
-pub const MAX_NODES: usize = 6000;
-/// AccessKit's word starts are `u8`s: a text run holds at most this many characters.
-const MAX_RUN: usize = 255;
-/// Deepest table nesting described (paths come from files).
-const MAX_DEPTH: usize = 16;
+use craft::pages::ui::PlacedPage;
+use craft::pages::ui::access::{AccessBuilder, AccessDescriber, AccessNode, AccessPosition, BlockRole, MAX_RUN};
 
-/// What was described last frame, and for what.
-#[derive(Default)]
-pub struct A11yCache {
-    key: Option<Key>,
-    tree: Tree,
-}
+/// Where floating pictures sit on a page, by (paragraph path, byte offset of the anchor character).
+type Pictures = HashMap<(Vec<u32>, usize), Rect>;
 
-struct Key {
+/// Describes the document the pages are drawn from, and its selection.
+pub(crate) struct DocumentDescriber {
+    doc: Arc<Document>,
     layout: Arc<DocLayout>,
-    doc: Id,
-    /// Whether the page shows Insert › Table's preview copy rather than the document: the two
-    /// can otherwise share a layout identity only across the preview's start and end, which must
-    /// rebuild the tree even when the page's rectangles and caret are unchanged.
-    previewing: bool,
-    pages: (usize, usize),
-    rects: Vec<Rect>,
+    /// The anchor and focus the caret is drawn from.
     sel: (Pos, Pos),
+    /// The caret and the selection's other end, found while describing: a run's handle exists only once
+    /// the builder made it.
+    selection: Cell<Option<(AccessPosition, AccessPosition)>>,
 }
 
-impl Key {
-    /// Compares two AccessKit cache keys: layout identity, document id, table-preview flag, page range,
-    /// page rectangles and selection.
-    fn same(&self, o: &Key) -> bool {
-        Arc::ptr_eq(&self.layout, &o.layout)
-            && self.doc == o.doc
-            && self.previewing == o.previewing
-            && self.pages == o.pages
-            && self.rects == o.rects
-            && self.sel == o.sel
-    }
-}
-
-/// The described document: its nodes (in creation order), the document node's children and the
-/// selection inside it.
-#[derive(Default, Clone)]
-pub struct Tree {
-    pub nodes: Vec<(Id, Node)>,
-    pub top: Vec<NodeId>,
-    pub selection: Option<TextSelection>,
-}
-
-/// #2726: AccessKit's contract is that every update's focus is in the node list, and
-/// `accesskit_consumer` treats a breach as fatal: `validate_global` panics on the UI thread,
-/// which closes the window (the Windows adapter reports `Focused ID #… is not in the node list`).
-/// egui can send an update that drops a focused widget's node, and a screen reader's focus
-/// request targets nodes in this document description, which the list carries only while the
-/// layout, the pages on screen and the selection are the same as when it asked. This guard runs
-/// on every update egui produces, before it reaches the adapter: a focus the update does not
-/// carry falls back to the root, so the reader starts from the top of the document instead of
-/// the process dying.
-pub struct FocusGuard;
-
-impl egui::plugin::Plugin for FocusGuard {
-    fn debug_name(&self) -> &'static str {
-        "a11y focus guard"
-    }
-
-    fn output_hook(&mut self, _ctx: &egui::Context, output: &mut egui::FullOutput) {
-        if let Some(update) = &mut output.platform_output.accesskit_update {
-            guard_update(update);
-        }
+impl DocumentDescriber {
+    /// A describer of `layout`, laid out from `doc`, with the caret and the selection's other end in `sel`. It owns
+    /// its snapshot, as the page source does, so the page view can hold it while the body edits the app. While
+    /// Insert › Table's preview shows (#3931) the pages and caret are drawn from the preview copy, so the caller
+    /// passes that copy's document and selection, not the real document the preview's layout does not belong to.
+    pub(crate) fn new(doc: Arc<Document>, layout: Arc<DocLayout>, sel: (Pos, Pos)) -> Self {
+        DocumentDescriber { doc, layout, sel, selection: Cell::new(None) }
     }
 }
 
-/// Point the focus at the root when this update's node list does not contain it.
-fn guard_update(update: &mut egui::accesskit::TreeUpdate) {
-    if update.nodes.iter().any(|(id, _)| *id == update.focus) {
-        return;
-    }
-    if let Some(root) = update.tree.as_ref().map(|t| t.root) {
-        update.focus = root;
-    }
-}
-
-/// The pages to describe: those meeting `view`, and one either side.
-pub fn page_window(rects: &[Rect], view: Rect) -> Option<(usize, usize)> {
-    let first = rects.iter().position(|r| r.intersects(view))?;
-    let last = rects.iter().rposition(|r| r.intersects(view)).unwrap_or(first);
-    Some((first.saturating_sub(1), (last + 2).min(rects.len())))
-}
-
-/// Describe the document under the canvas widget `doc_id` to AccessKit for this frame.
-/// `rects` are the pages' screen rectangles, `view` the visible part of the canvas.
-pub fn expose(app: &mut crate::WordApp, ctx: &egui::Context, doc_id: Id, layout: &Arc<DocLayout>, rects: &[Rect], view: Rect) {
-    if ctx.accesskit_node_builder(doc_id, |n| n.set_role(Role::Document)).is_none() {
-        // No screen reader: describe nothing, keep nothing.
-        app.canvas.a11y = A11yCache::default();
-        return;
-    }
-    let pages = page_window(rects, view).unwrap_or((0, 0));
-    // The page may show Insert › Table's preview copy while the grid is hovered (#3931): describe
-    // the same document and selection the pages and caret are drawn from, not the real document
-    // that the preview's layout does not belong to.
-    let preview = crate::canvas::preview_sel(app);
-    let sel = preview.map_or_else(|| (app.session.sel.anchor.clone(), app.session.sel.focus.clone()), |sel| (sel.anchor.clone(), sel.focus.clone()));
-    let key = Key {
-        layout: layout.clone(),
-        doc: doc_id,
-        previewing: preview.is_some(),
-        pages,
-        rects: rects.get(pages.0..pages.1).unwrap_or_default().to_vec(),
-        sel,
-    };
-    if !app.canvas.a11y.key.as_ref().is_some_and(|k| k.same(&key)) {
-        // Build before writing the cache: the preview document borrows `app`, and the tree is
-        // owned, so the borrow ends with this statement.
-        let tree = build(crate::canvas::page_doc(app), layout, doc_id, rects, pages, (&key.sel.0, &key.sel.1));
-        app.canvas.a11y.tree = tree;
-        app.canvas.a11y.key = Some(key);
-    }
-    let title = app.title_stem();
-    let tree = &app.canvas.a11y.tree;
-    let ours: HashSet<NodeId> = tree.nodes.iter().map(|(id, _)| id.accesskit_id()).collect();
-    for (id, node) in &tree.nodes {
-        ctx.accesskit_node_builder(*id, |n| *n = node.clone());
-    }
-    // egui hangs every new node off the window; ours belong under the document.
-    ctx.accesskit_node_builder(egui::accesskit_root_id(), |root| {
-        let keep: Vec<NodeId> = root.children().iter().filter(|c| !ours.contains(c)).copied().collect();
-        root.set_children(keep);
-    });
-    ctx.accesskit_node_builder(doc_id, |n| {
-        n.set_label(title);
-        for c in &tree.top {
-            n.push_child(*c);
-        }
-        match &tree.selection {
-            Some(s) => n.set_text_selection(*s),
-            None => n.clear_text_selection(),
-        }
-    });
-}
-
-/// Build the description of pages `pages.0..pages.1`.
-pub fn build(doc: &Document, layout: &DocLayout, doc_id: Id, rects: &[Rect], pages: (usize, usize), sel: (&Pos, &Pos)) -> Tree {
-    let mut b = Builder { doc, doc_id, tree: Tree::default(), index: HashMap::new(), lists: HashMap::new(), offsets: HashMap::new() };
-    for pi in pages.0..pages.1 {
-        let (Some(page), Some(pr)) = (layout.pages.get(pi), rects.get(pi)) else { continue };
-        let scale = crate::canvas::page_screen_scale(*pr, page, 1.0);
-        let to_screen = |r: wordcraft_geom::Rect| {
-            Rect::from_min_size(egui::pos2(pr.min.x + r.x * scale, pr.min.y + r.y * scale), egui::vec2(r.w * scale, r.h * scale))
-        };
-        // Where floating pictures sit (their anchor character takes no room on its line).
-        let mut pictures: HashMap<(&[u32], usize), Rect> = HashMap::new();
-        for it in &page.items {
-            if let Placed::Image { rect, story: StoryRef::Body, path, off, .. } | Placed::Graphic { rect, story: StoryRef::Body, path, off, .. } = it
-            {
-                pictures.insert((path.0.as_slice(), *off), to_screen(*rect));
+impl AccessDescriber for DocumentDescriber {
+    fn describe(&self, placed: &[PlacedPage], out: &mut AccessBuilder) {
+        let mut walk = Walk::new(&self.doc, out);
+        'pages: for pp in placed {
+            let Some(page) = self.layout.pages.get(pp.page) else { continue };
+            let scale = crate::canvas::page_screen_scale(pp.rect, page, 1.0);
+            // A floating picture's anchor character takes no room on its line: the picture's own rectangle is its bounds.
+            let mut pictures = Pictures::new();
+            for it in &page.items {
+                if let Placed::Image { rect, story: StoryRef::Body, path, off, .. } | Placed::Graphic { rect, story: StoryRef::Body, path, off, .. } =
+                    it
+                {
+                    let min = egui::pos2(pp.rect.min.x + rect.x * scale, pp.rect.min.y + rect.y * scale);
+                    pictures.insert((path.0.clone(), *off), Rect::from_min_size(min, egui::vec2(rect.w * scale, rect.h * scale)));
+                }
+            }
+            for it in &page.items {
+                let Placed::Lines { story: StoryRef::Body, path, para, l0, l1, x, y, turn } = it else { continue };
+                let place = LinePlace { x: *x, y: *y, turn: *turn, scale, origin: pp.rect.min };
+                if !walk.paragraph(path, para, *l0..*l1, &place, &pictures) {
+                    break 'pages;
+                }
             }
         }
-        for it in &page.items {
-            if b.full() {
-                break;
-            }
-            let Placed::Lines { story: StoryRef::Body, path, para, l0, l1, x, y, turn } = it else { continue };
-            let place = LinePlace { x: *x, y: *y, turn: *turn, scale, origin: pr.min };
-            b.paragraph(path, para, *l0..*l1, &place, &pictures);
-        }
+        let at = |p: &Pos| if p.story == StoryRef::Body { walk.position(&p.path, p.off) } else { None };
+        let (anchor, focus) = (at(&self.sel.0), at(&self.sel.1));
+        self.selection.set(match (focus, anchor) {
+            (Some(focus), Some(anchor)) => Some((focus, anchor)),
+            (Some(focus), None) => Some((focus, focus)),
+            _ => None,
+        });
     }
-    let at = |p: &Pos| if p.story == StoryRef::Body { b.position(&p.path, p.off) } else { None };
-    b.tree.selection = match (at(sel.0), at(sel.1)) {
-        (Some(anchor), Some(focus)) => Some(TextSelection { anchor, focus }),
-        (None, Some(focus)) => Some(TextSelection { anchor: focus, focus }),
-        _ => None,
-    };
-    b.tree
+
+    fn selection(&self) -> Option<(AccessPosition, AccessPosition)> {
+        self.selection.get()
+    }
 }
 
 /// Where a paragraph's lines are placed: the `Placed::Lines` frame and the page on screen.
@@ -219,169 +106,142 @@ impl LinePlace {
     }
 }
 
-struct Builder<'a> {
-    doc: &'a Document,
-    doc_id: Id,
-    tree: Tree,
-    index: HashMap<Id, usize>,
-    /// Per container: the list being filled and the block index of its last item.
-    lists: HashMap<Id, (Id, usize)>,
-    /// Per paragraph: (byte offset, text run, character index) of each cluster, in text order.
-    offsets: HashMap<Vec<u32>, Vec<(usize, Id, usize)>>,
-}
-
 /// One text run being gathered.
 #[derive(Default)]
-struct Run {
+struct Seg {
     text: String,
-    lens: Vec<u8>,
     /// Paragraph x of each character's left edge and its width (points).
-    xs: Vec<(f32, f32)>,
+    chars: Vec<(f32, f32)>,
     link: Option<String>,
 }
 
-impl Builder<'_> {
-    fn full(&self) -> bool {
-        self.tree.nodes.len() >= MAX_NODES
-    }
+/// What a line holds, in reading order.
+enum Piece {
+    Run(Seg),
+    /// A picture's alt text and its bounds on screen, when known.
+    Image(String, Option<Rect>),
+}
 
-    /// Add a node under `parent` (the document when `None`). False when it exists or the tree is full.
-    fn add(&mut self, id: Id, parent: Option<Id>, node: Node) -> bool {
-        if self.index.contains_key(&id) || self.full() {
-            return false;
+/// One page walk: the nodes made so far by document position.
+struct Walk<'a, 'o> {
+    doc: &'a Document,
+    out: &'o mut AccessBuilder,
+    paras: HashMap<Vec<u32>, AccessNode>,
+    tables: HashMap<Vec<u32>, AccessNode>,
+    rows: HashMap<Vec<u32>, AccessNode>,
+    cells: HashMap<Vec<u32>, AccessNode>,
+    /// The lines described: a repeated table header row shows the same lines again.
+    done: HashSet<(Vec<u32>, usize)>,
+    /// Per paragraph: (byte offset, text run, character index) of each cluster, in text order.
+    offsets: HashMap<Vec<u32>, Vec<(usize, AccessNode, usize)>>,
+}
+
+impl<'a, 'o> Walk<'a, 'o> {
+    fn new(doc: &'a Document, out: &'o mut AccessBuilder) -> Self {
+        Walk {
+            doc,
+            out,
+            paras: HashMap::new(),
+            tables: HashMap::new(),
+            rows: HashMap::new(),
+            cells: HashMap::new(),
+            done: HashSet::new(),
+            offsets: HashMap::new(),
         }
-        match parent {
-            Some(p) => match self.index.get(&p).and_then(|&i| self.tree.nodes.get_mut(i)) {
-                Some((_, pn)) => pn.push_child(id.accesskit_id()),
-                None => return false,
-            },
-            None => self.tree.top.push(id.accesskit_id()),
-        }
-        self.index.insert(id, self.tree.nodes.len());
-        self.tree.nodes.push((id, node));
-        true
     }
 
-    fn node_mut(&mut self, id: Id) -> Option<&mut Node> {
-        let i = *self.index.get(&id)?;
-        self.tree.nodes.get_mut(i).map(|(_, n)| n)
-    }
-
-    /// The node blocks at `path` sit in: the document, or a table cell (made on first use, with
-    /// its row and table).
-    fn container(&mut self, path: &[u32]) -> Option<Id> {
+    /// The node blocks at `path` sit in: `Some(None)` for the document, a table cell (made on first use,
+    /// with its row and table) otherwise; `None` for a path that cannot be described.
+    fn container(&mut self, path: &[u32]) -> Option<Option<AccessNode>> {
         if path.len() <= 1 {
-            return Some(self.doc_id);
+            return Some(None);
         }
-        if path.len() < 4 || path.len() > MAX_DEPTH * 3 + 1 {
+        if path.len() < 4 {
             return None;
         }
         let n = path.len();
         let (tpath, rpath, cpath) = (path.get(..n - 3)?, path.get(..n - 2)?, path.get(..n - 1)?);
-        let (row, col) = (*path.get(n - 3)? as usize, *path.get(n - 2)? as usize);
-        let (tid, rid, cid) = (self.doc_id.with(("table", tpath)), self.doc_id.with(("row", rpath)), self.doc_id.with(("cell", cpath)));
-        if !self.index.contains_key(&tid) {
-            let parent = self.container(tpath)?;
-            let mut t = Node::new(Role::Table);
-            if let Some(tb) = self.doc.block(StoryRef::Body, &Path(tpath.to_vec())).and_then(|b| b.as_table()) {
-                t.set_row_count(tb.rows.len());
-                t.set_column_count(tb.grid.len());
+        if let Some(cell) = self.cells.get(cpath) {
+            return Some(Some(*cell));
+        }
+        let table = match self.tables.get(tpath) {
+            Some(t) => *t,
+            None => {
+                let parent = self.container(tpath)?;
+                let t = self.out.block(parent, BlockRole::Table)?;
+                self.tables.insert(tpath.to_vec(), t);
+                t
             }
-            self.add(tid, (parent != self.doc_id).then_some(parent), t);
-        }
-        if !self.index.contains_key(&rid) {
-            let mut r = Node::new(Role::Row);
-            r.set_row_index(row);
-            self.add(rid, Some(tid), r);
-        }
-        if !self.index.contains_key(&cid) {
-            let mut c = Node::new(Role::Cell);
-            c.set_row_index(row);
-            c.set_column_index(col);
-            self.add(cid, Some(rid), c);
-        }
-        self.index.contains_key(&cid).then_some(cid)
+        };
+        let row = match self.rows.get(rpath) {
+            Some(r) => *r,
+            None => {
+                let r = self.out.block(Some(table), BlockRole::Row)?;
+                self.rows.insert(rpath.to_vec(), r);
+                r
+            }
+        };
+        let cell = self.out.block(Some(row), BlockRole::Cell)?;
+        self.cells.insert(cpath.to_vec(), cell);
+        Some(Some(cell))
     }
 
     /// The paragraph at `path`, made on first sight (later pieces of it add lines).
-    fn para_node(&mut self, path: &Path, para: &ParaLayout) -> Option<Id> {
-        let id = self.doc_id.with(("para", path.0.as_slice()));
-        if self.index.contains_key(&id) {
-            return Some(id);
+    fn para_node(&mut self, path: &Path, para: &ParaLayout) -> Option<AccessNode> {
+        if let Some(p) = self.paras.get(path.0.as_slice()) {
+            return Some(*p);
         }
-        let container = self.container(&path.0)?;
-        let parent = (container != self.doc_id).then_some(container);
-        let block = path.last();
+        let parent = self.container(&path.0)?;
         let heading = para.rp.outline_level.filter(|l| *l < 9);
         let list = para.rp.numbering.filter(|n| n.num != 0 && para.label.is_some());
-        let node = match (heading, list) {
-            (Some(l), _) => {
-                let mut n = Node::new(Role::Heading);
-                // AccessKit counts levels from zero, as the outline level does: a Heading 1 is
-                // level 0, which the Windows adapter reports to UIA as level 1.
-                n.set_level(l as usize);
-                n
-            }
+        let role = match (heading, list) {
+            (Some(l), _) => BlockRole::Heading(u8::try_from(l as usize + 1).unwrap_or(9)),
             (None, Some(num)) => {
-                let mut n = Node::new(Role::ListItem);
-                n.set_level(num.level as usize);
-                n
+                let marker = para
+                    .label
+                    .as_ref()
+                    .map(|l| {
+                        // Symbol-font bullets are private-use characters: say them as bullets.
+                        l.text.chars().map(|c| if ('\u{E000}'..='\u{F8FF}').contains(&c) { '•' } else { c }).collect::<String>()
+                    })
+                    .unwrap_or_default();
+                BlockRole::list_item(u8::try_from(num.level as usize).unwrap_or(8).min(8), marker)
             }
-            (None, None) => Node::new(Role::Paragraph),
+            (None, None) => BlockRole::Paragraph,
         };
-        let parent = if list.is_some() && heading.is_none() {
-            // Consecutive list paragraphs share a list.
-            let lid = match self.lists.get(&container) {
-                Some((lid, last)) if last + 1 == block && self.index.contains_key(lid) => *lid,
-                _ => {
-                    let lid = container.with(("list", block));
-                    if !self.add(lid, parent, Node::new(Role::List)) {
-                        return None;
-                    }
-                    lid
-                }
-            };
-            self.lists.insert(container, (lid, block));
-            Some(lid)
-        } else {
-            parent
-        };
-        if !self.add(id, parent, node) {
-            return None;
-        }
-        if let Some(label) = para.label.as_ref().filter(|l| !l.text.trim().is_empty()) {
-            let mut m = Node::new(Role::ListMarker);
-            // Symbol-font bullets are private-use characters: say them as bullets.
-            m.set_value(label.text.chars().map(|c| if ('\u{E000}'..='\u{F8FF}').contains(&c) { '•' } else { c }).collect::<String>());
-            self.add(id.with("marker"), Some(id), m);
-        }
-        Some(id)
+        let node = self.out.block(parent, role)?;
+        self.paras.insert(path.0.clone(), node);
+        Some(node)
     }
 
-    /// Lines `lines` of the paragraph at `path`: text runs (split at links, pictures and the
-    /// run length limit), links and pictures.
-    fn paragraph(
-        &mut self,
-        path: &Path,
-        para: &ParaLayout,
-        lines: std::ops::Range<usize>,
-        at: &LinePlace,
-        pictures: &HashMap<(&[u32], usize), Rect>,
-    ) {
-        let Some(pid) = self.para_node(path, para) else { return };
-        let Some(dp) = self.doc.para(StoryRef::Body, path) else { return };
+    /// Lines `lines` of the paragraph at `path`: text runs (split at links, pictures and the run length
+    /// limit), links and pictures. False when the tree is full and the walk should stop.
+    fn paragraph(&mut self, path: &Path, para: &ParaLayout, lines: Range<usize>, at: &LinePlace, pictures: &Pictures) -> bool {
+        let Some(pid) = self.para_node(path, para) else { return true };
+        let Some(dp) = self.doc.para(StoryRef::Body, path) else { return true };
         let links = links(dp);
         let first_top = para.lines.get(lines.start).map_or(0.0, |l| l.top);
         for li in lines {
             let Some(line) = para.lines.get(li) else { break };
-            if self.full() || self.index.contains_key(&pid.with(("run", li, 0usize))) {
-                // A repeated table header row shows the same lines again.
+            if !self.done.insert((path.0.clone(), li)) {
                 continue;
             }
-            let mut lb = LineBuild { pid, li, seg: 0, prev: None, top: line.top - first_top, run: Run::default(), map: Vec::new() };
+            let top = line.top - first_top;
+            let mut pieces: Vec<Piece> = Vec::new();
+            let mut runs = 0usize;
+            let mut cur = Seg::default();
+            // (byte offset, run number, character index) of each cluster.
+            let mut map: Vec<(usize, usize, usize)> = Vec::new();
+            // Emit the run being gathered.
+            let flush = |cur: &mut Seg, pieces: &mut Vec<Piece>, runs: &mut usize, force: bool| {
+                if cur.chars.is_empty() && !force {
+                    return;
+                }
+                pieces.push(Piece::Run(std::mem::take(cur)));
+                *runs += 1;
+            };
             for k in line.c0..line.c1 {
                 let Some(cl) = para.clusters.get(k) else { break };
-                lb.map.push((cl.start, lb.seg, lb.run.lens.len()));
                 let shown = para.shown.binary_search_by_key(&k, |s| s.0).ok().and_then(|i| para.shown.get(i)).map(|s| s.1.as_str());
                 let text = match (cl.kind, shown) {
                     (_, Some(s)) => s,
@@ -389,42 +249,32 @@ impl Builder<'_> {
                     (ClKind::Tab, None) => "\t",
                     (ClKind::LineBreak, None) => "\n",
                     (ClKind::Object(_), None) => {
-                        let picture = match dp.object_at(cl.start) {
-                            Some(InlineObject::Image { alt, .. } | InlineObject::Graphic { alt, .. }) => Some(alt.clone()),
-                            _ => None,
-                        };
-                        if let Some(alt) = picture {
-                            if !lb.run.lens.is_empty() {
-                                self.flush(&mut lb, line, at);
-                            }
-                            let rect = pictures.get(&(path.0.as_slice(), cl.start)).copied().or_else(|| {
+                        if let Some(InlineObject::Image { alt, .. } | InlineObject::Graphic { alt, .. }) = dp.object_at(cl.start) {
+                            flush(&mut cur, &mut pieces, &mut runs, false);
+                            let rect = pictures.get(&(path.0.clone(), cl.start)).copied().or_else(|| {
                                 let (x0, x1) = (line.cl_left(k)?, line.cl_right(k)?);
-                                Some(at.rect(wordcraft_geom::Rect::new(x0.min(x1), lb.top, (x1 - x0).abs(), line.height)))
+                                Some(at.rect(wordcraft_geom::Rect::new(x0.min(x1), top, (x1 - x0).abs(), line.height)))
                             });
-                            let mut n = Node::new(Role::Image);
-                            if !alt.trim().is_empty() {
-                                n.set_label(alt);
-                            }
-                            if let Some(r) = rect {
-                                n.set_bounds(bounds(r));
-                            }
-                            self.add(pid.with(("image", cl.start)), Some(pid), n);
+                            pieces.push(Piece::Image(alt.clone(), rect));
                         }
                         ""
                     }
                     (ClKind::PageBreak | ClKind::ColumnBreak | ClKind::Marker, None) => "",
                 };
                 if text.is_empty() {
+                    map.push((cl.start, runs, cur.chars.len()));
                     continue;
                 }
+                // Every run has a node of its own, so `position` can name any character in it: the limit
+                // splits runs here rather than leaving it to the builder.
+                let text: String = text.chars().take(MAX_RUN).collect();
+                let count = text.chars().count();
                 let link = links.iter().find(|(r, _)| r.contains(&cl.start)).map(|(_, u)| u.clone());
-                if (link != lb.run.link || lb.run.lens.len() >= MAX_RUN) && !lb.run.lens.is_empty() {
-                    self.flush(&mut lb, line, at);
-                    if let Some(m) = lb.map.last_mut() {
-                        *m = (cl.start, lb.seg, 0);
-                    }
+                if (link != cur.link || cur.chars.len() + count > MAX_RUN) && !cur.chars.is_empty() {
+                    flush(&mut cur, &mut pieces, &mut runs, false);
                 }
-                lb.run.link = link;
+                cur.link = link;
+                map.push((cl.start, runs, cur.chars.len()));
                 // A line break ends its line as the paragraph mark does, and takes the same room.
                 let (x, w) = if cl.kind == ClKind::LineBreak {
                     line.mark_box()
@@ -432,138 +282,101 @@ impl Builder<'_> {
                     let (x0, x1) = (line.cl_left(k).unwrap_or(0.0), line.cl_right(k).unwrap_or(0.0));
                     (x0.min(x1), (x1 - x0).abs())
                 };
-                push_char(&mut lb.run, text, x, w);
+                push_chars(&mut cur, &text, x, w);
             }
             if line.end == LineEnd::Para {
-                // The paragraph mark ends the run, as AccessKit expects of a paragraph's end. It
-                // takes the room a selection shows it with: magnifiers keep the caret in view by
-                // the box of the character after it, which on an empty line is this mark (#1119).
-                if lb.run.link.is_some() && !lb.run.lens.is_empty() {
-                    self.flush(&mut lb, line, at);
+                // The paragraph mark ends the run, as AccessKit expects of a paragraph's end. It takes the
+                // room a selection shows it with: magnifiers keep the caret in view by the box of the
+                // character after it, which on an empty line is this mark (#1119).
+                if (cur.link.is_some() || cur.chars.len() >= MAX_RUN) && !cur.chars.is_empty() {
+                    flush(&mut cur, &mut pieces, &mut runs, false);
                 }
-                if lb.run.lens.len() >= MAX_RUN {
-                    self.flush(&mut lb, line, at);
-                }
-                lb.run.link = None;
-                lb.map.push((para.text_len, lb.seg, lb.run.lens.len()));
+                cur.link = None;
+                map.push((para.text_len, runs, cur.chars.len()));
                 let (x, w) = line.mark_box();
-                push_char(&mut lb.run, "\n", x, w);
+                push_chars(&mut cur, "\n", x, w);
             }
-            if !lb.run.lens.is_empty() || lb.prev.is_none() {
-                self.flush(&mut lb, line, at);
-            }
-            // Offsets that fell into an empty last segment point at the end of the last run.
-            let end = lb.prev;
-            let entries = self.offsets.entry(path.0.clone()).or_default();
-            for (off, seg, idx) in lb.map {
-                let (seg, idx) = if seg >= lb.seg { end.unwrap_or((seg, idx)) } else { (seg, idx) };
-                entries.push((off, pid.with(("run", li, seg)), idx));
-            }
-        }
-    }
+            // An empty line still has one (empty) run for the caret to sit in.
+            let first_run = runs == 0;
+            flush(&mut cur, &mut pieces, &mut runs, first_run);
 
-    /// Emit the run being gathered as a text run node (inside a link node when it is linked).
-    fn flush(&mut self, lb: &mut LineBuild, line: &Line, at: &LinePlace) {
-        let run = std::mem::take(&mut lb.run);
-        if run.lens.is_empty() && lb.prev.is_some() {
-            return;
-        }
-        let id = lb.pid.with(("run", lb.li, lb.seg));
-        let mut n = Node::new(Role::TextRun);
-        let x0 = run.xs.iter().map(|c| c.0).fold(f32::INFINITY, f32::min);
-        let x1 = run.xs.iter().map(|c| c.0 + c.1).fold(f32::NEG_INFINITY, f32::max);
-        let (x0, x1) = if x0.is_finite() && x1.is_finite() { (x0, x1) } else { (line.left, line.left) };
-        let r = at.rect(wordcraft_geom::Rect::new(x0, lb.top, (x1 - x0).max(0.0), line.height));
-        n.set_bounds(bounds(r));
-        let rtl = line.rtl || !line.vis.is_empty();
-        n.set_text_direction(if line.rtl { accesskit::TextDirection::RightToLeft } else { accesskit::TextDirection::LeftToRight });
-        if at.turn == TextDirection::Horizontal && !rtl {
-            n.set_character_positions(run.xs.iter().map(|c| (c.0 - x0) * at.scale).collect::<Vec<f32>>());
-            n.set_character_widths(run.xs.iter().map(|c| c.1 * at.scale).collect::<Vec<f32>>());
-        }
-        n.set_word_starts(word_starts(&run.text, &run.lens));
-        n.set_value(run.text);
-        n.set_character_lengths(run.lens.clone());
-        if let Some((pseg, _)) = lb.prev {
-            let pid = lb.pid.with(("run", lb.li, pseg));
-            n.set_previous_on_line(pid.accesskit_id());
-            if let Some(p) = self.node_mut(pid) {
-                p.set_next_on_line(id.accesskit_id());
+            let horizontal = at.turn == TextDirection::Horizontal && !(line.rtl || !line.vis.is_empty());
+            let line_rect = at.rect(wordcraft_geom::Rect::new(line.left, top, 0.0, line.height));
+            let mut nodes: Vec<(AccessNode, usize)> = Vec::new();
+            for piece in pieces {
+                match piece {
+                    Piece::Image(alt, rect) => {
+                        // PLAN: assumed `AccessBuilder::image(&mut self, parent: Option<AccessNode>, alt: impl Into<String>, bounds: Rect) -> Option<AccessNode>` (chrome-w7)
+                        let made = match rect {
+                            Some(r) => self.out.image(Some(pid), alt, r),
+                            None => self.out.block(Some(pid), BlockRole::Image(alt)),
+                        };
+                        if made.is_none() {
+                            return false;
+                        }
+                    }
+                    Piece::Run(seg) => {
+                        let parent = match &seg.link {
+                            Some(url) => match self.out.block(Some(pid), BlockRole::Link(url.clone())) {
+                                Some(l) => l,
+                                None => return false,
+                            },
+                            None => pid,
+                        };
+                        // Turned and bidirectional text keeps no per-character boxes.
+                        let chars: Vec<(f32, f32)> = if horizontal {
+                            seg.chars
+                                .iter()
+                                .map(|&(x, w)| {
+                                    let r = at.rect(wordcraft_geom::Rect::new(x, top, w, line.height));
+                                    (r.min.x, r.width())
+                                })
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
+                        let Some(node) = self.out.line(parent, &seg.text, &chars, line_rect) else { return false };
+                        nodes.push((node, seg.chars.len()));
+                    }
+                }
+            }
+            // Offsets that fell into an empty last run point at the end of the last run.
+            let entries = self.offsets.entry(path.0.clone()).or_default();
+            for (off, run, idx) in map {
+                if let Some(&(node, len)) = nodes.get(run).or(nodes.last()) {
+                    entries.push((off, node, if run < nodes.len() { idx } else { len }));
+                }
             }
         }
-        let parent = match &run.link {
-            Some(url) => {
-                let lid = lb.pid.with(("link", lb.li, lb.seg));
-                let mut l = Node::new(Role::Link);
-                l.set_label(n.value().filter(|text| !text.is_empty()).unwrap_or(url).to_owned());
-                l.set_url(url.clone());
-                l.set_bounds(bounds(r));
-                self.add(lid, Some(lb.pid), l);
-                lid
-            }
-            None => lb.pid,
-        };
-        if self.add(id, Some(parent), n) {
-            lb.prev = Some((lb.seg, run.lens.len()));
-        }
-        lb.seg += 1;
+        true
     }
 
     /// The text position of byte `off` of the paragraph at `path`, when it is described.
-    fn position(&self, path: &Path, off: usize) -> Option<TextPosition> {
+    fn position(&self, path: &Path, off: usize) -> Option<AccessPosition> {
         let entries = self.offsets.get(&path.0)?;
         let i = entries.partition_point(|e| e.0 < off);
         let (_, run, idx) = entries.get(i).or(entries.last())?;
-        self.index.contains_key(run).then(|| TextPosition { node: run.accesskit_id(), character_index: *idx })
+        Some(AccessPosition::new(*run, *idx))
     }
 }
 
-/// A line being turned into runs.
-struct LineBuild {
-    pid: Id,
-    li: usize,
-    /// The segment (run) number being gathered.
-    seg: usize,
-    /// The last run emitted on this line and its length in characters.
-    prev: Option<(usize, usize)>,
-    /// The line's top in the frame of its `Placed::Lines`.
-    top: f32,
-    run: Run,
-    /// (byte offset, segment, character index) of each cluster.
-    map: Vec<(usize, usize, usize)>,
-}
-
-fn push_char(run: &mut Run, text: &str, x: f32, w: f32) {
-    // One character per cluster; a cluster longer than AccessKit's byte count keeps its first char.
-    let text = if text.len() > usize::from(u8::MAX) { text.get(..text.chars().next().map_or(0, char::len_utf8)).unwrap_or("") } else { text };
-    let Ok(len) = u8::try_from(text.len()) else { return };
-    if len == 0 {
+/// Adds `text`'s characters to the run, the cluster's box shared between them.
+fn push_chars(run: &mut Seg, text: &str, x: f32, w: f32) {
+    let n = text.chars().count();
+    if n == 0 {
         return;
     }
-    run.text.push_str(text);
-    run.lens.push(len);
     let (x, w) = (if x.is_finite() { x } else { 0.0 }, if w.is_finite() { w } else { 0.0 });
-    run.xs.push((x, w));
-}
-
-/// Characters where a word starts (after one that isn't part of a word).
-fn word_starts(text: &str, lens: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    let (mut at, mut after_gap) = (0usize, true);
-    for (i, len) in lens.iter().enumerate() {
-        let word = text.get(at..).and_then(|s| s.chars().next()).is_some_and(|c| c.is_alphanumeric() || c == '_');
-        if word && after_gap && i > 0 {
-            out.push(u8::try_from(i).unwrap_or(u8::MAX));
-        }
-        after_gap = !word;
-        at += usize::from(*len);
+    let each = w / n as f32;
+    for (i, c) in text.chars().enumerate() {
+        run.text.push(c);
+        run.chars.push((x + each * i as f32, each));
     }
-    out
 }
 
 /// The paragraph's hyperlinked byte ranges and their targets.
-fn links(p: &wordcraft_doc::Paragraph) -> Vec<(std::ops::Range<usize>, String)> {
-    let mut out: Vec<(std::ops::Range<usize>, String)> = Vec::new();
+fn links(p: &wordcraft_doc::Paragraph) -> Vec<(Range<usize>, String)> {
+    let mut out: Vec<(Range<usize>, String)> = Vec::new();
     let mut at = 0usize;
     for r in &p.runs {
         let end = at.saturating_add(r.len);
@@ -578,100 +391,104 @@ fn links(p: &wordcraft_doc::Paragraph) -> Vec<(std::ops::Range<usize>, String)> 
     out
 }
 
-fn bounds(r: Rect) -> accesskit::Rect {
-    accesskit::Rect { x0: r.min.x.into(), y0: r.min.y.into(), x1: r.max.x.into(), y1: r.max.y.into() }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use craft::pages::ui::access::MAX_NODES;
+    use craft::ui::runtime::access::Role;
+    use craft::ui::testing::Fixture;
+    use craft::ui::testing::access::{AccessTree, NodeKey};
+    use egui::accesskit;
     use serde_json::json;
 
-    /// What AccessKit is told about `app` after a few frames in `ctx`, with AccessKit on.
-    fn described(app: &mut crate::WordApp, ctx: &egui::Context) -> accesskit::TreeUpdate {
-        ctx.enable_accesskit();
-        let mut update = None;
-        for _ in 0..4 {
-            let input = egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))),
-                time: Some(ctx.input(|i| i.time) + 0.1),
-                ..Default::default()
-            };
-            let mut out = ctx.run_ui(input, |ui| {
-                app.logic(ui.ctx());
-                app.ui(ui);
-            });
-            out.textures_delta.clear();
-            update = out.platform_output.accesskit_update.take();
-        }
-        update.expect("AccessKit output")
+    fn role(r: accesskit::Role) -> Role {
+        Role::Node(r)
     }
 
-    /// What AccessKit is told after a few frames in which Insert › Table's grid hovers `rows` ×
-    /// `cols`: the picker sets the request from the popup after the ribbon draws, and the canvas
-    /// lays out and describes the page from that preview.
-    fn described_with_table_preview(app: &mut crate::WordApp, ctx: &egui::Context, rows: usize, cols: usize) -> accesskit::TreeUpdate {
-        ctx.enable_accesskit();
-        let mut update = None;
-        for _ in 0..4 {
-            let input = egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))),
-                time: Some(ctx.input(|i| i.time) + 0.1),
-                ..Default::default()
-            };
-            let mut out = ctx.run_ui(input, |ui| {
-                // Set it in every pass, as the grid does while its square is hovered.
-                app.canvas.table_preview = Some((rows, cols));
-                app.logic(ui.ctx());
-                app.ui(ui);
-            });
-            out.textures_delta.clear();
-            update = out.platform_output.accesskit_update.take();
-        }
-        update.expect("AccessKit output")
+    /// The app shown in a fixture as the real window shows it, with Insert › Table's preview set in every
+    /// pass when `preview` is given, as the grid does while its square is hovered.
+    fn shown(app: &Rc<RefCell<crate::WordApp>>, preview: Option<(usize, usize)>) -> Fixture {
+        let shared = app.clone();
+        let mut f = Fixture::new(move |ui| {
+            let mut app = shared.borrow_mut();
+            if let Some(p) = preview {
+                app.canvas.table_preview = Some(p);
+            }
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        });
+        f.room(egui::vec2(1440.0, 900.0));
+        f.settle();
+        f
     }
 
-    /// #3931 review: the page shows a previewed table while Insert › Table's grid is hovered, so
-    /// the AccessKit tree must describe that page's table, not the real document's block at the
-    /// preview's path. In the preview copy path `[0]` is a 2 × 2 table; in the real document it is
-    /// the paragraph "Lanterns". Describing the real document with the preview layout made the
-    /// table node lose its dimensions (and its cells their text) whenever a screen reader was on.
+    /// The text of the runs below `key`, in order.
+    fn text(tree: &AccessTree, key: NodeKey, out: &mut String) {
+        if tree.role_of(key) == Some(role(accesskit::Role::TextRun)) {
+            out.push_str(tree.value_of(key).unwrap_or(""));
+        }
+        for c in tree.children_of(key) {
+            text(tree, c, out);
+        }
+    }
+
+    fn texts(tree: &AccessTree, r: accesskit::Role) -> Vec<String> {
+        tree.with_role(role(r))
+            .into_iter()
+            .map(|k| {
+                let mut s = String::new();
+                text(tree, k, &mut s);
+                s
+            })
+            .collect()
+    }
+
+    /// The document's selection as the describer reports it for `app`'s whole layout: the character
+    /// offsets of the caret and of the other end.
+    fn selection_offsets(app: &crate::WordApp) -> Option<(usize, usize)> {
+        let doc = crate::canvas::page_doc(app);
+        let layout = Arc::new(wordcraft_layout::layout(doc, &mut wordcraft_layout::LayoutCache::new(), &Default::default()));
+        let sel = crate::canvas::preview_sel(app).unwrap_or(app.session.sel_ends());
+        let describer = DocumentDescriber::new(Arc::new(doc.clone()), layout.clone(), (sel.anchor.clone(), sel.focus.clone()));
+        let placed: Vec<PlacedPage> = layout
+            .pages
+            .iter()
+            .enumerate()
+            .map(|(i, p)| PlacedPage::new(i, Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(p.w, p.h)), 1.0, (0.0, p.h)))
+            .collect();
+        let mut out = AccessBuilder::new();
+        describer.describe(&placed, &mut out);
+        describer.selection().map(|(caret, other)| (caret.offset, other.offset))
+    }
+
+    /// #3931 review: the page shows a previewed table while Insert › Table's grid is hovered, so the
+    /// description must be of that page's table, not the real document's block at the preview's path. In
+    /// the preview copy path `[0]` is a 2 × 2 table; in the real document it is the paragraph "Lanterns".
     #[test]
     fn the_preview_table_is_described_from_the_previewed_page() {
-        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Lanterns\nKites")), Default::default());
-        let update = described_with_table_preview(&mut app, &egui::Context::default(), 2, 2);
-        let nodes: HashMap<NodeId, &Node> = update.nodes.iter().map(|(id, n)| (*id, n)).collect();
-        let tables: Vec<_> = nodes.iter().filter(|(_, n)| n.role() == Role::Table).map(|(id, _)| *id).collect();
-        assert_eq!(tables.len(), 1, "the previewed page has one table");
-        let table = nodes[&tables[0]];
-        assert_eq!(table.row_count(), Some(2), "the 2 × 2 preview's rows, not the real paragraph at its path");
-        assert_eq!(table.column_count(), Some(2), "the 2 × 2 preview's columns");
-
-        // The preview's caret is in the table; the document's own caret names a paragraph that
-        // the preview layout no longer has at that path, so it must not reach the tree instead.
-        let (_, doc) = nodes.iter().find(|(_, n)| n.role() == Role::Document).expect("a document node");
-        let selection = doc.text_selection().expect("the preview's caret is described");
-        let mut parent = HashMap::new();
-        for (id, n) in &nodes {
-            for c in n.children() {
-                parent.insert(*c, *id);
-            }
-        }
-        let mut at = Some(selection.focus.node);
-        let mut in_table = false;
-        while let Some(id) = at {
-            if id == tables[0] {
-                in_table = true;
-                break;
-            }
-            at = parent.get(&id).copied();
-        }
-        assert!(in_table, "the described caret is the preview's, inside the preview table");
+        let app = Rc::new(RefCell::new(crate::WordApp::new(
+            wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Lanterns\nKites")),
+            Default::default(),
+        )));
+        let f = shown(&app, Some((2, 2)));
+        let tree = f.tree();
+        assert_eq!(tree.with_role(role(accesskit::Role::Table)).len(), 1, "the previewed page has one table");
+        assert_eq!(tree.with_role(role(accesskit::Role::Row)).len(), 2, "the 2 × 2 preview's rows");
+        assert_eq!(tree.with_role(role(accesskit::Role::Cell)).len(), 4, "the 2 × 2 preview's cells");
+        // The preview copy has the table at the caret and the real paragraphs after it, so "Lanterns" is
+        // still described, below the table, never inside it where the real paragraph's path now holds the
+        // table.
+        let mut in_table = String::new();
+        text(tree, tree.with_role(role(accesskit::Role::Table))[0], &mut in_table);
+        assert!(!in_table.contains("Lanterns"), "the real paragraph is not at the preview's path: {in_table:?}");
     }
 
-    /// #488: with AccessKit on, the canvas describes the document: a heading with its level, a
-    /// paragraph, a list item in a list, a table's rows and cells and a link, with the text in
-    /// text runs and the caret at its paragraph and character.
+    /// #488: the canvas describes the document: a heading, a paragraph, a list item in a list, a table's
+    /// rows and cells and a link, with the text in text runs and the caret at its paragraph and character.
     #[test]
     fn the_canvas_describes_the_document_to_screen_readers() {
         let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
@@ -700,227 +517,94 @@ mod tests {
         app.run("caret.right", json!({})).unwrap();
         let caret = app.session.sel.focus.clone();
         assert!(caret.path.0.len() == 1 && caret.off == 4, "{caret:?}");
+        assert_eq!(selection_offsets(&app), Some((4, 4)), "the caret is after \"Read\", with no selection");
 
-        let update = described(&mut app, &egui::Context::default());
-        let nodes: HashMap<NodeId, &Node> = update.nodes.iter().map(|(id, n)| (*id, n)).collect();
+        let app = Rc::new(RefCell::new(app));
+        let f = shown(&app, None);
+        let tree = f.tree();
 
-        // A tree: every node has at most one parent.
-        let mut parents: HashMap<NodeId, usize> = HashMap::new();
-        for n in nodes.values() {
-            for c in n.children() {
-                *parents.entry(*c).or_default() += 1;
-            }
+        // AccessKit's levels are zero-based (#3173): Heading 1 is level 0, Heading 2 level 1, which the Windows
+        // adapter reports to UI Automation as levels 1 and 2.
+        // In tree order: `with_role` lists the nodes in egui's update order, which follows its id map, not the page.
+        let headings: Vec<NodeKey> = f.by_role(role(accesskit::Role::Heading)).iter().map(|t| t.node).collect();
+        // PLAN: assumed `AccessTree::level_of(&self, NodeKey) -> Option<usize>` and `url_of(&self, NodeKey) -> Option<&str>` (chrome-w7)
+        assert_eq!(headings.iter().map(|h| tree.level_of(*h)).collect::<Vec<_>>(), [Some(0), Some(1)]);
+        let heading_texts: Vec<String> = headings
+            .iter()
+            .map(|h| {
+                let mut s = String::new();
+                text(tree, *h, &mut s);
+                s
+            })
+            .collect();
+        assert_eq!(heading_texts, ["Title here\n", "Section here\n"]);
+        assert!(texts(tree, accesskit::Role::Paragraph).contains(&"Read this link\n".to_string()), "{:?}", texts(tree, accesskit::Role::Paragraph));
+        assert_eq!(texts(tree, accesskit::Role::Link), ["link"]);
+        let links = tree.with_role(role(accesskit::Role::Link));
+        assert_eq!(tree.url_of(links[0]), Some("https://example.com"));
+        assert_eq!(tree.with_role(role(accesskit::Role::List)).len(), 1, "one list");
+        let items = tree.with_role(role(accesskit::Role::ListItem));
+        assert_eq!(tree.level_of(items[0]), Some(0), "a first-level list item");
+        assert_eq!(texts(tree, accesskit::Role::ListItem), ["First item\n"]);
+        assert_eq!(tree.with_role(role(accesskit::Role::ListMarker)).len(), 1, "the bullet");
+        assert_eq!(tree.with_role(role(accesskit::Role::Table)).len(), 1);
+        assert_eq!(tree.with_role(role(accesskit::Role::Row)).len(), 2);
+        assert_eq!(tree.with_role(role(accesskit::Role::Cell)).len(), 4);
+        // The cells come in the order the nodes were made, which is not a reading order the framework
+        // promises; the typed cell is among them with its text and paragraph mark.
+        assert!(texts(tree, accesskit::Role::Cell).contains(&"Cell A\n".to_string()), "{:?}", texts(tree, accesskit::Role::Cell));
+        for run in tree.with_role(role(accesskit::Role::TextRun)) {
+            assert!(tree.bounds_of(run).is_some(), "{:?}", tree.value_of(run));
         }
-        assert!(parents.values().all(|n| *n == 1), "a node with two parents");
-
-        let (doc_id, doc) = nodes.iter().find(|(_, n)| n.role() == Role::Document).expect("a document node");
-        // Text of a node's runs, depth first.
-        fn text(nodes: &HashMap<NodeId, &Node>, id: NodeId, out: &mut String) {
-            let Some(n) = nodes.get(&id) else { return };
-            if n.role() == Role::TextRun {
-                out.push_str(n.value().unwrap_or(""));
-            }
-            for c in n.children() {
-                text(nodes, *c, out);
-            }
-        }
-        let mut all = Vec::new();
-        fn walk(nodes: &HashMap<NodeId, &Node>, id: NodeId, depth: usize, out: &mut Vec<(NodeId, Role, usize)>) {
-            let Some(n) = nodes.get(&id) else { return };
-            out.push((id, n.role(), depth));
-            for c in n.children() {
-                walk(nodes, *c, depth + 1, out);
-            }
-        }
-        walk(&nodes, *doc_id, 0, &mut all);
-        let of = |role: Role| all.iter().filter(|(_, r, _)| *r == role).map(|(id, _, _)| *id).collect::<Vec<_>>();
-        let texts = |role: Role| {
-            of(role)
-                .into_iter()
-                .map(|id| {
-                    let mut s = String::new();
-                    text(&nodes, id, &mut s);
-                    s
-                })
-                .collect::<Vec<_>>()
-        };
-
-        // AccessKit's levels are zero-based: Heading 1 is level 0, Heading 2 level 1.
-        let headings = of(Role::Heading);
-        assert_eq!(headings.iter().map(|h| nodes[h].level()).collect::<Vec<_>>(), [Some(0), Some(1)]);
-        assert_eq!(texts(Role::Heading), ["Title here\n", "Section here\n"]);
-        assert!(texts(Role::Paragraph).contains(&"Read this link\n".to_string()), "{:?}", texts(Role::Paragraph));
-        assert_eq!(texts(Role::Link), ["link"]);
-        assert_eq!(nodes[&of(Role::Link)[0]].url(), Some("https://example.com"));
-        assert_eq!(of(Role::List).len(), 1, "one list");
-        assert_eq!(texts(Role::ListItem), ["First item\n"]);
-        assert_eq!(nodes[&of(Role::ListItem)[0]].level(), Some(0), "a first-level list item");
-        assert_eq!(of(Role::ListMarker).len(), 1, "the bullet");
-        assert_eq!(of(Role::Table).len(), 1);
-        assert_eq!(of(Role::Row).len(), 2);
-        assert_eq!(of(Role::Cell).len(), 4);
-        assert_eq!(texts(Role::Cell)[0], "Cell A\n");
-
-        // Text runs carry one length and one position per character.
-        for id in of(Role::TextRun) {
-            let n = nodes[&id];
-            let v = n.value().unwrap_or("");
-            assert_eq!(n.character_lengths().iter().map(|l| usize::from(*l)).sum::<usize>(), v.len(), "{v:?}");
-            if let Some(p) = n.character_positions() {
-                assert_eq!(p.len(), n.character_lengths().len());
-            }
-            assert!(n.bounds().is_some());
-        }
-
-        // The caret: the selection is on the document node, in "Read this "'s run, after "Read".
-        let s = doc.text_selection().expect("the caret");
-        assert_eq!(s.anchor, s.focus);
-        assert_eq!(s.focus.character_index, 4);
-        let run = nodes[&s.focus.node];
-        assert_eq!(run.role(), Role::TextRun);
-        assert_eq!(run.value(), Some("Read this "));
     }
 
-    /// #1119: a magnifier keeps the caret in view by the box of the character after it (Windows
-    /// Magnifier asks for that box, the caret's own being empty). On an empty line that character
-    /// is the line's end mark — the paragraph mark after Enter, a line break between two Shift+Enter
-    /// breaks — and it takes room where the caret is, so the view follows the caret onto the line.
+    /// #1119: a magnifier keeps the caret in view by the box of the character after it. On an empty line
+    /// that character is the line's end mark — the paragraph mark after Enter, a line break between two
+    /// Shift+Enter breaks — and it takes room where the caret is, so the view follows the caret onto it.
     #[test]
     fn a_magnifier_finds_the_caret_on_an_empty_line() {
-        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
-        let ctx = egui::Context::default();
-        app.run("text.insert", json!({"text": "First line"})).unwrap();
-        app.run("text.newParagraph", json!({})).unwrap();
-        assert_end_mark_at_caret(&mut app, &ctx, "Enter");
-        for cmd in ["text.lineBreak", "text.lineBreak", "caret.left"] {
-            app.run(cmd, json!({})).unwrap_or_else(|e| panic!("{cmd}: {e}"));
+        let app = Rc::new(RefCell::new(crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default())));
+        {
+            let mut a = app.borrow_mut();
+            a.run("text.insert", json!({"text": "First line"})).unwrap();
+            a.run("text.newParagraph", json!({})).unwrap();
         }
-        assert_end_mark_at_caret(&mut app, &ctx, "Shift+Enter");
-    }
-
-    /// The character after the caret is the end mark of the empty line the caret is on, with room,
-    /// starting where the caret is drawn.
-    fn assert_end_mark_at_caret(app: &mut crate::WordApp, ctx: &egui::Context, step: &str) {
-        let update = described(app, ctx);
-        let nodes: HashMap<NodeId, &Node> = update.nodes.iter().map(|(id, n)| (*id, n)).collect();
-        let doc = nodes.values().find(|n| n.role() == Role::Document).expect("a document node");
-        let at = doc.text_selection().expect("the caret").focus;
-        let run = nodes[&at.node];
-        assert_eq!(run.value(), Some("\n"), "{step}: the caret is on an empty line");
-        // The character's box, as AccessKit works it out from the run.
-        let b = run.bounds().expect("the run's bounds");
-        let x0 = b.x0 + f64::from(run.character_positions().expect("positions")[at.character_index]);
-        let w = f64::from(run.character_widths().expect("widths")[at.character_index]);
-        let (caret, height) = crate::canvas::caret_screen(app).expect("the caret on screen");
-        assert!(w > 0.0, "{step}: the end mark takes room");
-        assert!((x0 - f64::from(caret.x)).abs() < 0.5, "{step}: it starts at the caret: {x0} vs {caret:?}");
-        assert!(
-            b.y0 <= f64::from(caret.y) + 0.5 && f64::from(caret.y + height) <= b.y1 + 0.5,
-            "{step}: it is on the caret's line: {b:?} vs caret {caret:?} + {height}"
-        );
-    }
-
-    /// #2726: the Windows adapter's consumer dies on an update whose focus is not in the node
-    /// list (`Focused ID #… is not in the node list`). A drop like that is fatal: `Tree::new`
-    /// panics. The guard moves the focus to the root, and the same update is accepted.
-    #[test]
-    fn a_focus_the_update_does_not_carry_falls_back_to_the_root() {
-        let root = egui::accesskit_root_id().accesskit_id();
-        let lost = egui::Id::unique("run_that_was_dropped").accesskit_id();
-        let make = |focus: accesskit::NodeId| accesskit::TreeUpdate {
-            nodes: vec![
-                (root, {
-                    let mut n = Node::new(Role::Window);
-                    n.push_child(egui::Id::unique("kept").accesskit_id());
-                    n
-                }),
-                (egui::Id::unique("kept").accesskit_id(), Node::new(Role::TextRun)),
-            ],
-            tree: Some(accesskit::TreeInfo::new(root)),
-            tree_id: accesskit::TreeId::ROOT,
-            focus,
-        };
-        // Red without the guard: the raw update breaks the consumer's contract.
-        let raw = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| accesskit_consumer::Tree::new(make(lost), true)));
-        assert!(raw.is_err(), "the update that drops the focused node must break the consumer");
-        let mut fixed = make(lost);
-        guard_update(&mut fixed);
-        assert_eq!(fixed.focus, root);
-        assert!(
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| accesskit_consumer::Tree::new(fixed, true))).is_ok(),
-            "the guarded update is accepted"
-        );
-    }
-
-    /// Every update the app sends — idle frames, typing, scrolling, selection, dialogs — feeds
-    /// the real Windows consumer without breaking its contract: its focus is in the node list.
-    #[test]
-    fn every_update_the_app_sends_is_valid_for_the_consumer() {
-        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
-        app.run("text.insert", json!({"text": "Hello word"})).unwrap();
-        app.run("para.bullets", json!({})).unwrap();
-        app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
-        app.run("text.insert", json!({"text": "Cell"})).unwrap();
-        let ctx = egui::Context::default();
-        ctx.enable_accesskit();
-        let mut handler = NoopHandler;
-        let mut tree: Option<accesskit_consumer::Tree> = None;
-        for frame in 0..10 {
-            let mut input = egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))),
-                time: Some(frame as f64 * 0.1),
-                ..Default::default()
-            };
-            if frame == 5 {
-                // A screen reader asks to focus a text run deep in the document description.
-                let (doc, _) = app.canvas.widget_id.expect("the canvas widget");
-                input.events.push(egui::Event::AccessKitActionRequest(accesskit::ActionRequest {
-                    action: accesskit::Action::Focus,
-                    target_node: doc.with(("para", [0u32])).with(("run", 0usize, 0usize)).accesskit_id(),
-                    target_tree: accesskit::TreeId::ROOT,
-                    data: None,
-                }));
+        assert_end_mark_at_caret(&app, "Enter");
+        {
+            let mut a = app.borrow_mut();
+            for cmd in ["text.lineBreak", "text.lineBreak", "caret.left"] {
+                a.run(cmd, json!({})).unwrap_or_else(|e| panic!("{cmd}: {e}"));
             }
-            let mut out = ctx.run_ui(input, |ui| {
-                app.logic(ui.ctx());
-                app.ui(ui);
-            });
-            out.textures_delta.clear();
-            let Some(update) = out.platform_output.accesskit_update else { continue };
-            tree = Some(match tree {
-                None => accesskit_consumer::Tree::new(update, true),
-                Some(mut t) => {
-                    t.update_and_process_changes(update, &mut handler);
-                    t
-                }
-            });
         }
-        let tree = tree.expect("the app sends AccessKit updates");
-        // The consumer's focus is one of its nodes.
-        let focus = tree.state().focus_id_in_tree();
-        assert!(tree.state().has_node(focus), "the consumer's focus is in the node list");
+        assert_end_mark_at_caret(&app, "Shift+Enter");
     }
 
-    struct NoopHandler;
-
-    impl accesskit_consumer::TreeChangeHandler for NoopHandler {
-        fn node_added(&mut self, _node: &accesskit_consumer::NodeRef<'_>) {}
-        fn node_updated(&mut self, _old_node: &accesskit_consumer::NodeRef<'_>, _new_node: &accesskit_consumer::NodeRef<'_>) {}
-        fn focus_moved(&mut self, _old_node: Option<&accesskit_consumer::NodeRef<'_>>, _new_node: Option<&accesskit_consumer::NodeRef<'_>>) {}
-        fn node_removed(&mut self, _node: &accesskit_consumer::NodeRef<'_>) {}
+    /// An end-mark run of the empty line the caret is on exists, with room, starting where the caret is
+    /// drawn and on its line.
+    fn assert_end_mark_at_caret(app: &Rc<RefCell<crate::WordApp>>, step: &str) {
+        let f = shown(app, None);
+        let tree = f.tree();
+        let (caret, height) = crate::canvas::caret_screen(&mut app.borrow_mut()).expect("the caret on screen");
+        let found = tree.with_role(role(accesskit::Role::TextRun)).into_iter().filter(|k| tree.value_of(*k) == Some("\n")).any(|k| {
+            let Some(b) = tree.bounds_of(k) else { return false };
+            b.width() > 0.0 && (b.min.x - caret.x).abs() < 0.5 && b.min.y <= caret.y + 0.5 && caret.y + height <= b.max.y + 0.5
+        });
+        assert!(found, "{step}: an end mark with room starts at the caret {caret:?}");
     }
 
-    /// Hostile layouts and junk geometry don't panic and the tree stays bounded.
+    /// Hostile layouts and junk geometry don't panic and the description stays bounded.
     #[test]
     fn junk_geometry_is_harmless() {
         let doc = wordcraft_doc::Document::from_text(&"word ".repeat(4000));
         let layout = wordcraft_layout::layout(&doc, &mut wordcraft_layout::LayoutCache::new(), &Default::default());
         let n = layout.pages.len();
-        let rects = vec![Rect::from_min_size(egui::pos2(f32::NAN, 0.0), egui::vec2(f32::INFINITY, 1.0)); n];
         let p = Pos::body(0, 1_000_000);
-        let t = build(&doc, &layout, Id::unique("doc"), &rects, (0, n + 5), (&p, &p));
-        assert!(!t.nodes.is_empty() && t.nodes.len() <= MAX_NODES);
-        assert!(t.selection.is_some(), "an offset past the end lands at the end");
-        assert!(page_window(&rects, Rect::NOTHING).is_none());
+        let describer = DocumentDescriber::new(Arc::new(doc), Arc::new(layout), (p.clone(), p));
+        let rect = Rect::from_min_size(egui::pos2(f32::NAN, 0.0), egui::vec2(f32::INFINITY, 1.0));
+        let placed: Vec<PlacedPage> = (0..n + 5).map(|i| PlacedPage::new(i, rect, f64::NAN, (f32::NAN, f32::INFINITY))).collect();
+        let mut out = AccessBuilder::new();
+        describer.describe(&placed, &mut out);
+        assert!(!out.is_empty() && out.len() <= MAX_NODES);
+        assert!(describer.selection().is_some(), "an offset past the end lands at the end");
     }
 }

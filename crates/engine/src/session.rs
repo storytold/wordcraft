@@ -34,7 +34,7 @@ pub use doc_state::{CellRange, ColumnBlock, FindState, MathEdit, Selection, UNDO
 use doc_state::{TypedWord, Undo, doc_bib_style};
 use ime_state::ImeCaretState;
 pub use locale::set_system_locale;
-pub(crate) use locale::system_locale;
+pub use locale::system_locale;
 pub use prefs::Prefs;
 pub use query::blank_document;
 pub use snapshot_types::EditSnapshot;
@@ -51,6 +51,11 @@ pub struct Session {
     pub view: ViewState,
     /// Formatting picked with a collapsed caret, applied to the next typed text.
     pub pending: Option<CharProps>,
+    /// Where the caret was when Backspace carried [`Self::pending`] over from the character it
+    /// deleted (#6518), moved on as typing advances the caret. That formatting is for typing
+    /// there only: once the caret is anywhere else (a paste, Find, Go To or a click put it
+    /// there) it is dropped (see [`Self::waiting`]). `None` for formatting picked at the caret.
+    pub(crate) pending_at: Option<Pos>,
     /// Last highlighter choice for the shortcut; palette state, outside document undo.
     pub(crate) last_highlight: wordcraft_doc::props::Highlight,
     pub path: Option<std::path::PathBuf>,
@@ -63,6 +68,9 @@ pub struct Session {
     /// `None`, so an agent's words stay in memory and never change the person's dictionary.
     /// Add to Dictionary and File › Options › Proofing save through it (#40).
     pub user_dict_path: Option<std::path::PathBuf>,
+    /// The default user dictionary path wired up by the host (usually `custom-dictionary.txt` in
+    /// the settings directory), used when [`Prefs::custom_dictionary`] is reset to auto (#5840).
+    pub default_user_dict_path: Option<std::path::PathBuf>,
     pub clipboard: Option<Fragment>,
     /// A tracked cut the next paste can turn into a move (see `cmd::moves`).
     pub pending_move: Option<crate::cmd::moves::PendingMove>,
@@ -206,8 +214,12 @@ pub struct Session {
     /// browser's locale on the web); headless sessions keep `en-US`. A region the user chose
     /// ([`Prefs::region`]) wins: read it with [`Session::region`].
     pub system_region: wordcraft_geom::Region,
-    /// Custom keyboard shortcuts (`tools.customizeKeyboard`); the front end saves them too.
-    pub keymap: crate::KeyMap,
+    /// Custom keyboard shortcuts (`tools.customizeKeyboard`) over the registry's keys; the front
+    /// end saves them too. Read with [`Session::keymap`].
+    keymap: craft_keymap::Overrides,
+    /// The Accessibility checker's findings and the `(document_id, rev)` they were made for, so
+    /// the pane reading them every frame runs the checker only after a change.
+    findings: Option<((u64, u64), Vec<Value>)>,
     /// Custom ribbon and Quick Access Toolbar (`tools.customizeRibbon`); the front end saves it too.
     pub ribbon: crate::RibbonLayout,
     /// The language new blank documents (and opened plain text) are written in, a BCP 47 tag;
@@ -260,4 +272,25 @@ pub struct Session {
 impl Session {
     /// File name of the persisted custom dictionary inside the settings folder.
     pub const USER_DICT_FILE: &str = "custom-dictionary.txt";
+
+    /// The user's keyboard shortcut changes.
+    pub fn keymap(&self) -> &craft_keymap::Overrides {
+        &self.keymap
+    }
+
+    /// The user's keyboard shortcut changes, to replace or edit (the saved preferences).
+    pub fn keymap_mut(&mut self) -> &mut craft_keymap::Overrides {
+        &mut self.keymap
+    }
+
+    /// The Accessibility checker's findings for the open document as it is now
+    /// ([`crate::cmd::accessibility::check`]). The checker runs again only when the document
+    /// changed: an edit bumps [`Session::rev`], a replacement changes [`Session::document_id`].
+    pub fn accessibility_findings(&mut self) -> &[Value] {
+        let stamp = (self.document_id, self.rev);
+        if self.findings.as_ref().is_none_or(|(made_for, _)| *made_for != stamp) {
+            self.findings = Some((stamp, crate::cmd::accessibility::check(&self.doc)));
+        }
+        self.findings.as_ref().map_or(&[], |(_, findings)| findings.as_slice())
+    }
 }

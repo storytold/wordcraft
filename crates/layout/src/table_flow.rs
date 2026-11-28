@@ -255,6 +255,13 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
                 .rows
                 .get(ri)
                 .is_some_and(|r| r.props.cant_split || (r.props.height_rule == HeightRule::Exact && r.props.height.is_some_and(|h| h > 0.0)));
+        // A Can't Split row (not an exact one) that is taller than a page splits where the page
+        // ends, as in Word (measured with synthetic documents): it moves to a new page first
+        // when it fits there, and only on a page it still doesn't fit does it break.
+        let splits_when_too_tall = ri >= header_rows.len()
+            && t.rows
+                .get(ri)
+                .is_some_and(|r| r.props.cant_split && !(r.props.height_rule == HeightRule::Exact && r.props.height.is_some_and(|h| h > 0.0)));
         let mut rest: Option<table::RowLayout> = None;
         // On a new page holding only the repeated header rows.
         let mut fresh = false;
@@ -290,7 +297,9 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
             // (#4272): moving on can give the cell room there.
             let first_part = rest.is_none() && !pb.at_top() && !fresh && !under_top_headers;
             let moves_on = first_part && short_of_min(ri, room);
-            let split = match (splittable && !moves_on && !defer_kept, first_part) {
+            // A row that fits the room but for the border below it is still placed whole.
+            let too_tall_to_keep = splits_when_too_tall && !first_part && cur.height > room + 0.01;
+            let split = match ((splittable || too_tall_to_keep) && !moves_on && !defer_kept, first_part) {
                 (false, _) => None,
                 (true, true) => split_keeping_nested(ctx.doc, cur, room),
                 // On a fresh page, a nested row taller than the room splits rather than overflowing.

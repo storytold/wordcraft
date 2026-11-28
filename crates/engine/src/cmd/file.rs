@@ -131,7 +131,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("file.printPdf", "Print to PDF", "File › Print", crate::print::print_pdf_to_file)
             .params(
-                r#"{"path": string, "pagesPerSheet"?: 1 | 2 | 4 | 6 | 9 | 16 | "booklet" | "bookletReverse", "range"?: "all" | "current" | "selection" (the pages the selection touches) | "custom", "pages"?: "1-3,5" (implies custom), "parity"?: "all" | "odd" | "even", "copies"?: 1-999, "collate"?: bool (default true), "paper"?: "none" | "Letter" | "Legal" | "A4" | … (a Layout › Size name: scale every page to this paper, centred; the document keeps its size)}"#,
+                r#"{"path": string, "pagesPerSheet"?: 1 | 2 | 4 | 6 | 9 | 16 | "booklet" | "bookletReverse", "range"?: "all" | "current" | "selection" (the pages the selection touches) | "custom", "pages"?: "1-3,5" (implies custom), "parity"?: "all" | "odd" | "even", "copies"?: 1-999, "collate"?: bool (default true), "paper"?: "none" | "Letter" | "Legal" | "A4" | … (a Layout › Size name: scale every page to this paper, centred; the document keeps its size), "compress"?: bool (default true: compress the PDF's content streams; false writes the same pages uncompressed, which is larger)"#,
             )
             .pure(),
         CommandSpec::new("file.print", "Print", "File", |s, _| {
@@ -485,8 +485,8 @@ fn save_as(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 /// How a copy is written: Print Markup from the command's `markup`, else the File › Print
-/// setting (`file.printMarkup`); comments as Track Changes Options show them; digits as the
-/// Numeral setting shows them on screen.
+/// setting (`file.printMarkup`); comments and revision marks/colours as Track Changes Options show them;
+/// digits as the Numeral setting shows them on screen.
 pub fn export_options(s: &Session, v: &Value) -> crate::io::ExportOptions {
     let markup = p::bool(v, "markup").unwrap_or(s.prefs.print_markup);
     crate::io::ExportOptions {
@@ -494,6 +494,7 @@ pub fn export_options(s: &Session, v: &Value) -> crate::io::ExportOptions {
         comments: markup && s.prefs.markup.comments,
         word2003: p::str(v, "format") == Some(FORMAT_WORD_2003),
         numeral: s.view.numeral.resolve(crate::session::system_locale()),
+        revisions: s.prefs.markup.clone(),
         strict: p::bool(v, "strict").unwrap_or(false),
     }
 }
@@ -517,7 +518,10 @@ fn strict_report(s: &mut Session, v: &Value) -> CmdResult {
             if l.pages.get(page).is_none() {
                 return Err(CmdError::Params(format!("no page {}", page + 1)));
             }
-            crate::strict::strict_report(&s.doc, &l, &crate::strict::png_display(), Some(page..=page), wordcraft_layout::StrictOutput::Png)
+            // The page image `file.exportPng` writes: the printed page, tracked changes marked as
+            // Track Changes Options mark them.
+            let display = crate::io_ext::page_image_options(&opts).display;
+            crate::strict::strict_report(&s.doc, &l, &display, Some(page..=page), wordcraft_layout::StrictOutput::Png)
         }
         None => {
             let out = super::references::output_fields(&s.doc);
@@ -527,6 +531,7 @@ fn strict_report(s: &mut Session, v: &Value) -> CmdResult {
     Ok(report.to_json())
 }
 
+/// Exports a page of the current document as a PNG image at the requested scale.
 fn export_png(s: &mut Session, v: &Value) -> CmdResult {
     // No path: the app asks where to save, as file.exportPdf does (#2313).
     let Some(path) = p::str(v, "path") else {
@@ -536,11 +541,13 @@ fn export_png(s: &mut Session, v: &Value) -> CmdResult {
     let page = crate::p::page_index(p::u64(v, "page").unwrap_or(1));
     let strict = p::bool(v, "strict").unwrap_or(false);
     let scale = p::f32(v, "scale").unwrap_or(2.0).clamp(0.1, 8.0);
-    let l = s.export_layout_with(export_options(s, v).markup);
+    let export = export_options(s, v);
+    let l = s.export_layout_with(export.markup);
     let pg = l.pages.get(page).ok_or_else(|| CmdError::Params(format!("no page {}", page + 1)))?;
     // A page image is the printed page: headers and footers at full strength. Dimming them is
-    // the on-screen cue while editing the body, not part of the page.
-    let opts = wordcraft_render::RenderOptions { display: crate::strict::png_display(), ..Default::default() };
+    // the on-screen cue while editing the body, not part of the page. Tracked changes are marked
+    // as Track Changes Options mark them on screen.
+    let opts = crate::io_ext::page_image_options(&export);
     if !path.to_ascii_lowercase().ends_with(".png") {
         return Err(CmdError::Params("path must end in .png".into()));
     }

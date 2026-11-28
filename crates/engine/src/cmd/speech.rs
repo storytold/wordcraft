@@ -26,7 +26,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"value"?: bool}"#)
             .pure(),
         CommandSpec::new("readAloud.status", "Read Aloud Status", "Review › Speech", status).pure(),
-        CommandSpec::new("caret.pastCitation", "Move Past Citation", "Zotero › Citations", past_citation).pure(),
+        CommandSpec::new("caret.pastCitation", "Move Past Citation", "Citations › Citations", past_citation).pure(),
     ]
 }
 

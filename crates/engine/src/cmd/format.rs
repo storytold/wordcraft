@@ -21,7 +21,7 @@ pub fn specs() -> Vec<CommandSpec> {
             toggle(
                 s,
                 v,
-                |r| r.bold,
+                shown_bold,
                 |c, on| {
                     c.bold = Some(on);
                     c.bold_cs = Some(on);
@@ -34,7 +34,7 @@ pub fn specs() -> Vec<CommandSpec> {
             toggle(
                 s,
                 v,
-                |r| r.italic,
+                shown_italic,
                 |c, on| {
                     c.italic = Some(on);
                     c.italic_cs = Some(on);
@@ -281,7 +281,10 @@ fn resolved(s: &Session) -> Vec<ResolvedChar> {
             return out;
         }
     }
-    let Some((a, b)) = selected_text_box(s).or_else(|| target(s)) else {
+    // Formatting waiting at a caret is what the caret shows, also inside a word: after Backspace
+    // it is the deleted character's (#6518), as Word's buttons show it.
+    let waiting = s.sel.is_collapsed() && s.waiting().is_some();
+    let Some((a, b)) = selected_text_box(s).or_else(|| target(s)).filter(|_| !waiting) else {
         let f = &s.sel.focus;
         let style = s.doc.para_at(f).and_then(|p| p.props.style.clone());
         out.push(s.doc.styles.resolve_char(style.as_deref(), &s.typing_props()));
@@ -308,6 +311,18 @@ fn resolved(s: &Session) -> Vec<ResolvedChar> {
         out.push(s.doc.styles.resolve_char(style.as_deref(), empty_box.unwrap_or(&s.typing_props())));
     }
     out
+}
+
+/// Bold as drawn: a run marked complex script (`w:cs`) or right to left (`w:rtl`) shows its
+/// complex-script bold.
+fn shown_bold(r: &ResolvedChar) -> bool {
+    if r.cs || r.rtl { r.bold_cs } else { r.bold }
+}
+
+/// Italic as drawn: a run marked complex script (`w:cs`) or right to left (`w:rtl`) shows its
+/// complex-script italic.
+fn shown_italic(r: &ResolvedChar) -> bool {
+    if r.cs || r.rtl { r.italic_cs } else { r.italic }
 }
 
 fn toggle(s: &mut Session, v: &Value, get: fn(&ResolvedChar) -> bool, set: fn(&mut CharProps, bool)) -> CmdResult {
@@ -887,8 +902,8 @@ pub fn state(s: &Session) -> Value {
         "fontShownAs": shown_as,
         "fontEastAsia": same(&|r| json!(r.font_ea)),
         "size": same(&|r| json!(r.size)),
-        "bold": all.iter().all(|r| r.bold),
-        "italic": all.iter().all(|r| r.italic),
+        "bold": all.iter().all(shown_bold),
+        "italic": all.iter().all(shown_italic),
         "underline": all.iter().all(|r| r.underline != Underline::None),
         "underlineColor": same(&|r| json!(r.underline_color.map_or_else(|| "auto".to_string(), |c| c.hex()))),
         "strike": all.iter().all(|r| r.strike),

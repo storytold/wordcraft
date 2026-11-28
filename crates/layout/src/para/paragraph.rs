@@ -533,13 +533,14 @@ fn mark_break_opportunities(clusters: &mut [Cluster], bt: &BreakText, rp: &Resol
     }
 }
 
-/// The list label, shaped; none on a paragraph containing only a page break: Word hides it there.
-/// The list counter has already advanced, so the following item keeps its number.
+/// The list label, shaped; none on a paragraph containing only a page break, nor on one that goes
+/// on from the line of the paragraph before (#3986): Word hides it there. The list counter has
+/// already advanced, so the following item keeps its number.
 fn list_label(cx: &Cx, b: &mut Builder, mark_style: u32) -> Option<Label> {
     let (p, rp) = (cx.p, cx.rp);
     let break_only =
         b.clusters.iter().any(|c| c.kind == ClKind::PageBreak) && b.clusters.iter().all(|c| matches!(c.kind, ClKind::PageBreak | ClKind::Marker));
-    let (text, lvl) = cx.env.label.as_ref().filter(|_| !break_only)?;
+    let (text, lvl) = cx.env.label.as_ref().filter(|_| !break_only && !cx.env.joined)?;
     let rc = cx.res.char(&p.mark.clone().overlaid(&lvl.chr));
     // A bullet no installed font can draw would come from whatever icon font has its
     // private-use code (Font Awesome's Twitter logo at U+F081, #1683): it shows the level's
@@ -713,6 +714,8 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         left_out: Vec::new(),
         enclosures,
         auto_space,
+        joined: env.joined,
+        row_est: 0.0,
     };
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&bt.text, |i| bt.to_para(i), &pl, auto, env.doc.settings.hyphenate_caps, &runs);
@@ -856,8 +859,11 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
     // keeps a hyphen and a number together (LB25), and when a slash and a letter follow
     // ("Dataprotection-" / "/Secrecyviolation", #3408), where LB13 forbids a break before the
     // slash: add those positions back. Word keeps "fitness-/1589" whole, so a slash before a digit
-    // gains no break. Only U+002D is added here; a non-breaking hyphen (U+2011) and a minus sign
-    // (U+2212) stay unbreakable, and the other dashes keep their ordinary UAX #14 breaks.
+    // gains no break. Word also breaks between two hyphens in a row ("--------" is a ruled line
+    // that wraps at any hyphen), where UAX #14 keeps them together (LB21): without it a row of
+    // hyphens after a gap moves to the next line whole instead of filling the line first. Only
+    // U+002D is added here; a non-breaking hyphen (U+2011) and a minus sign (U+2212) stay
+    // unbreakable, and the other dashes keep their ordinary UAX #14 breaks.
     let hyphen_breaks: Vec<usize> = text
         .match_indices('-')
         .filter_map(|(pos, _)| {
@@ -866,6 +872,7 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
             match next.next() {
                 Some(n) if n.is_ascii_digit() => Some(i),
                 Some('/') => next.next().is_some_and(char::is_alphabetic).then_some(i),
+                Some('-') => Some(i),
                 _ => None,
             }
         })
