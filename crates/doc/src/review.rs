@@ -54,11 +54,10 @@ impl Revision {
         Revision { kind, author: author.into(), date: date.into(), move_name: None, date_utc: None }
     }
 
-    /// A change made here at `utc` (ISO 8601, UTC): `date` and `date_utc` are both that instant;
-    /// a Word save writes `date` in local time.
-    pub fn made_at(kind: RevisionKind, author: impl Into<String>, utc: impl Into<String>) -> Revision {
-        let utc = utc.into();
-        Revision { kind, author: author.into(), date: utc.clone(), move_name: None, date_utc: Some(utc) }
+    /// A change made here: `date` is the local wall-clock time it was made at, as Word writes
+    /// `w:date`, and `date_utc` the same instant in UTC.
+    pub fn made_at(kind: RevisionKind, author: impl Into<String>, date: impl Into<String>, utc: impl Into<String>) -> Revision {
+        Revision { kind, author: author.into(), date: date.into(), move_name: None, date_utc: Some(utc.into()) }
     }
 
     /// The instant changes are grouped by: the UTC time when it is known, else `date`.

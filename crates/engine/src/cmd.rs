@@ -214,8 +214,15 @@ pub fn new_revision(s: &mut Session, kind: RevisionKind) -> u32 {
     {
         return i as u32;
     }
-    s.doc.revisions.push(Revision::made_at(kind, s.author.clone(), date));
+    s.doc.revisions.push(made_revision(kind, s.author.clone(), date));
     (s.doc.revisions.len() - 1) as u32
+}
+
+/// A revision record for a change made at `utc` (ISO 8601, UTC): dated in local wall-clock time,
+/// as Word writes `w:date`, with the UTC time beside it, so a save writes it as it is (#6851).
+pub fn made_revision(kind: RevisionKind, author: String, utc: String) -> Revision {
+    let date = crate::io_ext::word_date(&utc, local_offset_secs).unwrap_or_else(|| utc.clone());
+    Revision::made_at(kind, author, date, utc)
 }
 
 /// Whether the paragraph at `path` is followed by another paragraph in the same container (so

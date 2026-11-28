@@ -612,11 +612,11 @@ fn edits_in_the_repeated_hour_stay_separate_changes() {
     assert_eq!(change_spans(&mut s), [("insert".into(), 6, 10)], "the earlier insertion is still pending");
 }
 
-/// A tracked change read from a file without a UTC time (an older Word, another program) keeps
-/// its `w:date` as read through open and save: WordCraft doesn't guess the zone it was written in
-/// (#6851).
+/// A tracked change read from a file keeps its `w:date` and `w16du:dateUtc` as read through open
+/// and save in another zone (#6851): one without a UTC time (an older Word, another program), whose
+/// zone WordCraft doesn't guess, and one written in UTC, where the two are the same.
 #[test]
-fn a_file_date_without_utc_time_is_written_as_read() {
+fn a_file_date_is_written_as_read() {
     use crate::cmd::TEST_ZONE;
     struct Reset;
     impl Drop for Reset {
@@ -627,15 +627,24 @@ fn a_file_date_without_utc_time_is_written_as_read() {
     let _reset = Reset;
     TEST_ZONE.with(|z| z.set(Some(|_| 8 * 3600)));
 
-    let mut doc = Document::from_text("Draft.");
-    doc.revisions.push(wordcraft_doc::Revision::new(wordcraft_doc::RevisionKind::Insert, "Ada", "2026-11-16T08:33:24Z"));
-    doc.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().mark.ins = Some(0);
-    let bytes = crate::io::save_bytes("legacy.docx", &doc).unwrap();
-    let opened = crate::io::open_bytes("legacy.docx", &bytes).unwrap();
-    let r = opened.revisions.first().cloned().unwrap_or_default();
-    assert_eq!((r.date.as_str(), r.date_utc.as_deref()), ("2026-11-16T08:33:24Z", None));
-    let again = wordcraft_docx::read(&crate::io::save_bytes("legacy.docx", &opened).unwrap()).unwrap();
-    assert_eq!(again.revisions.first().map(|r| r.date.as_str()), Some("2026-11-16T08:33:24Z"));
+    let date = "2026-11-16T08:33:24Z";
+    for utc in [None, Some(date)] {
+        let mut doc = Document::from_text("Draft.");
+        let mut rev = wordcraft_doc::Revision::new(wordcraft_doc::RevisionKind::Insert, "Ada", date);
+        rev.date_utc = utc.map(String::from);
+        doc.revisions.push(rev);
+        doc.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().mark.ins = Some(0);
+        let dates = |d: &Document| d.revisions.iter().map(|r| (r.date.clone(), r.date_utc.clone())).collect::<Vec<_>>();
+        let want = vec![(date.to_string(), utc.map(String::from))];
+        for name in ["file.docx", "file.xml"] {
+            let bytes = crate::io::save_bytes(name, &doc).unwrap();
+            let opened = crate::io::open_bytes(name, &bytes).unwrap();
+            assert_eq!(dates(&opened), want, "{name} {utc:?}: opened");
+            let saved = crate::io::save_bytes(name, &opened).unwrap();
+            let again = if name.ends_with(".xml") { wordcraft_docx::read_xml(&saved) } else { wordcraft_docx::read(&saved) }.unwrap();
+            assert_eq!(dates(&again), want, "{name} {utc:?}: saved again");
+        }
+    }
 }
 
 /// Accept and Move to Next, Reject and Move to Next: the change at the caret is resolved and

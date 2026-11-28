@@ -82,16 +82,11 @@ pub(crate) fn draw_charts(doc: &mut Document, odf: bool) {
 pub fn save(ext: &str, doc: &Document, opts: &crate::io::ExportOptions) -> Option<Result<Vec<u8>, String>> {
     // .docx/.docm/.dotx/.dotm: the extension picks the package flavour Word expects.
     if let Some(flavor) = wordcraft_docx::Flavor::from_ext(ext) {
-        let dated = word_revision_dates(doc);
-        return Some(wordcraft_docx::write_as(dated.as_ref().unwrap_or(doc), flavor).map_err(|e| e.to_string()));
+        return Some(wordcraft_docx::write_as(doc, flavor).map_err(|e| e.to_string()));
     }
     match ext {
-        "xml" => {
-            let dated = word_revision_dates(doc);
-            let doc = dated.as_ref().unwrap_or(doc);
-            let written = if opts.word2003 { wordcraft_docx::write_wordml2003(doc) } else { wordcraft_docx::write_flat(doc) };
-            Some(written.map_err(|e| e.to_string()))
-        }
+        "xml" if opts.word2003 => Some(wordcraft_docx::write_wordml2003(doc).map_err(|e| e.to_string())),
+        "xml" => Some(wordcraft_docx::write_flat(doc).map_err(|e| e.to_string())),
         "png" => Some(render_png(doc, 0, 2.0, opts)),
         "pdf" => {
             // Output shows the fields Word fills in as it prints (see `output_fields`).
@@ -103,38 +98,11 @@ pub fn save(ext: &str, doc: &Document, opts: &crate::io::ExportOptions) -> Optio
     }
 }
 
-/// The document with the tracked changes made here dated as Word dates them (`w:date`): in local
-/// wall-clock time, with a `Z` Word writes but doesn't mean. Word read the UTC dates WordCraft
-/// wrote as local time, shifted by the user's offset from UTC (#6851). Each keeps its UTC instant
-/// in `date_utc`, written as `w16du:dateUtc`: the repeated hour as daylight saving time ends gives
-/// two edits an hour apart the same local time. A change read from a file is written as read.
-/// None when no date changes.
-pub(crate) fn word_revision_dates(doc: &Document) -> Option<Document> {
-    let revisions = revision_dates(&doc.revisions, |d| word_date(d, crate::cmd::local_offset_secs))?;
-    let mut doc = doc.clone();
-    doc.revisions = revisions;
-    Some(doc)
-}
-
-/// `revisions` with the date of each one made here (its `date` is its `date_utc`) that `convert`
-/// gives a new one for; None when it gives none.
-fn revision_dates(revisions: &[wordcraft_doc::Revision], convert: impl Fn(&str) -> Option<String>) -> Option<Vec<wordcraft_doc::Revision>> {
-    let mut out = None;
-    for (i, r) in revisions.iter().enumerate() {
-        if r.date_utc.as_deref() != Some(r.date.as_str()) {
-            continue;
-        }
-        if let Some(date) = convert(&r.date).filter(|d| *d != r.date) {
-            out.get_or_insert_with(|| revisions.to_vec()).get_mut(i)?.date = date;
-        }
-    }
-    out
-}
-
 /// A UTC date and time (a `Z` or an offset) as Word writes `w:date`: the wall-clock time in the
-/// zone `zone` gives for an instant (seconds east of UTC), with a `Z`. None for anything else (no
-/// zone or no time of day, before 1970, unreadable), which is written as it is.
-fn word_date(date: &str, zone: impl Fn(u64) -> i64) -> Option<String> {
+/// zone `zone` gives for an instant (seconds east of UTC), with a `Z` Word writes but doesn't
+/// mean. Word read the UTC dates WordCraft wrote as local time, shifted by the user's offset from
+/// UTC (#6851). None for anything else (no zone or no time of day, before 1970, unreadable).
+pub(crate) fn word_date(date: &str, zone: impl Fn(u64) -> i64) -> Option<String> {
     let utc = u64::try_from(chrono::DateTime::parse_from_rfc3339(date.trim()).ok()?.timestamp()).ok()?;
     Some(crate::cmd::iso_from_unix_secs(utc.checked_add_signed(zone(utc))?))
 }

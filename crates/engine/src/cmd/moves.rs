@@ -56,7 +56,7 @@ pub fn cut_tracked(s: &mut Session) -> Result<bool, CmdError> {
     if !s.doc.settings.track_changes || !s.doc.settings.track_moves || a == b || a.story != b.story || !move_sized(&s.clipboard_text) {
         return Ok(false);
     }
-    s.doc.revisions.push(Revision::made_at(RevisionKind::Delete, s.author.clone(), now_iso()));
+    s.doc.revisions.push(crate::cmd::made_revision(RevisionKind::Delete, s.author.clone(), now_iso()));
     let rid = (s.doc.revisions.len() - 1) as u32;
     let at = track_delete_as(s, &a, &b, rid)?.at;
     s.sel = Selection::caret(at);

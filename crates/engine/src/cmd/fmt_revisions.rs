@@ -57,7 +57,7 @@ impl Recorder<'_> {
         let r = match found {
             Some(i) => i as u32,
             None => {
-                self.revisions.push(Revision::made_at(RevisionKind::Format, self.author.clone(), self.date.clone()));
+                self.revisions.push(crate::cmd::made_revision(RevisionKind::Format, self.author.clone(), self.date.clone()));
                 self.revisions.len().saturating_sub(1) as u32
             }
         };
