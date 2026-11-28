@@ -111,7 +111,11 @@ fn run_request(app: &mut WordApp, request: FindRequest) -> String {
         FindRequest::FindNext { query, options, .. } => {
             // One step per request: `edit.find` would select a match itself, and the step after it skip one.
             match app.run("edit.findNext", params(&query, "", &options)) {
-                Ok(r) => format!("Match {} of {}", r["index"].as_u64().unwrap_or(0) + 1, r["count"]),
+                Ok(r) => {
+                    let index = (r["index"].as_u64().unwrap_or(0) + 1).to_string();
+                    let count = r["count"].to_string();
+                    crate::i18n::fmt(tl!("Match {index} of {count}"), &[("index", &index), ("count", &count)])
+                }
                 Err(e) => e,
             }
         }
@@ -120,7 +124,7 @@ fn run_request(app: &mut WordApp, request: FindRequest) -> String {
             Err(e) => e,
         },
         FindRequest::ReplaceAll { query, with, options, .. } => match app.run("edit.replaceAll", params(&query, &with, &options)) {
-            Ok(r) => format!("All done. We made {} replacements.", r["replaced"]),
+            Ok(r) => crate::i18n::fmt(tl!("All done. We made {count} replacements."), &[("count", &r["replaced"].to_string())]),
             Err(e) => e,
         },
         FindRequest::Highlight { query, options, on, .. } => {

@@ -266,9 +266,13 @@ impl WordApp {
 }
 
 /// The status bar's count line (#2797): the whole document's `total`, or "selected of total" when
-/// part of it is selected, worded as the Word Count dialog words the same counts.
+/// part of it is selected, worded as the Word Count dialog words the same counts. A one-word
+/// document says `1 word`, not `1 words` (#3881).
 pub(crate) fn status_count_text(unit: StatusCount, total: usize, selected: Option<usize>) -> String {
     match (unit, selected) {
+        (StatusCount::Words, None) | (StatusCount::Words, Some(_)) if total == 1 => {
+            crate::i18n::fmt(tl!("{words} word"), &[("words", &total.to_string())])
+        }
         (StatusCount::Words, None) => crate::i18n::fmt(tl!("{words} words"), &[("words", &total.to_string())]),
         (StatusCount::Words, Some(n)) => {
             crate::i18n::fmt(tl!("{selected} of {words} words"), &[("selected", &n.to_string()), ("words", &total.to_string())])

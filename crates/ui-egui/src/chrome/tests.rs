@@ -1126,3 +1126,30 @@ fn status_bar_view_mode_toggles_and_zoom_slider_proportions() {
     });
     assert!(has_14pt_knob, "Zoom slider should paint a {glyph_md} pt thumb (ControlSize::Md) matching 14 pt IconButton icons inside {slider:?}");
 }
+
+/// A one-word document reads "1 word", not "1 words" — and a selection still reads
+/// "<selected> of <total> words" once there is more than one (#3881).
+#[test]
+fn a_one_word_document_is_counted_in_the_singular() {
+    crate::i18n::apply_language(crate::i18n::Lang::EN);
+    assert_eq!(status_count_text(StatusCount::Words, 1, None), "1 word");
+    assert_eq!(status_count_text(StatusCount::Words, 1, Some(1)), "1 word", "selecting the only word keeps the singular");
+    assert_eq!(status_count_text(StatusCount::Words, 3, None), "3 words");
+    assert_eq!(status_count_text(StatusCount::Words, 3, Some(3)), "3 of 3 words");
+}
+
+/// Status-bar text with nothing behind it is a label, so assistive technology doesn't offer a
+/// note like "Editing footnote" as something to press (#3881).
+#[test]
+fn the_status_bar_notes_are_labels_not_buttons() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::By;
+
+    let mut a = new_app();
+    a.run("text.insert", json!({"text": "Body"})).unwrap();
+    a.run("references.footnote", json!({})).unwrap();
+    let h = harness(a);
+    let by = |role| By::new().role(role).label("Editing footnote");
+    assert_eq!(h.query_all(by(Role::Label)).count(), 1, "the note is plain text");
+    assert_eq!(h.query_all(by(Role::Button)).count(), 0, "and not something to press");
+}

@@ -283,7 +283,7 @@ fn trailing(app: &mut WordApp, ui: &mut Ui, step: usize) -> Option<egui::Rect> {
     let out = Avatar::new(app.session.author.clone())
         .initials(initials)
         .pressable(true)
-        .tooltip(TooltipSpec::new(format!("{} — {}", app.session.author, tl!("set your name in File › Options"))))
+        .tooltip(TooltipSpec::new(crate::i18n::fmt(tl!("{author} — set your name in File › Options"), &[("author", &app.session.author)])))
         .show(ui);
     if out.clicked {
         let _ = app.run("ui.backstage", json!({"value": true, "page": "options", "pane": "general"}));

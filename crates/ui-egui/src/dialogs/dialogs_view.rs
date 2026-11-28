@@ -95,11 +95,8 @@ impl StackDialog for WordCountDialog {
         let stats = self.stats.clone().unwrap_or(Value::Null);
         let include = &mut self.include_text_boxes;
         let shown = Dialog::new(tl!("Word Count").to_string())
-            // The old dialog's pair: Close as the default button, and Cancel; both only close it.
-            .buttons([
-                FooterButton::new(tl!("Close").to_string(), DialogRole::Accept),
-                FooterButton::new(tl!("Cancel").to_string(), DialogRole::Cancel),
-            ])
+            // Read-only: Close is the whole footer, not Close beside a Cancel that does the same thing (#3881).
+            .buttons([FooterButton::new(tl!("Close").to_string(), DialogRole::Cancel)])
             .show(ui, |ui, _| {
                 // A plain two-column table, the label and its count, both at the start, as the old dialog showed them:
                 // its rows a control's height apart and the counts well clear of the labels.

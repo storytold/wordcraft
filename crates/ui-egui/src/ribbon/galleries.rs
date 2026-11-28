@@ -195,7 +195,8 @@ pub(crate) fn style_sets(ui: &mut Ui, app: &mut WordApp) {
     let ppp = ui.ctx().pixels_per_point();
     // The tiles draw a fresh document: no styles hash, but the fonts they are set in are an input.
     let revision = preview_revision(0, wordcraft_fonts::FontDb::global().generation(), crate::i18n::current().code(), false, dark);
-    let entries: Vec<(String, String)> = STYLE_SETS.iter().map(|name| ((*name).to_string(), format!("Style set: {name}"))).collect();
+    let entries: Vec<(String, String)> =
+        STYLE_SETS.iter().map(|name| ((*name).to_string(), crate::i18n::fmt(tl!("Style set: {name}"), &[("name", *name)]))).collect();
     let makers: Vec<Maker<'_>> = entries.iter().map(|(name, _)| Box::new(move || style_set_image(name, ppp, dark)) as Maker<'_>).collect();
     let items = image_items("set", &entries, &makers, ppp, revision);
     // Each tile is a small page (title, heading, paragraph) at the large thumbnail size, about as wide as high as the

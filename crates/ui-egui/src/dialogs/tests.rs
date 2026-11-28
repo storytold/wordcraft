@@ -1872,9 +1872,10 @@ fn zoom_fit_button_fits_the_view() {
     assert_eq!(h.state().session.view.fit, "multiplePages");
 }
 
-/// Word Count shows a plain table, each label with its count to its right on its line, over Close and Cancel.
+/// Word Count shows a plain table, each label with its count to its right on its line, over Close
+/// only: it is read-only, so there is no Cancel or OK beside Close (#3881).
 #[test]
-fn word_count_shows_label_and_count_on_a_line_over_close_and_cancel() {
+fn word_count_shows_label_and_count_on_a_line_over_close() {
     let mut h = app_harness(app_with("Kilns and wheels"));
     h.run_steps(2);
     super::open(h.state_mut(), "wordCount", &json!({})).expect("word count opens");
@@ -1885,11 +1886,14 @@ fn word_count_shows_label_and_count_on_a_line_over_close_and_cancel() {
     assert!((label.center().y - count.center().y).abs() < 1.0 && label.max.x < count.min.x, "the count stands right of its label");
     let button = egui::accesskit::Role::Button;
     // The title bar's × carries the name Close too; the footer's is the lower of the two.
-    let closes: Vec<_> = h.query_all_by_role_and_label(button, "Close").filter(|n| !n.accesskit_node().is_hidden()).collect();
-    assert!(!closes.is_empty(), "a Close button");
-    h.get_by_role_and_label(button, "Cancel").click();
+    let mut closes: Vec<_> = h.query_all_by_role_and_label(button, "Close").filter(|n| !n.accesskit_node().is_hidden()).collect();
+    assert!(closes.len() >= 2, "Close closes it (title bar and footer)");
+    assert!(h.query_by_role_and_label(button, "Cancel").is_none(), "no pointless Cancel beside it");
+    assert!(h.query_by_role_and_label(button, "OK").is_none(), "and no second kind of close");
+    closes.sort_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y));
+    closes.last().expect("the footer's Close").click();
     h.run_steps(3);
-    assert!(!is_open(h.state(), "wordCount"), "Cancel closes Word Count");
+    assert!(!is_open(h.state(), "wordCount"), "the footer's Close closes Word Count");
 }
 
 /// #1885: the close control is at the title bar's right end; a click in the close box
