@@ -245,6 +245,21 @@ pub(crate) fn record(s: &mut Session, id: &str, before: &Document) {
     r.styles(&before.styles.styles, &mut std::sync::Arc::make_mut(&mut doc.styles).styles);
 }
 
+/// Record how the command formatted the paragraph at `at` (its text unchanged) differently from
+/// `before` as tracked formatting changes, for a command that also adds or removes paragraphs in
+/// the same story, which [`record`] does not compare.
+pub(crate) fn record_para(s: &mut Session, before: &Paragraph, at: &wordcraft_doc::Pos) -> Result<(), crate::CmdError> {
+    let Some(mut p) = s.doc.para(at.story, &at.path).cloned() else { return Ok(()) };
+    if p.text != before.text {
+        return Ok(());
+    }
+    let old = s.doc.revisions.clone();
+    let mut r = Recorder { author: s.author.clone(), date: super::now_iso(), before: &old, revisions: &mut s.doc.revisions, rid: None };
+    r.para(before, &mut p);
+    *s.doc.para_mut(at.story, &at.path)? = p;
+    Ok(())
+}
+
 /// Builds the tracked paragraph-property change for a command that also changes the paragraph's
 /// text. The ordinary after-command recorder deliberately compares only paragraphs with identical
 /// text, so mixed text/paragraph-format transformations use this before assigning their props.
