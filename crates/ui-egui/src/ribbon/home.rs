@@ -14,7 +14,7 @@ use craft::ui::primitives::{HAlign, TextRun};
 use craft::ui::tile_grid::{CaptionPlace, Tile, TileGrid};
 use wordcraft_doc::props::Align;
 
-use super::common::{icon_only, menu_button};
+use super::common::{icon_only, menu_button, painted_ibeam_over};
 use super::underline::underline_menu;
 use egui::vec2;
 use serde_json::Value;
@@ -182,6 +182,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 Row::new().gap(Gap::None).show(ui, |ui, _| {
                     let mut family = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
                     let out = crate::widgets::font_box(ui, app, tl!("Font").to_string(), &mut family);
+                    painted_ibeam_over(ui, &out.edit.response);
                     if let Some(f) = out.picked {
                         let _ = app.run("format.font", json!({"name": f}));
                     }
@@ -192,6 +193,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     let out = craft::ui::pickers::ComboBox::new(tl!("Font Size").to_string(), Bind::bound(&mut size), &sizes)
                         .tooltip(tl!("Font Size").to_string())
                         .show(ui);
+                    painted_ibeam_over(ui, &out.edit.response);
                     if let Some(v) = out.edit.events.committed()
                         && let Ok(x) = v.trim().parse::<f64>()
                     {

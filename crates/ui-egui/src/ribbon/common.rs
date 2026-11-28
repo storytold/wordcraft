@@ -1,5 +1,7 @@
 use std::ops::RangeInclusive;
 
+use craft::behavior::cursor::{Cursor, CursorPriority, PaintedCursor};
+use craft::host::target::{Os, Runtime};
 use craft::keymap::CommandRef;
 use craft::menu::ribbon::{RibbonGroup, RibbonRow};
 use craft::ui::buttons::{Arrangement, Button};
@@ -10,7 +12,7 @@ use craft::ui::layout_components::{Row, Stack};
 use craft::ui::list::ThumbAspect;
 use craft::ui::menu::{Menu, MenuItem, MenuOutput};
 use craft::ui::primitives::{FacePaint, IconSpec};
-use craft::ui::runtime::env::Label;
+use craft::ui::runtime::env::{Env, Label};
 use craft::ui::text::NumberField;
 
 use serde_json::Value;
@@ -53,6 +55,17 @@ pub(crate) fn icon_only<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
         },
         add,
     )
+}
+
+/// On Windows the system I-beam is the legacy white XOR cursor over the GPU surface; the page
+/// replaces it with the framework's painted beam. Do the same over a ribbon or mini-toolbar text
+/// field on hover.
+pub(crate) fn painted_ibeam_over(ui: &Ui, response: &egui::Response) {
+    let env = Env::of(ui);
+    let shell = env.view().shell();
+    if shell.os == Os::Windows && shell.runtime == Runtime::Native && response.hovered() {
+        craft::ui::runtime::cursor::request(ui.ctx(), Cursor::Painted(PaintedCursor::IBeam), CursorPriority::Hover);
+    }
 }
 
 /// Custom groups (Customize Ribbon, #379): up to three commands as stacked buttons, more as inline

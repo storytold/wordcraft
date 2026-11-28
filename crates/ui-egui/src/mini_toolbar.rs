@@ -187,6 +187,7 @@ pub(crate) fn members(app: &mut WordApp, ui: &mut Ui, preview: bool) {
                 Row::new().gap(Gap::Tight).show(ui, |ui, _| {
                     let mut family = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
                     let picked = crate::widgets::font_box::font_box(ui, app, tl!("Font").to_string(), &mut family);
+                    crate::ribbon::common::painted_ibeam_over(ui, &picked.edit.response);
                     follow_list(app, preview, &picked.preview, |f| Some(("format.font".to_string(), json!({"name": f}))));
                     if let Some(f) = &picked.picked {
                         let _ = app.run("format.font", json!({"name": f}));
@@ -199,6 +200,7 @@ pub(crate) fn members(app: &mut WordApp, ui: &mut Ui, preview: bool) {
                         .collect();
                     let mut text = size.clone();
                     let combo = ComboBox::new(tl!("Font Size").to_string(), Bind::bound(&mut text), &sizes).show(ui);
+                    crate::ribbon::common::painted_ibeam_over(ui, &combo.edit.response);
                     follow_list(app, preview, &combo.preview, |v| {
                         v.trim().parse::<f64>().ok().map(|x| ("format.size".to_string(), json!({"size": x})))
                     });
