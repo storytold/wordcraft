@@ -1,7 +1,5 @@
 //! Run and style properties that must survive repeated DOCX saves.
 
-use std::io::{Read, Write};
-
 fn docx(body: &str, styles: &str) -> Vec<u8> {
     let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
     let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
@@ -9,24 +7,22 @@ fn docx(body: &str, styles: &str) -> Vec<u8> {
         r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{body}<w:sectPr/></w:body></w:document>"#
     );
     let styles = format!(r#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{styles}</w:styles>"#);
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zip = craft_zip::Writer::new();
     for (name, xml) in [
         ("_rels/.rels", root.to_string()),
         ("word/document.xml", document),
         ("word/_rels/document.xml.rels", rels.to_string()),
         ("word/styles.xml", styles),
     ] {
-        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zip.write_all(xml.as_bytes()).unwrap();
+        zip.add(name, xml.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    zip.finish().unwrap().into_inner()
+    zip.finish().unwrap()
 }
 
 fn part(bytes: &[u8], name: &str) -> String {
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    let mut xml = String::new();
-    zip.by_name(name).unwrap().read_to_string(&mut xml).unwrap();
-    xml
+    let mut zip = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+
+    String::from_utf8(zip.read(name, 16 << 20).unwrap().unwrap()).unwrap()
 }
 
 #[test]
@@ -95,4 +91,40 @@ fn run_and_style_snap_to_grid_and_web_hidden_survive_two_saves() {
         assert!(document_xml.contains("visible in print"));
         doc = wordcraft_docx::read(&out).unwrap();
     }
+}
+
+#[test]
+fn style_paragraph_and_run_changes_keep_independent_authors() {
+    let styles = r#"
+        <w:style w:type="paragraph" w:styleId="Mine">
+          <w:name w:val="Mine"/>
+          <w:pPr><w:jc w:val="center"/><w:pPrChange w:id="1" w:author="Ana" w:date="2026-10-01T00:00:00Z"><w:pPr><w:jc w:val="right"/></w:pPr></w:pPrChange></w:pPr>
+          <w:rPr><w:b/><w:rPrChange w:id="2" w:author="Bo" w:date="2026-10-02T00:00:00Z"><w:rPr><w:i/></w:rPr></w:rPrChange></w:rPr>
+        </w:style>
+    "#;
+    let doc = wordcraft_docx::read(&docx("<w:p/>", styles)).unwrap();
+    let st = doc.styles.get("Mine").unwrap();
+    let p = st.para_change.as_ref().expect("paragraph revision");
+    let r = st.chr_change.as_ref().expect("run revision");
+    assert_eq!(doc.revisions[p.rev as usize].author, "Ana");
+    assert_eq!(doc.revisions[r.rev as usize].author, "Bo");
+
+    let out = wordcraft_docx::write(&doc).unwrap();
+    let xml = part(&out, "word/styles.xml");
+    let p_xml = xml.split("<w:pPrChange").nth(1).unwrap_or("").split("</w:pPrChange>").next().unwrap_or("");
+    let r_xml = xml.split("<w:rPrChange").nth(1).unwrap_or("").split("</w:rPrChange>").next().unwrap_or("");
+    assert!(p_xml.contains("w:author=\"Ana\"") && r_xml.contains("w:author=\"Bo\""), "{xml}");
+}
+
+#[test]
+fn old_style_paragraph_properties_get_heading_and_list_normalization() {
+    let styles = r#"
+        <w:style w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/><w:pPr><w:numPr><w:numId w:val="7"/></w:numPr></w:pPr></w:style>
+        <w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="center"/><w:outlineLvl w:val="4"/><w:pPrChange w:id="3" w:author="Ana"><w:pPr><w:numPr><w:ilvl w:val="2"/></w:numPr></w:pPr></w:pPrChange></w:pPr></w:style>
+    "#;
+    let doc = wordcraft_docx::read(&docx("<w:p/>", styles)).unwrap();
+    let st = doc.styles.get("Heading1").unwrap();
+    let old = &st.para_change.as_ref().expect("paragraph revision").old;
+    assert_eq!((st.para.outline_level, old.outline_level), (Some(4), Some(0)));
+    assert_eq!(old.numbering.map(|n| (n.num, n.level)), Some((7, 2)), "the old list level follows the based-on style instead of leaking LEVEL_ONLY");
 }

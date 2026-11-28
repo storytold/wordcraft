@@ -110,7 +110,7 @@ pub fn specs() -> Vec<CommandSpec> {
             apply_filter(s);
             filter_result(s)
         })
-        .params(r#"{"rules"?: [{"field": string, "op": "equal|notEqual|less|greater|lessOrEqual|greaterOrEqual|blank|notBlank|contains|notContains", "value"?: string, "join"?: "and|or" (with the rule before; And binds tighter)}], "sort"?: [{"field": string, "descending"?: bool}]} (replaces the filter; `sort` too when given; {} clears both). Preview, Finish & Merge and labels use only the matching records, in sort order"#)
+        .params(r#"{"rules"?: [{"field": string, "op": "equal|notEqual|less|greater|lessOrEqual|greaterOrEqual|blank|notBlank|contains|notContains", "value"?: string, "join"?: "and|or" (with the rule before; And binds tighter)}], "sort"?: [{"field": string, "descending"?: bool}]} (replaces the filter; `sort` too when given; `sort` also accepts a field name, one key object or null; array entries may also be field names; {} clears both). Preview, Finish & Merge and labels use only the matching records, in sort order"#)
         .when(has_list)
         .pure(),
         CommandSpec::new("mailings.sortRecipients", "Sort Recipients", "Mailings › Start Mail Merge › Edit Recipient List", |s, v| {
@@ -118,7 +118,7 @@ pub fn specs() -> Vec<CommandSpec> {
             apply_filter(s);
             filter_result(s)
         })
-        .params(r#"{"sort"?: [{"field": string, "descending"?: bool}]} | {"field": string, "descending"?: bool} (no params: the list's own order)"#)
+        .params(r#"{"sort"?: [{"field": string, "descending"?: bool}]} | {"field": string, "descending"?: bool} (`sort` also accepts a field name, one key object or null; array entries may also be field names; no params: the list's own order)"#)
         .when(has_list)
         .pure(),
         CommandSpec::new("mailings.insertField", "Insert Merge Field", "Mailings › Write & Insert Fields", |s, v| {
@@ -192,6 +192,7 @@ pub fn specs() -> Vec<CommandSpec> {
             refresh(s);
             Ok(json!({"record": idx + 1}))
         })
+        .params(r#"{"text": string}"#)
         .when(has_recipients),
         CommandSpec::new("mailings.checkErrors", "Check for Errors", "Mailings › Finish", |s, _| {
             let mut missing = Vec::new();

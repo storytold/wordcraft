@@ -40,7 +40,7 @@ impl StrictOutput {
 /// decodes within the decode budget. The same decision `wordcraft-pdf` and `wordcraft-render`
 /// take, so a picture that fails here is drawn as a grey box (or not at all) by that output.
 pub fn media_check(bytes: &[u8], output: StrictOutput) -> Result<(), DrawFailure> {
-    if wordcraft_metafile::is_metafile(bytes) && wordcraft_metafile::parse(bytes).is_ok_and(|p| p.has_size()) {
+    if craft_metafile::is_metafile(bytes) && craft_metafile::parse(bytes).is_ok_and(|p| p.has_size()) {
         return Ok(());
     }
     wordcraft_geom::picture::check_for_drawing(bytes, output.max_picture_side())

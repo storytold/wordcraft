@@ -103,7 +103,6 @@ fn gallery_lists_everything() {
 
 /// A session on a DOCX whose only paragraph is `<m:oMath>{math}</m:oMath>`.
 fn imported(math: &str) -> Session {
-    use std::io::Write;
     let w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     let m = "http://schemas.openxmlformats.org/officeDocument/2006/math";
     let parts = [
@@ -117,24 +116,21 @@ fn imported(math: &str) -> Session {
         ),
         ("word/document.xml", format!(r#"<w:document xmlns:w="{w}" xmlns:m="{m}"><w:body><w:p><m:oMath>{math}</m:oMath></w:p><w:sectPr/></w:body></w:document>"#)),
     ];
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, xml) in parts {
-        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(xml.as_bytes()).unwrap();
+        zw.add(name, xml.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    let bytes = zw.finish().unwrap().into_inner();
+    let bytes = zw.finish().unwrap();
     let mut s = Session::new(wordcraft_docx::read(&bytes).unwrap());
     s.run("equation.edit", &json!({})).unwrap();
     s
 }
 
 fn document_xml(s: &Session) -> String {
-    use std::io::Read;
     let bytes = wordcraft_docx::write(&s.doc).unwrap();
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    let mut xml = String::new();
-    z.by_name("word/document.xml").unwrap().read_to_string(&mut xml).unwrap();
-    xml
+    let mut z = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+
+    String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap()
 }
 
 #[test]

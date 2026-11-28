@@ -51,7 +51,7 @@ pub(super) fn link(s: &mut Session, v: &Value) -> CmdResult {
         },
     };
     if url.is_empty() || url.len() > 4096 {
-        return Err(CmdError::Params("bad url".into()));
+        return Err(CmdError::Params("`url` must be non-empty and at most 4096 UTF-8 bytes".into()));
     }
     let style = Some("Hyperlink".to_string());
     if s.sel.is_collapsed() {
@@ -188,7 +188,9 @@ pub(super) fn delete_bookmark(s: &mut Session, v: &Value) -> CmdResult {
 pub(super) fn bookmark(s: &mut Session, v: &Value) -> CmdResult {
     let name = p::req_str(v, "name")?.trim().to_string();
     if !bookmark_name_ok(&name) {
-        return Err(CmdError::Params("bookmark names start with a letter, have no spaces and at most 40 characters".into()));
+        return Err(CmdError::Params(
+            "bookmark names start with a letter or underscore, contain only letters, numbers or underscores, and have at most 40 characters".into(),
+        ));
     }
     // Replace an existing bookmark of the same name.
     remove_bookmark(s, &name)?;

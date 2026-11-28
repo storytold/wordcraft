@@ -1,4 +1,37 @@
-use super::{Serialize, Ui, Value, WordApp, buttons, heading, json, run, unit};
+use craft::theme::variant::Tone;
+use craft::ui::choice::{Checkbox, Radio, RadioGroup};
+use craft::ui::contract::{Bind, Entry, FieldLayout, Props as _, Show as _, ShowContainer as _, SideLabel};
+use craft::ui::display::Text;
+use craft::ui::form::Field;
+use craft::ui::layout_components::Stack;
+use craft::ui::notices::Notice;
+use craft::ui::patterns::form_dialogs::FormCx;
+use craft::ui::pickers::Select;
+use craft::ui::runtime::env::{Label, LengthUnits};
+use craft::ui::sections::Section;
+use craft::ui::text::{NamedOr, NumberName, TextField};
+use egui::Ui;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+use super::{WordApp, count_field, named_field, number_or_zero, points};
+use crate::dialogs::host::{Asks, WordForm};
+
+/// The field's one name: a width that shares the text width out.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Auto {
+    Auto,
+}
+
+impl NumberName for Auto {
+    fn id(self) -> u32 {
+        0
+    }
+
+    fn from_id(id: u32) -> Option<Self> {
+        (id == 0).then_some(Auto::Auto)
+    }
+}
 
 // ---------------------------------------------------------------------------------------------
 // Formula
@@ -8,8 +41,8 @@ pub const FORMULA_FUNCTIONS: [&str; 6] = ["AVERAGE", "COUNT", "MAX", "MIN", "PRO
 
 /// The table Formula dialog's field: the formula, suggested as Word does from the numbers next
 /// to the caret's cell (`=SUM(ABOVE)`, else `=SUM(LEFT)`, else a bare `=`).
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct FormulaForm {
     pub formula: String,
 }
@@ -48,30 +81,31 @@ impl FormulaForm {
     }
 }
 
-pub(super) fn formula_ui(app: &mut WordApp, ui: &mut Ui, f: &mut FormulaForm) -> bool {
-    ui.label(tl!("Formula:"));
-    ui.add(egui::TextEdit::singleline(&mut f.formula).desired_width(300.0));
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.label(tl!("Paste function:"));
-        let mut picked = None;
-        craft_ui::ComboBox::from_id_salt("formula_paste").selected_text("").width(140.0).show_ui(ui, |ui| {
-            for name in FORMULA_FUNCTIONS {
-                if ui.selectable_label(false, name).clicked() {
-                    picked = Some(name);
-                }
-            }
-        });
-        if let Some(name) = picked {
-            f.paste(name);
-        }
-    });
-    let ready = f.formula.trim().starts_with('=') && f.formula.trim().len() > 1;
-    let (ok, cancel) = buttons(ui, "OK", ready);
-    if ok {
-        return run(app, "table.formula", f.params());
+impl WordForm for FormulaForm {
+    fn key(&self) -> &'static str {
+        "tableFormula"
     }
-    cancel
+
+    fn title(&self) -> Label {
+        tl!("Formula").to_string().into()
+    }
+
+    fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
+        Field::new(tl!("Formula:").to_string()).id_salt("formula").show(ui, |ui, _| {
+            TextField::new(tl!("Formula:").to_string(), Bind::bound(&mut self.formula)).show(ui);
+        });
+        let functions: Vec<Entry<String>> = FORMULA_FUNCTIONS.iter().map(|n| Entry::new((*n).to_string(), (*n).to_string())).collect();
+        let mut picked = String::new();
+        Select::new(tl!("Paste function:").to_string(), Bind::bound(&mut picked), &functions).show(ui);
+        if !picked.is_empty() {
+            self.paste(&picked);
+        }
+        self.formula.trim().starts_with('=') && self.formula.trim().len() > 1
+    }
+
+    fn commands(&self) -> Vec<(String, Value)> {
+        vec![("table.formula".to_string(), self.params())]
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -80,8 +114,8 @@ pub(super) fn formula_ui(app: &mut WordApp, ui: &mut Ui, f: &mut FormulaForm) ->
 /// The table Sort dialog's fields: the column to sort by, the order and whether the first row is
 /// a header (kept in place). `headers` is the first row's text, which names the columns when it
 /// is a header.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct SortForm {
     pub column: usize,
     pub descending: bool,
@@ -117,30 +151,50 @@ impl SortForm {
     }
 }
 
-pub(super) fn sort_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SortForm) -> bool {
-    heading(ui, "Sort by");
-    ui.horizontal(|ui| {
-        craft_ui::ComboBox::from_id_salt("sort_column").selected_text(f.column_label(f.column)).width(180.0).show_ui(ui, |ui| {
-            for i in 0..f.headers.len() {
-                let label = f.column_label(i);
-                ui.selectable_value(&mut f.column, i, label);
-            }
-        });
-        crate::rtl::vertical(ui, |ui| {
-            ui.radio_value(&mut f.descending, false, tl!("Ascending"));
-            ui.radio_value(&mut f.descending, true, tl!("Descending"));
-        });
-    });
-    heading(ui, "My list has");
-    ui.horizontal(|ui| {
-        ui.radio_value(&mut f.header, true, tl!("Header row"));
-        ui.radio_value(&mut f.header, false, tl!("No header row"));
-    });
-    let (ok, cancel) = buttons(ui, "OK", true);
-    if ok {
-        return run(app, "table.sort", f.params());
+impl WordForm for SortForm {
+    fn key(&self) -> &'static str {
+        "tableSort"
     }
-    cancel
+
+    fn title(&self) -> Label {
+        tl!("Sort").to_string().into()
+    }
+
+    fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
+        Section::new(tl!("Sort by").to_string()).show(ui, |ui, _| {
+            let columns: Vec<Entry<String>> = (0..self.headers.len()).map(|i| Entry::new(i.to_string(), self.column_label(i))).collect();
+            let mut column = self.column.to_string();
+            Select::new(tl!("Sort by").to_string(), Bind::bound(&mut column), &columns).show(ui);
+            self.column = column.parse().unwrap_or(self.column);
+            let mut order = if self.descending { "descending" } else { "ascending" }.to_string();
+            let orders = [("ascending", tl!("Ascending")), ("descending", tl!("Descending"))];
+            RadioGroup::new(tl!("Order").to_string(), Bind::bound(&mut order)).show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, cx| {
+                    for (at, (v, l)) in orders.iter().enumerate() {
+                        cx.labelled(ui, at, Label::from(*l), SideLabel::new().layout(FieldLayout::After), Radio::new((*v).to_string()));
+                    }
+                });
+            });
+            self.descending = order == "descending";
+        });
+        Section::new(tl!("My list has").to_string()).show(ui, |ui, _| {
+            let mut header = if self.header { "header" } else { "none" }.to_string();
+            let headers = [("header", tl!("Header row")), ("none", tl!("No header row"))];
+            RadioGroup::new(tl!("My list has").to_string(), Bind::bound(&mut header)).show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, cx| {
+                    for (at, (v, l)) in headers.iter().enumerate() {
+                        cx.labelled(ui, at, Label::from(*l), SideLabel::new().layout(FieldLayout::After), Radio::new((*v).to_string()));
+                    }
+                });
+            });
+            self.header = header == "header";
+        });
+        true
+    }
+
+    fn commands(&self) -> Vec<(String, Value)> {
+        vec![("table.sort".to_string(), self.params())]
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -152,8 +206,8 @@ pub(super) fn sort_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SortForm) -> bool 
 /// `max_rows` rows, a vertically merged cell alone into at most its `height`; more gets Word's
 /// message ([`SplitCellsForm::check`]). Without merging each cell splits into columns on its own
 /// and the row count stays 1.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct SplitCellsForm {
     pub columns: u32,
     pub rows: u32,
@@ -167,7 +221,7 @@ pub struct SplitCellsForm {
     pub max_rows: u32,
     /// The default column count: twice the most cells selected in a row.
     pub default_columns: u32,
-    /// Word's message for a row count out of range, shown until OK is pressed again.
+    /// Word's message for a row count out of range, shown while the count stays out of range.
     #[serde(skip)]
     pub error: Option<String>,
 }
@@ -243,38 +297,35 @@ impl SplitCellsForm {
     }
 }
 
-/// An alert line under a dialog's fields, in the error colour.
-fn alert(ui: &mut Ui, text: &Option<String>) {
-    if let Some(e) = text {
-        ui.colored_label(ui.visuals().error_fg_color, e.as_str());
+impl WordForm for SplitCellsForm {
+    fn key(&self) -> &'static str {
+        "splitCells"
     }
-}
 
-pub(super) fn split_cells_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SplitCellsForm) -> bool {
-    // Several cells split one by one keep their rows.
-    let rows_on = f.cells <= 1 || f.merge_first;
-    crate::rtl::Table::new("split_cells").columns(2).show(ui, |t| {
-        t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Number of columns:")));
-            r.cell(|ui| ui.add(egui::DragValue::new(&mut f.columns).range(1..=63)));
-        });
-        t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Number of rows:")));
-            r.cell(|ui| ui.add_enabled(rows_on, egui::DragValue::new(&mut f.rows).range(1..=63)));
-        });
-    });
-    let mut merge = f.merge_first;
-    if ui.add_enabled_ui(f.several, |ui| ui.checkbox(&mut merge, tl!("Merge cells before split"))).inner.changed() {
-        f.set_merge(merge);
+    fn title(&self) -> Label {
+        tl!("Split Cells").to_string().into()
     }
-    alert(ui, &f.error);
-    let (ok, cancel) = buttons(ui, "OK", true);
-    if ok {
-        // Out of range: Word's message, and the dialog stays open.
-        f.error = f.check();
-        return f.error.is_none() && run(app, "table.split", f.params());
+
+    fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
+        // Several cells split one by one keep their rows.
+        let rows_on = self.cells <= 1 || self.merge_first;
+        count_field(ui, tl!("Number of columns:"), &mut self.columns, 1..=63, true);
+        count_field(ui, tl!("Number of rows:"), &mut self.rows, 1..=63, rows_on);
+        let mut merge = self.merge_first;
+        Checkbox::new(Bind::bound(&mut merge)).label(tl!("Merge cells before split").to_string()).enabled(self.several).show(ui);
+        if merge != self.merge_first {
+            self.set_merge(merge);
+        }
+        self.error = self.check();
+        if let Some(e) = &self.error {
+            Notice::new(Tone::Bad, e.clone()).show(ui);
+        }
+        self.error.is_none()
     }
-    cancel
+
+    fn commands(&self) -> Vec<(String, Value)> {
+        vec![("table.split".to_string(), self.params())]
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -283,23 +334,23 @@ pub(super) fn split_cells_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SplitCellsF
 /// The Convert Text to Table dialog's fields: the selected paragraphs (`lines`), where to
 /// separate them (`paragraph`, `comma`, `tab` or `other` with `other_char`), the column count
 /// (guessed from the text for the separator, as Word does) and the AutoFit behaviour: an initial
-/// column width (`width`, "Auto" or a measurement up to 22 in), or AutoFit to contents or to the
+/// column width (`width` in points, 0 = Auto, up to 22 in), or AutoFit to contents or to the
 /// window. `rows` is the resulting row count, shown read-only.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct TextToTableForm {
     #[serde(skip)]
     pub lines: Vec<String>,
     pub columns: u32,
     pub rows: usize,
     pub autofit: String,
-    /// Initial column width as typed: "Auto" (or 0) shares the text width out.
-    pub width: String,
+    /// Initial column width in points: 0 (Auto) shares the text width out.
+    pub width: f32,
     pub separator: String,
     pub other_char: String,
-    /// Word's message for a width out of range, shown until OK is pressed again.
+    /// The user's length unit, which only the app knows; read with the form.
     #[serde(skip)]
-    pub error: Option<String>,
+    lengths: Option<LengthUnits>,
 }
 
 impl TextToTableForm {
@@ -313,10 +364,10 @@ impl TextToTableForm {
             columns: 1,
             rows: 0,
             autofit: "initial".into(),
-            width: tl!("Auto").into(),
+            width: 0.0,
             separator: separator.into(),
             other_char: "-".into(),
-            error: None,
+            lengths: Some(crate::options::lengths(app.session.units())),
         };
         f.guess_columns();
         Some(f)
@@ -343,94 +394,86 @@ impl TextToTableForm {
         self.rows = wordcraft_engine::cmd::table::text_table_cells(&self.lines, self.sep(), Some(self.columns as usize)).0.len();
     }
 
-    /// The initial column width in points: 0 for Auto, `None` when it isn't a measurement from
-    /// 0 to 22 in.
-    fn width_pt(&self) -> Option<f32> {
-        let text = self.width.trim();
-        if text.is_empty() || text.eq_ignore_ascii_case("auto") || text == tl!("Auto") {
-            return Some(0.0);
-        }
-        wordcraft_geom::parse_measure(text, unit()).filter(|pt| (0.0..=22.0 * 72.0).contains(pt))
-    }
-
-    /// Word's message when the initial column width is out of range (only with that option).
-    pub fn check(&self) -> Option<String> {
-        if self.autofit != "initial" || self.width_pt().is_some() {
-            return None;
-        }
-        let sep = crate::options::decimal();
-        let (min, max) = (unit().format_with(0.0, sep), unit().format_with(22.0 * 72.0, sep));
-        Some(crate::i18n::fmt(tl!("The measurement must be between {min} and {max}."), &[("min", &min), ("max", &max)]))
-    }
-
     /// `table.fromText` parameters for OK.
     pub fn params(&self) -> Value {
         let mut v = json!({"separator": self.separator, "columns": self.columns, "autofit": self.autofit});
         if self.separator == "other" {
             v["char"] = json!(self.other_char);
         }
-        if self.autofit == "initial"
-            && let Some(w) = self.width_pt().filter(|&w| w > 0.0)
-        {
-            v["width"] = json!(w);
+        if self.autofit == "initial" && self.width > 0.0 {
+            v["width"] = json!(self.width);
         }
         v
     }
 }
 
-pub(super) fn text_to_table_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TextToTableForm) -> bool {
-    let before = (f.separator.clone(), f.other_char.clone(), f.columns);
-    heading(ui, "Table size");
-    crate::rtl::Table::new("text_to_table").columns(2).show(ui, |t| {
-        t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Number of columns:")));
-            r.cell(|ui| ui.add(egui::DragValue::new(&mut f.columns).range(1..=63)));
+impl WordForm for TextToTableForm {
+    fn key(&self) -> &'static str {
+        "textToTable"
+    }
+
+    fn title(&self) -> Label {
+        tl!("Convert Text to Table").to_string().into()
+    }
+
+    fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
+        let lengths = self.lengths.unwrap_or_else(points);
+        let before = (self.separator.clone(), self.other_char.clone(), self.columns);
+        Section::new(tl!("Table size").to_string()).show(ui, |ui, _| {
+            count_field(ui, tl!("Number of columns:"), &mut self.columns, 1..=63, true);
+            Text::new(format!("{} {}", tl!("Number of rows:"), self.rows)).show(ui);
         });
-        t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Number of rows:")));
-            r.cell(|ui| ui.label(f.rows.to_string()));
-        });
-    });
-    heading(ui, "AutoFit behavior");
-    ui.horizontal(|ui| {
-        ui.radio_value(&mut f.autofit, "initial".to_string(), tl!("Initial column width:"));
-        ui.add_enabled(f.autofit == "initial", egui::TextEdit::singleline(&mut f.width).desired_width(72.0));
-    });
-    ui.radio_value(&mut f.autofit, "contents".to_string(), tl!("AutoFit to contents"));
-    ui.radio_value(&mut f.autofit, "window".to_string(), tl!("AutoFit to window"));
-    heading(ui, "Separate text at");
-    crate::rtl::Table::new("text_to_table_sep").columns(2).show(ui, |t| {
-        t.row(|r| {
-            r.cell(|ui| ui.radio_value(&mut f.separator, "paragraph".to_string(), tl!("Paragraphs")));
-            r.cell(|ui| ui.radio_value(&mut f.separator, "comma".to_string(), tl!("Commas")));
-        });
-        t.row(|r| {
-            r.cell(|ui| ui.radio_value(&mut f.separator, "tab".to_string(), tl!("Tabs")));
-            r.cell(|ui| {
-                ui.horizontal(|ui| {
-                    ui.radio_value(&mut f.separator, "other".to_string(), tl!("Other:"));
-                    let edit = ui.add(egui::TextEdit::singleline(&mut f.other_char).char_limit(1).desired_width(24.0));
-                    if edit.changed() {
-                        f.separator = "other".into();
+        Section::new(tl!("AutoFit behavior").to_string()).show(ui, |ui, _| {
+            let fits = [("initial", tl!("Initial column width:")), ("contents", tl!("AutoFit to contents")), ("window", tl!("AutoFit to window"))];
+            RadioGroup::new(tl!("AutoFit behavior").to_string(), Bind::bound(&mut self.autofit)).show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, cx| {
+                    for (at, (v, l)) in fits.iter().enumerate() {
+                        cx.labelled(ui, at, Label::from(*l), SideLabel::new().layout(FieldLayout::After), Radio::new((*v).to_string()));
                     }
                 });
             });
+            let mut width = if self.width <= 0.0 { NamedOr::Named(Auto::Auto) } else { NamedOr::Number(f64::from(self.width)) };
+            named_field(
+                ui,
+                tl!("Initial column width:"),
+                &mut width,
+                (Auto::Auto, tl!("Auto")),
+                Some(lengths),
+                0.0..=22.0 * 72.0,
+                self.autofit == "initial",
+            );
+            self.width = number_or_zero(&width).clamp(0.0, 22.0 * 72.0) as f32;
         });
-    });
-    if (f.separator.as_str(), f.other_char.as_str()) != (before.0.as_str(), before.1.as_str()) {
-        f.guess_columns();
-    } else if f.columns != before.2 {
-        f.count_rows();
+        Section::new(tl!("Separate text at").to_string()).show(ui, |ui, _| {
+            let separators = [("paragraph", tl!("Paragraphs")), ("comma", tl!("Commas")), ("tab", tl!("Tabs")), ("other", tl!("Other:"))];
+            RadioGroup::new(tl!("Separate text at").to_string(), Bind::bound(&mut self.separator)).show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, cx| {
+                    for (at, (v, l)) in separators.iter().enumerate() {
+                        cx.labelled(ui, at, Label::from(*l), SideLabel::new().layout(FieldLayout::After), Radio::new((*v).to_string()));
+                    }
+                });
+            });
+            let other = self.other_char.clone();
+            Field::new(tl!("Other:").to_string()).id_salt("other_char").show(ui, |ui, _| {
+                TextField::new(tl!("Other:").to_string(), Bind::bound(&mut self.other_char)).show(ui);
+            });
+            // One character only, and typing in the box selects "Other".
+            self.other_char = self.other_char.chars().next().map(String::from).unwrap_or_default();
+            if self.other_char != other {
+                self.separator = "other".into();
+            }
+        });
+        if (self.separator.as_str(), self.other_char.as_str()) != (before.0.as_str(), before.1.as_str()) {
+            self.guess_columns();
+        } else if self.columns != before.2 {
+            self.count_rows();
+        }
+        self.separator != "other" || !self.other_char.is_empty()
     }
-    alert(ui, &f.error);
-    let ready = f.separator != "other" || !f.other_char.is_empty();
-    let (ok, cancel) = buttons(ui, "OK", ready);
-    if ok {
-        // Out of range: Word's message, and the dialog stays open.
-        f.error = f.check();
-        return f.error.is_none() && run(app, "table.fromText", f.params());
+
+    fn commands(&self) -> Vec<(String, Value)> {
+        vec![("table.fromText".to_string(), self.params())]
     }
-    cancel
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -438,8 +481,8 @@ pub(super) fn text_to_table_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TextToTab
 
 /// The Convert to Text dialog (Table Layout › Data): what sets the cells of a row apart in the
 /// text (`paragraph`, `tab`, `comma` or `other` with `other_char`). It opens on Tabs.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct TableToTextForm {
     pub separator: String,
     pub other_char: String,
@@ -462,22 +505,38 @@ impl TableToTextForm {
     }
 }
 
-pub(super) fn table_to_text_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TableToTextForm) -> bool {
-    heading(ui, "Separate text with");
-    ui.radio_value(&mut f.separator, "paragraph".to_string(), tl!("Paragraph marks"));
-    ui.radio_value(&mut f.separator, "tab".to_string(), tl!("Tabs"));
-    ui.radio_value(&mut f.separator, "comma".to_string(), tl!("Commas"));
-    ui.horizontal(|ui| {
-        ui.radio_value(&mut f.separator, "other".to_string(), tl!("Other:"));
-        let r = ui.add(egui::TextEdit::singleline(&mut f.other_char).char_limit(1).desired_width(24.0));
-        if r.changed() {
-            f.separator = "other".into();
-        }
-    });
-    let ready = f.separator != "other" || !f.other_char.is_empty();
-    let (ok, cancel) = buttons(ui, "OK", ready);
-    if ok {
-        return run(app, "table.toText", f.params());
+impl WordForm for TableToTextForm {
+    fn key(&self) -> &'static str {
+        "tableToText"
     }
-    cancel
+
+    fn title(&self) -> Label {
+        tl!("Convert to Text").to_string().into()
+    }
+
+    fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
+        Section::new(tl!("Separate text with").to_string()).show(ui, |ui, _| {
+            let separators = [("paragraph", tl!("Paragraph marks")), ("tab", tl!("Tabs")), ("comma", tl!("Commas")), ("other", tl!("Other:"))];
+            RadioGroup::new(tl!("Separate text with").to_string(), Bind::bound(&mut self.separator)).show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, cx| {
+                    for (at, (v, l)) in separators.iter().enumerate() {
+                        cx.labelled(ui, at, Label::from(*l), SideLabel::new().layout(FieldLayout::After), Radio::new((*v).to_string()));
+                    }
+                });
+            });
+            let other = self.other_char.clone();
+            Field::new(tl!("Other:").to_string()).id_salt("other_char").show(ui, |ui, _| {
+                TextField::new(tl!("Other:").to_string(), Bind::bound(&mut self.other_char)).show(ui);
+            });
+            self.other_char = self.other_char.chars().next().map(String::from).unwrap_or_default();
+            if self.other_char != other {
+                self.separator = "other".into();
+            }
+        });
+        self.separator != "other" || !self.other_char.is_empty()
+    }
+
+    fn commands(&self) -> Vec<(String, Value)> {
+        vec![("table.toText".to_string(), self.params())]
+    }
 }

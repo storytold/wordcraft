@@ -127,6 +127,10 @@ pub enum GraphicItem {
         align: TextAlign,
         #[serde(default)]
         font: Option<String>,
+        /// Degrees clockwise the text turns about `rect`'s center as it is drawn (a chart's vertical
+        /// axis title is turned -90°).
+        #[serde(default)]
+        angle: f32,
     },
     /// A picture (`Document::media` key) stretched into `rect`.
     Image { rect: [f32; 4], media: String },

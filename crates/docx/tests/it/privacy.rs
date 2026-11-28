@@ -2,28 +2,27 @@
 //! (ECMA-376 Part 1 §17.15.1.69–70) are kept on save and honoured by the writer. Synthetic
 //! fixtures written for these tests from the spec; the names are made up.
 use std::collections::BTreeMap;
-use std::io::{Cursor, Read, Write};
 
 const W_NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
 const RT: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
 
 fn zip(entries: &[(&str, String)]) -> Vec<u8> {
-    let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let mut z = craft_zip::Writer::new();
     for (name, text) in entries {
-        z.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-        z.write_all(text.as_bytes()).unwrap();
+        z.add(name, text.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    z.finish().unwrap().into_inner()
+    z.finish().unwrap()
 }
 
 fn unzip(bytes: &[u8]) -> BTreeMap<String, String> {
-    let mut z = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let mut z = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let names: Vec<String> = z.names().map(|n| n.into_owned()).collect();
     let mut parts = BTreeMap::new();
-    for i in 0..z.len() {
-        let mut f = z.by_index(i).unwrap();
-        let mut s = String::new();
-        if f.read_to_string(&mut s).is_ok() {
-            parts.insert(f.name().to_string(), s);
+    for name in names {
+        if let Ok(Some(bytes)) = z.read(&name, 16 << 20)
+            && let Ok(s) = String::from_utf8(bytes)
+        {
+            parts.insert(name, s);
         }
     }
     parts

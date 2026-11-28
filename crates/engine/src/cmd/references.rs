@@ -17,9 +17,12 @@ mod properties;
 mod toc;
 
 use fields::caption;
+#[cfg(test)]
+use fields::output_fields_with;
 pub use fields::{
     CHAPTER_SEPARATORS, REFERENCE_NOT_FOUND, output_fields, refresh_date_fields, seq_format, update_fields, update_fields_in, update_seq,
 };
+pub(crate) use fields::{page_at, page_formats, page_label, page_text};
 pub(super) use notes::note_options;
 use notes::{note, note_refs};
 pub use properties::{bookmark_text, date_picture};
@@ -32,7 +35,7 @@ use toc::{insert_toc, remove_toc, toc_range};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("references.toc", "Table of Contents", "References › Table of Contents", insert_toc).params(
-            r#"{"levels"?: 1-9, "title"?: string, "pageNumbers"?: bool, "rightAlign"?: bool, "tabLeader"?: "dot|hyphen|underscore|none", "hyperlinks"?: bool, "headingStyles"?: bool, "outlineLevels"?: bool, "tcFields"?: bool, "styleLevels"?: {style name: 1-9}} (replaces an existing table; {} updates it)"#,
+            r#"{"levels"?: 1-9, "title"?: string (at most 1024 characters), "pageNumbers"?: bool, "rightAlign"?: bool, "tabLeader"?: "dot|hyphen|underscore|none", "hyperlinks"?: bool, "headingStyles"?: bool, "outlineLevels"?: bool, "tcFields"?: bool, "styleLevels"?: {style name: 1-9}} (replaces an existing table; {} updates it)"#,
         ),
         CommandSpec::new("references.updateToc", "Update Table", "References › Table of Contents", |s, _| {
             update_toc(s)?;

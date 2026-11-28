@@ -194,10 +194,11 @@ fn an_undecodable_page_background_picture_is_refused_for_pdf_and_png() {
 
 #[test]
 fn a_decodable_page_background_picture_passes() {
-    let mut png = Vec::new();
-    image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 200, 255, 255]))
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .unwrap();
+    let png = wordcraft_geom::picture::encode_format(
+        &image::DynamicImage::from(image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 200, 255, 255])).clone()),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
     let mut doc = Document::from_text("Hello");
     doc.media.insert("bg.png".into(), std::sync::Arc::new(png));
     doc.settings.page_picture = Some(wordcraft_doc::PagePicture { media: "bg.png".into(), fill_type: "stretch".into(), title: String::new() });
@@ -208,10 +209,11 @@ fn a_decodable_page_background_picture_passes() {
 #[test]
 fn a_picture_wider_than_the_pdf_draws_is_refused_for_pdf_only() {
     // 40000 x 10: past the PDF's decode limit (30000), within what the page raster draws.
-    let mut png = Vec::new();
-    image::RgbaImage::from_pixel(40_000, 10, image::Rgba([9, 9, 9, 255]))
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .unwrap();
+    let png = wordcraft_geom::picture::encode_format(
+        &image::DynamicImage::from(image::RgbaImage::from_pixel(40_000, 10, image::Rgba([9, 9, 9, 255])).clone()),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
     let mut doc = Document::from_text("Hello");
     doc.media.insert("wide.png".into(), std::sync::Arc::new(png));
     doc.settings.page_picture = Some(wordcraft_doc::PagePicture { media: "wide.png".into(), fill_type: "stretch".into(), title: String::new() });

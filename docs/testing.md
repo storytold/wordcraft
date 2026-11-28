@@ -5,12 +5,14 @@ Source Serif 4, Inter and JetBrains Mono, with their bundled styles. Family list
 legacy style names such as Inter Medium. They do not load installed fonts, user font preferences,
 or the optional `CRAFT_FONTS_DIR` input. No download or extra font checkout is required.
 
-Every layout unit test starts with `crate::test_fonts();`, before constructing its fixture or
-resolving a font. This initializes the process-wide database once, including when a single test is
-run by name. The `wordcraft-fonts/test-support` development feature exposes the initializer;
-enabling the feature alone has no effect. Initialization fails if an application database already
-exists, rather than replacing a database whose faces may be in the shaping or math caches.
-Other test binaries and application builds keep their normal font discovery behavior.
+Layout entry points (`layout`, `layout_para`, `layout_equation` and
+`display::mark_text_width`) initialize the process-wide font database once in unit-test builds,
+including when a single test is run by name. Tests that resolve fonts before calling a layout
+entry point must first call `crate::test_fonts();`. The `wordcraft-fonts/test-support`
+development feature exposes the initializer; enabling the feature alone has no effect.
+Initialization fails if an application database already exists, rather than replacing a database
+whose faces may be in the shaping or math caches. Other test binaries and application builds
+keep their normal font discovery behavior.
 
 Uninstalled requested families use the normal substitution lists, restricted to this fixed set.
 In particular, the default Aptos request resolves to Source Sans 3. These fonts are not Calibri

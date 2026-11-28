@@ -1,183 +1,155 @@
 //! WordCraft DOCX reader and writer (ECMA-376 / ISO/IEC 29500 WordprocessingML).
 //!
-//! [`read`] turns a `.docx` package into a [`wordcraft_doc::Document`]; [`write`] does the
-//! reverse. Both are written from the public specification. The reader is lenient (unknown
-//! markup is skipped, bad numbers fall back to defaults) and bounded (zip entry sizes, total
-//! decompressed size, XML depth and element counts are capped), so hostile input yields an
-//! error or a best-effort document, never a panic.
+//! Delegates file-format parsing and serialization to `craft-docx`, adapting
+//! between the shared `craft-wordmodel` and WordCraft's application document model.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-mod bibliography;
-mod chart_spec;
-mod crypt;
-mod custom;
-mod flat;
-mod fonts;
-mod package;
-mod read;
-mod smart_art;
-#[cfg(test)]
-mod test_log;
-mod units;
-mod wordml2003;
-mod wordml2003_write;
-mod write;
-mod xml;
+mod fit;
+mod model_bridge;
 
-pub use bibliography::{MAX_SOURCES, Sources, read_sources};
-pub use chart_spec::{chart_items, chart_xml};
-pub use crypt::{
-    DEFAULT_SPIN_COUNT, MAX_PASSWORD_CHARS, PasswordCheck, check_password, check_protection_password, decrypt, encrypt, encrypt_standard_for_tests,
-    encrypt_with_spin_count, is_encrypted, protection_hash,
+pub use craft_docx::{
+    DEFAULT_SPIN_COUNT, DocxError, EmbeddedFont, Flavor, MAX_PASSWORD_CHARS, MAX_SOURCES, MAX_XML_FILE, PASSWORD_REQUIRED, PasswordCheck,
+    WRONG_PASSWORD, XmlKind, check_password, check_protection_password, encrypt, encrypt_standard_for_tests, encrypt_with_spin_count, package_title,
+    protection_hash, sniff_xml,
 };
-pub use flat::{XmlKind, sniff_xml, write as write_flat};
-pub use fonts::{EmbeddedFont, embedded_fonts};
-pub use read::{AltChunk, ChunkImporter, ReadOptions, read};
-pub use smart_art::smart_art_items;
-pub use wordml2003_write::write as write_wordml2003;
-pub use write::{write, write_as};
 
-/// Largest `.xml` file read as a Word XML document.
-pub const MAX_XML_FILE: usize = 1 << 30;
-
-/// Read a Word XML file (`.xml`): a Word XML Document (Flat OPC, the whole package in one XML
-/// file) or a Word 2003 XML Document (WordprocessingML 2003), told apart by the root element.
-/// Any other XML gives [`DocxError::NotWordXml`].
-pub fn read_xml(bytes: &[u8]) -> Result<wordcraft_doc::Document, DocxError> {
-    if bytes.len() > MAX_XML_FILE {
-        return Err(DocxError::Limit(format!("XML file of {} bytes", bytes.len())));
-    }
-    match sniff_xml(bytes) {
-        XmlKind::FlatOpc => flat::read(bytes),
-        XmlKind::WordMl2003 => wordml2003::read(bytes),
-        XmlKind::Other => Err(DocxError::NotWordXml),
-    }
+pub fn decrypt(bytes: &[u8], password: Option<&str>) -> Result<Vec<u8>, DocxError> {
+    wordcraft_doc::cfb_guard::check(bytes).map_err(DocxError::Xml)?;
+    craft_docx::decrypt(bytes, password)
 }
 
-/// The title (`dc:title`) in a package's core properties part (`docProps/core.xml`, ECMA-376
-/// Part 2 §11), trimmed; `None` when the part can't be read or has no title. Only the package's
-/// directory and at most `max_part` bytes of that part are inflated: for listing templates by
-/// name without unpacking the whole package. A package over 64 MiB, or one declaring more entries
-/// than `MAX_ENTRIES` (20,000), has none (#3660).
-pub fn package_title<R: std::io::Read>(package: R, max_part: u64) -> Option<String> {
-    use std::io::Read;
-    const MAX_PACKAGE: u64 = 64 << 20;
-    let mut bytes = Vec::new();
-    package.take(MAX_PACKAGE + 1).read_to_end(&mut bytes).ok()?;
-    if bytes.len() as u64 > MAX_PACKAGE {
-        return None;
-    }
-    wordcraft_doc::zip_guard::check(&bytes, package::MAX_ENTRIES as u64).ok()?;
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).ok()?;
-    let part = zip.by_name("docProps/core.xml").ok()?;
-    let mut xml = Vec::new();
-    part.take(max_part).read_to_end(&mut xml).ok()?;
-    let root = xml::parse(&xml).ok()?;
-    let title = root.child("dc:title")?.text();
-    let title = title.trim();
-    (!title.is_empty()).then(|| title.to_string())
+pub fn is_encrypted(bytes: &[u8]) -> bool {
+    wordcraft_doc::cfb_guard::check(bytes).is_ok() && craft_docx::is_encrypted(bytes)
 }
 
-/// What [`DocxError::PasswordRequired`] says.
-pub const PASSWORD_REQUIRED: &str = "this document is protected with a password";
-/// What [`DocxError::WrongPassword`] says.
-pub const WRONG_PASSWORD: &str = "the password is incorrect";
+pub use model_bridge::{from_shared_model, to_shared_model};
 
-/// The `a:ext` URI under a Drawing Canvas's `wpc:extLst` that holds its turn and flips as an
-/// `a:xfrm` (`rot`, `flipH`, `flipV`). Neither the canvas schema nor `wp:anchor` carries a
-/// transform, so this rides in the extension list Word and other readers skip.
-pub(crate) const CANVAS_SPIN_EXT: &str = "urn:wordcraft:canvas-xfrm";
+/// An alternative format chunk's content, as a [`ChunkImporter`] gets it.
+pub struct AltChunk<'a> {
+    pub content_type: &'a str,
+    pub part: &'a str,
+    pub bytes: &'a [u8],
+}
 
-/// Read a package that may be password-protected ([`is_encrypted`]): it is decrypted with
-/// `password` first. An encrypted package without a password gives
-/// [`DocxError::PasswordRequired`]; a wrong one, [`DocxError::WrongPassword`].
+/// Turns a chunk into a document; `None` leaves the chunk out.
+pub type ChunkImporter<'a> = &'a dyn Fn(&AltChunk) -> Option<wordcraft_doc::Document>;
+
+/// How [`read_with`] reads a package.
+#[derive(Clone, Copy, Default)]
+pub struct ReadOptions<'a> {
+    pub password: Option<&'a str>,
+    pub chunks: Option<ChunkImporter<'a>>,
+}
+
+/// Read a package into WordCraft's document model.
+pub fn read(bytes: &[u8]) -> Result<wordcraft_doc::Document, DocxError> {
+    read_with(bytes, &Default::default())
+}
+
+/// Read a package with a password.
 pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<wordcraft_doc::Document, DocxError> {
     read_with(bytes, &ReadOptions { password, ..Default::default() })
 }
 
-/// Read a package with options: the password of an encrypted one ([`read_with_password`]) and
-/// an importer for `w:altChunk` content in formats other than WordprocessingML (see
-/// [`ChunkImporter`]).
+/// Read a package with options.
 pub fn read_with(bytes: &[u8], opts: &ReadOptions) -> Result<wordcraft_doc::Document, DocxError> {
-    if is_encrypted(bytes) {
-        let package = zeroize::Zeroizing::new(decrypt(bytes, opts.password)?);
-        return read::read_package(&package, opts.chunks);
-    }
-    read::read_package(bytes, opts.chunks)
+    let bridge_importer = |shared_chunk: &craft_docx::AltChunk| -> Option<craft_wordmodel::Document> {
+        let importer = opts.chunks?;
+        let chunk = AltChunk { content_type: shared_chunk.content_type, part: shared_chunk.part, bytes: shared_chunk.bytes };
+        let doc = importer(&chunk)?;
+        to_shared_model(&doc).ok()
+    };
+
+    let shared_opts =
+        craft_docx::ReadOptions { password: opts.password, chunks: opts.chunks.as_ref().map(|_| &bridge_importer as craft_docx::ChunkImporter) };
+
+    let shared = craft_docx::read_with(bytes, &shared_opts)?;
+    from_shared_model(shared)
 }
 
-/// Which kind of WordprocessingML package to write. The main part's content type differs per
-/// kind, and Word refuses a file whose content type doesn't match its extension.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Flavor {
-    /// `.docx`
-    #[default]
-    Document,
-    /// `.docm`: may carry a VBA project.
-    MacroDocument,
-    /// `.dotx`
-    Template,
-    /// `.dotm`: may carry a VBA project.
-    MacroTemplate,
+/// Read a Word XML file (`.xml`).
+pub fn read_xml(bytes: &[u8]) -> Result<wordcraft_doc::Document, DocxError> {
+    let shared = craft_docx::read_xml(bytes)?;
+    from_shared_model(shared)
 }
 
-impl Flavor {
-    /// The flavour a file extension (without the dot, any case) names.
-    pub fn from_ext(ext: &str) -> Option<Flavor> {
-        match ext.to_ascii_lowercase().as_str() {
-            "docx" => Some(Flavor::Document),
-            "docm" => Some(Flavor::MacroDocument),
-            "dotx" => Some(Flavor::Template),
-            "dotm" => Some(Flavor::MacroTemplate),
-            _ => None,
-        }
-    }
-
-    /// Content type of the main document part.
-    pub fn main_content_type(self) -> &'static str {
-        match self {
-            Flavor::Document => "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml",
-            Flavor::MacroDocument => "application/vnd.ms-word.document.macroEnabled.main+xml",
-            Flavor::Template => "application/vnd.openxmlformats-officedocument.wordprocessingml.template.main+xml",
-            Flavor::MacroTemplate => "application/vnd.ms-word.template.macroEnabledTemplate.main+xml",
-        }
-    }
-
-    /// Can this package hold macros?
-    pub fn macros(self) -> bool {
-        matches!(self, Flavor::MacroDocument | Flavor::MacroTemplate)
-    }
+/// Write a document as `.docx`.
+pub fn write(doc: &wordcraft_doc::Document) -> Result<Vec<u8>, DocxError> {
+    let shared = to_shared_model(doc)?;
+    craft_docx::write(&shared)
 }
 
-/// Errors from reading or writing a DOCX package.
-#[derive(Debug, thiserror::Error, Clone, PartialEq)]
-pub enum DocxError {
-    /// The bytes are not a readable zip archive.
-    #[error("not a valid zip package: {0}")]
-    Zip(String),
-    /// A required part is absent.
-    #[error("missing part: {0}")]
-    MissingPart(String),
-    /// A part is not well-formed XML.
-    #[error("malformed XML: {0}")]
-    Xml(String),
-    /// The input exceeds a safety limit (size, nesting, element count).
-    #[error("limit exceeded: {0}")]
-    Limit(String),
-    /// The package is readable but isn't a WordprocessingML document.
-    #[error("not a Word document: {0}")]
-    NotWord(String),
-    /// An `.xml` file that is neither a Word XML Document (Flat OPC) nor Word 2003 XML.
-    #[error("not a Word XML document")]
-    NotWordXml,
-    /// The package is encrypted and no password was given.
-    #[error("{}", PASSWORD_REQUIRED)]
-    PasswordRequired,
-    /// The password doesn't open the package.
-    #[error("{}", WRONG_PASSWORD)]
-    WrongPassword,
-    /// The package is encrypted in a way WordCraft can't read, or its encryption data is damaged
-    /// (or encrypting failed).
-    #[error("encrypted document: {0}")]
-    Encryption(String),
+/// Write a document with a specific package flavor.
+pub fn write_as(doc: &wordcraft_doc::Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
+    let shared = to_shared_model(doc)?;
+    craft_docx::write_as(&shared, flavor)
+}
+
+/// Write a document as a Flat OPC XML file.
+pub fn write_flat(doc: &wordcraft_doc::Document) -> Result<Vec<u8>, DocxError> {
+    let shared = to_shared_model(doc)?;
+    craft_docx::write_flat(&shared)
+}
+
+/// Write a document as Word 2003 XML.
+pub fn write_wordml2003(doc: &wordcraft_doc::Document) -> Result<Vec<u8>, DocxError> {
+    let shared = to_shared_model(doc)?;
+    craft_docx::write_wordml2003(&shared)
+}
+
+/// Draw a chart.
+pub fn chart_items(spec: &wordcraft_doc::chart::ChartSpec, theme: &[wordcraft_doc::Rgb], w: f32, h: f32) -> Vec<wordcraft_doc::graphic::GraphicItem> {
+    let (Ok(shared_spec), Ok(shared_theme)) = (
+        model_bridge::convert_ref::<_, craft_wordmodel::chart::ChartSpec>(spec),
+        model_bridge::convert_ref::<_, Vec<craft_wordmodel::props::Rgb>>(theme),
+    ) else {
+        return Vec::new();
+    };
+    let shared_items = craft_docx::chart_items(&shared_spec, &shared_theme, w, h);
+    model_bridge::convert(shared_items).unwrap_or_default()
+}
+
+/// Write a chart part.
+pub fn chart_xml(spec: &wordcraft_doc::chart::ChartSpec) -> Vec<u8> {
+    let Ok(shared_spec) = model_bridge::convert_ref(spec) else {
+        return Vec::new();
+    };
+    craft_docx::chart_xml(&shared_spec).into_bytes()
+}
+
+/// Draw SmartArt.
+pub fn smart_art_items(
+    spec: &wordcraft_doc::smart_art::SmartArtSpec,
+    theme: &[wordcraft_doc::Rgb],
+    w: f32,
+    h: f32,
+) -> Vec<wordcraft_doc::graphic::GraphicItem> {
+    let (Ok(shared_spec), Ok(shared_theme)) = (
+        model_bridge::convert_ref::<_, craft_wordmodel::smart_art::SmartArtSpec>(spec),
+        model_bridge::convert_ref::<_, Vec<craft_wordmodel::props::Rgb>>(theme),
+    ) else {
+        return Vec::new();
+    };
+    let shared_items = craft_docx::smart_art_items(&shared_spec, &shared_theme, w, h);
+    model_bridge::convert(shared_items).unwrap_or_default()
+}
+
+/// Read bibliography sources from a `b:Sources` file.
+pub fn read_sources(bytes: &[u8]) -> Result<Sources, DocxError> {
+    let shared = craft_docx::read_sources(bytes)?;
+    Ok(Sources { sources: model_bridge::convert(shared.sources).map_err(|e| DocxError::Xml(e.to_string()))?, style: shared.style })
+}
+
+/// The font files embedded in the document's font table.
+pub fn embedded_fonts(doc: &wordcraft_doc::Document) -> Vec<EmbeddedFont> {
+    let mut shared = craft_wordmodel::Document::new();
+    shared.passthrough = doc.passthrough.clone();
+    craft_docx::embedded_fonts(&shared)
+}
+
+/// A `b:Sources` document read into the document model.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Sources {
+    pub sources: Vec<wordcraft_doc::Source>,
+    pub style: Option<String>,
 }

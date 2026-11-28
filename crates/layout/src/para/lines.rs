@@ -25,8 +25,11 @@ struct Breaker<'e> {
     /// Where default tab stops are counted from (see [`next_tab`]).
     tab_origin: f32,
     /// Word 2013+ (compatibility mode 15) fits more text on a justified line by shrinking its
-    /// spaces (`space_room`); never on lines with tabs.
+    /// spaces (`space_room`); on a line with tabs, only the spaces after a final left/default tab.
     shrink_spaces: bool,
+    /// Word 2003's indent rules (`w:doNotSuppressIndentation`) before Word 2013's layout, for an
+    /// unnumbered paragraph: a row starts right after a floating object before the indent.
+    tight_indent: bool,
     /// Word stretches a justified line ending in a manual line break unless the document says not to.
     expand_break: bool,
     /// Hyphenation Options: the zone, and how many lines in a row may end with a hyphen.
@@ -60,6 +63,9 @@ struct Breaker<'e> {
     row_first: usize,
     /// Spans skipped in a row because the next word didn't fit (see `Scan::skip`).
     skipped: usize,
+    /// The paragraph goes on from the line of the one before (#3986): its first line starts right
+    /// after that one's text, and takes its place there whatever its own alignment.
+    joined: bool,
     /// A left tab past the right indent that wrapped to start the next line.
     wrapped_tab: Option<usize>,
 }
@@ -94,9 +100,13 @@ struct Scan {
     pending_tab: Option<(usize, TabStop, f32)>,
     /// The text after a pending decimal tab looked at so far for its '.'.
     decimal: Option<DecimalScan>,
-    /// The width of the spaces so far on this line.
+    /// The width of the spaces so far on this line, after its last tab.
     space_w: f32,
-    has_tab: bool,
+    /// Whether spaces after the last tab so far may shrink (true initially and after left/default
+    /// tabs; false after right, center, or decimal tabs whose anchors use unshrunk widths).
+    shrink_tab: bool,
+    /// Tab cluster indices on this line whose alignment is not `TabAlign::Left`.
+    non_left_tabs: Vec<usize>,
     /// The first word doesn't fit a span narrowed by a floating object: it moves on whole.
     skip: bool,
 }
@@ -185,11 +195,20 @@ impl<'e> Breaker<'e> {
             n: pl.clusters.len(),
             width,
             base_right: (width - rp.indent_right).max(1.0),
-            first_left: rp.indent_left + rp.indent_first,
+            // On the line it shares with the paragraph before (#3986), kept clear of that one's
+            // text by an exclusion, a joined paragraph's own indents don't hold its text back.
+            first_left: if env.joined { (rp.indent_left + rp.indent_first).min(0.0) } else { rp.indent_left + rp.indent_first },
             default_tab: settings.default_tab,
             hanging_at: if rp.indent_first < 0.0 { Some(rp.indent_left) } else { None },
             tab_origin: if settings.odf.is_some_and(|o| o.tabs_from_indent) { rp.indent_left } else { 0.0 },
             shrink_spaces: rp.align == Align::Justify && settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT,
+            tight_indent: settings.do_not_suppress_indentation
+                && settings.compat_mode < wordcraft_doc::COMPAT_MODE_CURRENT
+                && level.is_none()
+                && pl.label.is_none()
+                // A drop cap sits at the indent: starting its lines at a float's edge would put
+                // them over the letter.
+                && pl.drop_cap.is_none(),
             expand_break: !settings.do_not_expand_shift_return,
             zone: Some(settings.hyphenation_zone).filter(|z| z.is_finite() && *z >= 0.0).unwrap_or(HYPHENATION_ZONE).min(1584.0),
             hyph_limit: settings.consecutive_hyphen_limit as usize,
@@ -212,13 +231,20 @@ impl<'e> Breaker<'e> {
             row_rest: VecDeque::new(),
             row_first: 0,
             skipped: 0,
+            joined: env.joined,
             wrapped_tab: None,
         }
     }
 
+    /// The first line's start: a joined paragraph's first line pushed below the shared line (its
+    /// first word didn't fit there) starts at the paragraph's left indent, as its other lines do.
+    fn first_indent(&self) -> f32 {
+        if self.joined && self.top > 0.0 { self.rp.indent_left } else { self.first_left }
+    }
+
     /// The left edge of the row's first span: the indent, behind a drop cap on its lines.
     fn row_left(&self, pl: &ParaLayout) -> f32 {
-        let lo = if self.first { self.first_left } else { self.rp.indent_left };
+        let lo = if self.first { self.first_indent() } else { self.rp.indent_left };
         match pl.drop_cap {
             Some((_, dl, dw)) if dw > 0.0 && self.lines.len() < dl as usize => self.first_left.max(self.rp.indent_left) + dw,
             _ => lo,
@@ -236,9 +262,12 @@ impl<'e> Breaker<'e> {
         let mut guard = 0;
         loop {
             let lo = self.row_left(pl);
-            match row_spans(self.exclusions, self.top, self.est_h, self.table_h, lo, self.base_right).map(|mut spans| (spans.pop_front(), spans)) {
+            let row = (self.top, self.est_h, self.table_h);
+            match row_spans(self.exclusions, row, (lo, self.base_right), self.tight_indent).map(|mut spans| (spans.pop_front(), spans)) {
                 Ok((Some((a, b)), rest)) => {
-                    let narrowed = !rest.is_empty() || a > lo || b < self.base_right;
+                    // Under Word 2003's indent rules a row can start left of the indent too.
+                    let moved = if self.tight_indent { (a - lo).abs() > 0.01 } else { a > lo };
+                    let narrowed = !rest.is_empty() || moved || b < self.base_right;
                     self.row_rest = rest;
                     self.row_first = self.lines.len();
                     return (a, b.max(a + MIN_LINE_WIDTH), narrowed);
@@ -258,7 +287,7 @@ impl<'e> Breaker<'e> {
     /// The start of a line: its span, and the list label if it is the first.
     fn begin_line(&mut self, pl: &mut ParaLayout) -> Scan {
         let beside = !self.row_rest.is_empty() && self.lines.len() > self.row_first;
-        let row_lo = if self.first { self.first_left } else { self.rp.indent_left };
+        let row_lo = if self.first { self.first_indent() } else { self.rp.indent_left };
         let (left, right_edge, narrowed) = self.next_span(pl);
         let x = if self.first { self.place_label(pl, left) } else { left };
         Scan {
@@ -281,7 +310,8 @@ impl<'e> Breaker<'e> {
             pending_tab: None,
             decimal: None,
             space_w: 0.0,
-            has_tab: false,
+            shrink_tab: true,
+            non_left_tabs: Vec::new(),
             skip: false,
         }
     }
@@ -550,7 +580,10 @@ impl<'e> Breaker<'e> {
         let last_tab = (c0..c1).rev().find(|k| pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Tab));
         let align_from = last_tab.map(|k| k + 1).unwrap_or(c0);
         let display = pl.displays.iter().find(|(ci, _)| *ci >= c0 && *ci < c1).map(|d| d.1);
-        let shift = match (display, rp.align) {
+        // The line a paragraph shares with the one before, whose mark is hidden, starts in that
+        // one, and takes its place right after that one's text (Word, #3986).
+        let align = if self.joined && self.lines.is_empty() { Align::Left } else { rp.align };
+        let shift = match (display, align) {
             (Some(MathJc::Left), _) => 0.0,
             (Some(MathJc::Right), _) => slack,
             (Some(_), _) => slack / 2.0,
@@ -574,13 +607,15 @@ impl<'e> Breaker<'e> {
         }
         // A line ending in a manual line break is stretched too, unless `doNotExpandShiftReturn` says not to.
         let stretch_end = sc.end == LineEnd::Wrap || (sc.end == LineEnd::LineBreak && self.expand_break);
-        let justify = display.is_none() && ((rp.align == Align::Justify && stretch_end) || rp.align == Align::Distribute);
-        // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
-        let shrink = display.is_none() && self.shrink_spaces && slack < 0.0 && last_tab.is_none();
+        let justify = display.is_none() && ((align == Align::Justify && stretch_end) || align == Align::Distribute);
+        // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too,
+        // unless its last tab is a non-left tab whose anchor was resolved with unshrunk widths.
+        let can_shrink_tab = last_tab.is_none_or(|k| !sc.non_left_tabs.contains(&k));
+        let shrink = display.is_none() && self.shrink_spaces && slack < 0.0 && can_shrink_tab;
         if shrink {
-            shrink_line_spaces(pl, &mut sc.xs, c0, c1, content_end, slack);
+            shrink_line_spaces(pl, &mut sc.xs, (c0, align_from), c1, content_end, slack);
         } else if justify && slack > 0.0 {
-            justify_line(pl, &mut sc.xs, (c0, c1, align_from), (content_end, slack), rp.align == Align::Distribute);
+            justify_line(pl, &mut sc.xs, (c0, c1, align_from), (content_end, slack), align == Align::Distribute);
         }
     }
 
@@ -679,6 +714,7 @@ impl<'e> Breaker<'e> {
     fn finish(mut self, pl: &mut ParaLayout) {
         self.hang_drop_cap(pl);
         pl.height = self.top;
+        pl.row_est = self.est_h;
         pl.lines = std::mem::take(&mut self.lines);
         let label_shift = self.label_shifts.get(pl.label_line()).copied().unwrap_or(0.0);
         if let Some(lab) = pl.label.as_mut() {
@@ -805,7 +841,8 @@ impl Scan {
     /// A tab: its stop, and the room to it. True when the line ends before it.
     fn tab(&mut self, bk: &mut Breaker, pl: &mut ParaLayout) -> bool {
         let j = self.j;
-        self.has_tab = true;
+        // Only the spaces after a line's last tab shrink (measured in Word for Mac).
+        self.space_w = 0.0;
         resolve_tab(pl, &mut self.pending_tab, &mut self.xs, self.c0, self.x, &mut self.x);
         let rp = &bk.rp;
         let ptab = pl.ptabs.iter().find(|t| t.0 == j).map(|&(_, a, b, l)| ptab_stop(a, b, l, bk.width, (rp.indent_left, rp.indent_right)));
@@ -848,6 +885,10 @@ impl Scan {
     /// decimal tab).
     fn place_tab(&mut self, pl: &mut ParaLayout, stop: TabStop) {
         let j = self.j;
+        self.shrink_tab = stop.align == TabAlign::Left;
+        if !self.shrink_tab {
+            self.non_left_tabs.push(j);
+        }
         match stop.align {
             TabAlign::Left | TabAlign::Bar | TabAlign::Clear => {
                 let w = (stop.pos - self.x).max(0.0);
@@ -888,7 +929,7 @@ impl Scan {
         // each segment's font, glyphs and position for painting.
         let advance = pl.atomic_advance(j);
         let absorbs = self.absorbs(pl, advance);
-        let shrink = if bk.shrink_spaces && !self.has_tab {
+        let shrink = if bk.shrink_spaces && self.shrink_tab {
             space_room(self.space_w, self.x + advance - pl.auto_space_after(j) - self.word_from)
         } else {
             0.0
@@ -1028,6 +1069,7 @@ impl Scan {
             self.last_break = Some(tj - 1);
             self.pending_tab = None;
             self.leaders.retain(|(k, _)| *k < tj);
+            self.non_left_tabs.retain(|&k| k < tj);
         }
     }
 
@@ -1064,6 +1106,23 @@ impl Scan {
 /// paragraph beside a floating table in a 21.3pt gap but not in an 18.6pt one.
 const MIN_SPAN: f32 = 20.0;
 
+/// Where a row starts under Word 2003's indent rules: right after the floating objects that end
+/// at or before the indent `lo` on this row and let text past their right side (their outline's
+/// right edge for Tight and Through wrapping), never left of the paragraph's own left edge (0) or
+/// right of `lo`; `lo` if there are none.
+fn tight_row_start(exclusions: &[Exclusion], (top, h, table_h): (f32, f32, f32), lo: f32) -> f32 {
+    exclusions
+        .iter()
+        .filter(|e| !e.top_bottom && e.side != WrapText::Left && e.right <= lo && e.intersects_row(top, h, table_h, f32::NEG_INFINITY, lo))
+        .filter_map(|e| match &e.contour {
+            None => Some(e.right),
+            Some(c) => c.occupied(top - e.top, top + h - e.top).into_iter().map(|(_, b)| b + e.left).reduce(f32::max),
+        })
+        .reduce(f32::max)
+        // A float out in the left margin doesn't pull the text into the margin after it.
+        .map_or(lo, |edge| edge.max(0.0).min(lo))
+}
+
 /// How far below a line's top its baseline sits. Multiple spacing at or above single keeps the
 /// text at the top of the line and puts the extra leading below the baseline; below single it
 /// shrinks the whole box, ascent included (Word's output for docxide-pdf's fixtures: 1.15-spaced
@@ -1078,8 +1137,17 @@ fn baseline_offset(spacing: LineSpacing, asc: f32, height: f32, desc: f32) -> f3
 
 /// The spans of a row at `top` (about `h` tall) between `lo` and `hi` that text can use around
 /// the exclusions, left to right (Square wrapping uses both sides of an object). `Err(y)`: none
-/// here, try again at `y` (below what's in the way).
-fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, table_h: f32, lo: f32, hi: f32) -> Result<VecDeque<(f32, f32)>, f32> {
+/// here, try again at `y` (below what's in the way). With `tight_indent` (Word 2003's indent
+/// rules, `w:doNotSuppressIndentation`) a row starts right after a floating object that ends
+/// before `lo`, the indent ignored (ECMA-376 Part 4 §14.8.3.12: a paragraph indented 1" tightly
+/// wraps an object at 0.25").
+fn row_spans(
+    exclusions: &[Exclusion],
+    (top, h, table_h): (f32, f32, f32),
+    (lo, hi): (f32, f32),
+    tight_indent: bool,
+) -> Result<VecDeque<(f32, f32)>, f32> {
+    let lo = if tight_indent { tight_row_start(exclusions, (top, h, table_h), lo) } else { lo };
     let here: Vec<&Exclusion> = exclusions.iter().filter(|e| e.intersects_row(top, h, table_h, lo, hi)).collect();
     if let Some(below) = here.iter().filter(|e| e.top_bottom).map(|e| e.bottom).reduce(f32::max) {
         return Err(below);

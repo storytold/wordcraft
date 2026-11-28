@@ -223,6 +223,22 @@ fn selecting_a_long_endnote_takes_linear_time() {
     assert_linear_steps("endnote selection", 20, laid, |(d, l, (a, b))| drop(std::hint::black_box(l.selection_rects(d, a, b, 0))));
 }
 
+/// One paragraph of `n` lines (a line break after each word), so it runs over many pages.
+fn many_lines(n: usize) -> Document {
+    let mut d = Document::from_text("");
+    d.body = vec![wordcraft_doc::para_block(Paragraph::with_text(&"x\n".repeat(n), CharProps::default()))];
+    d
+}
+
+/// The piece of a long paragraph on each page looked through every line of the paragraph for the
+/// pictures and shapes to draw with it (#6757).
+#[test]
+fn a_paragraph_over_many_pages_lays_out_in_linear_time() {
+    let pages = lay(&many_lines(SCALE * 400), &LayoutOptions::default()).pages.len();
+    assert!(pages > 40, "the paragraph runs over many pages: {pages}");
+    assert_layout_linear("a paragraph over many pages", 400, many_lines, &LayoutOptions::default());
+}
+
 /// A table of `n` rows of 60 cells, each row exactly half a point high, so every cell clips its
 /// (empty) paragraph and the whole table fits on the first page.
 fn clipped_table(n: usize) -> Document {

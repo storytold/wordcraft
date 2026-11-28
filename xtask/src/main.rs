@@ -19,7 +19,7 @@ usage: cargo xtask <command>
 
 commands:
   assets          check that every icon/image/font/asset is attributed in ATTRIBUTION.md
-  layers          enforce the crate dependency layering (plan/architecture.md §3)
+  layers          enforce the crate dependency layering (docs/architecture.md, Layers)
   wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates (one call)
   test            workspace tests (cargo nextest when installed, else cargo test), the interface
                   audit with its missing-translation report, then doctests
@@ -34,6 +34,8 @@ commands:
                   show where test corpora live; --download fetches PngSuite into corpus/pngsuite
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
   parity          recompute the Word feature-parity summary in docs/parity-checklist.md
+  version [set X.Y.Z[-pre]]
+                  show the workspace version, or set it and update Cargo.lock
   visual-diff <ref.pdf> <test.pdf> <outdir> [--private] [--dpi N]
                   compare two PDFs of a document page by page (SSIM, line breaks, offsets);
                   needs poppler (pdftoppm, pdftotext)
@@ -100,7 +102,7 @@ pub fn metadata() -> Result<serde_json::Value, String> {
 
 fn cmd_layers() -> Result<(), String> {
     let crates = layers::from_metadata(&metadata()?)?;
-    println!("Dependency layering (plan/architecture.md §3)\n");
+    println!("Dependency layering (docs/architecture.md, Layers)\n");
     println!("{:<28} {:<14} workspace deps", "crate", "layer");
     for c in &crates {
         let ws: Vec<String> = c

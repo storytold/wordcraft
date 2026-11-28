@@ -1,7 +1,19 @@
 use super::{
     Block, CharProps, CmdError, CmdResult, Counters, FieldCode, InlineObject, LevelSuffix, NumFormat, OBJ, Paragraph, Path, Pos, Selection, Session,
-    StoryRef, TabAlign, TabLeader, TabStop, Value, delete_selection, p, sel_result,
+    StoryRef, TabAlign, TabLeader, TabStop, Value, delete_selection, p, page_at, page_formats, page_text, sel_result,
 };
+
+/// A table-of-contents title is a heading, not document body: longer titles are rejected
+/// instead of laying out megabytes of text (#3720).
+pub(super) const MAX_TOC_TITLE: usize = 1024;
+
+fn checked_title(v: &Value) -> Result<Option<&str>, CmdError> {
+    let Some(title) = p::str(v, "title") else { return Ok(None) };
+    if title.chars().count() > MAX_TOC_TITLE {
+        return Err(CmdError::Params(format!("`title` is longer than {MAX_TOC_TITLE} characters")));
+    }
+    Ok(Some(title))
+}
 
 /// A level range such as `1-3` (or one level, `2`), clamped to 1–9.
 pub fn level_range(s: &str) -> Option<(u8, u8)> {
@@ -67,13 +79,15 @@ pub fn toc_instr(v: &Value) -> String {
     s
 }
 
-/// A TOC entry: the paragraph it points at, its level (0-based), its text, and the leading page
-/// breaks of that paragraph (its page is where the text after them lands).
+/// A TOC entry: the paragraph it points at, its level (0-based), its text, the leading page
+/// breaks of that paragraph (its page is where the text after them lands), and, for a number
+/// followed by a tab, how far the heading's text starts after where its number starts.
 struct TocEntry {
     path: Path,
     level: u8,
     text: String,
     lead: usize,
+    number_gap: Option<f32>,
 }
 
 /// The headings of the body, in document order, as (body block, level 1–9, text, leading page
@@ -117,9 +131,13 @@ fn toc_entries(s: &Session, f: &FieldCode) -> Vec<TocEntry> {
             .and_then(|n| counters.next_label(&s.doc.numbering, n.num, n.level))
             .filter(|(label, def)| !label.is_empty() && !matches!(def.format, NumFormat::Bullet | NumFormat::None))
             .map(|(label, def)| match def.suffix {
-                LevelSuffix::Tab => format!("{label}\t"),
-                LevelSuffix::Space => format!("{label} "),
-                LevelSuffix::Nothing => label,
+                LevelSuffix::Tab => {
+                    let start = def.indent - def.hanging;
+                    let gap = def.tab.filter(|t| *t > start).unwrap_or(def.indent) - start;
+                    (format!("{label}\t"), Some(gap).filter(|g| g.is_finite() && *g > 0.0))
+                }
+                LevelSuffix::Space => (format!("{label} "), None),
+                LevelSuffix::Nothing => (label, None),
             });
         let style = p.props.style.as_deref().unwrap_or("Normal");
         if style.starts_with("TOC") {
@@ -144,8 +162,9 @@ fn toc_entries(s: &Session, f: &FieldCode) -> Vec<TocEntry> {
         if let Some(l) = by_style.or(by_outline).or(if hidden { None } else { by_heading }) {
             let t = p.plain_text().replace(['\u{000C}', '\n', '\t'], " ").trim().to_string();
             if !t.is_empty() {
-                let text = number.map_or_else(|| t.clone(), |n| format!("{n}{t}"));
-                v.push(TocEntry { path: path.clone(), level: l - 1, text, lead });
+                let text = number.as_ref().map_or_else(|| t.clone(), |(n, _)| format!("{n}{t}"));
+                let number_gap = number.as_ref().and_then(|(_, g)| *g);
+                v.push(TocEntry { path: path.clone(), level: l - 1, text, lead, number_gap });
             }
         }
         if let Some(id) = &tc {
@@ -159,7 +178,7 @@ fn toc_entries(s: &Session, f: &FieldCode) -> Vec<TocEntry> {
                 let l = c.arg('l').and_then(|l| l.trim().parse::<u8>().ok()).unwrap_or(1).clamp(1, 9);
                 let text = c.args.first().map(|t| t.trim().to_string()).unwrap_or_default();
                 if (id.is_empty() || *id == kind) && (tc_levels.0..=tc_levels.1).contains(&l) && !text.is_empty() {
-                    v.push(TocEntry { path: path.clone(), level: l - 1, text, lead: off });
+                    v.push(TocEntry { path: path.clone(), level: l - 1, text, lead: off, number_gap: None });
                 }
             }
         }
@@ -375,6 +394,7 @@ pub(super) fn cached_toc_tabs(s: &Session) -> Vec<(String, Vec<TabStop>)> {
 }
 
 pub(super) fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
+    let title = checked_title(v)?.unwrap_or("Contents").to_string();
     let tabs = cached_toc_tabs(s);
     range_toc_to_field(s)?;
     let replace = v.as_object().is_some_and(|m| !m.is_empty());
@@ -403,7 +423,6 @@ pub(super) fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
         }
         None => delete_selection(s)?,
     };
-    let title = p::str(v, "title").unwrap_or("Contents").to_string();
     if at.story != StoryRef::Body || at.path.depth() > 0 {
         return Err(CmdError::Failed("a table of contents goes in the main text".into()));
     }
@@ -433,6 +452,7 @@ pub(super) fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
 /// (`title_above_break`): the field takes `v`'s settings, the title `v`'s `title` if one is given
 /// (otherwise it is kept, as Word's Insert Table of Contents keeps it), and the entries are rebuilt.
 fn replace_toc_above_break(s: &mut Session, v: &Value, start: usize, tabs: &[(String, Vec<TabStop>)]) -> Result<(), CmdError> {
+    let new_title = checked_title(v)?;
     let instr = toc_instr(v);
     let field = s.doc.para_mut(StoryRef::Body, &Path::top(start))?;
     for o in &mut field.objects {
@@ -446,7 +466,7 @@ fn replace_toc_above_break(s: &mut Session, v: &Value, start: usize, tabs: &[(St
         }
     }
     field.touch();
-    if let (Some(title), Some(i)) = (p::str(v, "title"), start.checked_sub(1)) {
+    if let (Some(title), Some(i)) = (new_title, start.checked_sub(1)) {
         let old = s.doc.para_mut(StoryRef::Body, &Path::top(i))?;
         let mut head = Paragraph::with_text(title, old.props_of_char(0).clone());
         head.props = old.props.clone();
@@ -555,6 +575,7 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
     };
     let no_pages = f.has('n').then(|| f.arg('n').and_then(level_range).unwrap_or((1, 9)));
     let sep = f.arg('p').map(str::to_string).unwrap_or_else(|| "\t".into());
+    let formats = page_formats(s);
     for pass in 0..2 {
         // Pass 1 lays out with the entries in place, so headings below the TOC sit `entries.len()`
         // blocks further down and their pages account for the TOC's own length.
@@ -574,8 +595,8 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
             {
                 *top = top.saturating_add(u32::try_from(shift).unwrap_or(u32::MAX));
             }
-            let page =
-                l.caret(&Pos { story: StoryRef::Body, path: target, off: e.lead }).and_then(|c| l.pages.get(c.page)).map(|pg| pg.number).unwrap_or(1);
+            let page = page_at(&l, &formats, &Pos { story: StoryRef::Body, path: target, off: e.lead })
+                .map_or_else(|| "1".into(), |(_, n, fmt)| page_text(n, fmt));
             let show_page = no_pages.is_none_or(|(a, b)| !(a..=b).contains(&(e.level + 1)));
             let link = links.get(k).cloned().flatten();
             // With a bookmark to point at, the page number is a `PAGEREF` field, as Word writes
@@ -589,12 +610,22 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
             let props = CharProps { link, ..Default::default() };
             let mut para = Paragraph::with_text(&text, props.clone()).styled(&format!("TOC{}", e.level + 1));
             if let Some(instr) = pageref {
-                let field = InlineObject::Field { instr, result: page.to_string(), locked: false, dirty: false, code: false, form: String::new() };
+                let field = InlineObject::Field { instr, result: page.clone(), locked: false, dirty: false, code: false, form: String::new() };
                 para.insert_object(para.len(), field, &props)?;
             }
             para.mark = CharProps::default();
             if e.text.contains('\t') {
                 para.props.tabs = tabs.iter().find(|(style, _)| Some(style) == para.props.style.as_ref()).map(|(_, tabs)| tabs.clone());
+                // Without a stop for the number (LibreOffice's Contents styles have only the page
+                // number's right stop), its tab would run to the page number: the entry gets a
+                // left stop as far after its indent as the heading's text is after its number.
+                let style = s.doc.styles.resolve_para(&para.props);
+                let has_stop =
+                    style.tabs.iter().any(|t| t.pos < width - 1.0 && matches!(t.align, TabAlign::Left | TabAlign::Center | TabAlign::Decimal));
+                if let (None, false, Some(gap)) = (&para.props.tabs, has_stop, e.number_gap) {
+                    let pos = style.indent_left.max(0.0) + gap;
+                    para.props.tabs = (pos < width - 1.0).then(|| vec![TabStop { pos, align: TabAlign::Left, leader: TabLeader::None }]);
+                }
             }
             if show_page && sep.contains('\t') {
                 let right = TabStop { pos: width - 0.5, align: TabAlign::Right, leader };

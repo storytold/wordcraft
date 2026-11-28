@@ -1,180 +1,169 @@
-//! Layout, Review and Mailings dialogs (#407): Line Numbers (Layout › Line Numbers › Line
-//! Numbering Options…), Hyphenation (Hyphenation Options… and Manual…), Language (Review ›
-//! Language), Envelopes and Labels (Mailings › Create), Formula (Table Layout › Data, #1201)
-//! Sort (Table Layout › Data, #1200), Split Cells (Table Layout › Merge), Convert Text to Table
-//! (Insert › Table, #2592), Size (Picture Format › Size, #2573) and Format Page Numbers (Insert ›
-//! Header & Footer › Page Number ▸ Format Page Numbers…, #1113). Each ends by running a
-//! command (`layout.lineNumbers`, `layout.hyphenation`, `layout.manualHyphenation` with
-//! `caret.set` and `text.optionalHyphen`, `review.language`, `mailings.envelopes`,
-//! `mailings.labels`, `table.formula`, `table.sort`, `table.split`, `table.fromText`,
-//! `picture.size`, `layout.pageNumberFormat`), so scripts and agents get the same result without
-//! the dialog. Shown through [`crate::dialogs::Dialog::Layout`].
+//! Layout, Review and Mailings dialogs (#407): Line Numbers, Hyphenation (with Manual…), Language,
+//! Envelopes and Labels, Formula, Sort, Split Cells, Convert Text to Table and Convert to Text,
+//! Size and Format Page Numbers. Each is one [`WordForm`]; OK runs its command (`layout.lineNumbers`,
+//! `layout.hyphenation`, `review.language`, `table.formula`, `table.sort`, `table.split`,
+//! `table.fromText`, `table.toText`, `picture.size`, `layout.pageNumberFormat`), so scripts and
+//! agents get the same result without the dialog.
 
-use egui::{Ui, vec2};
-use serde::Serialize;
-use serde_json::{Value, json};
+use std::ops::RangeInclusive;
 
-use wordcraft_doc::section::LineNumberRestart;
-use wordcraft_engine::cmd::mailings::{ENVELOPE_SIZES, LABEL_PRODUCTS};
-use wordcraft_engine::cmd::objects::fit_size;
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft::ui::dialog::DialogId;
+use craft::ui::runtime::env::{LengthUnits, UnitKind};
+use craft::ui::text::{NamedOr, NumberField, NumberName, NumberPick};
+use egui::Ui;
+use serde_json::Value;
 
 use crate::WordApp;
-use crate::options::MeasureExt;
-use crate::theme::semibold;
+use crate::dialogs::host::{DialogHooks, open_form, open_form_with};
 
 mod page;
-mod print;
+pub(crate) mod print;
 mod table;
 mod text;
 
 pub use page::{PageNumbersForm, SizeForm};
-use page::{page_numbers_ui, size_ui};
 #[cfg(test)]
 pub(crate) use print::envelope_label;
 #[cfg(test)]
 use print::product_label;
 pub use print::{EnvelopeForm, LabelsForm};
-use print::{envelopes_ui, labels_ui};
 pub use table::{FORMULA_FUNCTIONS, FormulaForm, SortForm, SplitCellsForm, TableToTextForm, TextToTableForm};
-use table::{formula_ui, sort_ui, split_cells_ui, table_to_text_ui, text_to_table_ui};
 #[cfg(test)]
 use text::language_name;
 pub use text::{HyphenationForm, LANGUAGES, LanguageForm, LineNumbersForm, ManualForm};
-use text::{hyphenation_ui, language_ui, line_numbers_ui, manual_ui};
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(tag = "form", rename_all = "camelCase")]
-pub enum LayoutDialog {
-    LineNumbers(LineNumbersForm),
-    Hyphenation(HyphenationForm),
-    ManualHyphenation(ManualForm),
-    Language(LanguageForm),
-    Envelopes(EnvelopeForm),
-    Labels(LabelsForm),
-    Formula(FormulaForm),
-    Sort(SortForm),
-    SplitCells(SplitCellsForm),
-    TextToTable(TextToTableForm),
-    TableToText(TableToTextForm),
-    Size(SizeForm),
-    PageNumbers(PageNumbersForm),
-}
-
-impl LayoutDialog {
-    pub fn name(&self) -> &'static str {
-        match self {
-            LayoutDialog::LineNumbers(_) => "lineNumbers",
-            LayoutDialog::Hyphenation(_) => "hyphenation",
-            LayoutDialog::ManualHyphenation(_) => "manualHyphenation",
-            LayoutDialog::Language(_) => "language",
-            LayoutDialog::Envelopes(_) => "envelopes",
-            LayoutDialog::Labels(_) => "labels",
-            LayoutDialog::Formula(_) => "tableFormula",
-            LayoutDialog::Sort(_) => "tableSort",
-            LayoutDialog::SplitCells(_) => "splitCells",
-            LayoutDialog::TextToTable(_) => "textToTable",
-            LayoutDialog::TableToText(_) => "tableToText",
-            LayoutDialog::Size(_) => "pictureSize",
-            LayoutDialog::PageNumbers(_) => "pageNumbers",
-        }
-    }
-
-    /// The window title (English; the caller translates it).
-    pub fn title(&self) -> &'static str {
-        match self {
-            LayoutDialog::LineNumbers(_) => "Line Numbers",
-            LayoutDialog::Hyphenation(_) => "Hyphenation",
-            LayoutDialog::ManualHyphenation(_) => "Manual Hyphenation",
-            LayoutDialog::Language(_) => "Language",
-            LayoutDialog::Envelopes(_) => "Envelopes",
-            LayoutDialog::Labels(_) => "Labels",
-            LayoutDialog::Formula(_) => "Formula",
-            LayoutDialog::Sort(_) => "Sort",
-            LayoutDialog::SplitCells(_) => "Split Cells",
-            LayoutDialog::TextToTable(_) => "Convert Text to Table",
-            LayoutDialog::TableToText(_) => "Convert to Text",
-            LayoutDialog::Size(_) => "Size",
-            LayoutDialog::PageNumbers(_) => "Page Number Format",
-        }
-    }
-}
-
-/// The dialog `ui.dialog` opens by `name`.
-pub fn open(name: &str, app: &mut WordApp) -> Option<LayoutDialog> {
+/// Opens the dialog `ui.dialog` names, over `parent` when given; `None` for a name this module does not own or when
+/// there is nothing to show (the table and picture dialogs need their selection).
+pub(crate) fn open(app: &mut WordApp, name: &str, params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
     Some(match name {
-        "lineNumbers" => LayoutDialog::LineNumbers(LineNumbersForm::read(app)),
-        "hyphenation" => LayoutDialog::Hyphenation(HyphenationForm::read(app)),
-        "manualHyphenation" => LayoutDialog::ManualHyphenation(ManualForm::start(app)),
-        "language" => LayoutDialog::Language(LanguageForm::read(app)),
-        "envelopes" => LayoutDialog::Envelopes(EnvelopeForm::read(app)),
-        "labels" => LayoutDialog::Labels(LabelsForm::read(app)),
-        "tableFormula" => LayoutDialog::Formula(FormulaForm::read(app)?),
-        "tableSort" => LayoutDialog::Sort(SortForm::read(app)?),
-        "splitCells" => LayoutDialog::SplitCells(SplitCellsForm::read(app)?),
-        "textToTable" => LayoutDialog::TextToTable(TextToTableForm::read(app)?),
-        "tableToText" => LayoutDialog::TableToText(TableToTextForm::read(app)?),
-        "pictureSize" => LayoutDialog::Size(SizeForm::read(app)?),
-        "pageNumbers" => LayoutDialog::PageNumbers(PageNumbersForm::read(app)),
+        "lineNumbers" => {
+            let form = LineNumbersForm::read(app);
+            open_form(app, parent, form)
+        }
+        "hyphenation" => {
+            let form = HyphenationForm::read(app);
+            open_form(app, parent, form)
+        }
+        "manualHyphenation" => {
+            let form = ManualForm::start(app);
+            open_form(app, parent, form)
+        }
+        "language" => {
+            let form = LanguageForm::read(app);
+            open_form(app, parent, form)
+        }
+        "envelopes" | "labels" => return print::open(app, name, params, parent),
+        "tableFormula" => {
+            let form = FormulaForm::read(app)?;
+            open_form(app, parent, form)
+        }
+        "tableSort" => {
+            let form = SortForm::read(app)?;
+            open_form(app, parent, form)
+        }
+        "splitCells" => {
+            let form = SplitCellsForm::read(app)?;
+            open_form(app, parent, form)
+        }
+        "textToTable" => {
+            let form = TextToTableForm::read(app)?;
+            open_form(app, parent, form)
+        }
+        "tableToText" => {
+            let form = TableToTextForm::read(app)?;
+            open_form(app, parent, form)
+        }
+        "pictureSize" => {
+            let form = SizeForm::read(app)?;
+            // PLAN: assumed `DialogHooks::prepare_only(prepare: fn(&mut WordApp, DialogId)) -> DialogHooks` (dialogs-w13)
+            open_form_with(app, parent, form, DialogHooks::prepare_only(page::prepare_size))
+        }
+        "pageNumbers" => {
+            let form = PageNumbersForm::read(app);
+            open_form_with(app, parent, form, DialogHooks::prepare_only(page::prepare_page_numbers))
+        }
         _ => return None,
     })
 }
 
-/// Draws the dialog; returns true to close it.
-pub fn body(app: &mut WordApp, ui: &mut Ui, d: &mut LayoutDialog) -> bool {
-    match d {
-        LayoutDialog::LineNumbers(f) => line_numbers_ui(app, ui, f),
-        LayoutDialog::Hyphenation(f) => hyphenation_ui(app, ui, f),
-        LayoutDialog::ManualHyphenation(f) => manual_ui(app, ui, f),
-        LayoutDialog::Language(f) => language_ui(app, ui, f),
-        LayoutDialog::Envelopes(f) => envelopes_ui(app, ui, f),
-        LayoutDialog::Labels(f) => labels_ui(app, ui, f),
-        LayoutDialog::Formula(f) => formula_ui(app, ui, f),
-        LayoutDialog::Sort(f) => sort_ui(app, ui, f),
-        LayoutDialog::SplitCells(f) => split_cells_ui(app, ui, f),
-        LayoutDialog::TextToTable(f) => text_to_table_ui(app, ui, f),
-        LayoutDialog::TableToText(f) => table_to_text_ui(app, ui, f),
-        LayoutDialog::Size(f) => size_ui(app, ui, f),
-        LayoutDialog::PageNumbers(f) => page_numbers_ui(app, ui, f),
-    }
+/// Lengths kept and shown in points: what a form shows before `read` gives it the user's unit.
+pub(crate) fn points() -> LengthUnits {
+    LengthUnits::new(UnitKind::Points, UnitKind::Points, 96.0)
 }
 
-/// The accent button and Cancel; returns (ok, cancel).
-fn buttons(ui: &mut Ui, ok: &str, ok_enabled: bool) -> (bool, bool) {
-    let mut r = (false, false);
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
-            let (okb, cancelb) =
-                crate::dialogs::ok_cancel_responses(ui, |ui| ui.add_enabled(ok_enabled, crate::widgets::primary_button(ui, tl!(ok))), tl!("Cancel"));
-            if cancelb.clicked() || crate::dialogs::cancel_key_pressed(ui) {
-                r.1 = true;
-            }
-            if okb.clicked() {
-                r.0 = true;
-            }
-        });
-    });
-    r
-}
-
-fn heading(ui: &mut Ui, s: &str) {
-    ui.add_space(4.0);
-    ui.label(egui::RichText::new(tl!(s)).font(semibold(12.5)));
-}
-
-/// Runs a dialog's command; a refusal shows in the status bar and keeps the dialog open.
-fn run(app: &mut WordApp, id: &str, params: Value) -> bool {
-    match app.run(id, params) {
-        Ok(_) => true,
-        Err(e) => {
-            app.status(e);
-            false
+/// A whole-number field over `value` within `range`; true when the user changed it.
+pub(crate) fn count_field(ui: &mut Ui, label: &str, value: &mut u32, range: RangeInclusive<u32>, enabled: bool) -> bool {
+    let was = f64::from(*value);
+    let mut shown = Some(was);
+    NumberField::new(label.to_string(), Bind::bound(&mut shown)).range(f64::from(*range.start())..=f64::from(*range.end())).enabled(enabled).show(ui);
+    match shown {
+        Some(n) if n != was => {
+            *value = (n.round().max(0.0) as u32).clamp(*range.start(), *range.end());
+            true
         }
+        _ => false,
     }
 }
 
-fn unit() -> wordcraft_geom::Unit {
-    crate::options::unit()
+/// The value a number field's events leave, `None` when they carry none.
+fn edited(events: &craft::behavior::EditEvents<Option<f64>>) -> Option<f64> {
+    events.iter().filter_map(|e| e.value().copied().flatten()).next_back()
+}
+
+/// A field over a length in points, shown in the user's unit; true when the user changed it.
+pub(crate) fn length_field(ui: &mut Ui, label: &str, value: &mut f32, lengths: LengthUnits, range: RangeInclusive<f64>, enabled: bool) -> bool {
+    let was = f64::from(*value);
+    // The form takes the field's edit events, not a write into a copy that lives one pass: an edit that commits as the
+    // dialog files its OK (Enter, or a click on OK) reaches the form in the pass that files it.
+    let out = NumberField::length(label.to_string(), Bind::given(Some(was)), lengths).range(range).enabled(enabled).show(ui);
+    match edited(&out.edit.events) {
+        Some(n) if n != was => {
+            *value = n as f32;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// A percentage field over `value`; true when the user changed it.
+pub(crate) fn percent_field(ui: &mut Ui, label: &str, value: &mut f32, range: RangeInclusive<f64>) -> bool {
+    let was = f64::from(*value);
+    let out = NumberField::new(label.to_string(), Bind::given(Some(was))).range(range).unit("%").show(ui);
+    match edited(&out.edit.events) {
+        Some(n) if n != was => {
+            *value = n as f32;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// A field that holds a number or one named entry (Auto, No limit) chosen from its presets list. `lengths` makes the
+/// number a length.
+pub(crate) fn named_field<K: NumberName + 'static>(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut NamedOr<K>,
+    name: (K, &str),
+    lengths: Option<LengthUnits>,
+    range: RangeInclusive<f64>,
+    enabled: bool,
+) {
+    let presets = vec![Entry::new(NumberPick::Choice(name.0.id()), name.1.to_string()).checked(matches!(*value, NamedOr::Named(_)))];
+    let mut field = NumberField::named(label.to_string(), Bind::bound(value)).range(range).presets(&presets).enabled(enabled);
+    if let Some(lengths) = lengths {
+        field = field.lengths(lengths);
+    }
+    field.show(ui);
+}
+
+/// The number a named field holds, 0 while it holds its name.
+pub(crate) fn number_or_zero<K>(value: &NamedOr<K>) -> f64 {
+    match value {
+        NamedOr::Number(n) => *n,
+        _ => 0.0,
+    }
 }
 
 #[cfg(test)]

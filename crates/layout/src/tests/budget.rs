@@ -277,9 +277,7 @@ fn disc_png(size: u32) -> Vec<u8> {
         let (dx, dy) = (x as f32 + 0.5 - c, y as f32 + 0.5 - c);
         image::Rgba([0, 0, 0, if dx * dx + dy * dy < c * c * 0.5 { 255 } else { 0 }])
     });
-    let mut buf = Vec::new();
-    image::DynamicImage::from(img).write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png).unwrap();
-    buf
+    wordcraft_geom::picture::encode_format(&image::DynamicImage::from(img), image::ImageFormat::Png).unwrap()
 }
 
 #[test]
@@ -331,9 +329,7 @@ fn decoding_pictures_stops_at_the_layouts_budget() {
 /// A `size` × `size` PNG with no transparency.
 fn opaque_png(size: u32) -> Vec<u8> {
     let img = image::RgbImage::from_pixel(size, size, image::Rgb([0, 0, 0]));
-    let mut buf = Vec::new();
-    image::DynamicImage::from(img).write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png).unwrap();
-    buf
+    wordcraft_geom::picture::encode_format(&image::DynamicImage::from(img), image::ImageFormat::Png).unwrap()
 }
 
 #[test]

@@ -450,6 +450,7 @@ fn long_names_are_cut_before_faces_copy_them() {
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn named_instances_and_collection_members_are_capped() {
     // #3716: a file's faces are capped before they are built, however the file multiplies them.
     let font = variable_font(300);

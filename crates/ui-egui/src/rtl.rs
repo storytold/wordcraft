@@ -353,7 +353,7 @@ impl Cells<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::i18n::{Lang, fixture_lang, set_current};
+    use crate::i18n::{Lang, apply_language, fixture_lang};
 
     /// Where a two-cell row puts its label and its field, as the centres of their rectangles.
     fn row_centres() -> (f32, f32) {
@@ -381,12 +381,12 @@ mod tests {
     /// right-to-left interface the label is at the right and the field to its left.
     #[test]
     fn a_form_row_puts_the_label_at_the_reading_start() {
-        set_current(Lang::EN);
+        apply_language(Lang::EN);
         let (label, field) = row_centres();
         assert!(label < field, "left to right: label {label}, field {field}");
-        set_current(fixture_lang("ar", "\tHome\tالرئيسية\n"));
+        apply_language(fixture_lang("ar", "\tHome\tالرئيسية\n"));
         let (label, field) = row_centres();
-        set_current(Lang::EN);
+        apply_language(Lang::EN);
         assert!(label > field, "right to left: label {label}, field {field}");
     }
 }

@@ -428,6 +428,23 @@ fn the_post_check_compares_the_settings_and_the_metadata() {
     assert!(super::outside_unchanged(&before, &before.clone(), "someone"), "an unchanged document isn't unchanged");
 }
 
+/// The glossary's building blocks reach the whole document, so the post-check compares them.
+#[test]
+fn the_post_check_compares_the_glossary() {
+    use wordcraft_doc::{BuildingBlock, CharProps, Paragraph};
+    let mut before = Document::from_text("Some text.");
+    before.glossary.push(BuildingBlock {
+        name: "g".into(),
+        blocks: vec![wordcraft_doc::para_block(Paragraph::with_text("Block", Default::default()))],
+        ..Default::default()
+    });
+    assert!(super::outside_unchanged(&before, &before.clone(), "someone"), "an unchanged glossary is unchanged");
+    let mut after = before.clone();
+    after.glossary[0].blocks[0] =
+        wordcraft_doc::para_block(Paragraph::with_text("Block", CharProps { lang: Some("fr-FR".into()), ..Default::default() }));
+    assert!(!super::outside_unchanged(&before, &after, "someone"), "a relanguaged building block is a change");
+}
+
 /// Read only, no exceptions: going to a header the document doesn't have doesn't create
 /// one, and loading or filtering recipients doesn't rewrite the merge fields' shown results
 /// (both used to change the document from a non-mutating command, #1327).

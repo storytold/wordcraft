@@ -3,17 +3,20 @@ use std::sync::Arc;
 use serde_json::json;
 use wordcraft_engine::Session;
 
+use wordcraft_doc::section::LineNumberRestart;
+use wordcraft_engine::cmd::mailings::{ENVELOPE_SIZES, LABEL_PRODUCTS};
+
 use super::*;
-use crate::dialogs::Dialog;
+use crate::dialogs::host::{Filed, FormHost, WordForm, open_form};
 use crate::{Services, WordApp};
 
 fn app() -> WordApp {
     WordApp::new(Session::new(wordcraft_doc::Document::from_text("Dear Jo,\nThanks.")), Services::default())
 }
 
-fn form(a: &mut WordApp) -> LayoutDialog {
-    let Some(Dialog::Layout(d)) = a.dialog.take() else { panic!("no dialog: {:?}", a.dialog) };
-    *d
+/// The form of the dialog the host has open.
+fn form<F: WordForm>(a: &mut WordApp) -> F {
+    a.dialog_host.get::<FormHost<F>>().expect("the dialog is open").form().clone()
 }
 
 /// #407: Line Numbering Options… opens with the section's numbering and OK sets every
@@ -22,7 +25,7 @@ fn form(a: &mut WordApp) -> LayoutDialog {
 fn line_numbers_and_hyphenation_options_apply() {
     let mut a = app();
     a.run("ui.dialog", json!({"name": "lineNumbers"})).unwrap();
-    let LayoutDialog::LineNumbers(mut f) = form(&mut a) else { panic!("line numbers") };
+    let mut f: LineNumbersForm = form(&mut a);
     assert!(!f.on && f.auto_distance && f.restart == "restartPage");
     f.on = true;
     f.start = 10;
@@ -32,10 +35,11 @@ fn line_numbers_and_hyphenation_options_apply() {
     let l = a.session.doc.last_section.line_numbers.clone().unwrap();
     assert_eq!((l.start, l.count_by, l.distance, l.restart), (10, 5, 0.0, LineNumberRestart::Continuous));
     a.run("ui.dialog", json!({"name": "lineNumbers"})).unwrap();
-    assert!(matches!(form(&mut a), LayoutDialog::LineNumbers(f) if f.on && f.start == 10 && f.restart == "continuous"));
+    let f: LineNumbersForm = form(&mut a);
+    assert!(f.on && f.start == 10 && f.restart == "continuous");
 
     a.run("ui.dialog", json!({"name": "hyphenation"})).unwrap();
-    let LayoutDialog::Hyphenation(mut h) = form(&mut a) else { panic!("hyphenation") };
+    let mut h: HyphenationForm = form(&mut a);
     assert!(!h.auto && h.caps && h.limit == 0);
     (h.auto, h.caps, h.limit) = (true, false, 2);
     a.run("layout.hyphenation", h.params()).unwrap();
@@ -52,7 +56,7 @@ fn page_numbers_dialog_sets_the_format_and_start() {
     use wordcraft_doc::section::NumFormat;
     let mut a = app();
     a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
-    let LayoutDialog::PageNumbers(mut f) = form(&mut a) else { panic!("page numbers") };
+    let mut f: PageNumbersForm = form(&mut a);
     assert!(f.cont && f.format == "decimal", "{f:?}");
     f.cont = false;
     f.start = 5;
@@ -62,7 +66,7 @@ fn page_numbers_dialog_sets_the_format_and_start() {
     assert_eq!((s.page_num_format, s.page_num_start), (NumFormat::UpperRoman, Some(5)));
     // The reopened dialog shows the section's numbering; continuing clears the start.
     a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
-    let LayoutDialog::PageNumbers(mut f) = form(&mut a) else { panic!("page numbers") };
+    let mut f: PageNumbersForm = form(&mut a);
     assert!(!f.cont && f.start == 5 && f.format == "upperRoman", "{f:?}");
     f.cont = true;
     a.run("layout.pageNumberFormat", f.params()).unwrap();
@@ -75,14 +79,14 @@ fn page_numbers_dialog_sets_the_format_and_start() {
     // A valid start above 32,767 is not lowered by opening the dialog and accepting it.
     a.run("layout.pageNumberFormat", json!({"start": 40_000})).unwrap();
     a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
-    let LayoutDialog::PageNumbers(f) = form(&mut a) else { panic!("page numbers") };
+    let f: PageNumbersForm = form(&mut a);
     assert_eq!(f.start, 40_000);
     a.run("layout.pageNumberFormat", f.params()).unwrap();
     assert_eq!(a.session.doc.last_section.page_num_start, Some(40_000));
     // The dialog follows the caret: moved to another section, it shows that section's
     // numbering, so OK never writes the numbers read from the first one.
     a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
-    let LayoutDialog::PageNumbers(mut f) = form(&mut a) else { panic!("page numbers") };
+    let mut f: PageNumbersForm = form(&mut a);
     assert_eq!(f.section, 0);
     a.run("caret.end", json!({})).unwrap();
     a.run("layout.break", json!({"kind": "continuous"})).unwrap();
@@ -93,27 +97,58 @@ fn page_numbers_dialog_sets_the_format_and_start() {
     assert_eq!((f.section, f.format.as_str(), f.start), (1, "lowerRoman", 9));
 }
 
-/// #755: the Line Numbers "From text" distance and the Hyphenation zone follow the
-/// File › Options unit (centimeters here); `params` sends points whatever the unit.
+/// #4911: zero is an explicit start, distinct from continuing the previous section.
+#[test]
+fn page_numbers_dialog_preserves_zero_and_continue() {
+    let mut a = app();
+    a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+    let f: PageNumbersForm = form(&mut a);
+    assert!(f.cont);
+    assert_eq!(f.start, 1, "unspecified numbering still defaults to one");
+    for start in [0, 1, 100_000] {
+        a.run("layout.pageNumberFormat", json!({"start": start})).unwrap();
+        assert_eq!(a.session.doc.last_section.page_num_start, Some(start));
+        a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+        let f: PageNumbersForm = form(&mut a);
+        assert!(!f.cont);
+        assert_eq!(f.start, start);
+        assert_eq!(f.params()["start"], json!(start));
+        a.run("layout.pageNumberFormat", f.params()).unwrap();
+        assert_eq!(a.session.doc.last_section.page_num_start, Some(start));
+        a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+        let mut f: PageNumbersForm = form(&mut a);
+        assert!(!f.cont);
+        assert_eq!(f.start, start, "reopening preserves the explicit start");
+        f.cont = true;
+        assert_eq!(f.params()["start"], serde_json::Value::Null);
+        a.run("layout.pageNumberFormat", f.params()).unwrap();
+        assert_eq!(a.session.doc.last_section.page_num_start, None);
+        a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+        let f: PageNumbersForm = form(&mut a);
+        assert!(f.cont);
+        assert_eq!(f.start, 1, "continuing does not become an explicit zero");
+    }
+}
+
+/// #755: the forms hold points whatever the File › Options unit (centimeters here); the field converts
+/// for display, so `params` sends what the form holds.
 #[test]
 fn line_numbers_and_hyphenation_measure_in_the_options_unit() {
     let mut a = app();
     a.run("file.options", json!({"units": "centimeters"})).unwrap();
     a.run("layout.lineNumbers", json!({"value": "restartPage", "start": 1, "countBy": 1, "distance": 18.0})).unwrap();
     a.run("ui.dialog", json!({"name": "lineNumbers"})).unwrap();
-    let LayoutDialog::LineNumbers(f) = form(&mut a) else { panic!("line numbers") };
+    let f: LineNumbersForm = form(&mut a);
     assert!(!f.auto_distance);
-    let cm = 18.0 / wordcraft_geom::PT_PER_CM;
-    assert!((f.distance - cm).abs() < 0.01, "distance was {} cm", f.distance);
-    let sent = f.params()["distance"].as_f64().unwrap_or_default();
-    assert!((sent - 18.0).abs() < 0.05, "params sent {sent} pt");
+    assert_eq!(f.distance, 18.0);
+
+    assert_eq!(f.params()["distance"].as_f64(), Some(18.0));
 
     a.run("layout.hyphenation", json!({"value": true, "zone": 36.0})).unwrap();
     a.run("ui.dialog", json!({"name": "hyphenation"})).unwrap();
-    let LayoutDialog::Hyphenation(h) = form(&mut a) else { panic!("hyphenation") };
-    assert!((h.zone - 36.0 / wordcraft_geom::PT_PER_CM).abs() < 0.01, "zone was {} cm", h.zone);
-    let sent = h.params()["zone"].as_f64().unwrap_or_default();
-    assert!((sent - 36.0).abs() < 0.05, "params sent {sent} pt");
+    let h: HyphenationForm = form(&mut a);
+    assert_eq!(h.zone, 36.0);
+    assert_eq!(h.params()["zone"].as_f64(), Some(36.0));
 }
 
 /// #407: the Language button opens the dialog (scripts with a language never see it); OK
@@ -123,7 +158,7 @@ fn language_dialog_marks_the_selection() {
     let mut a = app();
     a.run("select.all", json!({})).unwrap();
     assert_eq!(a.run("review.language", json!({})).unwrap(), json!({"pending": "language"}));
-    let LayoutDialog::Language(mut f) = form(&mut a) else { panic!("language") };
+    let mut f: LanguageForm = form(&mut a);
     assert_eq!(f.lang, "en-US");
     f.lang = "sr-Latn-RS".into();
     f.no_proof = true;
@@ -132,7 +167,6 @@ fn language_dialog_marks_the_selection() {
     assert_eq!((c.lang.as_deref(), c.no_proof), (Some("sr-Latn-RS"), Some(true)));
     a.run("review.language", json!({"lang": "fr-FR", "default": true})).unwrap();
     assert_eq!(a.session.doc.styles.default_chr.lang.as_deref(), Some("fr-FR"));
-    assert!(a.dialog.is_none());
     assert_eq!(language_name("xx-YY"), "xx-YY", "an unknown tag shows as itself");
 }
 
@@ -178,7 +212,7 @@ fn language_dialog_ok_keeps_inherited_proofing() {
     a.run("select.all", json!({})).unwrap();
     let before = a.session.doc.clone();
     a.run("review.language", json!({})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -194,7 +228,7 @@ fn language_dialog_ok_keeps_inherited_proofing() {
     h.run_steps(3);
     h.get_by_label("OK").click();
     h.run_steps(3);
-    assert!(h.state().dialog.is_none());
+    assert!(h.state().dialog_host.open_dialogs().is_empty());
     let state = h.state_mut().run("format.state", json!({})).unwrap();
     assert_eq!(state["lang"], "en-GB");
     assert_eq!(state["noProof"], true);
@@ -208,8 +242,16 @@ fn language_dialog_default_survives_a_restart() {
     use egui_kittest::kittest::Queryable;
     let mut a = app();
     a.ui.language = "en".into();
-    a.dialog = Some(Dialog::Layout(Box::new(LayoutDialog::Language(LanguageForm { lang: "fr-FR".into(), no_proof: false, detect: false }))));
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let language = LanguageForm {
+        lang: "fr-FR".into(),
+        no_proof: false,
+        detect: false,
+        whole_document: false,
+        initial: ("fr-FR".into(), false),
+        proof_touched: false,
+    };
+    open_form(&mut a, None, language);
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             app.logic(&ui.ctx().clone());
             app.ui(ui);
@@ -232,6 +274,143 @@ fn language_dialog_default_survives_a_restart() {
     assert_eq!(LanguageForm::read(&b).lang, "fr-FR");
 }
 
+/// #3518: ticking "Apply to the whole document" makes OK send `scope: "document"`; unticked sends none.
+#[test]
+fn language_dialog_whole_document_checkbox_sends_scope() {
+    use egui_kittest::kittest::Queryable;
+    let f = LanguageForm {
+        lang: "fr-FR".into(),
+        no_proof: false,
+        detect: false,
+        whole_document: false,
+        initial: ("fr-FR".into(), false),
+        proof_touched: false,
+    };
+    assert!(f.params().get("scope").is_none());
+    assert_eq!(LanguageForm { whole_document: true, ..f.clone() }.params()["scope"], "document");
+    let mut a = app();
+    a.ui.language = "en".into();
+    let para = wordcraft_doc::Paragraph::with_text("Header", Default::default());
+    let header = a.session.doc.add_part(wordcraft_doc::PartKind::Header, vec![Arc::new(wordcraft_doc::Block::Para(para))]);
+    open_form(&mut a, None, f);
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            app.logic(&ui.ctx().clone());
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(3);
+    h.get_by_label("Apply to the whole document").click();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    // The header, which the caret isn't in, took the language.
+    let doc = &h.state().session.doc;
+    let hp = doc.para(wordcraft_doc::StoryRef::Part(header), &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(hp.runs.first().and_then(|r| r.props.lang.as_deref()), Some("fr-FR"));
+}
+
+/// "Plain text, then a Do-not-check run", the caret in the plain text.
+fn proofing_mix_app() -> WordApp {
+    let mut a = app();
+    a.run("text.insert", json!({"text": "Plain code"})).unwrap();
+    a.run("select.text", json!({"text": "code"})).unwrap();
+    a.run("review.language", json!({"lang": "de-DE", "noProof": true})).unwrap();
+    a.run("select.text", json!({"text": "Plain"})).unwrap();
+    a.run("review.language", json!({"lang": "en-US", "noProof": false})).unwrap();
+    a.run("select.text", json!({"text": "Plain"})).unwrap();
+    a
+}
+
+fn run_proofing(a: &mut WordApp, text: &str) -> (Option<String>, Option<bool>) {
+    a.run("select.text", json!({"text": text})).unwrap();
+    let st = a.run("format.state", json!({})).unwrap();
+    (st["lang"].as_str().map(String::from), st["noProof"].as_bool())
+}
+
+/// #3518: whole-document OK sends only what the user changed.
+#[test]
+fn language_dialog_whole_document_sends_only_changes() {
+    // Changing only the language leaves the Do-not-check run alone.
+    let mut a = proofing_mix_app();
+    let mut f = LanguageForm::read(&a);
+    f.whole_document = true;
+    f.lang = "en-GB".into();
+    let p = f.params();
+    assert!(p.get("noProof").is_none());
+    a.run("review.language", p).unwrap();
+    assert_eq!(run_proofing(&mut a, "code"), (Some("en-GB".into()), Some(true)));
+    assert_eq!(run_proofing(&mut a, "Plain"), (Some("en-GB".into()), Some(false)));
+
+    // Changing only Do-not-check leaves each run's language alone.
+    let mut a = proofing_mix_app();
+    let mut f = LanguageForm::read(&a);
+    f.whole_document = true;
+    f.no_proof = true;
+    f.proof_touched = true;
+    let p = f.params();
+    assert!(p.get("lang").is_none());
+    a.run("review.language", p).unwrap();
+    assert_eq!(run_proofing(&mut a, "code"), (Some("de-DE".into()), Some(true)));
+    assert_eq!(run_proofing(&mut a, "Plain"), (Some("en-US".into()), Some(true)));
+
+    // No edits: the caret's language, no noProof (never the engine's en-US default).
+    let mut a = proofing_mix_app();
+    let mut f = LanguageForm::read(&a);
+    f.lang = "fr-FR".into();
+    f.initial.0 = "fr-FR".into();
+    f.whole_document = true;
+    let p = f.params();
+    assert_eq!(p["lang"], "fr-FR");
+    assert!(p.get("noProof").is_none());
+    a.run("review.language", p).unwrap();
+    assert_eq!(run_proofing(&mut a, "code"), (Some("fr-FR".into()), Some(true)));
+
+    // Selection mode is unchanged: both are sent.
+    f.whole_document = false;
+    assert_eq!(f.params()["noProof"], false);
+}
+
+/// #3518: a ticked Do-not-check box the user did not change (the caret sits in a no-proof run)
+/// is not sent, so a language-only whole-document apply leaves other runs' proofing state alone.
+#[test]
+fn language_dialog_whole_document_unchanged_no_proof_is_not_sent() {
+    let mut a = proofing_mix_app();
+    a.run("select.text", json!({"text": "code"})).unwrap();
+    let mut f = LanguageForm::read(&a);
+    assert!(f.no_proof && f.initial.1);
+    f.whole_document = true;
+    f.lang = "en-GB".into();
+    let p = f.params();
+    assert!(p.get("noProof").is_none(), "{p}");
+    a.run("review.language", p).unwrap();
+    assert_eq!(run_proofing(&mut a, "code"), (Some("en-GB".into()), Some(true)));
+    assert_eq!(run_proofing(&mut a, "Plain"), (Some("en-GB".into()), Some(false)));
+}
+
+/// #3518: with the caret in a no-proof run, ticking the whole-document box and clicking Do not
+/// check off and on again (ending ticked) still marks the whole document no-proof.
+#[test]
+fn language_dialog_whole_document_retoggled_no_proof_is_sent() {
+    let mut a = proofing_mix_app();
+    a.run("select.text", json!({"text": "code"})).unwrap();
+    let mut f = LanguageForm::read(&a);
+    assert!(f.no_proof && f.initial.1 && !f.proof_touched);
+    f.whole_document = true;
+    for _ in 0..2 {
+        f.no_proof = !f.no_proof;
+        f.proof_touched = true;
+    }
+    assert!(f.no_proof);
+    let p = f.params();
+    assert_eq!(p["noProof"], true, "{p}");
+    assert!(p.get("lang").is_none(), "{p}");
+    a.run("review.language", p).unwrap();
+    assert_eq!(run_proofing(&mut a, "Plain"), (Some("en-US".into()), Some(true)));
+    assert_eq!(run_proofing(&mut a, "code"), (Some("de-DE".into()), Some(true)));
+}
+
 /// #407: Envelopes starts from the selected address; Add to Document puts an envelope
 /// section before the letter without asking to save (nothing is replaced).
 #[test]
@@ -240,15 +419,16 @@ fn envelope_dialog_adds_an_envelope_section() {
     a.run("select.paragraph", json!({})).unwrap();
     a.session.dirty = true;
     assert_eq!(a.run("mailings.envelopes", json!({})).unwrap(), json!({"pending": "envelopes"}));
-    let LayoutDialog::Envelopes(mut f) = form(&mut a) else { panic!("envelopes") };
+    let mut f: EnvelopeForm = form(&mut a);
     assert_eq!(f.delivery, "Dear Jo,");
     f.delivery = "Jo Doe\n1 Main St".into();
     f.ret = "Me".into();
     f.size = ENVELOPE_SIZES.iter().position(|s| s.0 == "Envelope DL").unwrap();
     let document = a.session.document_id();
     a.run("mailings.envelopes", f.params(true)).unwrap();
-    assert!(a.dialog.is_none(), "no save prompt");
-    assert_eq!(a.session.document_id(), document);
+    assert_eq!(a.session.document_id(), document, "no save prompt: nothing is replaced");
+    // PLAN: assumed the save prompt's dialog key is `saveChanges` (shell-w8, dialogs-w13).
+    assert!(a.dialog_host.open_dialogs().iter().all(|d| d.key.as_deref() != Some("saveChanges")), "no save prompt is open");
     let secs = a.session.doc.sections();
     assert_eq!(secs.len(), 2);
     assert!((secs[0].1.page_w - 623.6).abs() < 0.1);
@@ -271,104 +451,8 @@ fn table_app(cols: usize, cells: &[&str]) -> WordApp {
     a
 }
 
-fn fields(a: &WordApp) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    a.session.doc.objects_in_reading_order(&mut |o| {
-        if let wordcraft_doc::InlineObject::Field { instr, result, .. } = o {
-            out.push((instr.clone(), result.clone()));
-        }
-    });
-    out
-}
-
-/// #1201: Table Layout › Formula opens its dialog instead of inserting `=SUM(ABOVE)` at once.
-/// The formula is suggested from the numbers next to the cell (above, else to the left), Paste
-/// function adds a function to it, and OK inserts the field of the formula as edited.
-#[test]
-fn table_formula_opens_its_dialog() {
-    let mut a = table_app(2, &["Item", "Cost", "Tea", "3", "Jam", "4", "Total", ""]);
-    assert_eq!(a.run("table.formula", json!({})).unwrap(), json!({"pending": "tableFormula"}));
-    assert!(fields(&a).is_empty(), "nothing inserted yet");
-    let LayoutDialog::Formula(mut f) = form(&mut a) else { panic!("formula") };
-    assert_eq!(f.formula, "=SUM(ABOVE)");
-    f.formula = "=".into();
-    f.paste("MAX");
-    assert_eq!(f.formula, "=MAX()");
-    f.formula = "=MAX(ABOVE)".into();
-    a.run("table.formula", f.params()).unwrap();
-    assert_eq!(fields(&a), [("=MAX(ABOVE)".to_string(), "4".to_string())]);
-    assert!(a.dialog.is_none());
-
-    let mut a = table_app(3, &["Tea", "3", "", "Jam", "4", ""]);
-    a.run("table.formula", json!({})).unwrap();
-    let LayoutDialog::Formula(f) = form(&mut a) else { panic!("formula") };
-    assert_eq!(f.formula, "=SUM(LEFT)", "nothing above, numbers to the left");
-
-    let mut a = app();
-    a.run("ui.dialog", json!({"name": "tableFormula"})).unwrap();
-    assert!(a.dialog.is_none(), "no dialog outside a table");
-}
-
-fn first_column(a: &WordApp) -> Vec<String> {
-    let t = a.session.doc.body.iter().find_map(|b| b.as_table()).unwrap();
-    t.rows.iter().map(|r| r.cells[0].blocks.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).collect()).collect()
-}
-
-/// #1200: Table Layout › Sort opens its dialog instead of sorting by the first column at once;
-/// with a header row the columns are named by it, and OK sorts the rows under it by the
-/// chosen column (as numbers here: 2, 7, 10).
-#[test]
-fn table_sort_opens_its_dialog() {
-    let mut a = table_app(2, &["Name", "Score", "Bea", "10", "Al", "2", "Cy", "7"]);
-    assert_eq!(a.run("table.sort", json!({})).unwrap(), json!({"pending": "tableSort"}));
-    assert_eq!(first_column(&a), ["Name", "Bea", "Al", "Cy"], "nothing sorted yet");
-    let LayoutDialog::Sort(mut f) = form(&mut a) else { panic!("sort") };
-    assert!(!f.header && f.column == 0 && !f.descending);
-    assert_eq!(f.column_label(1), "Column 2");
-    f.header = true;
-    assert_eq!(f.column_label(1), "Score");
-    f.column = 1;
-    a.run("table.sort", f.params()).unwrap();
-    assert_eq!(first_column(&a), ["Name", "Al", "Cy", "Bea"]);
-    assert!(a.dialog.is_none());
-}
-
 fn table_shape(a: &WordApp) -> Vec<usize> {
     a.session.doc.body.iter().find_map(|b| b.as_table()).unwrap().rows.iter().map(|r| r.cells.len()).collect()
-}
-
-/// #2592: Split Cells opens its dialog from the ribbon's command (scripts with settings never
-/// see it); OK splits the cell into the entered columns and rows. Merge cells before split is
-/// offered, and on, when several cells are selected.
-#[test]
-fn split_cells_opens_its_dialog() {
-    let mut a = table_app(2, &["A", "B", "C", "D"]);
-    assert_eq!(a.run("table.split", json!({})).unwrap(), json!({"pending": "splitCells"}));
-    assert_eq!(table_shape(&a), [2, 2], "nothing split yet");
-    let LayoutDialog::SplitCells(mut f) = form(&mut a) else { panic!("split cells") };
-    assert_eq!((f.columns, f.rows, f.several), (2, 1, false));
-    assert_eq!(f.params()["mergeFirst"], false);
-    (f.columns, f.rows) = (3, 2);
-    a.run("table.split", f.params()).unwrap();
-    assert_eq!(table_shape(&a), [2, 4, 4]);
-    assert!(a.dialog.is_none());
-
-    let mut a = table_app(2, &["A", "B", "C", "D"]);
-    let cell = |r: u32, c: u32| json!({"story": "body", "path": [0, r, c, 0], "off": 0});
-    a.run("select.range", json!({"anchor": cell(0, 0), "focus": cell(1, 1)})).unwrap();
-    a.run("ui.dialog", json!({"name": "splitCells"})).unwrap();
-    let LayoutDialog::SplitCells(mut f) = form(&mut a) else { panic!("split cells") };
-    assert!(f.several && f.merge_first);
-    (f.columns, f.rows) = (2, 1);
-    a.run("table.split", f.params()).unwrap();
-    // The merged cell spans both rows; its two parts do too.
-    assert_eq!(table_shape(&a), [2, 2], "merged into one cell, then split in two");
-    let t = a.session.doc.body.iter().find_map(|b| b.as_table()).unwrap();
-    assert!(t.rows[1].cells.iter().all(|c| c.props.vmerge == wordcraft_doc::props::VMerge::Continue));
-
-    let mut a = app();
-    a.run("ui.dialog", json!({"name": "splitCells"})).unwrap();
-    assert!(a.dialog.is_none(), "no dialog outside a table");
 }
 
 /// #2592, as Word does: for a merged cell the dialog's message says the row count must
@@ -382,7 +466,7 @@ fn split_cells_dialog_checks_a_merged_cells_row_count() {
     a.run("table.merge", json!({})).unwrap();
     a.run("caret.set", json!({"pos": cell(0, 0)})).unwrap();
     a.run("ui.dialog", json!({"name": "splitCells"})).unwrap();
-    let LayoutDialog::SplitCells(mut f) = form(&mut a) else { panic!("split cells") };
+    let mut f: SplitCellsForm = form(&mut a);
     assert_eq!(f.height, 3);
     for (rows, ok) in [(1, true), (2, false), (3, true), (4, false)] {
         f.rows = rows;
@@ -405,7 +489,7 @@ fn split_cells_defaults_follow_the_selection() {
         let mut a = table_app(3, &["A", "B", "C", "D", "E", "F", "G", "H", "I"]);
         a.run("select.range", json!({"anchor": anchor, "focus": focus})).unwrap();
         a.run("ui.dialog", json!({"name": "splitCells"})).unwrap();
-        let LayoutDialog::SplitCells(f) = form(&mut a) else { panic!("split cells") };
+        let f: SplitCellsForm = form(&mut a);
         f
     };
     let f = defaults(cell(1, 1), cell(1, 1));
@@ -426,7 +510,7 @@ fn split_cells_defaults_follow_the_selection() {
     a.run("table.merge", json!({})).unwrap();
     a.run("select.range", json!({"anchor": cell(0, 0), "focus": cell(1, 0)})).unwrap();
     a.run("ui.dialog", json!({"name": "splitCells"})).unwrap();
-    let LayoutDialog::SplitCells(mut f) = form(&mut a) else { panic!("split cells") };
+    let mut f: SplitCellsForm = form(&mut a);
     assert_eq!((f.columns, f.rows, f.several, f.merge_first), (2, 1, false, false), "one merged cell");
     // Word allows 1 to its height rows, with its message, and keeps the dialog open.
     f.rows = 3;
@@ -440,7 +524,7 @@ fn split_cells_defaults_follow_the_selection() {
     a.run("table.merge", json!({})).unwrap();
     a.run("select.range", json!({"anchor": cell(0, 1), "focus": cell(1, 2)})).unwrap();
     a.run("ui.dialog", json!({"name": "splitCells"})).unwrap();
-    let LayoutDialog::SplitCells(mut f) = form(&mut a) else { panic!("split cells") };
+    let mut f: SplitCellsForm = form(&mut a);
     assert_eq!((f.columns, f.rows, f.several, f.merge_first), (4, 2, true, true), "merged cell and neighbours");
     f.rows = 3;
     assert_eq!(f.check().as_deref(), Some("The number must be between 1 and 2."));
@@ -450,83 +534,9 @@ fn split_cells_defaults_follow_the_selection() {
     a.run("select.range", json!({"anchor": cell(2, 0), "focus": cell(2, 1)})).unwrap();
     a.run("table.merge", json!({})).unwrap();
     a.run("ui.dialog", json!({"name": "splitCells"})).unwrap();
-    let LayoutDialog::SplitCells(f) = form(&mut a) else { panic!("split cells") };
+    let f: SplitCellsForm = form(&mut a);
     assert_eq!((f.columns, f.rows, f.several, f.merge_first), (2, 1, true, true), "a wide cell");
     assert_eq!(f.check(), None);
-}
-
-/// #2592: Convert Text to Table opens its dialog; the separator and column count are guessed
-/// from the text, the row count follows the columns, and OK converts with the settings.
-#[test]
-fn text_to_table_opens_its_dialog() {
-    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("a\tb\tc\nd")), Services::default());
-    a.run("select.all", json!({})).unwrap();
-    assert_eq!(a.run("table.fromText", json!({})).unwrap(), json!({"pending": "textToTable"}));
-    assert!(a.session.doc.body.iter().all(|b| b.as_table().is_none()), "nothing converted yet");
-    let LayoutDialog::TextToTable(mut f) = form(&mut a) else { panic!("text to table") };
-    assert_eq!((f.separator.as_str(), f.columns, f.rows, f.autofit.as_str(), f.width.as_str()), ("tab", 3, 2, "initial", "Auto"));
-    assert!(f.params().get("width").is_none(), "Auto");
-    f.width = "1 in".into();
-    assert_eq!((f.check(), f.params()["width"].as_f64()), (None, Some(72.0)));
-    f.width = "50 in".into();
-    assert!(f.check().is_some_and(|e| e.starts_with("The measurement must be between 0")), "{:?}", f.check());
-    f.width = "0".into();
-    assert_eq!((f.check(), f.params().get("width")), (None, None), "0 is Auto");
-    f.width = "Auto".into();
-    f.separator = "paragraph".into();
-    f.guess_columns();
-    assert_eq!((f.columns, f.rows), (1, 2));
-    f.separator = "tab".into();
-    f.columns = 2;
-    f.count_rows();
-    assert_eq!(f.rows, 3, "a b / c / d");
-    a.run("table.fromText", f.params()).unwrap();
-    assert!(a.dialog.is_none());
-    let t = a.session.doc.body.iter().find_map(|b| b.as_table()).unwrap();
-    assert_eq!(t.rows.len(), 3);
-    assert!(!t.props.fixed, "the table still resizes to fit its contents");
-
-    let mut a = app();
-    a.run("select.all", json!({})).unwrap();
-    a.run("ui.dialog", json!({"name": "textToTable"})).unwrap();
-    let LayoutDialog::TextToTable(f) = form(&mut a) else { panic!("text to table") };
-    assert_eq!((f.separator.as_str(), f.columns, f.rows), ("paragraph", 1, 2), "a comma in one paragraph only");
-
-    // Word opens comma text on Paragraphs too; Commas counts the columns, short lines pad.
-    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("a,b,c\nd,e,f\ng,h\ni")), Services::default());
-    a.run("select.all", json!({})).unwrap();
-    a.run("table.fromText", json!({})).unwrap();
-    let LayoutDialog::TextToTable(mut f) = form(&mut a) else { panic!("text to table") };
-    assert_eq!((f.separator.as_str(), f.columns, f.rows, f.other_char.as_str()), ("paragraph", 1, 4, "-"));
-    f.separator = "comma".into();
-    f.guess_columns();
-    assert_eq!((f.columns, f.rows), (3, 4));
-    a.run("table.fromText", f.params()).unwrap();
-    let t = a.session.doc.body.iter().find_map(|b| b.as_table()).unwrap();
-    assert_eq!(t.rows.iter().map(|r| r.cells.len()).collect::<Vec<_>>(), [3, 3, 3, 3]);
-}
-
-/// Convert to Text opens its dialog on Tabs; OK converts with the separator chosen.
-#[test]
-fn table_to_text_opens_its_dialog() {
-    let mut a = table_app(2, &["a", "b", "c", "d"]);
-    assert_eq!(a.run("table.toText", json!({})).unwrap(), json!({"pending": "tableToText"}));
-    assert!(a.session.doc.body.iter().any(|b| b.as_table().is_some()), "nothing converted yet");
-    let LayoutDialog::TableToText(mut f) = form(&mut a) else { panic!("table to text") };
-    assert_eq!((f.separator.as_str(), f.other_char.as_str()), ("tab", "-"));
-    assert_eq!(f.params(), json!({"separator": "tab"}));
-    f.separator = "other".into();
-    f.other_char = "/".into();
-    assert_eq!(f.params(), json!({"separator": "other", "char": "/"}));
-    a.run("table.toText", f.params()).unwrap();
-    assert!(a.dialog.is_none());
-    let texts: Vec<&str> = a.session.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.as_str()).collect();
-    assert!(texts.contains(&"a/b") && texts.contains(&"c/d"), "{texts:?}");
-    assert!(a.session.doc.body.iter().all(|b| b.as_table().is_none()));
-
-    // Outside a table there is nothing to convert.
-    let mut a = app();
-    assert_eq!(a.run("ui.dialog", json!({"name": "tableToText"})).unwrap(), json!({"dialog": null}));
 }
 
 /// The envelope sizes go through the interface language's catalog and use the region's
@@ -534,19 +544,17 @@ fn table_to_text_opens_its_dialog() {
 /// English).
 #[test]
 fn envelope_sizes_follow_the_interface_language_and_region() {
-    let size = |name: &str| ENVELOPE_SIZES.iter().find(|s| s.0 == name).map(|(n, w, h)| envelope_label(n, *w, *h)).unwrap();
-    assert_eq!(size("Envelope #10"), "#10   4.13 × 9.5 in");
-    assert_eq!(size("Envelope DL"), "DL   110 × 220 mm");
+    // PLAN: assumed `envelope_label(name, w, h, region)` takes the region's format (dialogs-w27).
+    let size = |name: &str, region: &_| ENVELOPE_SIZES.iter().find(|s| s.0 == name).map(|(n, w, h)| envelope_label(n, *w, *h, region)).unwrap();
     let mut a = app();
+    assert_eq!(size("Envelope #10", &a.session.region()), "#10   4.13 × 9.5 in");
+    assert_eq!(size("Envelope DL", &a.session.region()), "DL   110 × 220 mm");
     a.run("file.options", json!({"region": "it-IT"})).unwrap();
-    crate::options::sync(&a);
-    assert_eq!(size("Envelope #10"), "#10   4,13 × 9,5 in");
-    crate::i18n::pseudo::set(true);
-    assert_eq!(size("Envelope #10"), "⟦#10   4,13 × 9,5 in⟧");
-    assert_eq!(size("Envelope DL"), "⟦DL   110 × 220 mm⟧");
-    crate::i18n::pseudo::set(false);
-    a.run("file.options", json!({"region": "en-US"})).unwrap();
-    crate::options::sync(&a);
+    assert_eq!(size("Envelope #10", &a.session.region()), "#10   4,13 × 9,5 in");
+    crate::i18n::apply_language(crate::i18n::Lang::PSEUDO);
+    assert_eq!(size("Envelope #10", &a.session.region()), "⟦#10   4,13 × 9,5 in⟧");
+    assert_eq!(size("Envelope DL", &a.session.region()), "⟦DL   110 × 220 mm⟧");
+    crate::i18n::apply_language(crate::i18n::Lang::EN);
 }
 
 /// #407: Labels builds a new document of the chosen sheet, or a single label.
@@ -554,7 +562,7 @@ fn envelope_sizes_follow_the_interface_language_and_region() {
 fn labels_dialog_builds_a_sheet() {
     let mut a = app();
     assert_eq!(a.run("mailings.labels", json!({})).unwrap(), json!({"pending": "labels"}));
-    let LayoutDialog::Labels(mut f) = form(&mut a) else { panic!("labels") };
+    let mut f: LabelsForm = form(&mut a);
     f.text = "Ada Lovelace\nLondon".into();
     f.product = LABEL_PRODUCTS.iter().position(|p| p.id == "a4-3x8").unwrap();
     let r = a.session.run("mailings.labels", &f.params()).unwrap();
@@ -563,14 +571,13 @@ fn labels_dialog_builds_a_sheet() {
     f.single = true;
     (f.row, f.col) = (3, 2);
     assert_eq!(a.session.run("mailings.labels", &f.params()).unwrap()["filled"], 1);
-    assert!(product_label(f.product).contains("63.5 × 33.9 mm (A4)"));
+    assert!(product_label(f.product, &a.session.region()).contains("63.5 × 33.9 mm (A4)"));
 }
 
 /// A `w`×`h` pixel PNG, base64 for `insert.picture`.
 fn png_data(w: u32, h: u32) -> String {
     let img = image::RgbaImage::from_pixel(w, h, image::Rgba([200, 30, 30, 255]));
-    let mut png = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let png = wordcraft_geom::picture::encode_format(&image::DynamicImage::from(img.clone()), image::ImageFormat::Png).unwrap();
     wordcraft_engine::cmd::insert::base64_encode(&png)
 }
 
@@ -596,7 +603,7 @@ fn size_dialog_scales_locks_and_resets_the_picture() {
     a.run("picture.size", json!({"width": 60.0, "height": 15.0, "lockAspect": false})).unwrap();
     assert_eq!(a.run("picture.size", json!({})).unwrap(), json!({"pending": "pictureSize"}));
     assert_eq!(selected_size(&a), (60.0, 15.0), "opening the dialog changes nothing");
-    let LayoutDialog::Size(mut f) = form(&mut a) else { panic!("size") };
+    let mut f: SizeForm = form(&mut a);
     assert!(f.lock && f.relative, "a picture opens locked, scaled from its original size");
     assert_eq!((f.original, f.uncropped, f.pixels), (Some((30.0, 15.0)), Some((30.0, 15.0)), Some((40, 20))));
     assert_eq!(f.scale(), (200.0, 100.0));
@@ -627,18 +634,18 @@ fn size_dialog_follows_the_crop_and_shapes_have_no_original() {
     let mut a = picture_app(40, 20);
     a.run("picture.crop", json!({"left": 0.25, "right": 0.25})).unwrap();
     a.run("picture.size", json!({})).unwrap();
-    let LayoutDialog::Size(mut f) = form(&mut a) else { panic!("size") };
+    let mut f: SizeForm = form(&mut a);
     assert_eq!((f.original, f.uncropped), (Some((15.0, 15.0)), Some((30.0, 15.0))));
     f.reset();
     assert_eq!((f.width, f.height), (15.0, 15.0));
 
     let mut a = app();
-    assert!(!crate::widgets::enabled(&a, "picture.size"), "nothing to size");
+    assert!(!crate::app::command_board::command_enabled(&a, "picture.size"), "nothing to size");
     let _ = a.run("ui.dialog", json!({"name": "pictureSize"}));
-    assert!(a.dialog.is_none());
+    assert!(a.dialog_host.open_dialogs().is_empty());
     a.run("insert.shape", json!({"kind": "rectangle"})).unwrap();
     a.run("picture.size", json!({})).unwrap();
-    let LayoutDialog::Size(f) = form(&mut a) else { panic!("size") };
+    let f: SizeForm = form(&mut a);
     assert!(!f.lock && !f.relative && f.original.is_none() && f.uncropped.is_none());
     assert_eq!(f.scale(), (100.0, 100.0));
 }
@@ -650,7 +657,7 @@ fn size_dialog_keeps_the_proportions_at_the_limits() {
     let close = |(w, h): (f32, f32), (ew, eh): (f32, f32)| (w - ew).abs() < 0.01 && (h - eh).abs() < 0.01;
     let mut a = picture_app(6000, 30);
     a.run("picture.size", json!({})).unwrap();
-    let LayoutDialog::Size(mut f) = form(&mut a) else { panic!("size") };
+    let mut f: SizeForm = form(&mut a);
     assert_eq!(f.original, Some((4500.0, 22.5)), "6000×30 px at 96 ppi");
     f.reset();
     assert!(close((f.width, f.height), (4000.0, 20.0)), "Reset: {}×{}", f.width, f.height);
@@ -673,7 +680,7 @@ fn size_dialog_keeps_the_proportions_at_the_limits() {
 fn size_dialog_follows_the_selection() {
     let mut a = picture_app(40, 20);
     a.run("picture.size", json!({})).unwrap();
-    let LayoutDialog::Size(mut f) = form(&mut a) else { panic!("size") };
+    let mut f: SizeForm = form(&mut a);
     f.set_width(300.0);
     assert!(f.follow(&a) && f.width == 300.0, "the same picture keeps the edits");
     // Cropped from the ribbon meanwhile: read again, Reset is what the new crop leaves.
@@ -689,16 +696,27 @@ fn size_dialog_follows_the_selection() {
     assert!(!f.follow(&a), "nothing to size");
 }
 
+/// Types `text` over the Size section's Height (the Scale section has one too, after it) as a user does: a click
+/// puts the caret in the field where it lands, as in a text box (egui's drag value selected all of it on the click,
+/// the framework's number field does not), so the field's text is selected first and the typing replaces it.
+fn type_height(h: &mut egui_kittest::Harness<'_, WordApp>, text: &str) {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("the height field").click();
+    crate::test_harness::frames(h, 2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    crate::test_harness::frames(h, 1);
+    h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("editing").type_text(text);
+}
+
 /// #2573 review: the Size dialog end to end. Its launcher (`picture.size` without a size)
 /// opens it; a height typed in pixels changes nothing until OK, which sizes the picture in
 /// proportion as one undo step and closes the dialog.
 #[test]
 fn size_dialog_typed_height_applies_on_ok_in_proportion() {
-    use egui::accesskit::Role;
-    use egui_kittest::kittest::Queryable;
     let mut a = picture_app(40, 20);
     a.run("picture.size", json!({})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -706,18 +724,19 @@ fn size_dialog_typed_height_applies_on_ok_in_proportion() {
         },
         a,
     );
-    h.run_steps(4);
+    // Frames as the app's driver runs them (`frames` hands the runtime the app's input first): a focus the click
+    // asks for, and so the typing, never lands on a harness stepped with `run_steps`.
+    crate::test_harness::frames(&mut h, 4);
     // The Size section's Height (the Scale section has one too, after it).
-    h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("the height field").click();
-    h.run_steps(2);
-    h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("editing").type_text("60 px");
-    h.key_press(egui::Key::Enter);
-    h.run_steps(2);
-    assert!(h.state().dialog.is_some());
+    type_height(&mut h, "60 px");
+    crate::test_harness::frames(&mut h, 2);
+    assert!(!h.state().dialog_host.open_dialogs().is_empty());
     assert_eq!(selected_size(h.state()), (30.0, 15.0), "nothing applies before OK");
-    h.get_by_role_and_label(Role::Button, "OK").click();
-    h.run_steps(2);
-    assert!(h.state().dialog.is_none(), "OK closes the dialog");
+    // In the framework's form dialog Enter in a single-line field is the dialog's OK (not only the field's
+    // commit), so it files the typed height and closes the dialog as the OK button does.
+    h.key_press(egui::Key::Enter);
+    crate::test_harness::frames(&mut h, 3);
+    assert!(h.state().dialog_host.open_dialogs().is_empty(), "OK closes the dialog");
     assert_eq!(selected_size(h.state()), (90.0, 45.0), "60 px = 45 pt high, the width follows");
     h.state_mut().run("edit.undo", json!({})).unwrap();
     assert_eq!(selected_size(h.state()), (30.0, 15.0), "one undo step");
@@ -731,7 +750,7 @@ fn size_dialog_leaves_out_of_range_values_alone() {
     let mut a = picture_app(1, 1);
     a.run("picture.size", json!({"width": 100.0, "height": 100.0, "lockAspect": false})).unwrap();
     a.run("picture.size", json!({})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -740,8 +759,7 @@ fn size_dialog_leaves_out_of_range_values_alone() {
         a,
     );
     h.run_steps(4);
-    let Some(Dialog::Layout(d)) = &h.state().dialog else { panic!("the Size dialog is open") };
-    let LayoutDialog::Size(f) = d.as_ref() else { panic!("size") };
+    let f: SizeForm = form(h.state_mut());
     assert!((f.scale().0 - 100.0 / 0.75 * 100.0).abs() < 1.0, "13333%: {:?}", f.scale());
     assert_eq!((f.width, f.height), (100.0, 100.0), "the form keeps the size");
     assert_eq!(selected_size(h.state()), (100.0, 100.0));
@@ -755,7 +773,7 @@ fn size_dialog_typed_height_then_ok_without_enter_applies_it() {
     use egui::accesskit::Role;
     use egui_kittest::kittest::Queryable;
     let harness = |a: WordApp| {
-        egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -767,30 +785,76 @@ fn size_dialog_typed_height_then_ok_without_enter_applies_it() {
     let mut a = picture_app(40, 20);
     a.run("picture.size", json!({})).unwrap();
     let mut h = harness(a);
-    h.run_steps(4);
-    h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("the height field").click();
-    h.run_steps(2);
-    h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("editing").type_text("60 px");
-    h.run_steps(2);
+    crate::test_harness::frames(&mut h, 4);
+    type_height(&mut h, "60 px");
+    crate::test_harness::frames(&mut h, 2);
     let ok = h.get_by_role_and_label(Role::Button, "OK").rect().center();
     h.event(egui::Event::PointerMoved(ok));
     h.event(egui::Event::PointerButton { pos: ok, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
-    h.run_steps(2);
+    crate::test_harness::frames(&mut h, 2);
     h.event(egui::Event::PointerButton { pos: ok, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
-    h.run_steps(2);
-    assert!(h.state().dialog.is_none(), "OK closes the dialog");
+    crate::test_harness::frames(&mut h, 2);
+    assert!(h.state().dialog_host.open_dialogs().is_empty(), "OK closes the dialog");
     assert_eq!(selected_size(h.state()), (90.0, 45.0), "the typed height, in proportion");
 
     // Esc throws the typing away and, as Cancel, closes the dialog: nothing applied.
     let mut a = picture_app(40, 20);
     a.run("picture.size", json!({})).unwrap();
     let mut h = harness(a);
-    h.run_steps(4);
-    h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("the height field").click();
-    h.run_steps(2);
-    h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("editing").type_text("60 px");
+    crate::test_harness::frames(&mut h, 4);
+    type_height(&mut h, "60 px");
+    // The framework gives Escape to the component that holds a draft first (`overlay/dismissal.rs`): the first
+    // throws the field's typing away, the next is the dialog's Cancel.
     h.key_press(egui::Key::Escape);
-    h.run_steps(2);
-    assert!(h.state().dialog.is_none(), "Esc cancels the dialog");
+    crate::test_harness::frames(&mut h, 2);
+    h.key_press(egui::Key::Escape);
+    crate::test_harness::frames(&mut h, 2);
+    assert!(h.state().dialog_host.open_dialogs().is_empty(), "Esc cancels the dialog");
     assert_eq!(selected_size(h.state()), (30.0, 15.0), "nothing applied");
+}
+
+/// Presses Yes (`extra` 0) or No (`extra` 1) as the host does: the extra's commands run, then the form steps on.
+fn press(f: &mut ManualForm, a: &mut WordApp, extra: usize) {
+    for (id, params) in f.extra(extra) {
+        a.run(&id, params).unwrap();
+    }
+    f.applied(a, Filed::Extra(extra), Ok(&[]));
+}
+
+/// Yes and No walk the words by byte offsets: a multi-byte letter before the break moves the char
+/// choice to a different byte, and the next word starts after the word plus the inserted soft hyphen.
+#[test]
+fn manual_hyphenation_yes_and_no_walk_the_words_by_byte_offsets() {
+    let text = "überraschenderweise überwältigenderweise ".repeat(40);
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text(&text)), Services::default());
+    let mut f = ManualForm::start(&mut a);
+    if f.done {
+        // No hyphenation data in this build, as the engine's own test skips.
+        return;
+    }
+    let (pos, word, choice) = (f.pos.clone(), f.word.clone(), f.choice);
+    let off = pos["off"].as_u64().unwrap_or(0) as usize;
+    let in_word = word.char_indices().nth(choice).map_or(word.len(), |(i, _)| i);
+    assert!(in_word > choice, "the multi-byte letter inside the word makes byte {in_word} differ from char {choice}");
+    let expected = off + in_word;
+    press(&mut f, &mut a, 0);
+    let body = a.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert_eq!(body.find('\u{ad}'), Some(expected), "the hyphen goes at the chosen point");
+    assert!(f.done || f.pos != pos, "Yes moves on to the next word");
+
+    let mut g = ManualForm::start(&mut a);
+    if !g.done {
+        let before = a.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        let at = g.pos.clone();
+        press(&mut g, &mut a, 1);
+        assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), before, "No leaves the text alone");
+        assert!(g.done || g.pos != at, "No moves on to the next word");
+    }
+    for _ in 0..500 {
+        if g.done {
+            break;
+        }
+        press(&mut g, &mut a, 1);
+    }
+    assert!(g.done, "the walk ends");
 }

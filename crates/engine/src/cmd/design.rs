@@ -63,7 +63,8 @@ pub fn specs() -> Vec<CommandSpec> {
             let t = THEMES.iter().find(|t| t.0.eq_ignore_ascii_case(name)).ok_or_else(|| CmdError::Params(format!("unknown colours `{name}`")))?;
             set_accent(s, t.3[0]);
             sel_result(s)
-        }),
+        })
+        .params(r#"{"name": string (see design.themes)}"#),
         CommandSpec::new("design.styleSet", "Style Set", "Design › Document Formatting", style_set)
             .params(r#"{"name": "default|basic|lines|shaded|casual|centered|minimalist|title"}"#),
         CommandSpec::new("design.paragraphSpacing", "Paragraph Spacing", "Design › Document Formatting", para_spacing)
@@ -154,14 +155,20 @@ fn style_set(s: &mut Session, v: &Value) -> CmdResult {
         match name {
             "basic" if heading => {
                 st.chr.color = Some(TextColor::Rgb(Rgb(0x26, 0x26, 0x26)));
+                // Both scripts, as Word's own heading styles carry `w:b` with `w:bCs`: a Thai
+                // heading in a run marked `w:cs` is drawn bold too.
                 st.chr.bold = Some(true);
+                st.chr.bold_cs = Some(true);
             }
             "lines" if st.id == "Heading1" || st.id == "Title" => st.para.borders = Some(Borders { bottom: Some(line), ..Default::default() }),
             "shaded" if st.id == "Heading1" => {
                 st.para.shading = Some(accent);
                 st.chr.color = Some(TextColor::Rgb(Rgb::WHITE));
             }
-            "casual" if heading => st.chr.italic = Some(true),
+            "casual" if heading => {
+                st.chr.italic = Some(true);
+                st.chr.italic_cs = Some(true);
+            }
             "centered" if heading => st.para.align = Some(wordcraft_doc::Align::Center),
             "minimalist" if heading => {
                 st.chr.caps = Some(true);

@@ -274,7 +274,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 st.quick = on;
             }
             sel_result(s)
-        }),
+        })
+        .params(r#"{"style": string (name or id), "value"?: bool (default true)}"#),
         // Advanced paragraph tools (#5043, as in WPS Office): conversions and cleanup over the
         // selection, or the whole document with `scope: "all"`. One undo step per command.
         CommandSpec::new("para.convertBreaks", "Convert Line Breaks to Paragraphs", "Home › Paragraph › Paragraph Tools", convert_breaks)

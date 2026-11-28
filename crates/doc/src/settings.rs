@@ -80,6 +80,8 @@ pub struct Settings {
     pub default_tab: f32,
     pub even_odd_headers: bool,
     pub mirror_margins: bool,
+    /// The gutter is added to the top margin instead of the left one (`w:gutterAtTop`).
+    pub gutter_at_top: bool,
     pub auto_hyphenation: bool,
     /// Hyphenation zone (`w:hyphenationZone`), points: a line is hyphenated only when breaking
     /// it at a word boundary would leave more than this empty at its end.
@@ -126,6 +128,15 @@ pub struct Settings {
     /// draws one that isn't installed in a serif face.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub roman_fonts: Vec<String>,
+    /// Fonts the font table classes as modern (fixed pitch, `w:family w:val="modern"`): Word draws
+    /// one that isn't installed, and whose alternate isn't either, in a serif face (#2702). Not
+    /// the East Asian ones (`w:charset` 80, 81, 86, 88: MS Gothic, SimHei…).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modern_fonts: Vec<String>,
+    /// Alternate names the document's font table gives its fonts (`w:font/w:altName`), as (font,
+    /// alternate): Word draws a font that isn't installed in its alternate when that one is.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub font_alt_names: Vec<(String, String)>,
     /// `w:doNotUseHTMLParagraphAutoSpacing`: the space between two paragraphs is the first's space
     /// after plus the second's space before, not the larger of the two.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -137,6 +148,12 @@ pub struct Settings {
     /// Keep contextual paragraph spacing inside legacy table cells (`allowSpaceOfSameStyleInTable`).
     /// Word ignores the layout override in compatibility mode 15, but the flag still round-trips.
     pub allow_space_of_same_style_in_table: bool,
+    /// `w:doNotSuppressIndentation` (a `.doc`'s `Copts.fWW11IndentRules`): Word 2003's indent
+    /// rules beside floating objects. An unnumbered paragraph's line starts right after a floating
+    /// object before it on the line, its own indent ignored (ECMA-376 Part 4 §14.8.3.12). Word 2013's
+    /// layout (compatibility mode 15) does not use it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub do_not_suppress_indentation: bool,
     /// Drawing grid spacing in points, across and down (View › Gridlines); ECMA-376's default is 1/8 inch.
     pub grid_h: f32,
     pub grid_v: f32,
@@ -296,6 +313,7 @@ impl Default for Settings {
             default_tab: 36.0,
             even_odd_headers: false,
             mirror_margins: false,
+            gutter_at_top: false,
             auto_hyphenation: false,
             hyphenation_zone: DEFAULT_HYPHENATION_ZONE,
             hyphenate_caps: true,
@@ -316,9 +334,12 @@ impl Default for Settings {
             protect_hash: Vec::new(),
             compat_mode: COMPAT_MODE_CURRENT,
             roman_fonts: Vec::new(),
+            modern_fonts: Vec::new(),
+            font_alt_names: Vec::new(),
             sum_paragraph_spacing: false,
             do_not_expand_shift_return: false,
             allow_space_of_same_style_in_table: false,
+            do_not_suppress_indentation: false,
             grid_h: DEFAULT_GRID,
             grid_v: DEFAULT_GRID,
             math: None,

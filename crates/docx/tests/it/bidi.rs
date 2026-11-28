@@ -2,18 +2,15 @@
 //! complex-script font, size, bold and italic, and the bidi language. Fixtures are hand-written
 //! from ECMA-376 Part 1 §17.3.1.6 (bidi), §17.3.2 (run properties).
 
-use std::io::{Read, Write};
-
 use wordcraft_doc::props::{Align, CharProps, ParaProps};
 use wordcraft_doc::{Document, Paragraph, para_block};
 
 fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, bytes) in entries {
-        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(bytes).unwrap();
+        zw.add(name, bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 /// A package whose body is `body`.
@@ -31,10 +28,9 @@ fn paras(d: &Document) -> Vec<&Paragraph> {
 
 /// `word/document.xml` of a written package.
 fn document_xml(bytes: &[u8]) -> String {
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    let mut s = String::new();
-    z.by_name("word/document.xml").unwrap().read_to_string(&mut s).unwrap();
-    s
+    let mut z = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+
+    String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap()
 }
 
 /// Persian text with a ZWNJ (نیم‌فاصله), Persian digits, Latin and punctuation.

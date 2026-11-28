@@ -6,15 +6,33 @@
 //! Refresh is their consent: it turns on the font store's downloading (there is no second
 //! prompt, R6.3). A click the control channel made never does.
 
+use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use egui::{RichText, Ui, vec2};
+use craft::behavior::{ColumnKey, ColumnWidth, keyed};
+use craft::theme::variant::Tone;
+use craft::ui::buttons::Button;
+use craft::ui::contract::{Bind, BodyCx, ColumnSpec, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, clicked};
+use craft::ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft::ui::display::{Progress, Shade, Spinner, Text};
+use craft::ui::layout::RowAlign;
+use craft::ui::layout_components::{Row, Stack};
+use craft::ui::list::{List, ListRow};
+use craft::ui::notices::{Notice, NoticeAction};
+use craft::ui::patterns::form_dialogs::AboutAppTab;
+use craft::ui::runtime::env::{Env, Label};
+use craft::ui::runtime::windows::WindowHost;
+use craft::ui::sections::{DialogRole, FooterButton, GroupBox};
+use craft::ui::table::Table;
+use craft::ui::text::TextField;
+use egui::Ui;
 use serde_json::json;
 use wordcraft_engine::packs::{self, LanguageRow, Pack, Proofing};
 
 use crate::WordApp;
-use crate::theme::{Tokens, semibold};
+use crate::dialogs::host::{DialogHooks, Settle, open_with};
 
 /// How long the bar keeps what it worked out while the document is being typed in.
 const MISSING_REFRESH_SECS: f64 = 1.0;
@@ -86,12 +104,6 @@ pub(crate) struct Runtime {
     finished: u64,
     /// The Your languages rows, and what they were worked out from.
     rows: Option<(RowsKey, Vec<LanguageRow>)>,
-    /// Is the Add a language window open?
-    picker: bool,
-    /// Its search text.
-    search: String,
-    /// Has its search box been given focus since it opened?
-    focused: bool,
     /// The person clicked the bar's Install before the list was known: the list's failure then
     /// shows in the bar (an automatic fetch's stays in Options).
     asked: bool,
@@ -118,9 +130,9 @@ struct MissingKey {
     caret: Option<String>,
 }
 
-/// Bytes as people read them: `1.9 MB`, `640 KB`.
-pub(crate) fn size_text(bytes: u64) -> String {
-    let d = crate::options::decimal().to_string();
+/// Bytes as people read them: `1.9 MB`, `640 KB`; the decimal mark is the region's `format`.
+pub(crate) fn size_text(bytes: u64, format: &craft::i18n::Format) -> String {
+    let d = format.separators().0;
     if bytes >= 1_000_000 {
         let tenths = bytes.saturating_add(50_000) / 100_000;
         crate::i18n::fmt(tl!("{n} MB"), &[("n", &format!("{}{d}{}", tenths / 10, tenths % 10))])
@@ -204,7 +216,12 @@ fn progress(locale: &str) -> Option<(u64, u64)> {
 
 /// The failure to show for `locale` ("" for the list): the window's own, else the engine's.
 fn error_of(app: &WordApp, locale: &str) -> Option<String> {
-    if let Some(e) = app.packs_rt.errors.get(locale) {
+    error_in(&app.packs_rt.errors, locale)
+}
+
+/// [`error_of`] over a copy of the window's own failures (the Add a language dialog holds one).
+fn error_in(own: &HashMap<String, String>, locale: &str) -> Option<String> {
+    if let Some(e) = own.get(locale) {
         return Some(e.clone());
     }
     let e = packs::error(locale)?;
@@ -218,11 +235,24 @@ fn error_of(app: &WordApp, locale: &str) -> Option<String> {
 /// Downloading on for a click on Install, Add a language… or Refresh: the person's
 /// consent. A click the control channel made (an agent's `click`) leaves it off and says why.
 fn consent(app: &mut WordApp, ctx: &egui::Context, key: &str) -> bool {
+    consent_with(app, injected(ctx), key)
+}
+
+/// Whether the running pass carries injected input (an automation client's), by the framework's own signal: the
+/// same on every platform and on the web. A second pass of a frame has none of its own input, so a click read from
+/// it is never taken for the person's; a click's pass is where this is asked.
+fn injected(ctx: &egui::Context) -> bool {
+    WindowHost::of(ctx).injected_pass()
+}
+
+/// [`consent`] for a click whose pass was `injected` (or not): the Add a language dialog records that at the click
+/// and the app applies it a pass later.
+fn consent_with(app: &mut WordApp, injected: bool, key: &str) -> bool {
     let Some(backend) = packs::backend() else { return false };
     if backend.network_on() {
         return true;
     }
-    if app.input_from_control(ctx) {
+    if injected {
         let why = tl!("Only you can turn on downloading: click the button yourself. Agents can install once it is on.");
         app.packs_rt.errors.insert(key.to_string(), why.to_string());
         return false;
@@ -236,8 +266,13 @@ fn consent(app: &mut WordApp, ctx: &egui::Context, key: &str) -> bool {
 
 /// Install `pack` (on the engine's thread): the person clicked Install.
 fn start_install(app: &mut WordApp, ctx: &egui::Context, pack: &Pack) {
+    start_install_with(app, injected(ctx), pack);
+}
+
+/// [`start_install`] for a click whose pass was `injected` (or not).
+fn start_install_with(app: &mut WordApp, injected: bool, pack: &Pack) {
     app.packs_rt.errors.remove(&pack.locale);
-    if !consent(app, ctx, &pack.locale) {
+    if !consent_with(app, injected, &pack.locale) {
         return;
     }
     if let Err(e) = packs::start_install(&pack.locale) {
@@ -248,9 +283,9 @@ fn start_install(app: &mut WordApp, ctx: &egui::Context, pack: &Pack) {
 
 /// Fetch the list again (on the engine's thread): the person clicked Add a language…
 /// or Refresh.
-fn start_fetch(app: &mut WordApp, ctx: &egui::Context) {
+fn start_fetch(app: &mut WordApp, injected: bool) {
     app.packs_rt.errors.remove("");
-    if !consent(app, ctx, "") {
+    if !consent_with(app, injected, "") {
         return;
     }
     if let Err(e) = packs::start_refresh() {
@@ -311,58 +346,114 @@ fn start_get(app: &mut WordApp, ctx: &egui::Context, tag: &str) {
     app.packs_rt.missing = None;
 }
 
-/// The missing-pack bar under the ribbon: "<Language> proofing isn't installed. Install (<size>)",
-/// for the first language of the document with an available pack that isn't installed. Closing it
-/// hides it for that language in this document. Never shown for a language with no pack.
-pub(crate) fn bar(app: &mut WordApp, ui: &mut Ui) {
-    if packs::backend().is_none() {
-        return;
-    }
+/// What the bar offers now.
+enum Bar {
+    /// A pack the list has for a language of the document.
+    Pack(Pack),
+    /// A language of the document asked for while there is no list yet (its tag).
+    Unlisted(String),
+}
+
+/// What the bar shows for the shown document: the first language with an available pack that isn't
+/// installed and wasn't closed, else the first one asked for before the list was known (hidden while
+/// an automatic fetch of the list runs). The one place that decides, for [`bar_offer`] and
+/// [`pack_bar`] alike.
+fn shown_bar(app: &mut WordApp) -> Option<Bar> {
+    packs::backend()?;
+    let now = app.ctx.as_ref().map_or(0.0, |ctx| ctx.input(|i| i.time));
     let document = app.session.document_id();
-    let now = ui.input(|i| i.time);
     let offers = missing(app, now);
     // The whole list, for a tag closed before it was known (only then: it is a copy).
     let index = if app.packs_rt.dismissed_tags.is_empty() { Vec::new() } else { packs::available() };
-    let Some(pack) = offers.packs.into_iter().find(|p| !dismissed(app, document, p, &index)) else {
-        if let Some(tag) = offers.unlisted.into_iter().find(|t| !app.packs_rt.dismissed_tags.contains(&(document, t.clone()))) {
-            unlisted_bar(app, ui, &tag);
-        }
-        return;
-    };
-    let t = Tokens::get(ui.ctx());
-    egui::Panel::top("language_pack_bar")
-        .exact_size(36.0)
-        .show_separator_line(false)
-        .frame(egui::Frame::NONE.fill(t.panel).inner_margin(egui::Margin::symmetric(12, 0)))
-        .show(ui, |ui| {
-            let bottom = ui.max_rect().bottom();
-            let full = ui.max_rect();
-            ui.painter().hline(full.x_range(), bottom - 0.5, egui::Stroke::new(1.0, t.border));
-            ui.horizontal_centered(|ui| {
-                let language = shown(&language_of(&pack.locale, &pack.name), MAX_BAR_NAME);
-                ui.label(RichText::new(crate::i18n::fmt(tl!("{language} proofing isn't installed."), &[("language", &language)])).color(t.text));
-                match progress(&pack.locale) {
-                    Some((done, total)) => {
-                        let pct = (done.min(total) * 100 / total).to_string();
-                        ui.label(RichText::new(crate::i18n::fmt(tl!("Installing… {percent}%"), &[("percent", &pct)])).color(t.text_dim));
-                    }
-                    None => {
-                        let label = crate::i18n::fmt(tl!("Install ({size})"), &[("size", &size_text(pack.size))]);
-                        if ui.add(crate::widgets::primary_button(ui, label)).on_hover_text(licence_hover(&pack)).clicked() {
-                            start_install(app, &ui.ctx().clone(), &pack);
-                        }
-                    }
+    if let Some(pack) = offers.packs.into_iter().find(|p| !dismissed(app, document, p, &index)) {
+        return Some(Bar::Pack(pack));
+    }
+    let tag = offers.unlisted.into_iter().find(|t| !app.packs_rt.dismissed_tags.contains(&(document, t.clone())))?;
+    if packs::fetching() && !app.packs_rt.asked {
+        return None;
+    }
+    Some(Bar::Unlisted(tag))
+}
+
+/// Whether the bar has something to show for the shown document: an offer, an install in progress or
+/// its error. The `languagePack` slot is visible only then, so it takes no room otherwise.
+// PLAN: the decision names `&WordApp`; the offers are cached in `app.packs_rt`, so this takes `&mut WordApp` (app-hub's slot call passes `self`).
+pub(crate) fn bar_offer(app: &mut WordApp) -> bool {
+    shown_bar(app).is_some()
+}
+
+/// The missing-pack bar under the ribbon: "<Language> proofing isn't installed. Install (<size>)",
+/// for the first language of the document with an available pack that isn't installed. Closing it
+/// hides it for that language in this document. Never shown for a language with no pack.
+pub(crate) fn pack_bar(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
+    let Some(bar) = shown_bar(app) else { return };
+    let document = app.session.document_id();
+    let ctx = ui.ctx().clone();
+    let env = Env::of(ui);
+    let format = env.format();
+    match bar {
+        Bar::Pack(pack) => {
+            let language = shown(&language_of(&pack.locale, &pack.name), MAX_BAR_NAME);
+            let message = crate::i18n::fmt(tl!("{language} proofing isn't installed."), &[("language", &language)]);
+            let running = progress(&pack.locale);
+            let error = error_of(app, &pack.locale);
+            let install =
+                (running.is_none()).then(|| crate::i18n::fmt(tl!("Install ({size})"), &[("size", &size_text(pack.size, format))]).to_string());
+            // The body can run twice in a pass (measuring, then drawing): the notice is built in it each time.
+            let shown_bar = Row::new().show(ui, |ui, _| {
+                let mut notice = Notice::new(if error.is_some() { Tone::Bad } else { Tone::Info }, message.to_string()).dismiss().id_salt("pack");
+                if let Some(label) = &install {
+                    notice = notice.action(NoticeAction::new(label.clone()));
                 }
-                if let Some(e) = error_of(app, &pack.locale) {
-                    ui.add(egui::Label::new(RichText::new(e).color(t.red)).truncate());
+                if let Some(e) = &error {
+                    notice = notice.lines([e.clone()]);
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if crate::widgets::icon_button(ui, "close", tl!("Not now")).clicked() {
-                        app.packs_rt.dismissed.insert((document, pack.locale.clone()));
-                    }
-                });
+                let out = notice.show(ui);
+                if let Some((done, total)) = running {
+                    Progress::new(done.min(total) as f32 / total as f32).show(ui);
+                    let pct = (done.min(total) * 100 / total).to_string();
+                    Text::new(crate::i18n::fmt(tl!("Installing… {percent}%"), &[("percent", &pct)]).to_string()).show(ui);
+                }
+                (out.action, out.dismissed)
             });
-        });
+            let (action, closed) = shown_bar.inner.unwrap_or((None, false));
+            if action == Some(0) {
+                start_install(app, &ctx, &pack);
+            }
+            if closed {
+                app.packs_rt.dismissed.insert((document, pack.locale.clone()));
+            }
+        }
+        Bar::Unlisted(tag) => {
+            let fetching = packs::fetching();
+            let language = shown(&language_of(&tag.to_ascii_lowercase(), ""), MAX_BAR_NAME);
+            let message = crate::i18n::fmt(tl!("{language} proofing isn't installed."), &[("language", &language)]);
+            // The window's own failure (consent), else the list's when the person asked.
+            let error = app.packs_rt.errors.get("").cloned().or_else(|| if app.packs_rt.asked { error_of(app, "") } else { None });
+            let shown_bar = Row::new().show(ui, |ui, _| {
+                let mut notice = Notice::new(if error.is_some() { Tone::Bad } else { Tone::Info }, message.to_string()).dismiss().id_salt("unlisted");
+                if !fetching {
+                    notice = notice.action(NoticeAction::new(tl!("Install").to_string()));
+                }
+                if let Some(e) = &error {
+                    notice = notice.lines([e.clone()]);
+                }
+                let out = notice.show(ui);
+                if fetching {
+                    Spinner::new().show(ui);
+                    Text::new(tl!("Getting the list of languages…").to_string()).show(ui);
+                }
+                (out.action, out.dismissed)
+            });
+            let (action, closed) = shown_bar.inner.unwrap_or((None, false));
+            if action == Some(0) {
+                start_get(app, &ctx, &tag);
+            }
+            if closed {
+                app.packs_rt.dismissed_tags.insert((document, tag));
+            }
+        }
+    }
 }
 
 /// Whether the bar for `pack` was closed in `document`: for the pack itself, or for a language
@@ -376,54 +467,6 @@ fn dismissed(app: &WordApp, document: u64, pack: &Pack, index: &[Pack]) -> bool 
             .dismissed_tags
             .iter()
             .any(|(d, tag)| *d == document && packs::pack_for_tag(tag, index).is_some_and(|p| p.locale == pack.locale))
-}
-
-/// The bar for a language the document asks for while there is no list of packs yet (a fresh
-/// install, or a list cached for an older pin): "<Language> proofing isn't installed. Install".
-/// Install fetches the list, then installs the language's pack if it has one; if not, the bar
-/// goes. Hidden while an automatic fetch of the list runs.
-fn unlisted_bar(app: &mut WordApp, ui: &mut Ui, tag: &str) {
-    let fetching = packs::fetching();
-    if fetching && !app.packs_rt.asked {
-        return;
-    }
-    let document = app.session.document_id();
-    let t = Tokens::get(ui.ctx());
-    egui::Panel::top("language_pack_bar")
-        .exact_size(36.0)
-        .show_separator_line(false)
-        .frame(egui::Frame::NONE.fill(t.panel).inner_margin(egui::Margin::symmetric(12, 0)))
-        .show(ui, |ui| {
-            let bottom = ui.max_rect().bottom();
-            let full = ui.max_rect();
-            ui.painter().hline(full.x_range(), bottom - 0.5, egui::Stroke::new(1.0, t.border));
-            ui.horizontal_centered(|ui| {
-                let language = shown(&language_of(&tag.to_ascii_lowercase(), ""), MAX_BAR_NAME);
-                ui.label(RichText::new(crate::i18n::fmt(tl!("{language} proofing isn't installed."), &[("language", &language)])).color(t.text));
-                if fetching {
-                    ui.spinner();
-                    ui.label(RichText::new(tl!("Getting the list of languages…")).color(t.text_dim));
-                } else {
-                    let mut hover = vec![tl!("Gets the list of Language packs, then this language's pack if there is one.").to_string()];
-                    if packs::backend().is_some_and(|b| !b.network_on()) {
-                        hover.push(tl!("Installing turns on downloading of fonts and Language packs from GitHub.").to_string());
-                    }
-                    if ui.add(crate::widgets::primary_button(ui, tl!("Install").to_string())).on_hover_text(hover.join("\n")).clicked() {
-                        start_get(app, &ui.ctx().clone(), tag);
-                    }
-                }
-                // The window's own failure (consent), else the list's when the person asked.
-                let e = app.packs_rt.errors.get("").cloned().or_else(|| if app.packs_rt.asked { error_of(app, "") } else { None });
-                if let Some(e) = e {
-                    ui.add(egui::Label::new(RichText::new(e).color(t.red)).truncate());
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if crate::widgets::icon_button(ui, "close", tl!("Not now")).clicked() {
-                        app.packs_rt.dismissed_tags.insert((document, tag.to_string()));
-                    }
-                });
-            });
-        });
 }
 
 /// The bar's Install tooltip: the licence and source, that it turns on downloading when it is
@@ -532,22 +575,61 @@ fn your_view(app: &mut WordApp, index: &[Pack], installed: &[packs::Installed]) 
     view
 }
 
+/// What a pass of the Your languages table asked for; applied after the table is drawn.
+#[derive(Default)]
+struct Chosen {
+    /// The pack whose Install was clicked.
+    install: Option<Pack>,
+    /// The pack whose installation Cancel was clicked.
+    cancel: Option<String>,
+    /// The locale of the pack whose Remove was clicked.
+    removal: Option<String>,
+    /// The tag Set as default was clicked for.
+    default: Option<String>,
+}
+
+/// The Your languages table's columns: Language and its own name and code, the proofing status, then the
+/// action columns (Install or Cancel, Set as default, Remove).
+fn language_columns() -> Vec<ColumnSpec> {
+    vec![
+        ColumnSpec::new(ColumnKey::new("language"), tl!("Language").to_string(), ColumnWidth::fill(1.0)),
+        ColumnSpec::new(ColumnKey::new("names"), tl!("Own name and code").to_string(), ColumnWidth::Content),
+        ColumnSpec::new(ColumnKey::new("status"), tl!("Status").to_string(), ColumnWidth::Content),
+        ColumnSpec::new(ColumnKey::new("install"), tl!("Actions").to_string(), ColumnWidth::Content),
+        ColumnSpec::new(ColumnKey::new("default"), Label::Empty, ColumnWidth::Content),
+        ColumnSpec::new(ColumnKey::new("remove"), Label::Empty, ColumnWidth::Content),
+    ]
+}
+
+/// The status text of a row, when it has one in words (an install in progress shows its percentage).
+fn status_text(row: &LanguageRow, running: Option<(u64, u64)>) -> String {
+    if let Some((done, total)) = running {
+        let pct = (done.min(total) * 100 / total).to_string();
+        return crate::i18n::fmt(tl!("Installing… {percent}%"), &[("percent", &pct)]).to_string();
+    }
+    match row.proofing {
+        Proofing::BuiltIn => tl!("Built in"),
+        Proofing::Installed => tl!("Installed"),
+        Proofing::OwnDictionary => tl!("Your own dictionary"),
+        Proofing::SystemDictionary => tl!("System dictionary"),
+        Proofing::NotAvailable => tl!("Not available yet"),
+        Proofing::GrammarBuiltIn => tl!("Grammar built in"),
+        Proofing::Install => "",
+    }
+    .to_string()
+}
+
 /// File › Options › Language › Your languages: the languages in use and installed, each with
 /// where its proofing comes from and what can be done, and Add a language….
-pub(crate) fn your_languages_section(app: &mut WordApp, ui: &mut Ui) {
-    // Language names include Arabic and other scripts; ask for a system Arabic face when none is embedded.
-    app.want_system_arabic = true;
-    let t = Tokens::get(ui.ctx());
-    ui.label(RichText::new(tl!("Your languages")).font(semibold(15.0)));
-    ui.add_space(2.0);
-    ui.label(
-        RichText::new(tl!(
-            "English, the languages of this document and every installed Language pack. Language packs add spelling dictionaries and hyphenation."
-        ))
-        .small()
-        .weak(),
-    );
-    ui.add_space(4.0);
+pub(crate) fn your_languages(app: &mut WordApp, ui: &mut Ui) {
+    let env = Env::of(ui);
+    let format = env.format();
+    let ctx = ui.ctx().clone();
+    Text::new(tl!(
+        "English, the languages of this document and every installed Language pack. Language packs add spelling dictionaries and hyphenation."
+    ))
+    .shade(Shade::Faint)
+    .show(ui);
     let backend = packs::backend();
     if backend.is_none() {
         let why = if cfg!(target_arch = "wasm32") {
@@ -555,160 +637,129 @@ pub(crate) fn your_languages_section(app: &mut WordApp, ui: &mut Ui) {
         } else {
             tl!("Language packs need the font store folder, and there is none on this computer.")
         };
-        ui.label(RichText::new(why).small().weak());
+        Text::new(why).shade(Shade::Faint).show(ui);
     }
     if let Some(source) = packs::index_override() {
         let line = crate::i18n::fmt(tl!("Language packs come from a test source: {source}"), &[("source", &shown(&source, 300))]);
-        ui.add(egui::Label::new(RichText::new(line).small().color(t.orange)).wrap());
+        Notice::new(Tone::Warn, line.to_string()).id_salt("test_source").show(ui);
     }
     let index = packs::available();
     let installed = packs::installed();
-    let caret = crate::ribbon::caret_lang_tag(app);
     let view = your_view(app, &index, &installed);
-    let mut install = None;
-    let mut removal = None;
-    let mut default = None;
-    // As wide as the window leaves room for (the rows scroll sideways in a narrow one).
-    let room = (ui.ctx().content_rect().right() - ui.cursor().min.x - 16.0).clamp(200.0, 760.0);
-    let narrow = room < 660.0;
-    egui::ScrollArea::both().id_salt("options_your_languages").max_width(room).max_height(300.0).auto_shrink([false, true]).show(ui, |ui| {
-        crate::rtl::grid(
-            ui,
-            egui::Grid::new("options_your_languages_grid").num_columns(if narrow { 2 } else { 3 }).spacing(vec2(16.0, 8.0)).striped(true),
-            |ui| {
-                for (name, detail, row) in &view {
-                    let mut actions = |ui: &mut Ui| {
-                        ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
-                            if !row.default
-                                && ui
-                                    .small_button(tl!("Set as default"))
-                                    .on_hover_text(tl!("New blank documents are written in this language"))
-                                    .clicked()
-                            {
-                                default = Some(row_tag(row));
-                            }
-                            if row.installed
-                                && let Some(locale) = &row.pack
-                                && ui.add_enabled(!busy(), egui::Button::new(tl!("Remove")).small()).clicked()
-                            {
-                                removal = Some(locale.clone());
-                            }
-                        });
+    let errors: Vec<Option<String>> = view
+        .iter()
+        .map(|(_, _, row)| {
+            let error = row.pack.as_deref().and_then(|l| error_of(app, l));
+            let unreadable = (matches!(row.proofing, Proofing::OwnDictionary | Proofing::SystemDictionary))
+                .then(|| wordcraft_engine::proof::dictionary_load_error(wordcraft_engine::proof::ProofLang::from_tag(Some(&row_tag(row)))))
+                .flatten()
+                .map(|reason| crate::i18n::fmt(tl!("Its dictionary couldn't be read: {reason}"), &[("reason", &shown_error(&reason))]).to_string());
+            match (error, unreadable) {
+                (Some(a), Some(b)) => Some(format!("{a}\n{b}")),
+                (a, b) => a.or(b),
+            }
+        })
+        .collect();
+    let chosen = RefCell::new(Chosen::default());
+    let busy = busy();
+    let order: Vec<usize> = (0..view.len()).collect();
+    let source = keyed(&order[..], |at: &usize| *at).with_text(|at| Cow::Owned(view[*at].0.clone()));
+    let _ = Table::<usize>::new(tl!("Your languages").to_string(), language_columns()).select(SelectMode::None).natural_height(true).show_items(
+        ui,
+        &source,
+        &mut |key, icx| {
+            let at = *key;
+            let (name, detail, row) = &view[at];
+            let shown_name = shown(name, MAX_BAR_NAME);
+            let line = if row.default { crate::i18n::fmt(tl!("{language} (default)"), &[("language", &shown_name)]).to_string() } else { shown_name };
+            let pack = row.pack.as_deref().and_then(|l| index.iter().find(|p| p.locale == l));
+            let running = pack.and_then(|p| progress(&p.locale));
+            let mut list_row = ListRow::new(line)
+                .cells(icx.cells())
+                .striped(icx.row.striped)
+                .cell(ColumnKey::new("names"), detail.clone())
+                .cell(ColumnKey::new("status"), status_text(row, running));
+            if let Some(pack) = pack
+                && !row.installed
+                && matches!(row.proofing, Proofing::Install | Proofing::GrammarBuiltIn)
+            {
+                let chosen = &chosen;
+                if running.is_some() {
+                    let locale = pack.locale.clone();
+                    list_row = list_row.cell_field(ColumnKey::new("install"), Button::new(tl!("Cancel")).id_salt(("cancel", at)), move |out| {
+                        if clicked(&out) {
+                            chosen.borrow_mut().cancel = Some(locale);
+                        }
+                    });
+                } else {
+                    let size = size_text(row.size, format);
+                    let label = if row.proofing == Proofing::Install {
+                        crate::i18n::fmt(tl!("Install ({size})"), &[("size", &size)])
+                    } else {
+                        crate::i18n::fmt(tl!("Install spelling ({size})"), &[("size", &size)])
                     };
-                    let here = caret.as_deref().is_some_and(|c| row.is_tag(c));
-                    ui.vertical(|ui| {
-                        ui.set_width(if narrow { 170.0 } else { 250.0 });
-                        let shown_name = shown(name, MAX_BAR_NAME);
-                        let line = if row.default { crate::i18n::fmt(tl!("{language} (default)"), &[("language", &shown_name)]) } else { shown_name };
-                        ui.label(if here { RichText::new(line).font(semibold(14.0)) } else { RichText::new(line) });
-                        ui.label(RichText::new(detail.as_str()).small().weak());
-                    });
-                    let pack = row.pack.as_deref().and_then(|l| index.iter().find(|p| p.locale == l));
-                    let size = size_text(row.size);
-                    ui.vertical(|ui| {
-                        ui.set_width(190.0);
-                        match row.proofing {
-                            Proofing::BuiltIn => {
-                                ui.label(tl!("Built in"));
-                            }
-                            Proofing::Installed => {
-                                ui.label(RichText::new(tl!("Installed")).color(t.green));
-                            }
-                            Proofing::OwnDictionary => {
-                                ui.label(tl!("Your own dictionary"));
-                            }
-                            Proofing::SystemDictionary => {
-                                ui.label(tl!("System dictionary"));
-                            }
-                            Proofing::NotAvailable => {
-                                ui.label(RichText::new(tl!("Not available yet")).weak());
-                            }
-                            Proofing::GrammarBuiltIn => {
-                                ui.label(tl!("Grammar built in"));
-                            }
-                            Proofing::Install => {}
-                        }
-                        if let Some(pack) = pack
-                            && !row.installed
-                            && matches!(row.proofing, Proofing::Install | Proofing::GrammarBuiltIn)
-                        {
-                            match progress(&pack.locale) {
-                                Some((done, total)) => {
-                                    ui.horizontal(|ui| {
-                                        ui.add(egui::ProgressBar::new(done.min(total) as f32 / total as f32).desired_width(90.0).show_percentage());
-                                        if ui.small_button(tl!("Cancel")).clicked() {
-                                            packs::cancel(&pack.locale);
-                                        }
-                                    });
-                                }
-                                None => {
-                                    let label = if row.proofing == Proofing::Install {
-                                        crate::i18n::fmt(tl!("Install ({size})"), &[("size", &size)])
-                                    } else {
-                                        crate::i18n::fmt(tl!("Install spelling ({size})"), &[("size", &size)])
-                                    };
-                                    if ui.button(label).on_hover_text(licence_hover(pack)).clicked() {
-                                        install = Some(pack.clone());
-                                    }
-                                }
-                            }
-                        }
-                        if narrow {
-                            actions(ui);
+                    let pack = pack.clone();
+                    list_row = list_row.cell_field(ColumnKey::new("install"), Button::new(label.to_string()).id_salt(("install", at)), move |out| {
+                        if clicked(&out) {
+                            chosen.borrow_mut().install = Some(pack);
                         }
                     });
-                    if !narrow {
-                        actions(ui);
-                    }
-                    ui.end_row();
-                    let error = row.pack.as_deref().and_then(|l| error_of(app, l));
-                    let unreadable = (matches!(row.proofing, Proofing::OwnDictionary | Proofing::SystemDictionary))
-                        .then(|| wordcraft_engine::proof::dictionary_load_error(wordcraft_engine::proof::ProofLang::from_tag(Some(&row_tag(row)))))
-                        .flatten();
-                    if error.is_some() || unreadable.is_some() {
-                        ui.label("");
-                        ui.vertical(|ui| {
-                            if let Some(e) = error {
-                                ui.add(egui::Label::new(RichText::new(e).small().color(t.red)).wrap());
-                            }
-                            if let Some(reason) = unreadable {
-                                let line = crate::i18n::fmt(tl!("Its dictionary couldn't be read: {reason}"), &[("reason", &shown_error(&reason))]);
-                                ui.add(egui::Label::new(RichText::new(line).small().color(t.red)).wrap());
-                            }
-                        });
-                        if !narrow {
-                            ui.label("");
-                        }
-                        ui.end_row();
-                    }
                 }
-            },
-        );
-    });
-    ui.add_space(4.0);
+            }
+            if !row.default {
+                let chosen = &chosen;
+                let tag = row_tag(row);
+                list_row = list_row.cell_field(ColumnKey::new("default"), Button::new(tl!("Set as default")).id_salt(("default", at)), move |out| {
+                    if clicked(&out) {
+                        chosen.borrow_mut().default = Some(tag);
+                    }
+                });
+            }
+            if row.installed
+                && let Some(locale) = &row.pack
+            {
+                let chosen = &chosen;
+                let locale = locale.clone();
+                list_row =
+                    list_row.cell_field(ColumnKey::new("remove"), Button::new(tl!("Remove")).enabled(!busy).id_salt(("remove", at)), move |out| {
+                        if clicked(&out) {
+                            chosen.borrow_mut().removal = Some(locale);
+                        }
+                    });
+            }
+            if let Some(Some(e)) = errors.get(at) {
+                list_row = list_row.below(Notice::new(Tone::Bad, e.clone()).id_salt(("row_error", at)), |_| {});
+            }
+            list_row
+        },
+    );
     if let Some(e) = error_of(app, "") {
-        ui.add(egui::Label::new(RichText::new(e).small().color(t.red)).wrap());
+        Notice::new(Tone::Bad, e).id_salt("list_error").show(ui);
     }
-    ui.horizontal(|ui| {
-        if ui.add_enabled(backend.is_some(), egui::Button::new(tl!("Add a language…"))).clicked() {
-            open_picker(app, &ui.ctx().clone());
-        }
+    let add = Row::new().show(ui, |ui, _| {
+        let add = clicked(&Button::new(tl!("Add a language…")).enabled(backend.is_some()).id_salt("add_language").show(ui));
         if packs::fetching() {
-            ui.spinner();
-            ui.label(RichText::new(tl!("Getting the list of languages…")).small());
+            Spinner::new().show(ui);
+            Text::new(tl!("Getting the list of languages…")).show(ui);
         }
+        add
     });
-    if backend.as_ref().is_some_and(|b| !b.network_on()) {
-        ui.label(
-            RichText::new(tl!(
-                "Downloading is off. Clicking Add a language… or Install turns it on: WordCraft then downloads language packs and fonts from GitHub."
-            ))
-            .small()
-            .weak(),
-        );
+    if add.inner == Some(true) {
+        open_picker(app, &ctx);
     }
+    if backend.as_ref().is_some_and(|b| !b.network_on()) {
+        Text::new(tl!(
+            "Downloading is off. Clicking Add a language… or Install turns it on: WordCraft then downloads language packs and fonts from GitHub."
+        ))
+        .shade(Shade::Faint)
+        .show(ui);
+    }
+    let Chosen { install, cancel, removal, default } = chosen.into_inner();
     if let Some(p) = install {
-        start_install(app, &ui.ctx().clone(), &p);
+        start_install(app, &ctx, &p);
+    }
+    if let Some(locale) = cancel {
+        packs::cancel(&locale);
     }
     if let Some(l) = removal {
         remove(app, &l);
@@ -722,126 +773,172 @@ pub(crate) fn your_languages_section(app: &mut WordApp, ui: &mut Ui) {
 
 /// The Add a language… click: the person's own click is their consent to download (an agent's
 /// never is: it leaves downloading off and says why); then the picker opens, and the list of
-/// languages is fetched when downloading was just turned on or there is none yet.
+/// languages is fetched when downloading was just turned on or there is none yet. Opening is the
+/// click's act only, never a side effect of a pass.
 fn open_picker(app: &mut WordApp, ctx: &egui::Context) {
     let Some(backend) = packs::backend() else { return };
     app.packs_rt.errors.remove("");
     let was_on = backend.network_on();
-    if !consent(app, ctx, "") {
+    let injected = injected(ctx);
+    if !consent_with(app, injected, "") {
         return;
     }
     if !was_on || packs::available().is_empty() {
-        start_fetch(app, ctx);
+        start_fetch(app, injected);
     }
-    app.packs_rt.search.clear();
-    app.packs_rt.picker = true;
+    if !app.dialog_host.is_open::<AddLanguage>() {
+        let _ = open_with(app, None, AddLanguage::new(), DialogHooks { prepare: Some(prepare_picker), settle: settle_picker });
+    }
 }
 
-/// The Add a language window: search, then the packs not installed, by name, each with its size,
-/// licence, source and Install. Stays open while installs run.
-pub(crate) fn add_language_window(app: &mut WordApp, ctx: &egui::Context) {
-    if !app.packs_rt.picker {
-        return;
+/// The key of the Add a language dialog on the host.
+const ADD_KEY: &str = "addLanguage";
+
+/// What the Add a language dialog asks of the app. The dialog cannot reach the app, so a click is recorded
+/// with whether its pass carried injected input, and [`settle_picker`] applies it with that answer: only a
+/// person's click turns downloading on.
+enum Want {
+    /// Install the pack.
+    Install(Pack, bool),
+    /// Cancel the installation of the pack with this locale.
+    Cancel(String),
+    /// Fetch the list again.
+    Refresh(bool),
+}
+
+/// The Add a language dialog: search, then the packs not installed, by name, each with its size,
+/// licence, source and Install. It stays open while installs run, and holds its search text only while it is open.
+pub(crate) struct AddLanguage {
+    /// The search text; empty each time the dialog opens.
+    search: String,
+    /// What the clicks of this pass ask of the app; [`settle_picker`] takes them in the same pass.
+    asks: Vec<Want>,
+    /// The window's own failures, written by [`prepare_picker`] before each pass for the rows to show.
+    errors: HashMap<String, String>,
+}
+
+impl AddLanguage {
+    /// A dialog with an empty search.
+    pub(crate) fn new() -> Self {
+        AddLanguage { search: String::new(), asks: Vec::new(), errors: HashMap::new() }
     }
-    // Pack names include Arabic and other scripts.
-    app.want_system_arabic = true;
-    let t = Tokens::get(ctx);
-    let mut open = true;
-    egui::Window::new(tl!("Add a language"))
-        .open(&mut open)
-        .collapsible(false)
-        .auto_sized()
-        .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, -80.0))
-        .show(ctx, |ui| {
-            // Right to left the search row and the list mirror, as the other windows.
-            crate::rtl::root(ui, |ui| {
-                let index = packs::available();
-                let installed = packs::installed();
-                ui.horizontal(|ui| {
-                    let search_label = ui.label(tl!("Search:"));
-                    let mut search = std::mem::take(&mut app.packs_rt.search);
-                    let r = ui
-                        .add(egui::TextEdit::singleline(&mut search).desired_width(280.0).hint_text(tl!("Dutch, Nederlands or nl")))
-                        .labelled_by(search_label.id);
-                    if !r.has_focus() && app.packs_rt.search.is_empty() && search.is_empty() && !app.packs_rt.focused {
-                        r.request_focus();
-                    }
-                    app.packs_rt.focused = true;
-                    app.packs_rt.search = search;
-                    if packs::fetching() {
-                        ui.spinner();
-                        ui.label(RichText::new(tl!("Getting the list of languages…")).small());
-                    } else if ui.button(tl!("Refresh")).on_hover_text(tl!("Get the list of languages again")).clicked() {
-                        start_fetch(app, &ui.ctx().clone());
+}
+
+impl StackDialog for AddLanguage {
+    type Result = ();
+
+    fn id(&self) -> DialogId {
+        dialog_id(ADD_KEY)
+    }
+
+    fn key(&self) -> Option<&str> {
+        Some(ADD_KEY)
+    }
+
+    fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<()>> {
+        let injected = injected(ui.ctx());
+        let env = Env::of(ui);
+        let format = env.format();
+        let index = packs::available();
+        let installed = packs::installed();
+        let list = picker_packs(&index, &installed, &self.search);
+        let fetching = packs::fetching();
+        let wants = RefCell::new(Vec::new());
+        let AddLanguage { search, errors, .. } = self;
+        let list_error = error_in(errors, "");
+        let shown_dialog = Dialog::new(tl!("Add a language")).buttons([FooterButton::new(tl!("Close"), DialogRole::Cancel)]).show(ui, |ui, _| {
+            Stack::new().show(ui, |ui, _| {
+                Row::new().align(RowAlign::Center).show(ui, |ui, _| {
+                    TextField::new(tl!("Search"), Bind::bound(&mut *search)).id_salt("search").show(ui);
+                    if fetching {
+                        Spinner::new().show(ui);
+                        Text::new(tl!("Getting the list of languages…")).show(ui);
+                    } else if clicked(&Button::new(tl!("Refresh")).id_salt("refresh").show(ui)) {
+                        wants.borrow_mut().push(Want::Refresh(injected));
                     }
                 });
-                if let Some(e) = error_of(app, "") {
-                    ui.add(egui::Label::new(RichText::new(e).small().color(t.red)).wrap());
+                if let Some(e) = &list_error {
+                    Notice::new(Tone::Bad, e.clone()).id_salt("list_error").show(ui);
                 }
-                ui.add_space(4.0);
-                let list = picker_packs(&index, &installed, &app.packs_rt.search);
                 if list.is_empty() {
                     let text = if index.is_empty() { tl!("No languages to show yet.") } else { tl!("No language matches your search.") };
-                    ui.label(RichText::new(text).weak());
+                    Text::new(text).shade(Shade::Faint).show(ui);
                 }
-                let mut install = None;
-                egui::ScrollArea::both().id_salt("add_language_list").max_height(340.0).auto_shrink([true, true]).show(ui, |ui| {
-                    crate::rtl::grid(ui, egui::Grid::new("add_language_grid").num_columns(4).spacing(vec2(14.0, 8.0)).striped(true), |ui| {
-                        for (name, pack) in &list {
-                            ui.vertical(|ui| {
-                                ui.set_width(180.0);
-                                ui.label(name.as_str());
-                                let endonym = shown(&pack.name, MAX_BAR_NAME);
-                                let detail = if endonym == *name { pack.locale.clone() } else { format!("{endonym} · {}", pack.locale) };
-                                ui.label(RichText::new(detail.as_str()).small().weak());
-                            });
-                            ui.label(if pack.size > 0 { size_text(pack.size) } else { String::new() });
-                            ui.vertical(|ui| {
-                                ui.set_width(150.0);
-                                let licence = shown(&pack.licence, 300);
-                                ui.add(egui::Label::new(RichText::new(licence.as_str()).small()).truncate()).on_hover_text(licence_hover(pack));
-                                let source = pack.source_link();
-                                if !source.is_empty() {
-                                    ui.hyperlink_to(tl!("Source"), source).on_hover_text(shown(source, 300));
-                                }
-                            });
-                            ui.horizontal(|ui| match progress(&pack.locale) {
-                                Some((done, total)) => {
-                                    ui.add(egui::ProgressBar::new(done.min(total) as f32 / total as f32).desired_width(80.0).show_percentage());
-                                    if ui.small_button(tl!("Cancel")).clicked() {
-                                        packs::cancel(&pack.locale);
+                let order: Vec<usize> = (0..list.len()).collect();
+                let source = keyed(&order[..], |at: &usize| *at).with_text(|at| Cow::Owned(list[*at].0.clone()));
+                let _ = List::new(tl!("Languages")).id_salt("packs").select(SelectMode::None).max_rows(PICKER_ROWS).show_items(
+                    ui,
+                    &source,
+                    &mut |key, _| {
+                        let at = *key;
+                        let (name, pack) = &list[at];
+                        let endonym = shown(&pack.name, MAX_BAR_NAME);
+                        let detail = if endonym == *name { pack.locale.clone() } else { format!("{endonym} · {}", pack.locale) };
+                        let wants = &wants;
+                        // The licence is the row's wrapped secondary text: `below` components share one line, and the error
+                        // notice (or the progress bar while installing) needs the row's width there.
+                        let mut row = ListRow::new(format!("{name} · {detail}")).lines(licence_hover(pack));
+                        match progress(&pack.locale) {
+                            Some((done, total)) => {
+                                let locale = pack.locale.clone();
+                                row = row
+                                    .below(Progress::new(done.min(total) as f32 / total as f32).id_salt(("progress", at)), |_| {})
+                                    .trailing_field(Button::new(tl!("Cancel")).id_salt(("cancel", at)), move |out| {
+                                        if clicked(&out) {
+                                            wants.borrow_mut().push(Want::Cancel(locale));
+                                        }
+                                    });
+                            }
+                            None => {
+                                let size = if pack.size > 0 { format!(" ({})", size_text(pack.size, format)) } else { String::new() };
+                                let pack = pack.clone();
+                                row = row.trailing_field(Button::new(format!("{}{size}", tl!("Install"))).id_salt(("install", at)), move |out| {
+                                    if clicked(&out) {
+                                        wants.borrow_mut().push(Want::Install(pack, injected));
                                     }
-                                }
-                                None => {
-                                    if ui.button(tl!("Install")).clicked() {
-                                        install = Some(pack.clone());
-                                    }
-                                }
-                            });
-                            ui.end_row();
-                            if let Some(e) = error_of(app, &pack.locale) {
-                                ui.label("");
-                                ui.add(egui::Label::new(RichText::new(e).small().color(t.red)).wrap());
-                                ui.label("");
-                                ui.label("");
-                                ui.end_row();
+                                });
                             }
                         }
-                    });
-                });
-                if let Some(p) = install {
-                    start_install(app, &ui.ctx().clone(), &p);
-                }
-            })
+                        if let Some(e) = error_in(errors, &pack.locale) {
+                            row = row.below(Notice::new(Tone::Bad, e).id_salt(("row_error", at)), |_| {});
+                        }
+                        row
+                    },
+                );
+            });
         });
-    if !open {
-        app.packs_rt.picker = false;
-        app.packs_rt.focused = false;
+        self.asks.extend(wants.into_inner());
+        shown_dialog.output.closed.map(|_| DialogResult::Ok(()))
     }
 }
 
-/// Height of About › Language data's list.
-const ABOUT_HEIGHT: f32 = 420.0;
+/// Rows of the picker's list shown before it scrolls.
+const PICKER_ROWS: u16 = 9;
+
+/// Hands the Add a language dialog the window's own failures to show, before each of its passes.
+fn prepare_picker(app: &mut WordApp, id: DialogId) {
+    let errors = app.packs_rt.errors.clone();
+    if let Some(dialog) = app.dialog_host.get_mut_by_id::<AddLanguage>(id) {
+        dialog.errors = errors;
+    }
+}
+
+/// Applies what the Add a language dialog recorded in the pass that just ran. Never opens the dialog: a click on
+/// Add a language… does ([`open_picker`]).
+fn settle_picker(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
+    // The dialog answers `()`: taking it keeps the host's results from piling up.
+    let _ = app.dialog_host.take_by_id::<AddLanguage>(id);
+    let Some(dialog) = app.dialog_host.get_mut_by_id::<AddLanguage>(id) else { return Settle::Done };
+    let asks = std::mem::take(&mut dialog.asks);
+    for ask in asks {
+        match ask {
+            Want::Install(pack, injected) => start_install_with(app, injected, &pack),
+            Want::Cancel(locale) => packs::cancel(&locale),
+            Want::Refresh(injected) => start_fetch(app, injected),
+        }
+    }
+    Settle::Keep
+}
 
 /// The licence texts About shows, read again only when the dictionaries change (they can run to
 /// megabytes).
@@ -862,27 +959,17 @@ fn licence_texts() -> Arc<Vec<(String, String)>> {
 }
 
 /// About › Language data: the full licence text of the embedded English data and of each
-/// installed pack.
-pub(crate) fn about_tab(ui: &mut Ui) {
-    ui.label(RichText::new(tl!("The spelling and hyphenation data WordCraft uses, and their licences.")).small().weak());
-    ui.add_space(4.0);
-    let texts = licence_texts();
-    // A fixed height: entries open and long texts scroll inside it, and the dialog keeps its size.
-    egui::ScrollArea::vertical()
-        .id_salt("about_language_data")
-        .min_scrolled_height(ABOUT_HEIGHT)
-        .max_height(ABOUT_HEIGHT)
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            for (title, text) in texts.iter() {
-                egui::CollapsingHeader::new(RichText::new(title.as_str()).font(semibold(13.0))).id_salt(("language_data", title.as_str())).show(
-                    ui,
-                    |ui| {
-                        ui.add(egui::Label::new(RichText::new(text).small().monospace()).wrap());
-                    },
-                );
-            }
-        });
+/// installed pack. The body reads only the static licence texts, so the tab needs no app; the About dialog's tab
+/// body scrolls, so a long text does not change the dialog's size.
+pub(crate) fn language_data_tab() -> AboutAppTab {
+    AboutAppTab::new("languageData", tl!("Language data"), |ui: &mut Ui| {
+        Text::new(tl!("The spelling and hyphenation data WordCraft uses, and their licences.")).shade(Shade::Faint).show(ui);
+        for (at, (title, text)) in licence_texts().iter().enumerate() {
+            GroupBox::new(title.clone(), None).id_salt(("language_data", at)).show(ui, |ui, _| {
+                Text::new(text.clone()).shade(Shade::Faint).show(ui);
+            });
+        }
+    })
 }
 
 #[cfg(test)]
@@ -895,12 +982,13 @@ mod tests {
     use crate::WordApp;
 
     /// One 1440 by 900 frame as the desktop runs it, with the user's own `events`; control input
-    /// goes in through the raw-input hook. Returns the accessibility tree.
+    /// goes in through the shell's before-input step. Returns the accessibility tree.
     fn frame(a: &mut WordApp, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::accesskit::TreeUpdate {
         let time = ctx.input(|i| i.time) + 0.05;
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
-        let mut raw = egui::RawInput { focused: true, time: Some(time), screen_rect: Some(screen), events, ..Default::default() };
-        a.raw_input_hook(ctx, &mut raw);
+        let raw = egui::RawInput { focused: true, time: Some(time), screen_rect: Some(screen), events, ..Default::default() };
+        // PLAN: assumed `WordApp::frame_input(FrameOutput) -> FrameInput` (app-hub)
+        craft::ui::shell::embed::before_input(ctx, |out| a.frame_input(out));
         let mut out = ctx.run_ui(raw, |ui| {
             a.logic(ui.ctx());
             a.ui(ui);
@@ -917,14 +1005,19 @@ mod tests {
     /// A request as a control client (or MCP's `click`) sends it, with frames until its input
     /// has gone in.
     fn as_agent(a: &mut WordApp, ctx: &egui::Context, method: &str, params: Value) {
-        let (req, _rx) = crate::control::ControlRequest::new(method, params);
-        let crate::control::Outcome::Done(_) = crate::control::handle(a, ctx, &req) else { panic!("{method} replies at once") };
+        let (req, _reply) = craft::automation::control::ControlRequest::new(method, params);
+        let _ = crate::control::handle(a, ctx, &req);
+        let host = craft::ui::runtime::windows::WindowHost::of(ctx);
         for _ in 0..200 {
             frame(a, ctx, Vec::new());
-            if a.synthetic.is_empty() && !a.synthetic_pending {
+            if host.injected_idle() {
                 break;
             }
         }
+        // The control server ends the client's injection session when its connection closes
+        // (`WindowHost::end_injection`); until then the framework keeps the pointer where the agent left it, which
+        // would stand in for the person's own pointer in `user_click`.
+        host.end_injection();
         for _ in 0..3 {
             frame(a, ctx, Vec::new());
         }
@@ -933,8 +1026,16 @@ mod tests {
     fn user_click(a: &mut WordApp, ctx: &egui::Context, (x, y): (f64, f64)) {
         let pos = egui::pos2(x as f32, y as f32);
         frame(a, ctx, vec![egui::Event::PointerMoved(pos)]);
+        // The pointer rests over the button for a frame before it presses, as a hand's does.
+        frame(a, ctx, Vec::new());
         for pressed in [true, false] {
             frame(a, ctx, vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() }]);
+        }
+        // The framework reports a control's action a pass after the release that takes it (the runtime hands the
+        // app's input over at the head of the next pass), so the click's effect is read after a few idle frames, as a
+        // person's next moment would be.
+        for _ in 0..3 {
+            frame(a, ctx, Vec::new());
         }
     }
 
@@ -943,6 +1044,28 @@ mod tests {
         let (_, node) = tree.nodes.iter().find(|(_, n)| n.label().is_some_and(|l| l.starts_with(label)))?;
         let b = node.bounds()?;
         Some(((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0))
+    }
+
+    /// [`spot`] once the widget has stopped moving: a notice that gains a line eases to its new height, and a
+    /// press aimed at a button on its way misses it.
+    fn settled_spot(a: &mut WordApp, ctx: &egui::Context, label: &str) -> Option<(f64, f64)> {
+        let mut at: Option<(f64, f64)> = None;
+        let mut still = 0;
+        for _ in 0..60 {
+            let tree = frame(a, ctx, Vec::new());
+            if let Some(now) = spot(&tree, label) {
+                if at == Some(now) {
+                    still += 1;
+                } else {
+                    at = Some(now);
+                    still = 0;
+                }
+            }
+            if still >= 5 {
+                break;
+            }
+        }
+        at
     }
 
     /// craft-proof calls Swiss German and Portugal's Portuguese pack languages (`de-ch`,
@@ -1263,8 +1386,7 @@ mod tests {
     fn a_faked_click_never_turns_on_downloading() {
         let _g = BACKEND_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let ctx = egui::Context::default();
-        crate::theme::install_fonts(&ctx);
-        crate::theme::apply(&ctx, crate::theme::Appearance::Light);
+        craft::ui::shell::embed::install(&ctx, crate::test_harness::install_spec(), &crate::ui_fonts(crate::i18n::Lang::EN)).unwrap();
         ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
         ctx.enable_accesskit();
         struct Reset;
@@ -1290,6 +1412,8 @@ mod tests {
         assert!(!backend.network.load(Ordering::Relaxed), "a faked click leaves downloading off");
         assert!(packs::installing().is_empty() && !packs::is_installed("pl"));
         assert!(a.packs_rt.errors.get("pl").is_some_and(|e| e.contains("Only you")), "{:?}", a.packs_rt.errors);
+        // The reason now sits in the notice, which moves the button: find it again.
+        let install = settled_spot(&mut a, &ctx, "Install (").expect("the bar still offers Polish");
         user_click(&mut a, &ctx, install);
         assert!(backend.network.load(Ordering::Relaxed), "the person's click turns it on");
         for _ in 0..500 {
@@ -1315,8 +1439,7 @@ mod tests {
     /// the context to draw it in.
     fn options_app(pane: &str, network: bool) -> (WordApp, egui::Context, std::sync::Arc<FixedBackend>) {
         let ctx = egui::Context::default();
-        crate::theme::install_fonts(&ctx);
-        crate::theme::apply(&ctx, crate::theme::Appearance::Light);
+        craft::ui::shell::embed::install(&ctx, crate::test_harness::install_spec(), &crate::ui_fonts(crate::i18n::Lang::EN)).unwrap();
         ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
         ctx.enable_accesskit();
         let backend = std::sync::Arc::new(FixedBackend::sample());
@@ -1472,7 +1595,9 @@ mod tests {
     }
 
     /// Add a language…: a click the control channel made never turns downloading on (it says
-    /// why and opens nothing); the person's own click does, and opens the picker.
+    /// why and opens nothing); the person's own click does, and opens the picker. In the picker a row's
+    /// Install follows the same rule: an agent's click leaves downloading off and says why, the person's
+    /// click turns it on.
     #[test]
     fn a_faked_click_on_add_a_language_never_turns_on_downloading() {
         let _g = BACKEND_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1482,22 +1607,49 @@ mod tests {
         let add = spot(&tree, "Add a language").expect("the button");
         as_agent(&mut a, &ctx, "ui.click", json!({"x": add.0, "y": add.1}));
         assert!(!backend.network.load(Ordering::Relaxed), "a faked click leaves downloading off");
-        assert!(!a.packs_rt.picker, "and opens nothing");
+        assert!(!a.dialog_host.is_open::<super::AddLanguage>(), "and opens nothing");
         assert!(a.packs_rt.errors.get("").is_some_and(|e| e.contains("Only you")), "{:?}", a.packs_rt.errors);
         // The reason is shown above the button, which moves down.
         let add = spot(&settled(&mut a, &ctx), "Add a language").expect("the button");
         user_click(&mut a, &ctx, add);
         assert!(backend.network.load(Ordering::Relaxed), "the person's click is the consent");
-        assert!(a.packs_rt.picker);
+        assert!(a.dialog_host.is_open::<super::AddLanguage>(), "the dialog opens on the host");
         for _ in 0..500 {
             if !packs::fetching() {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        // Inside the dialog: with downloading off again, an agent's click on a row's Install is refused. Off, each row
+        // gains a licence line and its Install moves down, so the click is aimed at the rows as they are then.
+        backend.network.store(false, Ordering::Relaxed);
         let tree = settled(&mut a, &ctx);
-        assert!(has(&tree, "Search:") && has(&tree, "Refresh"), "{:?}", labels(&tree));
-        assert!(labels(&tree).iter().any(|l| l == "Catalan"), "the packs are listed by name: {:?}", labels(&tree));
+        assert!(has(&tree, "Search") && has(&tree, "Refresh"), "{:?}", labels(&tree));
+        assert!(labels(&tree).iter().any(|l| l.starts_with("Catalan")), "the packs are listed by name: {:?}", labels(&tree));
+        let install = spot(&tree, "Install").expect("a row offers Install");
+        as_agent(&mut a, &ctx, "ui.click", json!({"x": install.0, "y": install.1}));
+        assert!(!backend.network.load(Ordering::Relaxed), "an agent's click in the picker leaves downloading off");
+        assert!(packs::installing().is_empty());
+        assert!(a.packs_rt.errors.values().any(|e| e.contains("Only you")), "{:?}", a.packs_rt.errors);
+        let tree = settled(&mut a, &ctx);
+        assert!(labels(&tree).iter().any(|l| l.contains("Only you")), "the row says why: {:?}", labels(&tree));
+        // The reason has room to be read: it is at least as wide as Install and within the list's width (the row may sit
+        // partly below the list's visible edge).
+        let rect = |pick: &dyn Fn(&egui::accesskit::Node) -> bool| {
+            tree.nodes.iter().filter(|(_, n)| pick(n)).filter_map(|(_, n)| n.bounds()).collect::<Vec<_>>()
+        };
+        let list = rect(&|n| n.role() == egui::accesskit::Role::List && n.label() == Some("Languages"));
+        let button = rect(&|n| n.label().is_some_and(|l| l.starts_with("Install (")));
+        let why = rect(&|n| n.label().is_some_and(|l| l.contains("Only you")));
+        let (list, button) = (list.first().expect("the list"), button.first().expect("an Install button"));
+        assert!(
+            why.iter().any(|w| w.width() >= button.width() && w.x0 >= list.x0 && w.x1 <= list.x1 && w.y0 < list.y1),
+            "the reason is as wide as Install and within the list's width: {why:?}, Install {button:?}, list {list:?}"
+        );
+        // The person's own click on the same row turns it on.
+        let install = spot(&tree, "Install").expect("the row still offers Install");
+        user_click(&mut a, &ctx, install);
+        assert!(backend.network.load(Ordering::Relaxed), "the person's click in the picker is the consent");
     }
 
     /// Set as default sets only the saved default proofing language (`review.language.preferred`); the
@@ -1583,8 +1735,7 @@ mod tests {
     fn with_no_list_yet_the_bar_offers_the_language_and_gets_it() {
         let _g = BACKEND_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let ctx = egui::Context::default();
-        crate::theme::install_fonts(&ctx);
-        crate::theme::apply(&ctx, crate::theme::Appearance::Light);
+        craft::ui::shell::embed::install(&ctx, crate::test_harness::install_spec(), &crate::ui_fonts(crate::i18n::Lang::EN)).unwrap();
         ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
         ctx.enable_accesskit();
         struct Reset;
@@ -1614,6 +1765,8 @@ mod tests {
         assert!(!backend.0.network.load(Ordering::Relaxed), "a faked click leaves downloading off");
         assert!(!packs::fetched() && !packs::is_installed("kl"));
         assert!(a.packs_rt.errors.get("").is_some_and(|e| e.contains("Only you")), "{:?}", a.packs_rt.errors);
+        // The reason now sits in the notice, which moves the button: find it again.
+        let install = settled_spot(&mut a, &ctx, "Install").expect("the bar still offers Greenlandic");
         user_click(&mut a, &ctx, install);
         assert!(backend.0.network.load(Ordering::Relaxed), "the person's click turns it on");
         for _ in 0..500 {

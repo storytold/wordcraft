@@ -6,7 +6,9 @@ use super::{
     Block, CharProps, CmdError, CmdResult, Document, FieldCode, InlineObject, Paragraph, Path, Pos, Session, SortKey, StoryRef, TabAlign, TabLeader,
     TabStop, Value, delete_selection, heading_letter, p, sel_result, sort_key,
 };
+use crate::cmd::references::{page_at, page_formats, page_text};
 use std::sync::Arc;
+use wordcraft_doc::section::NumFormat;
 
 /// The TOC field for `references.tableOfFigures` (ECMA-376 §17.16.5.68): `\c "<label>"` lists the
 /// captions that label's SEQ field numbers, `\a "<label>"` lists them without their label and
@@ -331,9 +333,11 @@ fn add_entry_style(s: &mut Session) {
     }
 }
 
-pub(super) fn page_of(s: &mut Session, pos: &Pos) -> u32 {
+/// The page holding `pos`: its index in the layout (to order and deduplicate by) and its number
+/// in its section's format (`ii`), as the list writes it. Page "1" (index 0) when no page holds it.
+fn page_of(s: &mut Session, formats: &[NumFormat], pos: &Pos) -> (usize, String) {
     let l = s.layout();
-    l.caret(pos).and_then(|c| l.pages.get(c.page)).map(|p| p.number).unwrap_or(1)
+    page_at(&l, formats, pos).map_or_else(|| (0, "1".into()), |(i, n, fmt)| (i, page_text(n, fmt)))
 }
 
 /// Entry lines (text, hanging indent) for a generated list.
@@ -370,7 +374,7 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
             }
         }
     }
-    let mut with_pages: Vec<(String, u32)> = marks.into_iter().map(|(e, _)| (e, 0)).collect();
+    let mut with_pages: Vec<(String, (usize, String))> = marks.into_iter().map(|(e, _)| (e, (0, String::new()))).collect();
     // Pages (layout once).
     let positions: Vec<Pos> = {
         let mut v = Vec::new();
@@ -393,8 +397,9 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
         }
         v
     };
+    let formats = page_formats(s);
     for (i, pos) in positions.iter().enumerate() {
-        let pg = page_of(s, pos);
+        let pg = page_of(s, &formats, pos);
         if let Some(x) = with_pages.get_mut(i) {
             x.1 = pg;
         }
@@ -403,14 +408,15 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
         // `\n` without page numbers; `\p` the separator before them (a tab by default).
         let f = FieldCode::parse(kind);
         let sep = f.arg('p').unwrap_or("\t");
-        return with_pages.into_iter().map(|(t, p)| (if f.has('n') { t } else { format!("{t}{sep}{p}") }, false)).collect();
+        return with_pages.into_iter().map(|(t, p)| (if f.has('n') { t } else { format!("{t}{sep}{}", p.1) }, false)).collect();
     }
     // Index / TOA: group by entry, sort, list pages.
     let lang = crate::cmd::default_lang(s);
-    let mut grouped: std::collections::BTreeMap<(SortKey, String), Vec<u32>> = Default::default();
+    // Each page once, in page order (by its place in the layout, not its label: `ii` before `1`).
+    let mut grouped: std::collections::BTreeMap<(SortKey, String), Vec<(usize, String)>> = Default::default();
     for (e, p) in with_pages {
         let pages = grouped.entry((sort_key(&e, lang.as_deref()), e)).or_default();
-        if !pages.contains(&p) {
+        if !pages.iter().any(|(i, _)| *i == p.0) {
             pages.push(p);
         }
     }
@@ -424,7 +430,7 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
                 out.push((l, false));
             }
         }
-        let list = pages.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
+        let list = pages.iter().map(|(_, label)| label.as_str()).collect::<Vec<_>>().join(", ");
         out.push(if kind.starts_with("INDEX") { (format!("{e}, {list}"), true) } else { (format!("{e}\t{list}"), false) });
     }
     out

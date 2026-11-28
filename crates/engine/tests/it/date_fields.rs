@@ -7,12 +7,11 @@ use std::io::Write;
 use wordcraft_doc::{InlineObject, StoryRef};
 
 fn zip(entries: &[(&str, &str)]) -> Vec<u8> {
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, body) in entries {
-        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(body.as_bytes()).unwrap();
+        zw.add(name, body.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 /// A field run: its code, its cached result, and whether it carries `w:fldLock`.

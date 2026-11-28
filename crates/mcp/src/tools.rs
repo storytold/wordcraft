@@ -145,7 +145,7 @@ pub fn tool_definitions() -> Value {
         tool(
             "inspect_document",
             "Inspect document",
-            "Structure: blocks with text, styles, formatting runs, lists, tables, sections, parts, selection, pages.",
+            "Structure: blocks with text, styles, formatting runs, lists, tables, sections, parts (headers, footers, notes: their text and fields; a field with perPage true, such as PAGE, NUMPAGES or STYLEREF, shows its own value on each page, so its stored result is not what every page shows: render_page shows it; fieldsTruncated means a part has more than the 200 fields listed; a range field's result, such as a TOC's, is cut at 2000 characters, with resultTruncated), selection, pages.",
             with_doc(obj(json!({}), &[])),
             true
         ),
@@ -169,14 +169,20 @@ pub fn tool_definitions() -> Value {
             "click",
             "Click",
             "Click at window coordinates (desktop app only).",
-            obj(json!({"x": n("x"), "y": n("y"), "count": n("1-3 clicks"), "shift": {"type": "boolean"}, "cmd": {"type": "boolean"}}), &["x", "y"]),
+            obj(
+                json!({"x": n("x"), "y": n("y"), "count": n("1-3 clicks"), "button": s("left (default) or right"), "shift": {"type": "boolean"}, "alt": {"type": "boolean"}, "cmd": {"type": "boolean"}, "ctrl": {"type": "boolean"}, "command": {"type": "boolean"}}),
+                &["x", "y"]
+            ),
             false
         ),
         tool(
             "key",
             "Press key",
             "Press a key with modifiers (desktop app only), e.g. {key:\"B\", cmd:true}.",
-            obj(json!({"key": s("Key name"), "shift": {"type": "boolean"}, "alt": {"type": "boolean"}, "cmd": {"type": "boolean"}}), &["key"]),
+            obj(
+                json!({"key": s("Key name"), "shift": {"type": "boolean"}, "alt": {"type": "boolean"}, "cmd": {"type": "boolean"}, "ctrl": {"type": "boolean"}, "command": {"type": "boolean"}}),
+                &["key"]
+            ),
             false
         ),
         tool(

@@ -74,6 +74,7 @@ fn cost_ratio(scale: usize, mut small: impl FnMut(), mut big: impl FnMut()) -> (
 /// looked for each paragraph's markers in the whole set of markers, once per paragraph, so a
 /// document with 32,000 controls took four seconds to save where it takes a tenth of one now.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn a_document_with_many_inline_content_controls_saves_in_linear_time() {
     let scale = 4;
     let small = inline_controls(8_000);
@@ -94,6 +95,7 @@ fn a_document_with_many_inline_content_controls_saves_in_linear_time() {
 /// The same for the controls written around whole paragraphs: the writer compared every control
 /// with every other one to find the ones that clash, so the save was quadratic in their number.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn a_document_with_many_block_content_controls_saves_in_linear_time() {
     let scale = 4;
     let small = block_controls(8_000);
@@ -136,18 +138,14 @@ fn the_controls_are_written_where_they_were() {
 
 /// The names of the parts of a package, in the order they are in it.
 fn part_names(bytes: &[u8]) -> Vec<String> {
-    let z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("zip");
-    z.file_names().map(str::to_string).collect()
+    let z = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).expect("zip");
+    z.names().map(|n| n.into_owned()).collect()
 }
 
 /// The body of the document part of a package.
 fn document_body(bytes: &[u8]) -> String {
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("zip");
-    let mut xml = String::new();
-    {
-        use std::io::Read;
-        z.by_name("word/document.xml").expect("the document part").read_to_string(&mut xml).expect("read");
-    }
+    let mut z = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).expect("zip");
+    let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).expect("read").expect("the document part")).expect("utf8");
     let rest = xml.split_once("<w:body>").expect("the body").1;
     let body = rest.split_once("</w:body>").expect("the end of the body").0;
     format!("<w:body>{body}</w:body>")
@@ -221,6 +219,8 @@ const PINNED_PARTS: &[&str] = &[
     "word/styles.xml",
     "word/settings.xml",
     "word/theme/theme1.xml",
+    // The fonts the document uses, with their families: it brings no font table of its own.
+    "word/fontTable.xml",
     "docProps/core.xml",
     "docProps/app.xml",
 ];
