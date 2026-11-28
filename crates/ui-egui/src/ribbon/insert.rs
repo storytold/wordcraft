@@ -8,7 +8,7 @@ use craft::ui::buttons::{Arrangement, Button, IconButton};
 use craft::ui::contract::{ActivateOn, BodyCx, CollectionEvent, Gap, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::display::Divider;
 use craft::ui::layout_components::Stack;
-use craft::ui::list::ThumbAspect;
+use craft::ui::list::{ThumbAspect, ThumbSize};
 use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::primitives::{HAlign, TextRun};
 use craft::ui::tile_grid::{CaptionPlace, Tile, TileGrid};
@@ -286,17 +286,69 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     });
 }
 
-/// The recent and common characters as a grid of six per row; a click inserts the character, remembers it and closes
+/// The characters the grid offers after the recent ones, with their Unicode names (UnicodeData.txt). No Unicode-names
+/// crate is installed, and the one on crates.io is under Unicode-DFS-2016, which the licence allowlist lacks.
+const DEFAULT_SYMBOLS: &[(char, &str)] = &[
+    ('\u{A9}', "COPYRIGHT SIGN"),
+    ('\u{AE}', "REGISTERED SIGN"),
+    ('\u{2122}', "TRADE MARK SIGN"),
+    ('\u{A7}', "SECTION SIGN"),
+    ('\u{B6}', "PILCROW SIGN"),
+    ('\u{20AC}', "EURO SIGN"),
+    ('\u{A3}', "POUND SIGN"),
+    ('\u{A5}', "YEN SIGN"),
+    ('\u{B0}', "DEGREE SIGN"),
+    ('\u{B1}', "PLUS-MINUS SIGN"),
+    ('\u{2260}', "NOT EQUAL TO"),
+    ('\u{2264}', "LESS-THAN OR EQUAL TO"),
+    ('\u{2265}', "GREATER-THAN OR EQUAL TO"),
+    ('\u{F7}', "DIVISION SIGN"),
+    ('\u{D7}', "MULTIPLICATION SIGN"),
+    ('\u{221E}', "INFINITY"),
+    ('\u{B5}', "MICRO SIGN"),
+    ('\u{3B1}', "GREEK SMALL LETTER ALPHA"),
+    ('\u{3B2}', "GREEK SMALL LETTER BETA"),
+    ('\u{3C0}', "GREEK SMALL LETTER PI"),
+    ('\u{3A9}', "GREEK CAPITAL LETTER OMEGA"),
+    ('\u{2211}', "N-ARY SUMMATION"),
+    ('\u{221A}', "SQUARE ROOT"),
+    ('\u{2192}', "RIGHTWARDS ARROW"),
+    ('\u{2190}', "LEFTWARDS ARROW"),
+    ('\u{2713}', "CHECK MARK"),
+    ('\u{2605}', "BLACK STAR"),
+    ('\u{2665}', "BLACK HEART SUIT"),
+    ('\u{2014}', "EM DASH"),
+    ('\u{2026}', "HORIZONTAL ELLIPSIS"),
+];
+
+/// A symbol's hover text: its Unicode name and code point (the code point alone, with its block, for a character
+/// not named above), then its font when it has one.
+pub(super) fn symbol_tip(glyph: &str, font: &str) -> String {
+    let mut chars = glyph.chars();
+    let tip = match (chars.next(), chars.next()) {
+        (Some(c), None) => {
+            let name = DEFAULT_SYMBOLS.iter().find(|(n, _)| *n == c).map(|(_, name)| *name);
+            let block = crate::dialogs_insert::subset_of(c);
+            match (name, block) {
+                (Some(name), _) => format!("{name} (U+{:04X})", c as u32),
+                (None, Some(block)) => format!("U+{:04X} ({block})", c as u32),
+                (None, None) => format!("U+{:04X}", c as u32),
+            }
+        }
+        _ => glyph.to_string(),
+    };
+    if font.is_empty() { tip } else { format!("{tip}, {font}") }
+}
+
+/// The recent and common characters as a compact grid; a click inserts the character, remembers it and closes
 /// the menu.
 fn symbol_grid(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
     // Recently used symbols first (their font on hover), then common ones.
     let mut items: Vec<(String, String)> = app.ui.recent_symbols.iter().map(|r| (r.ch.clone(), r.font.clone())).collect();
-    for c in [
-        "©", "®", "™", "§", "¶", "€", "£", "¥", "°", "±", "≠", "≤", "≥", "÷", "×", "∞", "µ", "α", "β", "π", "Ω", "∑", "√", "→", "←", "✓", "★", "♥",
-        "—", "…",
-    ] {
-        if !items.iter().any(|(ch, f)| ch == c && f.is_empty()) {
-            items.push((c.to_string(), String::new()));
+    for (c, _) in DEFAULT_SYMBOLS {
+        let c = c.to_string();
+        if !items.iter().any(|(ch, f)| *ch == c && f.is_empty()) {
+            items.push((c, String::new()));
         }
     }
     items.truncate(30);
@@ -304,20 +356,20 @@ fn symbol_grid(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
         .select(SelectMode::None)
         .activate(ActivateOn::Click)
         .caption(CaptionPlace::None)
-        .card_columns(6)
-        .content_cells()
+        // Small cells (#7165): a glyph needs no more room than the small thumbnail step.
+        .thumb_size(ThumbSize::Small)
         // At most thirty symbols, all shown; the menu's body is the one scroll.
         .natural_height(true)
         .show_items(ui, &SymbolCells(items.len()), &mut |key, _| {
             let (c, font) = items.get(*key).cloned().unwrap_or_default();
-            let glyph = c.clone();
+            let (glyph, tip) = (c.clone(), symbol_tip(&c, &font));
             let tile = Tile::new(c).thumb(ThumbAspect::SQUARE, move |cx, rect| {
                 let run = TextRun::new(glyph.as_str()).align(HAlign::Center);
                 cx.with_draw(|d| {
                     d.text_on_centre_line(rect, &run);
                 });
             });
-            if font.is_empty() { tile } else { tile.tooltip(font) }
+            tile.tooltip(tip)
         });
     for event in &out.response.events {
         if let CollectionEvent::Activate(key) = event
