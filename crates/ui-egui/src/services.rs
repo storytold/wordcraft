@@ -28,4 +28,7 @@ pub struct Services {
     pub templates_dir: Option<std::path::PathBuf>,
     /// Files the system asked the app to open, and files dropped on a window, read once per frame.
     pub intake: Option<craft::platform::open::FileIntake>,
+    /// Desktop (Linux and BSD): open every link the interface follows with the system instead of
+    /// egui's opener ([`crate::open_url`], #2349). `None` (the web, macOS, Windows): egui opens links.
+    pub open_url: Option<crate::open_url::Hook>,
 }

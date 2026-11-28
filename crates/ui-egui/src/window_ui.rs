@@ -182,6 +182,7 @@ impl WordApp {
             windows: _,
             print_document: _,
             clipboard_published: _,
+            open_urls: _,
             // Per document: the shown document's, swapped with `parked` on a document switch.
             autosave_path: _,
             parked: _,

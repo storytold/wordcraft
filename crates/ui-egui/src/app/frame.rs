@@ -168,5 +168,7 @@ impl WordApp {
         if let Some(url) = self.canvas.open_url.take() {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
+        crate::open_url::route(self, ctx);
+        crate::open_url::show(self, ctx);
     }
 }

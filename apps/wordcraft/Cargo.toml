@@ -61,6 +61,11 @@ craft = { workspace = true, features = ["platform-apple-events", "menu"] }
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 winit = { version = "0.30", default-features = false, features = ["x11"] }
+# The desktop portal used when opening links (`open_url.rs`, #2349).
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+# The last way links are opened, after xdg-open and the desktop portal (`open_url.rs`, #2349).
+# Already in the build through eframe's `links` feature, at this version.
+webbrowser = "1"
 # Check that the libraries winit's X11 backend opens are installed before choosing XWayland (see
 # `x11_libraries` in main.rs). Both are already in the build through winit's `x11` feature, at
 # these versions and with this feature.

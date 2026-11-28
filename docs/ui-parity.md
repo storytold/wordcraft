@@ -215,6 +215,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | 2026-10-19 | trivial | Insert Caption picks the label used last, as Word does, and keeps it between runs (#3120) |
 | 2026-10-21 | trivial | File › Recover uses the same fills and text colours as the other Backstage pages; it no longer draws black with forced white text in the light theme (#3243, part of #2348) |
 | 2026-10-21 | trivial | The ribbon's font name and size boxes, and the dropdown arrows beside them, say what they are to a screen reader (#3172) |
+| 2026-10-20 | trivial | Linux and BSD: links (the Discord button, Ctrl+click on a hyperlink, About) open with `xdg-open`, then the desktop portal, then the `webbrowser` crate, so they work where no browser is detected, as on SteamOS; a link nothing could open is shown with a Copy button (#2349) |
 | 2026-10-20 | trivial | Tables on the page: the move and resize handles show while the caret is in the table, not only under the pointer (#2428) |
 | 2026-10-20 | trivial | Closing the header or footer (Esc, Close Header and Footer) puts the caret back where it was in the body, not on page 1 (#3331) |
 | 2026-10-22 | trivial | File › Options disables the User name field while Restrict Editing is active (#3279 follow-up). |

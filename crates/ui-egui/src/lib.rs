@@ -54,6 +54,7 @@ mod local_time;
 pub mod md_source;
 pub mod mini_toolbar;
 pub mod objects;
+pub mod open_url;
 pub mod options;
 /// The window identity of the channel this build runs as (stable or Nightly).
 pub mod os_window;
@@ -508,6 +509,8 @@ pub struct WordApp {
     pub(crate) closing: Option<app::Closing>,
     /// The file dialog the host is showing, and what its answer is for ([`file_dialogs`]).
     file_dialog: Option<file_dialogs::PendingDialog>,
+    /// Links the host is opening, and the notice for one it couldn't ([`open_url`]).
+    open_urls: open_url::State,
     /// Whether the in-app file chooser is forced in place of the system one.
     pub(crate) fallback_chooser: bool,
     /// File › Info: the property field being typed in and the document revision after its last

@@ -23,6 +23,8 @@ mod launch_profile;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod nightly_session;
+#[cfg(all(unix, not(target_os = "macos")))]
+mod open_url;
 mod prefs;
 mod process_identity;
 mod profile_root;
@@ -233,7 +235,9 @@ type MakeDefault = Box<dyn Fn() -> Result<DefaultApp, DefaultAppError>>;
 /// What the app takes from its host beyond the runtime: File › Print through the system spooler,
 /// personal templates (#2852, made on first save in `Templates` in the settings folder), and making
 /// WordCraft the default app for Word documents (#295; macOS has no way to, so no button there).
-fn services(spool: Spool, intake: FileIntake, nightly: bool) -> Services {
+fn services(spool: Spool, intake: FileIntake, nightly: bool, ctx: &egui::Context) -> Services {
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    let _ = ctx;
     // Nightly never claims the stable app's file associations: the button would rewrite the same
     // OS registration the stable WordCraft owns.
     #[cfg(any(unix, windows))]
@@ -246,6 +250,8 @@ fn services(spool: Spool, intake: FileIntake, nightly: bool) -> Services {
         templates_dir: wordcraft_control_key::settings_dir().map(|d| d.join("Templates")),
         make_default_app,
         intake: Some(intake),
+        #[cfg(all(unix, not(target_os = "macos")))]
+        open_url: Some(open_url::hook(ctx.clone())),
         ..Default::default()
     }
 }
@@ -738,7 +744,7 @@ fn main() -> eframe::Result {
                 prefs::load_user_dictionary(&mut session, &settings, path);
             }
             let spool = Spool::new(host.jobs_shared().clone());
-            let mut app = WordApp::new(session, services(spool.clone(), intake, nightly)).with_host(host).with_settings(settings.clone());
+            let mut app = WordApp::new(session, services(spool.clone(), intake, nightly, &ctx)).with_host(host).with_settings(settings.clone());
             // PLAN: writer note 9 puts `with_settings` after `with_control`; it comes first here because
             // the region check below reads the saved region the settings apply.
             if std::env::var("WORDCRAFT_FILE_DIALOG").is_ok_and(|v| v.trim().eq_ignore_ascii_case("builtin")) {
@@ -1031,7 +1037,7 @@ mod smoke {
             let (intake, sender) = FileIntake::new(Wake::new(|| {}));
             let drops = intake.sender();
             let session = Session::new(wordcraft_doc::Document::new());
-            let app = WordApp::new(session, services(spool.clone(), intake, false)).with_host(host).with_settings(settings.clone());
+            let app = WordApp::new(session, services(spool.clone(), intake, false, &ctx)).with_host(host).with_settings(settings.clone());
             Run {
                 app: App {
                     #[cfg(target_os = "macos")]
