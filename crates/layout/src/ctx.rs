@@ -51,6 +51,9 @@ pub(crate) struct Ctx<'a> {
     /// Empty body paragraphs with hidden marks or continuous section breaks, in order:
     /// they take no room (see [`place_para`]).
     pub(crate) quiet_marks: Vec<usize>,
+    /// The paragraph being laid out as going on from the line of the one before, whose mark is
+    /// hidden: its list number is counted but not drawn (#3986).
+    pub(crate) joined: Option<Joining>,
     /// Empty paragraphs closing a continuous section right after another section's mark, in
     /// order: each takes its line while it fits, then stays at the page's bottom (#3907).
     pub(crate) stacked_marks: Vec<usize>,
@@ -79,6 +82,31 @@ pub(crate) struct Ctx<'a> {
     pub(crate) header_repeats: usize,
 }
 
+/// A paragraph going on from the line of the one before, whose mark is hidden (#3986): a copy of
+/// the document's, which keeps its revision, given the space before that puts its text on that
+/// line's baseline.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Joining {
+    /// The paragraph's revision.
+    pub(crate) rev: u64,
+    /// The space before the copy is given.
+    before: f32,
+    /// Whether it still shares that line: not once its first line has moved on to the next
+    /// column or page, where it is laid out as on its own (the copy's space before kept).
+    pub(crate) shares: bool,
+}
+
+impl Joining {
+    pub(crate) fn new(rev: u64, before: f32) -> Self {
+        Joining { rev, before, shares: true }
+    }
+
+    /// What tells the copy's layouts apart from each other and from the paragraph's own.
+    fn key(self) -> (u32, bool) {
+        (self.before.to_bits(), self.shares)
+    }
+}
+
 struct ParaEnvInput<'a> {
     width: f32,
     label: Option<(String, Level)>,
@@ -87,6 +115,7 @@ struct ParaEnvInput<'a> {
     eq_number: u32,
     typing_word: Option<(usize, usize)>,
     fitted: &'a [(usize, f32)],
+    joined: bool,
 }
 
 /// A header or footer (`story`) laid out for page `number` of a section (`sect`, `mirror`): its
@@ -227,10 +256,29 @@ impl Ctx<'_> {
             grid: para::Grid::default(),
             fit_objects: false,
             fitted: &[],
+            joined: false,
         };
         let pl = Arc::new(para::layout_para(&p, &env));
         self.numbers.insert(n, pl.clone());
         pl
+    }
+
+    /// Whether `p` is laid out going on from the line of the paragraph before, sharing it (#3986).
+    fn shares_line(&self, p: &Paragraph) -> bool {
+        self.joined.is_some_and(|j| j.rev == p.rev && j.shares)
+    }
+
+    /// Whether `p`'s paragraph mark is hidden, with hidden text not shown: Word then shows the
+    /// paragraph on one line with the next one (#3986). A section's closing mark never joins.
+    pub(crate) fn mark_hidden(&self, p: &Paragraph, table_chr: Option<&CharProps>) -> bool {
+        !self.opts.show_hidden && p.section.is_none() && self.doc.styles.resolve_char_in(p.props.style.as_deref(), table_chr, &p.mark).hidden
+    }
+
+    /// Whether `p` shows none of its text (it has none, or all of it is hidden and not shown).
+    pub(crate) fn text_hidden(&self, p: &Paragraph, table_chr: Option<&CharProps>) -> bool {
+        p.text.is_empty()
+            || (!self.opts.show_hidden
+                && p.runs.iter().all(|r| r.len == 0 || self.doc.styles.resolve_char_in(p.props.style.as_deref(), table_chr, &r.props).hidden))
     }
 
     /// The list label of `p`, advancing the list counters: call it once per paragraph, in
@@ -269,7 +317,16 @@ impl Ctx<'_> {
         let typing = key.typing;
         let pl = Arc::new(para::layout_para(
             p,
-            &self.para_env(ParaEnvInput { width, label, table, exclusions, eq_number, typing_word: typing, fitted: &fitted }),
+            &self.para_env(ParaEnvInput {
+                width,
+                label,
+                table,
+                exclusions,
+                eq_number,
+                typing_word: typing,
+                fitted: &fitted,
+                joined: self.shares_line(p),
+            }),
         ));
         self.cache.paras.insert(key, pl.clone());
         pl
@@ -302,7 +359,16 @@ impl Ctx<'_> {
         self.cache.misses += 1;
         let pl = Arc::new(para::layout_para(
             p,
-            &self.para_env(ParaEnvInput { width, label, table: None, exclusions: &[], eq_number, typing_word: None, fitted: &[] }),
+            &self.para_env(ParaEnvInput {
+                width,
+                label,
+                table: None,
+                exclusions: &[],
+                eq_number,
+                typing_word: None,
+                fitted: &[],
+                joined: self.shares_line(p),
+            }),
         ));
         self.cache.paras.insert(key, pl.clone());
         Some(pl)
@@ -330,7 +396,16 @@ impl Ctx<'_> {
         let typing = key.typing;
         let m = measure(&para::layout_para(
             p,
-            &self.para_env(ParaEnvInput { width, label, table, exclusions: &[], eq_number, typing_word: typing, fitted: &fitted }),
+            &self.para_env(ParaEnvInput {
+                width,
+                label,
+                table,
+                exclusions: &[],
+                eq_number,
+                typing_word: typing,
+                fitted: &fitted,
+                joined: self.shares_line(p),
+            }),
         ));
         self.cache.measures.insert(key, m);
         m
@@ -415,6 +490,7 @@ impl Ctx<'_> {
             hide_deleted: self.hide_deleted,
             sref: if self.fields.styleref.is_some() && styleref::has_styleref(p) { self.fields.styleref_key(p) } else { 0 },
             typing: self.opts.typing_word.filter(|t| t.rev == p.rev).map(|t| (t.start, t.end)),
+            joined: self.joined.filter(|j| j.rev == p.rev).map(Joining::key),
         };
         (key, eq_number)
     }
@@ -435,7 +511,7 @@ impl Ctx<'_> {
     }
 
     fn para_env<'b>(&'b self, input: ParaEnvInput<'b>) -> para::ParaEnv<'b> {
-        let ParaEnvInput { width, label, table, exclusions, eq_number, typing_word, fitted } = input;
+        let ParaEnvInput { width, label, table, exclusions, eq_number, typing_word, fitted, joined } = input;
         para::ParaEnv {
             doc: self.doc,
             width,
@@ -454,6 +530,7 @@ impl Ctx<'_> {
             grid: self.grid,
             fit_objects: self.boxes.inside(),
             fitted,
+            joined,
         }
     }
 }
@@ -525,6 +602,7 @@ mod tests {
             track_totals: false,
             pct_base: None,
             quiet_marks: Vec::new(),
+            joined: None,
             stacked_marks: Vec::new(),
             mirror: false,
             table_keys: Vec::new(),

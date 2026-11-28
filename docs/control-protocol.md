@@ -103,7 +103,7 @@ let apps move windows, so there Arrange All and Side by Side only resize.
 | `ui.wheel` | `x`, `y`, `dy`, `dx?`, `unit?` (`point`/`line`/`page`), `phase?` (`start`/`move`/`end`), modifiers | mouse-wheel or trackpad scroll at window coordinates (`dy` < 0 scrolls down) |
 | `ui.key` | `key` (`B`, `Enter`, `Left`…), `shift?`, `alt?`, `cmd?` | key press through egui (shortcuts apply) |
 | `ui.text` | `text` | typed text through egui |
-| `ui.screenshot` | `path?` | PNG of the window in the root viewport: written to `path`, or without one returned as base64 `png` in the reply. Capturing a secondary document window is not supported by the viewport renderer; select the root window with `view.switchWindows {"window": root}` first |
+| `ui.screenshot` | `path?`, `region?` (`[x0, y0, x1, y1]` in points) | PNG of the window (or of `region`) in the root viewport: written to `path`, or without one returned as base64 `png` in the reply. Capturing a secondary document window is not supported by the viewport renderer; select the root window with `view.switchWindows {"window": root}` first |
 | `ui.render` | `path?`, `page?` (1-based), `scale?`, `doc?` | PNG of a page, rendered by the engine: written to `path`, or without one returned as base64 `png` in the reply (never a fixed name in the shared temporary folder) |
 | `ui.parity` | — | feature-catalog parity |
 | `ui.resize` | `width`, `height` | asks for that window content size in points; sizes that aren't positive and finite are refused, the rest are clamped to the app's minimum (600 × 480, #5886) and to the largest surface the GPU can draw (at most 16384; that limit wins over the minimum), and the reply's `width` and `height` are the size asked for |

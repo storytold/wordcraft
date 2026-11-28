@@ -81,6 +81,7 @@ impl WordApp {
         let mode = self.screen_mode();
         let dropped = self.ribbon_dropped;
         let key = self.windows.window_key();
+        let ribbon_out = std::cell::RefCell::new(None);
         let shell = AppShell::new(key)
             .mode_set(ScreenModeSet::Document)
             .screen_mode(Bind::given(mode))
@@ -94,12 +95,12 @@ impl WordApp {
             // tabs and collapsed every one of them.
             .top(Slot::new("ribbonDrop").drops().size(SlotSize::Content), |ui, _cx, app: &mut WordApp| {
                 if !stale(app) {
-                    ribbon_slot(app, ui);
+                    *ribbon_out.borrow_mut() = Some(ribbon::show(app, ui));
                 }
             })
             .top(Slot::new("ribbon").size(SlotSize::Content), |ui, _cx, app: &mut WordApp| {
                 if !stale(app) {
-                    ribbon_slot(app, ui);
+                    *ribbon_out.borrow_mut() = Some(ribbon::show(app, ui));
                 }
             })
             // As tall as the bar: a failure's line under the message puts Install below the first line, and a slot of
@@ -132,6 +133,11 @@ impl WordApp {
             self.follow_screen_mode(out.screen_mode);
         }
         self.ribbon_dropped = out.dropped;
+        // Keytips run outside the ribbon slots so legacy sequences and their hint still work when
+        // no ribbon shows (Focus, Full Screen View) and anchor under the slim screen bar.
+        let ribbon = ribbon_out.into_inner().unwrap_or_else(ribbon::no_ribbon);
+        let screen_bar = out.regions.slots.iter().find(|(slot, _)| *slot == "screenBar").map(|(_, rect)| *rect);
+        crate::keytips::show(ui, self, &ribbon, screen_bar);
         out.regions
     }
 
@@ -145,20 +151,22 @@ impl WordApp {
         // PLAN: assumed `updates_ui::run(app: &mut WordApp)` (shell-w13, sh.A20) opens the updater's dialogs on the host.
         updates_ui::run(self);
         crate::dialogs::host::prepare(self);
+        let had_dialogs = !self.dialog_host.is_empty();
         self.dialog_host.run(ui);
         crate::dialogs::host::settle(self, ctx);
+        crate::dialogs::chrome::apply_modal_nudge(self, ui);
         if moved(self) {
             return;
+        }
+        if had_dialogs && self.dialog_host.is_empty() && !self.file_dialog_open() && !self.ui.backstage {
+            self.canvas.focus_page(ctx);
+            self.canvas.focus_pending = true;
+            self.canvas.focus_page_after_pass();
+            ctx.request_repaint();
         }
         self.refocus_after_chrome_click(ctx, regions);
         if let Some(url) = self.canvas.open_url.take() {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
     }
-}
-
-/// The ribbon, then its keytips, in a top slot: the keytips read what the ribbon recorded this pass.
-fn ribbon_slot(app: &mut WordApp, ui: &mut egui::Ui) {
-    let out = ribbon::show(app, ui);
-    crate::keytips::show(ui, app, &out);
 }

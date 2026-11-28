@@ -24,7 +24,7 @@ use crate::colors::{Remember, Target};
 
 /// A ribbon group titled `title`, with the Dialog Launcher `launcher` when it has one.
 fn ribbon_group(key: &'static str, title: &str, icon: &'static str, launcher: Option<&str>) -> RibbonGroup<'static> {
-    let group = RibbonGroup::new(key, tl!(title).to_string(), crate::icons::id(icon).into());
+    let group = RibbonGroup::new(key, tl!(title).to_string(), crate::icons::spec(icon));
     match launcher {
         Some(id) => group.launcher(CommandRef::new(id)),
         None => group,
@@ -157,6 +157,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 ("Paste", "edit.paste"),
                 ("Keep Text Only", "edit.pasteText"),
                 ("Merge Formatting", "edit.pasteMerge"),
+                ("Paste as Nested Table", "edit.pasteNestedTable"),
                 ("Paste Special…", "edit.pasteSpecial"),
             ] {
                 MenuItem::command(CommandRef::new(id)).label(tl!(label).to_string()).show(ui);
@@ -165,7 +166,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             for (icon, label, id) in [("cut", "Cut", "edit.cut"), ("copy", "Copy", "edit.copy")] {
                 Button::command(CommandRef::new(id))
-                    .icon(crate::icons::id(icon))
+                    .icon(crate::icons::spec(icon))
                     .label(tl!(label).to_string())
                     .tooltip(tl!(label).to_string())
                     .show(ui);
@@ -188,7 +189,9 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     let mut size = st.get("size").and_then(Value::as_f64).map(fmt).unwrap_or_default();
                     let sizes: Vec<Entry<String>> =
                         wordcraft_engine::cmd::format::SIZES.iter().map(|s| Entry::new(fmt(f64::from(*s)), fmt(f64::from(*s)))).collect();
-                    let out = craft::ui::pickers::ComboBox::new(tl!("Font Size").to_string(), Bind::bound(&mut size), &sizes).show(ui);
+                    let out = craft::ui::pickers::ComboBox::new(tl!("Font Size").to_string(), Bind::bound(&mut size), &sizes)
+                        .tooltip(tl!("Font Size").to_string())
+                        .show(ui);
                     if let Some(v) = out.edit.events.committed()
                         && let Ok(x) = v.trim().parse::<f64>()
                     {
@@ -196,12 +199,12 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     }
                     for (icon, tip, id) in [("grow", "Increase Font Size", "format.growFont"), ("shrink", "Decrease Font Size", "format.shrinkFont")]
                     {
-                        IconButton::command(crate::icons::id(icon), CommandRef::new(id))
+                        IconButton::command(crate::icons::spec(icon), CommandRef::new(id))
                             .label(tl!(tip).to_string())
                             .tooltip(tl!(tip).to_string())
                             .show(ui);
                     }
-                    let face = Button::new(tl!("Change Case").to_string()).icon(IconId::new("case")).tooltip(tl!("Change Case").to_string());
+                    let face = Button::new(tl!("Change Case").to_string()).icon(crate::icons::spec("case")).tooltip(tl!("Change Case").to_string());
                     menu_button(ui, face, tl!("Change Case").to_string(), Some("format.changeCase"), |ui, _| {
                         for (label, mode) in [
                             ("Sentence case.", "sentence"),
@@ -216,7 +219,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                         }
                     });
                     for (icon, tip, id) in [("clear", "Clear All Formatting", "format.clear"), ("phonetic", "Phonetic Guide", "format.phonetic")] {
-                        IconButton::command(crate::icons::id(icon), CommandRef::new(id))
+                        IconButton::command(crate::icons::spec(icon), CommandRef::new(id))
                             .label(tl!(tip).to_string())
                             .tooltip(tl!(tip).to_string())
                             .show(ui);
@@ -226,7 +229,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     for (icon, tip, id, on) in [("bold", "Bold", "format.bold", flag("bold")), ("italic", "Italic", "format.italic", flag("italic"))]
                     {
                         ToggleButton::command(CommandRef::new(id))
-                            .icon(crate::icons::id(icon))
+                            .icon(crate::icons::spec(icon))
                             .icon_only()
                             .selected(on)
                             .tooltip(tl!(tip).to_string())
@@ -236,7 +239,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                         CommandRef::with_params("format.underline", json!({})),
                         SplitMenu::Body(Box::new(|ui, _| underline_menu(ui, app))),
                     )
-                    .icon(IconId::new("underline"))
+                    .icon(crate::icons::spec("underline"))
                     .selected(flag("underline"))
                     .tooltip(tl!("Underline").to_string())
                     .show(ui);
@@ -247,18 +250,18 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                         ("charborder", "Character Border", "format.border", flag("border")),
                     ] {
                         ToggleButton::command(CommandRef::new(id))
-                            .icon(crate::icons::id(icon))
+                            .icon(crate::icons::spec(icon))
                             .icon_only()
                             .selected(on)
                             .tooltip(tl!(tip).to_string())
                             .show(ui);
                     }
-                    IconButton::command(IconId::new("enclose"), CommandRef::new("format.enclose"))
+                    IconButton::command(crate::icons::spec("enclose"), CommandRef::new("format.enclose"))
                         .label(tl!("Enclose Characters").to_string())
                         .tooltip(tl!("Enclose Characters").to_string())
                         .show(ui);
                     let face = Button::new(tl!("Text Effects and Typography").to_string())
-                        .icon(IconId::new("effects"))
+                        .icon(crate::icons::spec("effects"))
                         .tooltip(tl!("Text Effects and Typography").to_string());
                     menu_button(ui, face, tl!("Text Effects and Typography").to_string(), None, |ui, cx| text_effects_menu(ui, cx, app));
                     crate::colors::highlight_split(ui, app, tl!("Text Highlight Color"));
@@ -304,7 +307,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                                 .show(ui);
                         })),
                     )
-                    .icon(IconId::new("numbering"))
+                    .icon(crate::icons::spec("numbering"))
                     .selected(lists.numbering)
                     .tooltip(tl!("Numbering").to_string())
                     .show(ui);
@@ -341,20 +344,20 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                             }
                         })),
                     )
-                    .icon(IconId::new("multilevel"))
+                    .icon(crate::icons::spec("multilevel"))
                     .selected(lists.multilevel)
                     .tooltip(tl!("Multilevel List").to_string())
                     .show(ui);
                     for (icon, tip, id) in
                         [("outdent", "Decrease Indent", "para.outdent"), ("indent", "Increase Indent", "para.indent"), ("sort", "Sort", "para.sort")]
                     {
-                        IconButton::command(crate::icons::id(icon), CommandRef::new(id))
+                        IconButton::command(crate::icons::spec(icon), CommandRef::new(id))
                             .label(tl!(tip).to_string())
                             .tooltip(tl!(tip).to_string())
                             .show(ui);
                     }
                     ToggleButton::command(CommandRef::new("view.marks"))
-                        .icon(IconId::new("wordcraft.pilcrow"))
+                        .icon(crate::icons::spec("pilcrow"))
                         .icon_only()
                         .selected(marks)
                         .tooltip(tl!("Show/Hide ¶").to_string())
@@ -370,7 +373,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                         ("textRtl", "Right-to-Left Text Direction", "para.rtl", rtl),
                     ] {
                         ToggleButton::command(CommandRef::new(id))
-                            .icon(crate::icons::id(icon))
+                            .icon(crate::icons::spec(icon))
                             .icon_only()
                             .selected(on)
                             .tooltip(tl!(tip).to_string())
@@ -424,7 +427,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     // whole document with Ctrl+A first (the commands take `scope: "all"` for that as well).
     row.group(ribbon_group("paragraphTools", "Paragraph Tools", "pilcrow", None), |ui| {
         let face = Button::new(tl!("Paragraph\nTools").to_string())
-            .icon(IconId::new("wordcraft.pilcrow"))
+            .icon(crate::icons::spec("pilcrow"))
             .tooltip(tl!("Paragraph Tools").to_string())
             .arrangement(Arrangement::Stacked);
         menu_button(ui, face, tl!("Paragraph Tools").to_string(), None, |ui, _| {
@@ -470,7 +473,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 }
             });
             Button::command(CommandRef::with_params("ui.dialog", json!({"name": "replace"})))
-                .icon(IconId::new("replace"))
+                .icon(crate::icons::spec("replace"))
                 .label(tl!("Replace").to_string())
                 .tooltip(tl!("Replace").to_string())
                 .show(ui);
@@ -491,9 +494,59 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     });
     row.group(ribbon_group("editor", "Editor", "editor", None), |ui| {
         Button::command(CommandRef::new("review.spelling"))
-            .icon(IconId::new("editor"))
+            .icon(crate::icons::spec("editor"))
             .label(tl!("Editor").to_string())
             .arrangement(Arrangement::Stacked)
             .show(ui);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::WordApp;
+    use crate::test_harness::AppFrames as _;
+    use egui::accesskit::Role;
+    use egui::vec2;
+    use egui_kittest::kittest::{By, Queryable};
+    use serde_json::json;
+    use wordcraft_engine::Session;
+
+    /// #7317: focusing a real ribbon control (`Bold` -> `Tab`) via keyboard shows its hint only
+    /// after `tooltip::DELAY`, and hides it while a ribbon menu is open.
+    #[test]
+    fn keyboard_focus_shows_the_hint_after_a_delay_but_not_over_a_menu() {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Sample")), crate::Services::default());
+        app.ui.language = "en".into();
+        app.run("ui.tab", json!({"tab": "Home"})).unwrap();
+        let mut h = crate::test_harness::builder().with_size(vec2(2560.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        crate::test_harness::cjk_stand_in(&h.ctx);
+        crate::test_harness::frames(&mut h, 4);
+
+        let tooltip_visible = |h: &egui_kittest::Harness<'static, WordApp>| h.query_all_by_label_contains("Home › Font").count() > 0;
+
+        let bold = h.query_all(By::new().role(Role::Button).label("Bold")).next().expect("ribbon Bold button");
+        bold.focus();
+        h.app_frame();
+        h.event(egui::Event::Key { key: egui::Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+        h.app_frame();
+        assert!(!tooltip_visible(&h), "just focused: hint should not show before tooltip delay");
+
+        let delay_frames = (craft::ui::contract::tooltip::DELAY / 0.25).ceil() as usize + 3;
+        for _ in 0..delay_frames {
+            h.step();
+        }
+        assert!(tooltip_visible(&h), "focused ribbon control should show its hint after tooltip delay");
+
+        let case_btn = h.query_all(By::new().role(Role::Button).label("Change Case")).next().expect("ribbon Change Case button");
+        case_btn.click();
+        crate::test_harness::frames(&mut h, 3);
+        assert!(!tooltip_visible(&h), "hint must not remain visible over an open ribbon menu");
+    }
 }

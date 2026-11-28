@@ -253,6 +253,24 @@ fn drawing_over_the_pages_follows_the_read_mode_page_color() {
     assert_eq!(blank(&a), Rgb::WHITE, "the paper under the raster, not the page color");
 }
 
+/// #299: the caret's colour is worked out only when the caret is drawn: with text selected
+/// there is no caret, so the page's draw list isn't built for it.
+#[test]
+fn caret_colour_is_not_worked_out_while_the_caret_is_hidden() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello WordCraft")), Default::default());
+    a.run("select.text", json!({"text": "Hello"})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    assert!(h.state().canvas.caret_bg.is_none(), "no caret, no colour lookup");
+}
+
 /// Show revisions in balloons: a document whose only revision is a deletion gets the markup
 /// area for its balloon; the other modes have nothing to show there, and neither does the view
 /// while the Comments pane is open.
@@ -427,20 +445,20 @@ fn selection_bar_clicks_select_lines() {
         page_to_screen(h.state_mut(), c.page, 30.0, c.top + c.height * (li + 0.5)).expect("on screen")
     };
     let line_start = |h: &mut H, at: Pos2| {
-        let placed = *h.state().canvas.shown.pages.iter().find(|p| p.rect.contains(at)).expect("page");
+        let placed = h.state().canvas.shown.pages.iter().find(|p| p.rect.contains(at)).expect("page").clone();
         let p = placed.to_page(at);
         let layout = h.state_mut().session.layout();
         layout.selection_bar_at(placed.page, p.x as f32, p.y as f32).expect("in the selection bar")
     };
     let span = |h: &mut H, pos: &Pos| h.state_mut().session.layout().line_span(pos, 0).expect("line");
-    let button = |at: Pos2, pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
-    let clicks_drag = |h: &mut H, from: Pos2, to: Pos2, clicks: usize| {
+    let button = |at: Pos2, pressed: bool, modifiers: Modifiers| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers };
+    let clicks_drag = |h: &mut H, from: Pos2, to: Pos2, clicks: usize, mods: Modifiers| {
         h.event(Event::PointerMoved(from));
         for i in 0..clicks {
-            h.event(button(from, true));
+            h.event(button(from, true, mods));
             h.app_frame();
             if i + 1 < clicks {
-                h.event(button(from, false));
+                h.event(button(from, false, mods));
                 h.app_frame();
             }
         }
@@ -448,7 +466,7 @@ fn selection_bar_clicks_select_lines() {
             h.event(Event::PointerMoved(from + (to - from) * (k as f32 / 4.0)));
             h.app_frame();
         }
-        h.event(button(to, false));
+        h.event(button(to, false, mods));
         for _ in 0..3 {
             h.app_frame();
         }
@@ -462,22 +480,22 @@ fn selection_bar_clicks_select_lines() {
     let at = margin(&mut h, Pos::body(0, 0), 1.0);
     let l2 = line_start(&mut h, at);
     assert!(l2.off > 0 && l2.path == wordcraft_doc::Path::top(0));
-    clicks_drag(&mut h, at, at, 1);
+    clicks_drag(&mut h, at, at, 1, Modifiers::NONE);
     let (_, l2_end, _) = span(&mut h, &l2);
     assert_eq!(h.state().session.sel.ordered(), (l2.clone(), l2_end.clone()), "the line");
     // Double-click: the paragraph, mark included.
     pause(&mut h);
-    clicks_drag(&mut h, at, at, 2);
+    clicks_drag(&mut h, at, at, 2, Modifiers::NONE);
     assert_eq!(h.state().session.sel.ordered(), (Pos::body(0, 0), Pos::body(1, 0)), "the paragraph");
     // Triple-click: the whole document.
     pause(&mut h);
-    clicks_drag(&mut h, at, at, 3);
+    clicks_drag(&mut h, at, at, 3, Modifiers::NONE);
     assert_eq!(h.state().session.sel.ordered(), (Pos::body(0, 0), Pos::body(2, 10)), "everything");
     // Drag from beside the first line down past the third: three whole lines.
     pause(&mut h);
     let (from, to) = (margin(&mut h, Pos::body(0, 0), 0.0), margin(&mut h, Pos::body(0, 0), 2.0));
     let l3 = line_start(&mut h, to);
-    clicks_drag(&mut h, from, to, 1);
+    clicks_drag(&mut h, from, to, 1, Modifiers::NONE);
     let (_, l3_end, _) = span(&mut h, &l3);
     let sel = h.state().session.sel.clone();
     assert_eq!((sel.anchor, sel.focus), (Pos::body(0, 0), l3_end), "three lines");
@@ -486,7 +504,7 @@ fn selection_bar_clicks_select_lines() {
     let second = margin(&mut h, Pos::body(1, 0), 0.0);
     h.event(Event::ModifiersChanged(Modifiers::SHIFT));
     h.app_frame();
-    clicks_drag(&mut h, second, second, 1);
+    clicks_drag(&mut h, second, second, 1, Modifiers::SHIFT);
     h.event(Event::ModifiersChanged(Modifiers::default()));
     h.app_frame();
     let sel = h.state().session.sel.clone();
@@ -1227,15 +1245,14 @@ fn a_cjk_composition_uses_the_cjk_ui_font() {
     assert_eq!(row.glyphs.len(), 3, "one glyph per composed kana");
     let family = composition_font(&drawn).map(|f| f.family).expect("a font");
     assert_eq!(family, egui::FontFamily::Name(format!("face+ui:{}", super::caret::face_key(run.requested_face)).into()), "in the text's face");
-    let (chain, interface) = h.ctx.fonts(|f| {
-        let families = &f.definitions().families;
-        (families.get(&family).cloned().unwrap_or_default(), families.get(&egui::FontFamily::Proportional).cloned().unwrap_or_default())
-    });
+    // The framework serves the face with the interface fonts behind it; what the face lacks is drawn from them, so each
+    // kana has a full-width glyph (a missing one would be a narrow box or nothing).
+    let size = composition_font(&drawn).map(|f| f.size).expect("a size");
     assert!(
-        !interface.is_empty() && interface.iter().all(|f| chain.contains(f)),
-        "the face's chain goes on with the interface fonts: {chain:?} {interface:?}"
+        row.glyphs.iter().all(|g| g.advance_width >= size * 0.8),
+        "the kana come from the interface fonts: {:?}",
+        row.glyphs.iter().map(|g| g.advance_width).collect::<Vec<_>>()
     );
-    assert_eq!(chain.len(), interface.len() + 1, "and no other document face is borrowed: {chain:?}");
 }
 
 /// The composition is drawn in the font and size of the text it goes into, as Word draws it, its
@@ -2301,4 +2318,127 @@ fn a_linked_text_box_shows_and_follows_its_link_from_inside() {
     let s = &h.state().session;
     let (start, _) = wordcraft_engine::cmd::insert::bookmark_range(&s.doc, "Spot").unwrap();
     assert!(s.sel.is_collapsed() && s.sel.focus == start, "the caret went to the bookmark: {:?}", s.sel);
+}
+
+/// Unit-level checks for #7742 (`hostile_numbers_are_ignored` logic): invalid `ScrollSpeed`
+/// codes, non-finite framework wheel/ease inputs, out-of-range `view.zoom` commands, and
+/// `sync_view_state` recovery from non-finite `session.view.zoom`.
+#[test]
+fn hostile_scroll_and_zoom_logic_is_ignored() {
+    use crate::scroll::ScrollSpeed;
+    use craft::behavior::{Wheel, WheelEase, WheelPhase, WheelUnit};
+    use craft::keymap::{Mods, Platform};
+    use craft::ui::canvas::{NavigationOptions, WheelInput, WheelNavigation};
+    use egui::Vec2;
+
+    for bad in ["", "warp", "NaN", "infinity"] {
+        assert_eq!(ScrollSpeed::from_code(bad), None);
+        assert_eq!(ScrollSpeed::from(bad.to_string()), ScrollSpeed::Normal);
+    }
+    for speed in ScrollSpeed::ALL {
+        assert!(speed.wheel_factor().is_finite() && speed.wheel_factor() > 0.0);
+        assert!(speed.touchpad_factor().is_finite() && speed.touchpad_factor() > 0.0);
+    }
+
+    let mut nav_wheel = WheelNavigation::default();
+    let opts = NavigationOptions::default();
+    let wheel_input = |scroll: Vec2, zoom: f32| {
+        WheelInput::of(&Wheel::new(scroll, Mods::NONE, WheelUnit::Point, WheelPhase::Move).zoom(zoom), 16.0, Platform::current())
+    };
+    assert!(nav_wheel.classify(wheel_input(Vec2::new(f32::NAN, f32::INFINITY), 1.0), &opts).is_none());
+    assert!(nav_wheel.classify(wheel_input(Vec2::new(0.0, f32::NEG_INFINITY), 1.0), &opts).is_none());
+    for bad_zoom in [f32::NAN, f32::INFINITY, 0.0, -1.0] {
+        assert!(nav_wheel.classify(wheel_input(Vec2::ZERO, bad_zoom), &opts).is_none());
+    }
+
+    let mut ease = WheelEase::default();
+    ease.feed(Vec2::new(f32::NAN, f32::INFINITY), 1.0);
+    ease.feed(Vec2::new(0.0, -30.0), f64::NAN);
+    assert!(!ease.owes());
+    ease.feed(Vec2::new(0.0, -30.0), 1.0);
+    assert_eq!(ease.step(f64::NAN), Vec2::ZERO);
+    assert!(!ease.owes());
+
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    for bad_cmd in [json!({"value": -10.0}), json!({"value": 1e30}), json!({"value": "warp"})] {
+        assert!(app.run("view.zoom", bad_cmd).is_err());
+    }
+
+    let mut state = PageViewState::default();
+    state.zoom = 1.5;
+    for bad_zoom in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        app.session.view.zoom = bad_zoom;
+        sync_view_state(&app, &mut state);
+        assert_eq!(state.zoom, 1.0, "non-finite session zoom {bad_zoom:?} falls back to 1.0");
+    }
+    app.session.view.zoom = 1.25;
+    sync_view_state(&app, &mut state);
+    assert_eq!(state.zoom, 1.25);
+}
+
+/// Restored from pre-#7101 `scroll::tests::hostile_numbers_are_ignored` (#7317) against the
+/// post-#7101 `ScrollSpeed` + `PageView` canvas wheel/zoom pipeline: hostile zoom/rotation
+/// events, extreme finite wheel deltas, and non-finite view state are ignored or bounded
+/// without poisoning `offset` or `zoom`.
+#[test]
+fn hostile_numbers_are_ignored() {
+    use egui::{Event, Modifiers, MouseWheelSource, MouseWheelUnit, TouchPhase, Vec2};
+
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Page text"})).unwrap();
+    a.run("layout.break", json!({"kind": "page"})).unwrap();
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|_| a);
+    h.run_steps(2);
+
+    let at = h.state().canvas.shown.rect.center();
+    let wheel = |unit, delta, modifiers, source| Event::MouseWheel { unit, delta, phase: TouchPhase::Move, modifiers, source };
+    let finite_view = |app: &WordApp| {
+        let v = &app.canvas.view;
+        v.offset.0.is_finite() && v.offset.1.is_finite() && v.zoom.is_finite() && v.zoom > 0.0 && app.session.view.zoom.is_finite()
+    };
+
+    let start_offset = h.state().canvas.view.offset;
+    let start_zoom = h.state().canvas.view.zoom;
+
+    // Hostile zoom and rotation events over the canvas are ignored.
+    h.event(Event::PointerMoved(at));
+    for bad in [
+        Event::Zoom(f32::NAN),
+        Event::Zoom(f32::INFINITY),
+        Event::Zoom(0.0),
+        Event::Zoom(-1.0),
+        Event::Rotate(f32::NAN),
+        Event::Rotate(f32::INFINITY),
+    ] {
+        h.event(bad);
+    }
+    h.run_steps(1);
+    assert!(finite_view(h.state()));
+    assert_eq!(h.state().canvas.view.offset, start_offset);
+    assert_eq!(h.state().canvas.view.zoom, start_zoom);
+
+    // Normal touchpad input scrolls down cleanly after hostile events.
+    h.event(wheel(MouseWheelUnit::Point, Vec2::new(0.0, -30.0), Modifiers::NONE, MouseWheelSource::Trackpad));
+    h.run_steps(1);
+    let scrolled_offset = h.state().canvas.view.offset;
+    assert!(scrolled_offset.1 > start_offset.1, "normal wheel input scrolls down: {scrolled_offset:?} vs {start_offset:?}");
+
+    // Huge finite deltas in both point and line units stay finite and clamped to document bounds.
+    h.event(wheel(MouseWheelUnit::Point, Vec2::new(0.0, -1e30), Modifiers::NONE, MouseWheelSource::Trackpad));
+    h.run_steps(1);
+    assert!(finite_view(h.state()));
+    assert!(h.state().canvas.view.offset.1.abs() < 1e6, "offset stays clamped to document bounds: {:?}", h.state().canvas.view.offset);
+
+    h.event(wheel(MouseWheelUnit::Line, Vec2::new(0.0, 1e30), Modifiers::NONE, MouseWheelSource::Wheel));
+    h.run_steps(1);
+    assert!(finite_view(h.state()));
+    assert!(h.state().canvas.view.offset.1.abs() < 1e6);
+
+    // Non-finite session zoom is clamped/recovered on the next pass without poisoning canvas state.
+    h.state_mut().session.view.zoom = f32::NAN;
+    h.run_steps(1);
+    assert!(h.state().canvas.view.zoom.is_finite() && h.state().canvas.view.zoom > 0.0);
+    assert!(h.state().canvas.view.offset.0.is_finite() && h.state().canvas.view.offset.1.is_finite());
 }

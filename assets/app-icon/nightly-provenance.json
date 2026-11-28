@@ -1,0 +1,72 @@
+{
+  "title": "WordCraft nightly deep-background icons",
+  "author": "@skylartaylor",
+  "license": "MIT OR Apache-2.0",
+  "source_commit": null,
+  "inputs": [
+    {
+      "path": "assets/app-icon/hicolor/256x256/apps/ai.storyteller.wordcraft.png",
+      "sha256": "7c1791408282d01e8c5d0cb1f4080971eaa412c60518694a1cec1e60b23c7406",
+      "purpose": "Windows/Linux native256 master"
+    },
+    {
+      "path": "assets/app-icon/wordcraft.ico",
+      "sha256": "53a23dcf66260f44d87d4d143d633395f3e967f391eda47e6e9cc3a52f820225",
+      "purpose": "nine full-bleed frames, 16-256 px"
+    },
+    {
+      "path": "assets/app-icon/wordcraft.icns",
+      "sha256": "02ac9dcb7ee06858416c7ef70ca2b359cad38dbef4a0b526bb1f28953d90170f",
+      "purpose": "padded macOS frames, 32-1024 px"
+    },
+    {
+      "path": "assets/app-icon/wordcraft-macos-512.png",
+      "sha256": "5a8a4476c1fb67123f803a8ab7a7a0dbd9912675ae54d695c17e74454913ceae",
+      "purpose": "padded macOS master (box-filtered down to the 16/32/64 px slots, never upscaled)"
+    }
+  ],
+  "method": {
+    "kind": "derived from the project-owned stable renders by a committed, reproducible script",
+    "original_palette": {
+      "ink": "#0b0b0c",
+      "paper": "#efe9dc",
+      "background": "#3b5bdb"
+    },
+    "nightly_background": "#232c67",
+    "transform": "Decompose every pixel in the stable three-colour palette (ink, paper, background) and rebuild it with the Nightly background, keeping the ink and paper weights, alpha and padding. Clamped and renormalised where an antialiased pixel falls outside the triangle. No crescent, letter or badge.",
+    "generator": "packaging/nightly-icons.py",
+    "generator_sha256": "7a31bc6d3a00d991cf4fd6b1f2ce06b3bdc9201525d207ba84a935a877ee8e4a",
+    "reproduce": "python3 packaging/nightly-icons.py --check"
+  },
+  "outputs": {
+    "assets/app-icon/wordcraft-nightly.png": "43a002255f6db703599de99224cd47274905b8742d92f91d0f7c41c8cb5656e2",
+    "assets/app-icon/wordcraft-nightly.ico": "f4bb314bb6c8c131c7250e441407be5e22e645579881f0a80fe7bd963adda54a",
+    "assets/app-icon/wordcraft-nightly-1024.png": "36e21d31b852ac222c787ee27af45667882353eb9b1c3bfb62a9038c17843b25",
+    "assets/app-icon/wordcraft-nightly.icns": "0b359aa7f07fda079298a97215da207486ca092bbe9c6b277a5de3d3fbc4f9ef"
+  },
+  "ico_frame_sizes": [
+    16,
+    20,
+    24,
+    32,
+    40,
+    48,
+    64,
+    128,
+    256
+  ],
+  "icns_png_slots": {
+    "icp4": 16,
+    "icp5": 32,
+    "icp6": 64,
+    "ic07": 128,
+    "ic08": 256,
+    "ic13": 256,
+    "ic09": 512,
+    "ic14": 512,
+    "ic10": 1024,
+    "ic11": 32,
+    "ic12": 64
+  },
+  "validation": "Every output is re-derived from the committed inputs by the committed script (--check) and compared by SHA-256; the frames' pixel dimensions and the containers' members are checked while deriving; the foreground and padding were compared visually against the stable renders. Native Explorer/Finder qualification is unrun."
+}

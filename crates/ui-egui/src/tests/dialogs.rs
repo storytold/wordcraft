@@ -430,14 +430,17 @@ fn find_replace_and_go_to_keys_like_word() {
     h.event(egui::Event::Text("Kilns fire clay. Kilns cool.".into()));
     h.step();
     let nav_query = |h: &egui_kittest::Harness<WordApp>| h.ctx.data(|d| d.get_temp::<String>(h.state().window_id("nav_query"))).unwrap_or_default();
+    let release = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers };
     // Ctrl+F: the pane, and typing goes into its search box.
     h.event(key(egui::Key::F, egui::Modifiers::COMMAND));
+    h.event(release(egui::Key::F, egui::Modifiers::COMMAND));
     h.step();
     h.step();
     assert!(h.state().session.view.nav_pane, "the Navigation pane opened");
     assert_eq!(h.state().ui.nav_tab, "results", "Find exposes its results (#2096)");
     assert!(h.state().dialog_host.open_dialogs().is_empty(), "no dialog: {:?}", open_key(h.state()));
     h.event(key(egui::Key::C, egui::Modifiers::NONE));
+    h.event(release(egui::Key::C, egui::Modifiers::NONE));
     h.event(egui::Event::Text("cool".into()));
     h.step();
     h.step();
@@ -460,6 +463,7 @@ fn find_replace_and_go_to_keys_like_word() {
     h.state_mut().canvas.focus_page(&ctx);
     h.step();
     h.event(key(egui::Key::F, egui::Modifiers::COMMAND));
+    h.event(release(egui::Key::F, egui::Modifiers::COMMAND));
     h.step();
     h.step();
     assert_eq!(nav_query(&h), "Kilns");

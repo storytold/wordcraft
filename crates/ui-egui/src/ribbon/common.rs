@@ -7,8 +7,9 @@ use craft::ui::contract::{Bind, BodyCx, Gap, Props as _, Show as _, ShowContaine
 use craft::ui::controls::disclosure::DisclosureGlyph;
 use craft::ui::display::Divider;
 use craft::ui::layout_components::{Row, Stack};
+use craft::ui::list::ThumbAspect;
 use craft::ui::menu::{Menu, MenuItem, MenuOutput};
-use craft::ui::primitives::IconSpec;
+use craft::ui::primitives::{FacePaint, IconSpec};
 use craft::ui::runtime::env::Label;
 use craft::ui::text::NumberField;
 
@@ -36,6 +37,9 @@ pub(crate) fn menu_button(
         face = face.tooltip(TooltipSpec::new(hint.clone()).disabled_text(hint));
     }
     let opener = face.trailing_icon(IconSpec::glyph(&MENU_ARROW)).enabled(enabled).show(ui);
+    if !ui.is_sizing_pass() {
+        crate::keytips::note_menu_button(ui.ctx(), opener.response.id, about.filter(|id| !id.is_empty()));
+    }
     Menu::new(name).opened_by(&opener.response, Trigger::Click).show(ui, body).output
 }
 
@@ -130,10 +134,13 @@ pub(crate) fn weight_menu(ui: &mut Ui, _app: &mut WordApp, id: &str, current: Op
         MenuItem::command(CommandRef::with_params(id, params(w)))
             .label(label)
             .check(checked)
-            .sample(move |cx, rect| {
-                let y = rect.center().y;
-                cx.painter.line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)], egui::Stroke::new(w.max(pixel), cx.ink()));
-            })
+            .sample(
+                ThumbAspect::new(3, 1),
+                FacePaint::new(u64::from(w.to_bits()), move |cx, rect| {
+                    let y = rect.center().y;
+                    cx.painter.line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)], egui::Stroke::new(w.max(pixel), cx.ink()));
+                }),
+            )
             .show(ui);
     }
 }

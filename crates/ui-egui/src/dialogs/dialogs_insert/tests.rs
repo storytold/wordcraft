@@ -375,3 +375,21 @@ fn date_time_dialog_keeps_open_and_displays_invalid_picture_error() {
     assert!(a.dialog_host.get_dyn(id).is_some(), "the dialog stays open");
     assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "");
 }
+
+/// #4832: Document Information fields are offered and format instructions match the chosen
+/// format.
+#[test]
+fn field_dialog_lists_the_document_information_fields() {
+    let listed: Vec<&str> = FIELDS.iter().filter(|(_, cat, _)| *cat == "Document Information").map(|(n, _, _)| *n).collect();
+    for name in ["COMMENTS", "KEYWORDS", "LASTSAVEDBY", "NUMCHARS", "REVNUM", "SUBJECT"] {
+        assert!(listed.contains(&name), "{name} in {listed:?}");
+    }
+    let a = app();
+    let mut f = FieldForm::new(&a);
+    f.select("REVNUM");
+    f.number_format = "ROMAN".into();
+    f.preserve = false;
+    assert_eq!(f.instruction(), r"REVNUM \* ROMAN");
+    f.select("SUBJECT");
+    assert_eq!(f.instruction(), "SUBJECT");
+}

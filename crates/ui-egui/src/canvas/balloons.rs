@@ -3,7 +3,7 @@
 //! and its drafts are `CanvasState::comments`, the one copy the Comments pane shares.
 
 use craft::review::ui::{BalloonItem, BalloonPlace, CommentBalloons, CommentEdit};
-use craft::review::{CommentAnchor, CommentMessage, CommentThread, ReviewStatus, Revision, RevisionKind, ThreadId};
+use craft::review::{CommentAnchor, CommentMessage, CommentThread, Revision, RevisionKind, ThreadId};
 
 use super::geometry::{FLOAT_WIDTH, floating_comments, markup_width, shown_comment};
 use super::{Color32, CommentDisplay, DocLayout, Env, Pos, Pos2, StoryRef, Ui, WordApp, json};
@@ -68,7 +68,8 @@ pub(crate) fn balloons(app: &mut WordApp, ui: &mut Ui, out: &craft::pages::ui::P
 /// Applies what a card reported through the commands the Comments pane uses.
 fn apply(app: &mut WordApp, cards: &[Card], edit: CommentEdit) {
     match edit {
-        CommentEdit::Select(thread) => {
+        CommentEdit::Select(threads) => {
+            let Some(thread) = threads.first().copied() else { return };
             let Some(id) = app_id(thread) else { return };
             focus_balloon(app, id);
             let pos = cards.iter().find_map(|c| match &c.what {
@@ -149,7 +150,7 @@ fn thread_of(app: &WordApp, id: u32, page: usize, anchor: Pos2, color: Color32) 
             let c = app.session.doc.comments.get(&cid)?;
             let created = c.date_utc.as_deref().map(unix_seconds).filter(|t| *t > 0).unwrap_or_else(|| unix_seconds(&c.date));
             let text = app.session.doc.plain_text(StoryRef::Part(c.part)).trim().to_string();
-            Some(CommentMessage { author: author_name(&c.author), created, modified: None, text, reactions: Vec::new(), read: true })
+            Some(CommentMessage { author: author_name(&c.author), created, modified: None, text, reactions: Vec::new(), read: true, deletable: true })
         })
         .collect();
     Some(CommentThread {
@@ -158,7 +159,8 @@ fn thread_of(app: &WordApp, id: u32, page: usize, anchor: Pos2, color: Color32) 
         kind: None,
         color: Some([color.r(), color.g(), color.b()]),
         messages,
-        status: ReviewStatus::None,
+        statuses: Vec::new(),
+        reply_statuses: Vec::new(),
         marked: false,
         locked: false,
         resolved: root.resolved,
@@ -253,7 +255,7 @@ fn focus_balloon(app: &mut WordApp, id: u32) {
     let text = app.session.doc.comments.get(&id).filter(|_| editable).map(|c| app.session.doc.plain_text(StoryRef::Part(c.part)));
     let thread = thread_id(id);
     let comments = &mut app.canvas.comments;
-    comments.selected = Some(thread);
+    comments.selected = craft::behavior::Selection::single(thread);
     if comments.editing.as_ref().is_none_or(|(t, ..)| *t != thread) {
         comments.editing = text.map(|t| (thread, 0, t));
     }
@@ -275,5 +277,5 @@ pub fn deselect_balloon(app: &mut WordApp) {
     // What was written is cleared by the write; a draft the document refused (read-only protection) stays, with its
     // reason on the status line, for when the balloon is selected again or the document is saved or closed (#1348).
     write_back(app, id);
-    app.canvas.comments.selected = None;
+    app.canvas.comments.selected = craft::behavior::Selection::default();
 }

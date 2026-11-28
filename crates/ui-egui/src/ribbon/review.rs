@@ -12,24 +12,24 @@ use super::{WordApp, json};
 
 /// The Review tab.
 pub(super) fn review(row: &mut RibbonRow<'_>, app: &mut WordApp) {
-    row.group(RibbonGroup::new("review.proofing", tl!("Proofing").to_string(), IconId::new("spelling").into()), |ui| {
+    row.group(RibbonGroup::new("review.proofing", tl!("Proofing").to_string(), crate::icons::spec("spelling")), |ui| {
         Button::command(CommandRef::new("review.spelling"))
             .label(tl!("Spelling &\nGrammar").to_string())
-            .icon(IconId::new("spelling"))
+            .icon(crate::icons::spec("spelling"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-            Button::command(CommandRef::new("review.thesaurus")).label(tl!("Thesaurus").to_string()).icon(IconId::new("thesaurus")).show(ui);
+            Button::command(CommandRef::new("review.thesaurus")).label(tl!("Thesaurus").to_string()).icon(crate::icons::spec("thesaurus")).show(ui);
             Button::command(CommandRef::with_params("ui.dialog", json!({"name": "wordCount"})))
                 .label(tl!("Word Count").to_string())
-                .icon(IconId::new("wordCount"))
+                .icon(crate::icons::spec("wordCount"))
                 .show(ui);
         });
     });
-    row.group(RibbonGroup::new("review.speech", tl!("Speech").to_string(), IconId::new("readAloud").into()), |ui| {
+    row.group(RibbonGroup::new("review.speech", tl!("Speech").to_string(), crate::icons::spec("readAloud")), |ui| {
         Button::command(CommandRef::new("review.readAloud"))
             .label(tl!("Read\nAloud").to_string())
-            .icon(IconId::new("readAloud"))
+            .icon(crate::icons::spec("readAloud"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
     });
@@ -40,13 +40,13 @@ pub(super) fn review(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .arrangement(Arrangement::Stacked)
             .show(ui);
     });
-    row.group(RibbonGroup::new("review.language", tl!("Language").to_string(), IconId::new("language").into()), |ui| {
+    row.group(RibbonGroup::new("review.language", tl!("Language").to_string(), crate::icons::spec("language")), |ui| {
         Button::command(CommandRef::new("review.translate"))
             .label(tl!("Translate").to_string())
-            .icon(IconId::new("translate"))
+            .icon(crate::icons::spec("translate"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
-        let face = Button::new(tl!("Language").to_string()).icon(IconId::new("language")).arrangement(Arrangement::Stacked);
+        let face = Button::new(tl!("Language").to_string()).icon(crate::icons::spec("language")).arrangement(Arrangement::Stacked);
         menu_button(ui, face, tl!("Language").to_string(), None, |ui, _| language_menu(ui, app));
     });
     row.group(RibbonGroup::new("review.comments", tl!("Comments").to_string(), IconId::new("newComment").into()), |ui| {
@@ -188,7 +188,7 @@ pub(super) fn review(row: &mut RibbonRow<'_>, app: &mut WordApp) {
 /// Developer › Controls: content controls.
 pub(super) fn developer(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     let design = app.session.view.design_mode;
-    row.group(RibbonGroup::new("developer.controls", tl!("Controls").to_string(), IconId::new("ccRichText").into()), |ui| {
+    row.group(RibbonGroup::new("developer.controls", tl!("Controls").to_string(), crate::icons::spec("ccRichText")), |ui| {
         let rows: [[(&'static str, &str); 3]; 3] = [
             [("ccRichText", "developer.richText"), ("ccPlainText", "developer.plainText"), ("ccPicture", "developer.picture")],
             [("ccGallery", "developer.buildingBlock"), ("ccCheckBox", "developer.checkBox"), ("ccComboBox", "developer.comboBox")],
@@ -199,7 +199,7 @@ pub(super) fn developer(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             for cells in rows {
                 Row::new().show(ui, |ui, _| {
                     for (icon_name, id) in cells {
-                        IconButton::command(crate::icons::id(icon_name), CommandRef::new(id)).show(ui);
+                        IconButton::command(crate::icons::spec(icon_name), CommandRef::new(id)).show(ui);
                     }
                 });
             }
@@ -217,15 +217,15 @@ pub(super) fn developer(row: &mut RibbonRow<'_>, app: &mut WordApp) {
 
 /// The Help tab.
 pub(super) fn help(row: &mut RibbonRow<'_>, _app: &mut WordApp) {
-    row.group(RibbonGroup::new("help.help", tl!("Help").to_string(), IconId::new("help").into()), |ui| {
+    row.group(RibbonGroup::new("help.help", tl!("Help").to_string(), crate::icons::spec("help")), |ui| {
         Button::command(CommandRef::with_params("ui.dialog", json!({"name": "about"})))
             .label(tl!("Help").to_string())
-            .icon(IconId::new("help"))
+            .icon(crate::icons::spec("help"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
         Button::command(CommandRef::new("ui.checkForUpdates"))
             .label(tl!("Check for\nUpdates…").to_string())
-            .icon(IconId::new("checkForUpdates"))
+            .icon(IconId::new("update"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
         Button::command(CommandRef::new("ui.discord"))

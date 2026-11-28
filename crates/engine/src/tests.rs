@@ -20,6 +20,7 @@ mod fonts;
 mod ime_noop;
 mod page_number_formats_in_lists;
 mod para_tools;
+mod paste_table_in_cell;
 mod revision_checks;
 mod typing;
 mod wordart;
@@ -1662,10 +1663,9 @@ fn copying_puts_rtf_on_the_clipboard() {
     assert!(r["rtf"].as_str().is_some_and(|t| t.starts_with("{\\rtf1") && t.contains("bold")), "{r}");
     assert_eq!(text(&s).lines().next(), Some("plain "));
 
-    // Nothing selected: nothing copied, no RTF.
+    // Nothing selected: Copy is refused, so nothing is copied.
     run(&mut s, "caret.docEnd", json!({}));
-    let r = run(&mut s, "edit.copy", json!({}));
-    assert!(r.get("rtf").is_none(), "{r}");
+    assert!(s.run("edit.copy", &json!({})).is_err(), "Copy with nothing selected");
 }
 
 #[test]
@@ -2070,6 +2070,205 @@ fn paste_keeps_source_formatting_from_other_programs() {
     assert_eq!(props_at(&s, 4).italic, Some(true));
 }
 
+/// Verify that pasting syntax-highlighted code from VS Code retains syntax colors and font styling
+/// without inheriting dark background shading strips from outer container elements (#6157).
+#[test]
+fn pasted_code_from_vscode_has_syntax_colors_and_no_character_shading() {
+    // #6157: VS Code wraps copied code in an outer div with `background-color: #1e1e1e`.
+    // In Word and per CSS (background-color does not inherit), pasting into a document keeps the
+    // syntax colors and mono font without painting dark character shading strips over the runs.
+    let mut s = s();
+    let vscode_html = r#"<div style="color: #d4d4d4;background-color: #1e1e1e;font-family: Consolas, 'Courier New', monospace;font-weight: normal;font-size: 14px;line-height: 19px;white-space: pre;"><div><span style="color: #569cd6;">const</span><span style="color: #d4d4d4;"> x = </span><span style="color: #b5cea8;">1</span><span style="color: #d4d4d4;">;</span></div></div>"#;
+    run(&mut s, "edit.paste", json!({"text": "const x = 1;", "html": vscode_html}));
+    assert_eq!(text(&s), "const x = 1;");
+    let p = s.doc.para_at(&s.sel.focus).unwrap();
+    for r in &p.runs {
+        assert_eq!(r.props.shading, None, "character should have no shading from container div");
+    }
+    assert_eq!(p.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)), "container background is kept as paragraph shading");
+    assert!(p.runs.iter().any(|r| r.props.color == Some(wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(0x56, 0x9c, 0xd6)))));
+}
+
+/// A multi-block paste keeps the first pasted paragraph's shading when the destination has its own properties (#6157).
+#[test]
+fn multi_block_paste_keeps_first_paragraph_shading() {
+    let mut s = s();
+    run(&mut s, "para.align", json!({"value": "center"}));
+    let html = r#"<div style="background-color:#1e1e1e"><p>one</p><p>two</p></div>"#;
+    run(&mut s, "edit.paste", json!({"text": "one\ntwo", "html": html}));
+    assert_eq!(text(&s), "one\ntwo");
+    let p = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)), "first pasted paragraph keeps its shading");
+}
+
+/// A destination paragraph whose style shades keeps that shading when a shaded paragraph is pasted (#6157).
+#[test]
+fn paste_keeps_destination_style_shading() {
+    let mut s = s();
+    Arc::make_mut(&mut s.doc.styles).upsert(wordcraft_doc::Style {
+        id: "Shaded".into(),
+        name: "Shaded".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        based_on: Some("Normal".into()),
+        para: wordcraft_doc::props::ParaProps { shading: Some(wordcraft_doc::Rgb(0x22, 0x22, 0x22)), ..Default::default() },
+        ..Default::default()
+    });
+    run(&mut s, "para.style", json!({"style": "Shaded"}));
+    let html = r#"<div style="background-color:#1e1e1e"><span>text</span></div>"#;
+    run(&mut s, "edit.paste", json!({"text": "text", "html": html}));
+    let p = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p.props.shading, None, "source shading must not override the destination style");
+    assert_eq!(
+        s.doc.styles.resolve_para(&p.props).shading,
+        Some(wordcraft_doc::Rgb(0x22, 0x22, 0x22)),
+        "destination style shading remains effective"
+    );
+}
+
+/// Multi-line VS Code paste keeps removable paragraph shading rather than stuck character shading,
+/// so Shading › No Color, Clear All Formatting, and Merge Formatting all clear the dark background (#6157).
+#[test]
+fn pasted_code_from_vscode_shading_is_removable() {
+    let vscode_html = concat!(
+        r#"<div style="color: #d4d4d4;background-color: #1e1e1e;font-family: Consolas, 'Courier New', monospace;font-size: 14px;white-space: pre;">"#,
+        r#"<div><span style="color: #569cd6;">const</span><span style="color: #d4d4d4;"> a = 1;</span></div>"#,
+        r#"<div><span style="color: #569cd6;">const</span><span style="color: #d4d4d4;"> b = 2;</span></div>"#,
+        r#"</div>"#,
+    );
+    let plain = "const a = 1;\nconst b = 2;";
+
+    // Home › Paragraph › Shading › No Color removes the dark background across all pasted lines.
+    let mut s = self::s();
+    run(&mut s, "edit.paste", json!({"text": plain, "html": vscode_html}));
+    assert_eq!(s.doc.body.len(), 2);
+    for b in &s.doc.body {
+        let p = b.as_para().unwrap();
+        assert_eq!(p.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)));
+        assert!(p.runs.iter().all(|r| r.props.shading.is_none()));
+    }
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.shading", json!({"color": null}));
+    for b in &s.doc.body {
+        let p = b.as_para().unwrap();
+        assert_eq!(p.props.shading, None, "Shading › No Color clears the container background");
+        assert!(p.runs.iter().all(|r| r.props.shading.is_none()));
+    }
+
+    // Clear All Formatting clears both the dark paragraph shading and light syntax colors.
+    let mut s = self::s();
+    run(&mut s, "edit.paste", json!({"text": plain, "html": vscode_html}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.clear", json!({}));
+    for b in &s.doc.body {
+        let p = b.as_para().unwrap();
+        assert_eq!(p.props.shading, None);
+        assert!(p.runs.iter().all(|r| r.props.shading.is_none() && r.props.color.is_none()));
+    }
+
+    // Paste › Merge Formatting drops the dark container background and light text colors up front.
+    let mut s = self::s();
+    run(&mut s, "edit.pasteMerge", json!({"text": plain, "html": vscode_html}));
+    for b in &s.doc.body {
+        let p = b.as_para().unwrap();
+        assert_eq!(p.props.shading, None);
+        assert!(p.runs.iter().all(|r| r.props.shading.is_none() && r.props.color.is_none()));
+    }
+}
+
+/// Copying a paragraph shaded via its style writes `background-color` to the clipboard HTML (#6157).
+#[test]
+fn copy_exports_style_inherited_paragraph_shading_to_clipboard_html() {
+    let mut s = s();
+    Arc::make_mut(&mut s.doc.styles).upsert(wordcraft_doc::Style {
+        id: "CodeBlock".into(),
+        name: "Code Block".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        based_on: Some("Normal".into()),
+        para: wordcraft_doc::props::ParaProps { shading: Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)), ..Default::default() },
+        ..Default::default()
+    });
+    run(&mut s, "document.setText", json!({"text": "const x = 1;"}));
+    run(&mut s, "para.style", json!({"style": "CodeBlock"}));
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default();
+    assert!(html.contains("background-color:#1E1E1E"), "clipboard HTML carries style paragraph shading: {html}");
+
+    let mut dst = self::s();
+    run(&mut dst, "edit.paste", json!({"text": "const x = 1;", "html": html, "privateClipboard": false}));
+    let p = dst.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)));
+}
+
+/// Pasting a single inline-highlighted word into the middle of an unshaded paragraph keeps run
+/// shading on that word alone and leaves the destination paragraph unshaded (#6157).
+#[test]
+fn pasting_inline_highlighted_word_mid_paragraph_keeps_run_shading_only() {
+    for (html, want) in [
+        (r#"<span style="background-color:yellow">word</span>"#, wordcraft_doc::Rgb(0xff, 0xff, 0x00)),
+        (r"<mark>word</mark>", wordcraft_doc::Rgb(0xff, 0xff, 0x00)),
+        (r#"<code style="background-color:#eeeeee">word</code>"#, wordcraft_doc::Rgb(0xee, 0xee, 0xee)),
+    ] {
+        let mut s = self::s();
+        run(&mut s, "document.setText", json!({"text": "before  after"}));
+        run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 7}, "focus": {"block": 0, "off": 7}}));
+        run(&mut s, "edit.paste", json!({"text": "word", "html": html}));
+        assert_eq!(text(&s), "before word after", "{html}");
+        let p = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
+        assert_eq!(p.props.shading, None, "destination paragraph stays unshaded: {html}");
+        assert_eq!(p.props_of_char(0).shading, None, "{html}");
+        assert_eq!(p.props_of_char(7).shading, Some(want), "pasted word keeps run shading: {html}");
+        assert_eq!(p.props_of_char(12).shading, None, "{html}");
+    }
+}
+
+/// Pasting a container-wrapped one-line snippet (no paragraph break) into the middle of a
+/// paragraph leaves the destination paragraph unshaded (#6157).
+#[test]
+fn container_wrapped_one_line_paste_mid_paragraph_leaves_paragraph_unshaded() {
+    let mut s = self::s();
+    run(&mut s, "document.setText", json!({"text": "Call  now."}));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 5}, "focus": {"block": 0, "off": 5}}));
+    let vscode_html = r#"<div style="color: #d4d4d4;background-color: #1e1e1e;font-family: Consolas, 'Courier New', monospace;font-size: 14px;white-space: pre;"><span style="color: #569cd6;">foo</span></div>"#;
+    run(&mut s, "edit.paste", json!({"text": "foo", "html": vscode_html}));
+    assert_eq!(text(&s), "Call foo now.");
+    let p = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p.props.shading, None, "destination paragraph stays unshaded");
+    assert_eq!(p.props_of_char(0).shading, None);
+    assert_eq!(p.props_of_char(5).shading, None);
+}
+
+/// Under Track Changes, rejecting a paste restores the destination paragraph formatting (#6157).
+#[test]
+fn tracked_paste_reject_restores_destination_paragraph_shading() {
+    let mut s = self::s();
+    run(&mut s, "document.setText", json!({"text": "Call  now."}));
+    run(&mut s, "review.trackChanges", json!({"enabled": true}));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 5}, "focus": {"block": 0, "off": 5}}));
+    let vscode_html = r#"<div style="color: #d4d4d4;background-color: #1e1e1e;font-family: Consolas, 'Courier New', monospace;font-size: 14px;white-space: pre;"><span style="color: #569cd6;">foo</span></div>"#;
+    run(&mut s, "edit.paste", json!({"text": "foo", "html": vscode_html}));
+    assert_eq!(text(&s), "Call foo now.");
+    let p = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p.props.shading, None);
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(text(&s), "Call  now.");
+    let p_after = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p_after.props.shading, None, "rejecting paste leaves paragraph unshaded");
+
+    // Also verify that pasting into an empty paragraph under Track Changes restores the empty
+    // paragraph's unshaded state on Reject All.
+    let mut s2 = self::s();
+    run(&mut s2, "review.trackChanges", json!({"enabled": true}));
+    run(&mut s2, "edit.paste", json!({"text": "foo", "html": vscode_html}));
+    assert_eq!(text(&s2), "foo");
+    let p2 = s2.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p2.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)));
+    run(&mut s2, "review.rejectAll", json!({}));
+    assert_eq!(text(&s2), "");
+    let p2_after = s2.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p2_after.props.shading, None, "rejecting paste into empty paragraph clears paragraph shading");
+}
+
 /// A CF_HTML ("HTML Format") clipboard payload around `html`, with the byte offsets Windows writes.
 fn cf_html(html: &str) -> String {
     let n = "Version:1.0\r\nStartHTML:0000000000\r\nEndHTML:0000000000\r\nStartFragment:0000000000\r\nEndFragment:0000000000\r\n".len();
@@ -2417,6 +2616,122 @@ fn copy_whole_table_pastes_a_table() {
     assert_eq!(body_table_cells(&s), vec![want.clone(), want]);
 }
 
+/// #5906: Copying select-all in a document starting with a table must preserve the table.
+#[test]
+fn select_all_in_document_starting_with_table_preserves_table() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    run(&mut s, "text.insert", json!({"text": "A1"}));
+    run(&mut s, "select.all", json!({"whole": true}));
+    run(&mut s, "edit.copy", json!({}));
+    let clip = s.clipboard.as_ref().unwrap();
+    assert!(
+        clip.blocks.iter().any(|b| matches!(b, wordcraft_doc::Block::Table(_))),
+        "copying select-all in a document starting with a table must preserve table structure, got {:?}",
+        clip.blocks
+    );
+    let table = clip
+        .blocks
+        .iter()
+        .find_map(|b| match b {
+            wordcraft_doc::Block::Table(t) => Some(t),
+            _ => None,
+        })
+        .expect("table block in clipboard");
+    assert_eq!(table.rows.len(), 2, "copied table row count");
+    assert_eq!(table.cols(), 2, "copied table col count");
+    let c00 = table.rows[0].cells[0].blocks.first().and_then(|b| match &**b {
+        wordcraft_doc::Block::Para(p) => Some(p.text.as_str()),
+        _ => None,
+    });
+    assert_eq!(c00, Some("A1"), "cell (0, 0) text");
+}
+
+/// #5906: Cut and Spike across table cells with non-corner endpoints must preserve every removed character.
+#[test]
+fn cut_and_spike_across_table_cells_preserves_every_removed_character() {
+    // 1. Test Spike then insertSpike
+    {
+        let mut s = s();
+        run(&mut s, "insert.table", json!({"rows": 3, "cols": 3}));
+        for (i, text) in ["R0C0", "R0C1", "R0C2", "R1C0", "R1C1", "R1C2", "R2C0", "R2C1", "R2C2"].iter().enumerate() {
+            if i > 0 {
+                run(&mut s, "text.tab", json!({}));
+            }
+            run(&mut s, "text.insert", json!({"text": text}));
+        }
+
+        // Set linear text range across non-corner cells: (0, 1) off 1 ("0C1") through (1, 1) off 3 ("R1C").
+        // Traversed in linear document order: (0, 1) "0C1", (0, 2) "R0C2", (1, 0) "R1C0", (1, 1) "R1C".
+        s.sel = crate::Selection {
+            anchor: wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 1, 0]), off: 1 },
+            focus: wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path(vec![0, 1, 1, 0]), off: 3 },
+        };
+        s.column = None;
+
+        run(&mut s, "edit.spike", json!({}));
+
+        // Verify the table content after spike:
+        // (0, 1) has "R" remaining, (0, 2) emptied, (1, 0) emptied, (1, 1) has "1" remaining.
+        let cells_after = body_table_cells(&s);
+        assert_eq!(
+            cells_after,
+            vec![vec!["R0C0".to_string(), "R".into(), "".into(), "".into(), "1".into(), "R1C2".into(), "R2C0".into(), "R2C1".into(), "R2C2".into(),]]
+        );
+
+        // Paste the spike at the end of the document: all 4 removed pieces must be present.
+        run(&mut s, "caret.docEnd", json!({}));
+        run(&mut s, "edit.insertSpike", json!({}));
+        let texts = body_texts(&s);
+        assert!(
+            texts.iter().any(|t| t == "0C1")
+                && texts.iter().any(|t| t == "R0C2")
+                && texts.iter().any(|t| t == "R1C0")
+                && texts.iter().any(|t| t == "R1C"),
+            "every removed character must be preserved and inserted from spike, got: {:?}",
+            texts
+        );
+    }
+
+    // 2. Test Cut then paste
+    {
+        let mut s = s();
+        run(&mut s, "insert.table", json!({"rows": 3, "cols": 3}));
+        for (i, text) in ["R0C0", "R0C1", "R0C2", "R1C0", "R1C1", "R1C2", "R2C0", "R2C1", "R2C2"].iter().enumerate() {
+            if i > 0 {
+                run(&mut s, "text.tab", json!({}));
+            }
+            run(&mut s, "text.insert", json!({"text": text}));
+        }
+
+        s.sel = crate::Selection {
+            anchor: wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 1, 0]), off: 1 },
+            focus: wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path(vec![0, 1, 1, 0]), off: 3 },
+        };
+        s.column = None;
+
+        run(&mut s, "edit.cut", json!({}));
+
+        let cells_after_cut = body_table_cells(&s);
+        assert_eq!(
+            cells_after_cut,
+            vec![vec!["R0C0".to_string(), "R".into(), "".into(), "".into(), "1".into(), "R1C2".into(), "R2C0".into(), "R2C1".into(), "R2C2".into(),]]
+        );
+
+        run(&mut s, "caret.docEnd", json!({}));
+        run(&mut s, "edit.paste", json!({}));
+        let texts_cut = body_texts(&s);
+        assert!(
+            texts_cut.iter().any(|t| t == "0C1")
+                && texts_cut.iter().any(|t| t == "R0C2")
+                && texts_cut.iter().any(|t| t == "R1C0")
+                && texts_cut.iter().any(|t| t == "R1C"),
+            "every removed character must be preserved and inserted from cut, got: {:?}",
+            texts_cut
+        );
+    }
+}
+
 /// #1744: Select Table → Cut removes the whole table, and one Undo brings it back.
 #[test]
 fn cut_whole_table_removes_it_and_undoes() {
@@ -2633,6 +2948,20 @@ fn tracked_cut_of_a_table_or_row_marks_text_deleted() {
     assert_eq!(body_table_final(&s), row_cells(&["A1", "B1", "C1", "", "", "", "A3", "B3", "C3"]));
     run(&mut s, "edit.undo", json!({}));
     assert_eq!(body_table_final(&s), full);
+}
+
+/// Cut and Copy are off with nothing selected (the ribbon buttons read this) and on with text selected.
+#[test]
+fn cut_and_copy_are_disabled_without_a_selection() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    for id in ["edit.cut", "edit.copy"] {
+        assert!(s.why_disabled(id).is_some(), "{id} with a caret only");
+    }
+    run(&mut s, "select.text", json!({"text": "Hello"}));
+    for id in ["edit.cut", "edit.copy"] {
+        assert!(s.why_disabled(id).is_none(), "{id} with a selection");
+    }
 }
 
 /// #1744 review: Cut of a table, or of cells, holding a content control locked against deletion
@@ -3000,11 +3329,19 @@ fn tables_nest_only_as_deep_as_a_json_save_reads() {
     let e = s.run("insert.table", &json!({"rows": 1, "cols": 1})).unwrap_err();
     assert!(e.to_string().contains(&format!("{MAX_TABLE_DEPTH} deep")), "{e}");
     assert_eq!(s.doc, before);
-    run(&mut s, "edit.paste", json!({"text": "b", "html": "<table><tr><td>b</td></tr></table>"}));
+    // Paste as Nested Table is the path the depth guard sits on: the table's text comes as paragraphs.
+    run(&mut s, "edit.pasteNestedTable", json!({"text": "b", "html": "<table><tr><td>b</td></tr></table>"}));
     let cell = s.sel.focus.path.clone();
     let blocks: Vec<_> = (0..).map_while(|i| s.doc.block(StoryRef::Body, &cell.with_last(i))).collect();
     assert!(blocks.iter().all(|b| b.as_table().is_none()), "no table below the limit");
     assert!(blocks.iter().any(|b| b.as_para().is_some_and(|p| p.text.contains('b'))), "the pasted text is there");
+    // Paste lays a one-cell table over the cell (#6739): no new level either.
+    run(&mut s, "edit.paste", json!({"text": "c", "html": "<table><tr><td>c</td></tr></table>"}));
+    let cell = s.sel.focus.path.clone();
+    let blocks: Vec<_> = (0..).map_while(|i| s.doc.block(StoryRef::Body, &cell.with_last(i))).collect();
+    assert!(blocks.iter().all(|b| b.as_table().is_none()), "no table below the limit");
+    assert!(blocks.iter().any(|b| b.as_para().is_some_and(|p| p.text.contains('c'))), "the pasted text is there");
+    assert_eq!(s.sel.focus.path.depth(), MAX_TABLE_DEPTH);
 }
 
 /// #3618: a text box story sits two JSON levels below the body, and its deepest cell still reads
@@ -5837,6 +6174,318 @@ fn copy_paste_text_box_makes_an_independent_copy() {
     run(&mut s, "edit.undo", json!({}));
     run(&mut s, "edit.undo", json!({}));
     assert_eq!(s.doc.parts.len(), parts);
+}
+
+/// Copying and pasting a selected custom text box duplicates its dimensions, styling, and text
+/// while giving the copy an independent story ID.
+#[test]
+fn copy_and_paste_selected_custom_text_box_duplicates_dimensions_styling_and_text() {
+    let mut s = s();
+    let id = run(
+        &mut s,
+        "insert.textBox",
+        json!({
+            "text": "Custom content",
+            "width": 180.0,
+            "height": 90.0
+        }),
+    )["story"]
+        .as_u64()
+        .unwrap() as u32;
+
+    // Apply custom styling (fill and outline).
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "shape.fill", json!({"color": "FFEEDD"}));
+    run(&mut s, "shape.outline", json!({"color": "112233", "width": 2.5}));
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    let orig_obj = para.objects[0].clone();
+    let wordcraft_doc::InlineObject::Shape { w, h, stroke_width, fill, stroke, .. } = &orig_obj else { panic!("not a shape") };
+    assert_eq!((*w, *h), (180.0, 90.0));
+    assert_eq!(*stroke_width, 2.5);
+    assert!(fill.is_some());
+    assert!(stroke.is_some());
+
+    // Copy selected custom text box (non-collapsed, object_selection, #5785, #5859).
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    assert!(crate::cmd::objects::object_selection(&s).is_some());
+    let copy_res = run(&mut s, "edit.copy", json!({}));
+    assert_eq!(copy_res["text"], "Custom content");
+    assert_eq!(s.clipboard_text, "Custom content");
+    assert!(s.clipboard.is_some());
+
+    // Move caret after original and paste.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 3)}));
+    run(&mut s, "edit.paste", json!({}));
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 2);
+    let pasted = &para.objects[1];
+
+    let wordcraft_doc::InlineObject::Shape { w: pw, h: ph, stroke_width: psw, fill: pfill, stroke: pstroke, story: pstory, .. } = pasted else {
+        panic!("pasted not a shape");
+    };
+
+    assert_eq!((*pw, *ph), (180.0, 90.0), "dimensions duplicated");
+    assert_eq!(*psw, 2.5, "stroke width duplicated");
+    assert_eq!(pfill, fill, "fill duplicated");
+    assert_eq!(pstroke, stroke, "stroke duplicated");
+    assert!(pstory.is_some());
+    assert_ne!(pstory.unwrap(), id, "independent story ID");
+    assert_eq!(s.doc.plain_text(StoryRef::Part(pstory.unwrap())), "Custom content", "inner text duplicated");
+
+    // Cut the pasted text box by selecting it (non-collapsed, object_selection).
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 3), "focus": Pos::body(0, 6)}));
+    assert!(crate::cmd::objects::object_selection(&s).is_some());
+    let cut_res = run(&mut s, "edit.cut", json!({}));
+    assert_eq!(cut_res["text"], "Custom content");
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 1);
+    assert_eq!(para.objects[0].text_box(), Some(id));
+
+    // Paste it back.
+    run(&mut s, "edit.paste", json!({}));
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 2);
+
+    // Copy and paste a shape without text.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 6)}));
+    run(&mut s, "insert.shape", json!({"kind": "star", "width": 64.0, "height": 48.0}));
+    run(&mut s, "shape.fill", json!({"color": "00FF00"}));
+
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 6), "focus": Pos::body(0, 9)}));
+    run(&mut s, "edit.copy", json!({}));
+    assert!(s.clipboard.is_some());
+
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 9)}));
+    run(&mut s, "edit.paste", json!({}));
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 4);
+    let star_copy = &para.objects[3];
+    let wordcraft_doc::InlineObject::Shape { kind, w, h, fill, .. } = star_copy else { panic!("not a shape") };
+    assert_eq!(*kind, wordcraft_doc::para::ShapeKind::Star);
+    assert_eq!((*w, *h), (64.0, 48.0));
+    assert!(fill.is_some());
+}
+
+/// Cut and Copy with a bare caret beside an object (collapsed selection) change nothing (#5859).
+#[test]
+fn cut_and_copy_with_bare_caret_beside_object_change_nothing() {
+    let mut s = s();
+    let id = run(&mut s, "insert.textBox", json!({"text": "Box content"}))["story"].as_u64().unwrap() as u32;
+
+    // 1. Bare caret immediately before the object (Pos::body(0, 0)).
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    assert!(s.sel.is_collapsed());
+    assert!(crate::cmd::objects::object_selection(&s).is_none());
+
+    let copy_res = s.run("edit.copy", &json!({}));
+    assert!(matches!(copy_res, Err(crate::CmdError::Disabled(_))), "copy on bare caret is disabled");
+    assert!(s.clipboard.is_none(), "clipboard remains unset");
+
+    let cut_res = s.run("edit.cut", &json!({}));
+    assert!(matches!(cut_res, Err(crate::CmdError::Disabled(_))), "cut on bare caret is disabled");
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 1, "object was not deleted");
+    assert_eq!(para.objects[0].text_box(), Some(id));
+
+    // 2. Bare caret immediately after the object (Pos::body(0, 3)).
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 3)}));
+    assert!(s.sel.is_collapsed());
+    assert!(crate::cmd::objects::object_selection(&s).is_none());
+
+    let copy_res = s.run("edit.copy", &json!({}));
+    assert!(matches!(copy_res, Err(crate::CmdError::Disabled(_))), "copy on bare caret is disabled");
+    assert!(s.clipboard.is_none(), "clipboard remains unset");
+
+    let cut_res = s.run("edit.cut", &json!({}));
+    assert!(matches!(cut_res, Err(crate::CmdError::Disabled(_))), "cut on bare caret is disabled");
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 1, "object was not deleted");
+    assert_eq!(para.objects[0].text_box(), Some(id));
+}
+
+/// Fallback plain text / clipboard text when paragraphs contain text boxes (#5785).
+#[test]
+fn fallback_plain_text_extracts_text_box_story_when_body_contains_paragraph_marks() {
+    let mut f = wordcraft_doc::edit::Fragment::default();
+    let mut p = wordcraft_doc::Paragraph::new();
+    p.text = format!("{}\n", wordcraft_doc::para::OBJ);
+    let mut part_p = wordcraft_doc::Paragraph::new();
+    part_p.text = "Box text".to_string();
+    let part = wordcraft_doc::Part {
+        kind: wordcraft_doc::PartKind::TextBox,
+        blocks: vec![std::sync::Arc::new(wordcraft_doc::Block::Para(part_p))],
+        body: Default::default(),
+    };
+    f.blocks = vec![wordcraft_doc::Block::Para(p)];
+    f.parts.insert(100, part);
+    assert_eq!(f.plain_text(), "Box text");
+    assert_eq!(f.clipboard_text(), "Box text");
+}
+
+/// Pasting formatted content with matching RTF but mismatched HTML from an external app prefers HTML (#5785).
+#[test]
+fn paste_content_prefers_external_html_when_rtf_matches_session_clipboard() {
+    let mut s = s();
+    run(&mut s, "insert.textBox", json!({"text": "Internal text"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    let my_rtf = s.clipboard_rtf.clone();
+    let external_html = "<p>External rich text</p>";
+    let pasted_res = crate::cmd::paste::paste_content(&mut s, &json!({"html": external_html, "rtf": my_rtf}));
+    assert!(matches!(pasted_res, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_res {
+        assert_eq!(frag.plain_text(), "External rich text");
+    }
+}
+
+/// Pasting with no text payload or empty text but matching HTML and RTF uses WordCraft's session clipboard
+/// fragment, preserving custom text box parts (#5785, #5859).
+#[test]
+fn paste_content_uses_session_clipboard_when_html_and_rtf_match_without_text() {
+    let mut s = s();
+    run(&mut s, "insert.textBox", json!({"text": "Internal text box"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    let my_html = s.clipboard_html.clone();
+    let my_rtf = s.clipboard_rtf.clone();
+    assert!(!my_html.is_empty());
+    assert!(!my_rtf.is_empty());
+    assert!(s.clipboard.as_ref().is_some_and(|f| !f.parts.is_empty()));
+
+    let pasted_res = crate::cmd::paste::paste_content(&mut s, &json!({"html": my_html, "rtf": my_rtf}));
+    assert!(matches!(pasted_res, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_res {
+        assert_eq!(frag.parts.len(), 1, "session text box parts preserved");
+        assert_eq!(frag.plain_text(), "Internal text box");
+    }
+
+    let pasted_with_empty_text = crate::cmd::paste::paste_content(&mut s, &json!({"text": "", "html": my_html, "rtf": my_rtf}));
+    assert!(matches!(pasted_with_empty_text, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_with_empty_text {
+        assert_eq!(frag.parts.len(), 1, "session text box parts preserved with empty text");
+        assert_eq!(frag.plain_text(), "Internal text box");
+    }
+
+    let avail = crate::cmd::paste::available(&s, &json!({"text": "", "html": my_html, "rtf": my_rtf}));
+    assert!(avail.contains(&"formatted"), "formatted format is available for pasteSpecial when text is empty but rich formats match");
+    let paste_special_res = s.run("edit.pasteSpecial", &json!({"as": "formatted", "text": "", "html": my_html, "rtf": my_rtf}));
+    assert!(paste_special_res.is_ok(), "pasteSpecial as formatted succeeds with empty text and matching rich formats");
+}
+
+/// On macOS, arboard wraps HTML in `<html><head>…</head><body>…</body></html>`, so the
+/// round-tripped HTML never equals what WordCraft stored. The session clipboard must still be
+/// recognised when RTF matches or HTML matches after unwrapping (#5859).
+#[test]
+fn paste_content_uses_session_clipboard_when_macos_wraps_html() {
+    let mut s = s();
+    run(&mut s, "insert.textBox", json!({"text": "Internal text box"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    let my_rtf = s.clipboard_rtf.clone();
+    assert!(!my_rtf.is_empty());
+    assert!(s.clipboard.as_ref().is_some_and(|f| !f.parts.is_empty()));
+
+    // Simulate macOS wrapping: HTML is wrapped by arboard, RTF is raw.
+    let wrapped_html =
+        format!("<html><head><meta http-equiv=\"content-type\" content=\"text/html; charset=utf-8\"></head><body>{}</body></html>", s.clipboard_html);
+    assert_ne!(wrapped_html, s.clipboard_html, "wrapped HTML differs from stored");
+
+    // With empty text (front-end path for shapes/text-boxes without text), session clipboard matched.
+    let pasted = crate::cmd::paste::paste_content(&mut s, &json!({"text": "", "html": wrapped_html, "rtf": my_rtf}));
+    assert!(matches!(pasted, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted {
+        assert_eq!(frag.parts.len(), 1, "session text box parts preserved despite wrapped HTML");
+        assert_eq!(frag.plain_text(), "Internal text box");
+    }
+
+    // With non-empty text that matches, session clipboard matched via main's text rule.
+    let my_text = s.clipboard_text.clone();
+    let pasted_text = crate::cmd::paste::paste_content(&mut s, &json!({"text": my_text, "html": wrapped_html, "rtf": my_rtf}));
+    assert!(matches!(pasted_text, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_text {
+        assert_eq!(frag.parts.len(), 1, "session text box parts preserved with text match");
+    }
+
+    // Paste Special as formatted is available despite wrapped HTML.
+    let avail = crate::cmd::paste::available(&s, &json!({"text": my_text, "html": wrapped_html, "rtf": my_rtf}));
+    assert!(avail.contains(&"formatted"), "formatted format is available for pasteSpecial when HTML is wrapped on macOS");
+}
+
+/// Pasting external RTF when HTML matches WordCraft's session clipboard does not return the old
+/// session fragment with its custom parts (#5785, #5859).
+#[test]
+fn paste_content_does_not_use_session_clipboard_when_html_matches_but_rtf_differs() {
+    let mut s = s();
+    run(&mut s, "insert.textBox", json!({"text": "Internal text box"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    let my_html = s.clipboard_html.clone();
+    let external_rtf = "{\\rtf1\\ansi External rich text}";
+    let pasted_res = crate::cmd::paste::paste_content(&mut s, &json!({"html": my_html, "rtf": external_rtf}));
+    assert!(matches!(pasted_res, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_res {
+        assert!(frag.parts.is_empty(), "session text box parts not reused when RTF differs");
+    }
+}
+
+/// Pasting external RTF when plain text matches WordCraft's session clipboard does not return the
+/// old session fragment with its custom parts, even when privateClipboard is omitted (#5785, #5859).
+#[test]
+fn paste_content_does_not_use_session_clipboard_when_text_matches_but_rtf_differs() {
+    let mut s = s();
+    run(&mut s, "insert.textBox", json!({"text": "Internal text box"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    let my_text = s.clipboard_text.clone();
+    let external_rtf = "{\\rtf1\\ansi External rich text}";
+    let pasted_res = crate::cmd::paste::paste_content(&mut s, &json!({"text": my_text, "rtf": external_rtf}));
+    assert!(matches!(pasted_res, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_res {
+        assert!(frag.parts.is_empty(), "session text box parts not reused when RTF differs");
+    }
+
+    let avail = crate::cmd::paste::available(&s, &json!({"text": my_text, "rtf": external_rtf}));
+    assert!(!avail.contains(&"formatted"), "formatted is unavailable when supplied RTF differs");
+}
+
+/// When another app copies different RTF (`privateClipboard: false`), plain text matching
+/// WordCraft's session clipboard does not return the old session fragment (#5785, #5859).
+#[test]
+fn paste_content_does_not_use_session_clipboard_when_another_app_copied_rtf() {
+    let mut s = s();
+    run(&mut s, "insert.textBox", json!({"text": "Internal text box"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    let my_text = s.clipboard_text.clone();
+    let external_rtf = "{\\rtf1\\ansi External rich text}";
+    let pasted_res = crate::cmd::paste::paste_content(&mut s, &json!({"privateClipboard": false, "text": my_text, "rtf": external_rtf}));
+    assert!(matches!(pasted_res, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_res {
+        assert!(frag.parts.is_empty(), "session text box parts not reused when another app copied");
+    }
+}
+
+/// The public `edit.paste` command does not reuse session text box parts when supplied RTF differs,
+/// even when privateClipboard is omitted (#5859).
+#[test]
+fn paste_command_does_not_use_session_clipboard_when_text_matches_but_rtf_differs() {
+    let mut s = s();
+    run(&mut s, "insert.textBox", json!({"text": "Internal text box"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    let my_text = s.clipboard_text.clone();
+    let external_rtf = "{\\rtf1\\ansi External rich text}";
+
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "edit.paste", json!({"text": my_text, "rtf": external_rtf}));
+    assert_eq!(s.doc.parts.len(), 1, "no second text box part created from session fragment");
+    assert!(s.doc.plain_text(StoryRef::Body).contains("External rich text"));
 }
 
 #[test]
@@ -14292,6 +14941,143 @@ fn page_down_extends_a_selection_that_ends_in_collapsed_outline_text() {
     assert_eq!(s.sel.anchor, anchor, "the anchor stays");
     assert!(s.sel.focus.path.0[0] > 6, "Page Down extends the selection a page on: {:?}", s.sel.focus);
     assert!(s.layout().caret(&s.sel.focus).is_some(), "to a place the outline shows");
+}
+
+/// #5428: an inserted or pasted picture fits where it goes, as in Word: a table cell's width
+/// (a nested cell's too), a column's, not the whole page's text width.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_inserted_or_pasted_picture_fits_where_it_goes() {
+    let png = |w: u32, h: u32| {
+        let mut b = Vec::new();
+        image::RgbaImage::from_pixel(w, h, image::Rgba([30, 90, 200, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png)
+            .unwrap();
+        cmd::insert::base64_encode(&b)
+    };
+    let widths = |s: &Session| {
+        let mut v = Vec::new();
+        for b in s.doc.body.iter() {
+            let mut b = (**b).clone();
+            cmd::paste::each_para(&mut b, 0, &mut |p| {
+                for o in &p.objects {
+                    if let wordcraft_doc::InlineObject::Image { w, h, .. } = o {
+                        v.push((*w, *h));
+                    }
+                }
+            });
+        }
+        v
+    };
+    let text_w = crate::io::text_width(&Session::new(wordcraft_doc::Document::new()).doc);
+    let in_cell = |cols: u32| {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        run(&mut s, "insert.table", json!({"rows": 1, "cols": cols}));
+        assert!(s.sel.focus.path.depth() > 0, "the caret is in the first cell");
+        s
+    };
+    // Insert › Pictures and Paste in a cell of a three-column table.
+    let cell = text_w / 3.0;
+    let mut s = in_cell(3);
+    run(&mut s, "insert.picture", json!({"data": png(1000, 200)}));
+    let mut p = in_cell(3);
+    let html = format!("<p><img src=\"data:image/png;base64,{}\"></p>", png(1000, 200));
+    run(&mut p, "edit.pasteSpecial", json!({"as": "html", "html": html}));
+    for (how, s) in [("inserted", &s), ("pasted", &p)] {
+        let got = widths(s);
+        let [(w, h)] = got.as_slice() else { panic!("{how}: {got:?}") };
+        assert!(*w <= cell && *w > cell - 20.0, "{how}: {w} fits the cell's text area ({cell} less its margins)");
+        assert!((h * 5.0 - w).abs() < 0.1, "{how}: proportions kept: {w} × {h}");
+    }
+    // A table in that cell: its own narrower cell.
+    let mut s = in_cell(2);
+    let outer = s.room_at(&s.sel.focus.clone());
+    // (A table inserted in a cell takes the page's text width for its columns, so four columns
+    // make its cells narrower than the outer one.)
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 4}));
+    assert!(s.sel.focus.path.depth() > 1, "the caret is in the nested cell");
+    let nested = s.room_at(&s.sel.focus.clone());
+    assert!(nested < outer - 50.0, "the nested cell ({nested}) is narrower than the outer one ({outer})");
+    run(&mut s, "insert.picture", json!({"data": png(1000, 200)}));
+    let w = widths(&s)[0].0;
+    assert!((w - nested).abs() < 0.5 && w <= text_w / 4.0, "{w} fits the nested cell ({nested})");
+    // Two text columns: one column's width.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "layout.columns", json!({"count": 2}));
+    let column = s.doc.sections()[0].1.column_boxes()[0].1;
+    run(&mut s, "insert.picture", json!({"data": png(1000, 200)}));
+    let w = widths(&s)[0].0;
+    assert!((w - column).abs() < 0.5, "{w} fits the column ({column})");
+    // Body text keeps the full text width.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "insert.picture", json!({"data": png(1000, 200)}));
+    assert!((widths(&s)[0].0 - text_w).abs() < 0.5);
+}
+
+/// #5428 review: a page can hold several continuous sections; a picture goes by the section of the
+/// position, not of the page's first one (two columns, then a continuous single-column section).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_picture_after_a_continuous_break_fits_its_own_section() {
+    let sect = |cols: &str, kind: &str| format!(r#"<w:sectPr>{kind}<w:pgSz w:w="11906" w:h="16838"/><w:cols {cols} w:space="708"/></w:sectPr>"#);
+    let body = [
+        "<w:p><w:r><w:t>one</w:t></w:r></w:p>".to_string(),
+        format!("<w:p><w:pPr>{}</w:pPr></w:p>", sect(r#"w:num="2""#, "")),
+        "<w:p><w:r><w:t>two</w:t></w:r></w:p>".to_string(),
+        sect("", r#"<w:type w:val="continuous"/>"#),
+    ]
+    .concat();
+    let mut s = Session::new(wordcraft_docx::read(&docx_with_styles(&body, "")).unwrap());
+    let last = s.doc.body.len() - 1;
+    s.sel = crate::Selection::caret(Pos::body(last, 0));
+    let room = s.room_at(&s.sel.focus.clone());
+    let column = s.doc.sections()[0].1.column_boxes()[0].1;
+    assert!(room > column + 50.0, "{room} is the single column's width, not the earlier two columns' ({column})");
+}
+
+/// #5428 review: Web Layout and Read Mode reflow the text to the window, but a picture put in
+/// there is fitted to the page's text width, as in Print Layout: the size stays in the document.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_picture_put_in_in_web_layout_fits_the_page_not_the_window() {
+    let png = |w: u32, h: u32| {
+        let mut b = Vec::new();
+        image::RgbaImage::from_pixel(w, h, image::Rgba([30, 90, 200, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png)
+            .unwrap();
+        cmd::insert::base64_encode(&b)
+    };
+    let width = |s: &Session| {
+        s.doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| p.objects.iter()).find_map(|o| match o {
+            wordcraft_doc::InlineObject::Image { w, .. } => Some(*w),
+            _ => None,
+        })
+    };
+    let text_w = crate::io::text_width(&Session::new(wordcraft_doc::Document::new()).doc);
+    let web = || {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        run(&mut s, "view.webLayout", json!({}));
+        // A narrow window, or a high zoom.
+        s.view.web_width = 350.0;
+        assert!(s.layout().pages[0].w < text_w, "the window is narrower than the page's text");
+        s
+    };
+    let mut s = web();
+    run(&mut s, "insert.picture", json!({"data": png(1000, 200)}));
+    let mut p = web();
+    let html = format!("<p><img src=\"data:image/png;base64,{}\"></p>", png(1000, 200));
+    run(&mut p, "edit.pasteSpecial", json!({"as": "html", "html": html}));
+    for (how, s) in [("inserted", &s), ("pasted", &p)] {
+        let w = width(s).unwrap();
+        assert!((w - text_w).abs() < 0.5, "{how}: {w} fits the page's text width ({text_w})");
+    }
+    // Read Mode's narrow pages don't set it either.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "text.insert", json!({"text": "Read"}));
+    run(&mut s, "view.readMode", json!({}));
+    s.view.read_width = 240.0;
+    let room = s.room_at(&s.sel.focus.clone());
+    assert!((room - text_w).abs() < 0.5, "Read Mode: {room} is the page's text width ({text_w})");
 }
 
 /// A picture an OpenDocument file gives no size is shown at its own, fitted to the text as other
