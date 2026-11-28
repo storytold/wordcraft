@@ -255,7 +255,7 @@ pub(super) fn parse_sort(headers: &[String], v: Option<&Value>) -> Result<Vec<So
         None | Some(Value::Null) => return Ok(Vec::new()),
         Some(Value::Array(a)) => a.clone(),
         Some(o @ (Value::Object(_) | Value::String(_))) => vec![o.clone()],
-        Some(_) => return Err(CmdError::Params("`sort` must be an array of {field, descending}".into())),
+        Some(_) => return Err(CmdError::Params("`sort` must be a field name, a {field, descending} object, an array of those, or null".into())),
     };
     if arr.len() > MAX_SORT_KEYS {
         return Err(CmdError::Params(format!("at most {MAX_SORT_KEYS} sort keys")));

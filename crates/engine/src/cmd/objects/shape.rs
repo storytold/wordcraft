@@ -1,14 +1,35 @@
-use super::select::{all_objects, edit_obj, picked_objects, selected, selected_all};
+use super::select::{all_objects, edit_obj, picked_objects, selected, target_objects};
 use super::{CmdError, CmdResult, InlineObject, Pos, Rgb, Session, StoryRef, TextBody, Value, json, p};
 
 pub(super) const NO_TEXT_BOX: &str = "select a text box first";
 
 pub(super) fn has_text_box(s: &Session) -> Option<&'static str> {
-    if text_box_target(s).is_some() { None } else { Some(NO_TEXT_BOX) }
+    if text_box_targets(s).is_empty() { Some(NO_TEXT_BOX) } else { None }
 }
 
 fn is_text_box(s: &Session, id: u32) -> bool {
     s.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox)
+}
+
+/// Target text boxes for Shape Format › Text commands: all selected text boxes (including
+/// those added with `select.addObject` or the active canvas text box member), falling back
+/// to the text box containing the caret when no object is selected.
+pub fn text_box_targets(s: &Session) -> Vec<(Pos, u32)> {
+    let mut targets: Vec<(Pos, u32)> = target_objects(s, |o| matches!(o, InlineObject::Shape { story: Some(id), .. } if is_text_box(s, *id)))
+        .into_iter()
+        .filter_map(|(pos, o)| match o {
+            InlineObject::Shape { story: Some(id), .. } => Some((pos, id)),
+            _ => None,
+        })
+        .collect();
+    if targets.is_empty()
+        && selected(s).is_none()
+        && picked_objects(s).is_empty()
+        && let Some(t) = text_box_target(s)
+    {
+        targets.push(t);
+    }
+    targets
 }
 
 /// The text box the Shape Format › Text commands work on: the selected one, or the one whose
@@ -28,15 +49,22 @@ pub fn text_box_target(s: &Session) -> Option<(Pos, u32)> {
     Some((Pos { off, ..after }, id))
 }
 
-/// Change the target text box's text direction, alignment or link.
+/// Change the target text boxes' text direction, alignment or link.
 pub(crate) fn set_text_body(s: &mut Session, f: impl Fn(&mut TextBody)) -> CmdResult {
-    let (pos, id) = text_box_target(s).ok_or_else(|| CmdError::Disabled(NO_TEXT_BOX.into()))?;
-    let part = s.doc.parts.get_mut(&id).ok_or_else(|| CmdError::Failed("text box vanished".into()))?;
-    f(&mut part.body);
-    let body = part.body;
-    // Its paragraph is laid out again.
-    edit_obj(s, &pos, |_| {})?;
-    Ok(json!({"textBox": id, "body": body}))
+    let targets = text_box_targets(s);
+    if targets.is_empty() {
+        return Err(CmdError::Disabled(NO_TEXT_BOX.into()));
+    }
+    let mut last_id = 0;
+    let mut last_body = TextBody::default();
+    for (pos, id) in targets {
+        let part = s.doc.parts.get_mut(&id).ok_or_else(|| CmdError::Failed("text box vanished".into()))?;
+        f(&mut part.body);
+        (last_id, last_body) = (id, part.body);
+        // Its paragraph is laid out again.
+        edit_obj(s, &pos, |_| {})?;
+    }
+    Ok(json!({"textBox": last_id, "body": last_body}))
 }
 
 pub(super) fn can_link(s: &Session) -> Option<&'static str> {
@@ -80,9 +108,6 @@ pub(super) fn link_text_box(s: &mut Session, v: &Value) -> CmdResult {
     edit_obj(s, &at, |_| {})?;
     Ok(json!({"textBox": from, "next": to}))
 }
-
-/// Most shapes one `shape.effects` changes.
-const MAX_EFFECT_SHAPES: usize = 10_000;
 
 /// `shape.effects`: set or clear the shadow, glow and soft edges of the selected shapes.
 pub(super) fn shape_effects(s: &mut Session, v: &Value) -> CmdResult {
@@ -133,19 +158,13 @@ pub(super) fn shape_effects(s: &mut Session, v: &Value) -> CmdResult {
         Some(n @ Value::Number(_)) => Some(n.as_f64().map(|x| x as f32)),
         Some(_) => return Err(CmdError::Params("`softEdge`: a radius in points or null".into())),
     };
-    // The shapes in the selection and those added to it (Shift+click).
-    let mut targets: Vec<Pos> =
-        selected_all(s, MAX_EFFECT_SHAPES).into_iter().filter(|(_, o)| matches!(o, InlineObject::Shape { .. })).map(|(pos, _)| pos).collect();
-    for pos in picked_objects(s) {
-        if !targets.contains(&pos) && matches!(s.doc.para_at(&pos).and_then(|q| q.object_at(pos.off)), Some(InlineObject::Shape { .. })) {
-            targets.push(pos);
-        }
-    }
+    // The shapes in the selection, those added with `select.addObject`, or the active text box.
+    let targets = target_objects(s, |o| matches!(o, InlineObject::Shape { .. }));
     if targets.is_empty() {
         return Err(CmdError::Disabled("no shape selected".into()));
     }
     let mut last = ShapeEffects::default();
-    for pos in &targets {
+    for (pos, _) in &targets {
         let o = edit_obj(s, pos, |o| {
             if let InlineObject::Shape { effects, float, .. } = o {
                 let mut e = *effects;

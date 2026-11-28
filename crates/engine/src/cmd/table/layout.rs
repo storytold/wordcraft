@@ -1,4 +1,4 @@
-use super::cells::{cell, with_cells, with_table};
+use super::cells::{cell, selected_cells, with_cells, with_table};
 use super::{
     Align, Border, BorderStyle, Borders, CmdError, CmdResult, HeightRule, Path, Pos, Rgb, Selection, Session, Table, TextDirection, VAlign, Value,
     json, p, sel_result,
@@ -74,18 +74,9 @@ pub(super) fn set_column_widths(t: &mut Table, cells: &[(usize, usize)], w: f32)
     }
 }
 
-fn set_column_width(t: &mut Table, r: usize, c: usize, w: f32) {
-    let g = t.grid_col(r, c);
-    if let Some(x) = t.grid.get_mut(g) {
-        *x = w;
-        t.props.width = None;
-        t.props.width_pct = None;
-        sync_cell_widths(t);
-    }
-}
-
 /// Table Properties: table, row, column and cell settings in one undoable step. Row, column and
-/// cell settings apply to the caret's. Without any setting it returns the current values.
+/// cell settings apply to the selected rows, columns and cells, as in Word, and to the caret's
+/// when nothing is selected (#4857). Without any setting it returns the caret's current values.
 pub(super) fn properties(s: &mut Session, v: &Value) -> CmdResult {
     let (tp, r, c) = cell(s)?;
     let keys = [
@@ -150,6 +141,11 @@ pub(super) fn properties(s: &mut Session, v: &Value) -> CmdResult {
     let column_width = p::f32(v, "columnWidth").map(|x| x.clamp(6.0, 1584.0));
     let cell_width = size("cellWidth", 6.0, 1584.0);
     let rtl = p::bool(v, "rtl");
+    // The selected cells (a whole table, rows, a column…), else the caret's.
+    let cells = Some(selected_cells(s)).filter(|c| !c.is_empty()).unwrap_or_else(|| vec![(r, c)]);
+    let mut rows: Vec<usize> = cells.iter().map(|&(r, _)| r).collect();
+    rows.sort_unstable();
+    rows.dedup();
     with_table(s, |t| {
         if let Some(a) = align {
             t.props.align = Some(a);
@@ -161,7 +157,7 @@ pub(super) fn properties(s: &mut Session, v: &Value) -> CmdResult {
             t.props.indent = Some(i);
         }
         if let Some(cw) = column_width {
-            set_column_width(t, r, c, cw);
+            set_column_widths(t, &cells, cw);
         }
         if let Some(w) = width {
             t.props.width = w;
@@ -170,7 +166,8 @@ pub(super) fn properties(s: &mut Session, v: &Value) -> CmdResult {
         if let Some(pct) = width_pct {
             t.props.width_pct = Some(pct);
         }
-        if let Some(row) = t.rows.get_mut(r) {
+        for &r in &rows {
+            let Some(row) = t.rows.get_mut(r) else { continue };
             if let Some(h) = row_height {
                 row.props.height = h;
                 row.props.height_rule = if h.is_some() { rule.unwrap_or(HeightRule::AtLeast) } else { HeightRule::Auto };
@@ -185,13 +182,14 @@ pub(super) fn properties(s: &mut Session, v: &Value) -> CmdResult {
             if let Some(h) = header {
                 row.props.header = h;
             }
-            if let Some(cl) = row.cells.get_mut(c) {
-                if let Some(w) = cell_width {
-                    cl.props.width = w;
-                }
-                if let Some(va) = valign {
-                    cl.props.valign = Some(va);
-                }
+        }
+        for &(r, c) in &cells {
+            let Some(cl) = t.rows.get_mut(r).and_then(|row| row.cells.get_mut(c)) else { continue };
+            if let Some(w) = cell_width {
+                cl.props.width = w;
+            }
+            if let Some(va) = valign {
+                cl.props.valign = Some(va);
             }
         }
     })

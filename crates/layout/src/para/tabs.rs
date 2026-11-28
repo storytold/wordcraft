@@ -2,8 +2,9 @@ use super::model::Cluster;
 use super::{PTabAlign, PTabBase, ParaLayout, TabAlign, TabLeader, TabStop};
 
 /// Next tab stop after `x` (column coordinates): explicit stops, the hanging-indent implicit stop,
-/// then default stops.
-pub(super) fn next_tab(x: f32, tabs: &[TabStop], default_tab: f32, hanging_at: Option<f32>) -> TabStop {
+/// then default stops, every `default_tab` from `origin` (the margin, 0, or for an ODF document
+/// whose tabs are measured from the indent, the paragraph's left indent).
+pub(super) fn next_tab(x: f32, tabs: &[TabStop], default_tab: f32, hanging_at: Option<f32>, origin: f32) -> TabStop {
     let mut best: Option<TabStop> = tabs.iter().copied().filter(|t| t.pos > x + 0.01).min_by(|a, b| a.pos.total_cmp(&b.pos));
     if let Some(h) = hanging_at
         && h > x + 0.01
@@ -18,8 +19,10 @@ pub(super) fn next_tab(x: f32, tabs: &[TabStop], default_tab: f32, hanging_at: O
         // one (a second tab in a row, or a line starting at -72 pt) stays put. Measured on Word
         // 2016+: a line starting at -72 pt with a leading tab stays at -72, at -60 goes to -36;
         // "a\t\tX" at -60 puts X at -36, not 0. Letterheads with negative indents rely on it.
+        let origin = if origin.is_finite() { origin.clamp(-1584.0, 1584.0) } else { 0.0 };
+        let x = x - origin;
         let n = if x < -0.01 { ((x - 0.01) / d).ceil() } else { ((x + 0.01) / d).floor() + 1.0 };
-        TabStop { pos: (n * d).min(1e6), align: TabAlign::Left, leader: TabLeader::None }
+        TabStop { pos: (n * d + origin).min(1e6), align: TabAlign::Left, leader: TabLeader::None }
     })
 }
 

@@ -6,36 +6,8 @@ pub(crate) enum PromptSave {
     Saved,
     /// Not saved (a format that doesn't keep everything); the command is cancelled.
     NotSaved,
-    /// Web: the browser's save picker finishes later; its ticket ([`async_saves`]).
-    Later(u64),
-}
-
-/// What [`Services::make_default_app`] did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DefaultApp {
-    /// The system's default-apps settings opened; the user picks WordCraft there (Windows).
-    SettingsOpened,
-    /// WordCraft is now the default app for Word documents (Linux, BSD).
-    MadeDefault,
-}
-
-/// The answer to "Do you want to save changes?" (`ui.saveChanges`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SaveChoice {
-    Save,
-    DontSave,
-    Cancel,
-}
-
-impl SaveChoice {
-    pub fn parse(s: &str) -> Option<SaveChoice> {
-        Some(match s {
-            "save" => SaveChoice::Save,
-            "dontSave" => SaveChoice::DontSave,
-            "cancel" => SaveChoice::Cancel,
-            _ => return None,
-        })
-    }
+    /// Web: the browser's save picker finishes later; its ticket.
+    Later,
 }
 
 /// Why AutoSave can't cover the document ([`WordApp::autosave_block`]); the switch is greyed out
@@ -82,5 +54,5 @@ impl AutoSaveBlock {
 /// AutoSave writes only these formats.
 pub fn keeps_everything(name: &str) -> bool {
     let ext = std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    matches!(ext.as_str(), "docx" | "docm" | "dotx" | "dotm" | "odt" | "rtf" | "json" | "xml")
+    matches!(ext.as_str(), "docx" | "docm" | "dotx" | "dotm" | "odt" | "ott" | "fodt" | "rtf" | "json" | "xml")
 }

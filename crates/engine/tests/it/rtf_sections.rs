@@ -3,8 +3,6 @@
 //! page defaults, then `\sectd` + section words + the section's header/footer groups, a `\sect`
 //! after the last `\par` (or after a table), and a `\sectd` inside a footer's field result.
 
-use std::io::Read;
-
 use wordcraft_engine::io;
 
 const RTF: &str = r"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0 Times New Roman;}}
@@ -28,10 +26,9 @@ const RTF: &str = r"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0 Times New Roman;}
 \pard\plain Last line.\par}";
 
 fn document_xml(docx: &[u8]) -> String {
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(docx)).unwrap();
-    let mut xml = String::new();
-    zip.by_name("word/document.xml").unwrap().read_to_string(&mut xml).unwrap();
-    xml
+    let mut zip = craft_zip::Archive::open(docx, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+
+    String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap()
 }
 
 #[test]

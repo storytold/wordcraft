@@ -1,0 +1,7 @@
+{
+  "base": "8dc309afe132bb09e90e7b19faf99cbfaf82db81",
+  "implementation_diff": "log/fredfix-round18-reviewed.diff",
+  "sha256": "6605b95a565dfd79867c4ab81e4df9fc046580d18b4fabd66cf61d4d24668e01",
+  "scope": "implementation and progress documents; log evidence excluded",
+  "no_dependency_changes": true
+}

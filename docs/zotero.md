@@ -2,9 +2,11 @@
 
 WordCraft works with the [Zotero](https://www.zotero.org) desktop app the way Word does: Zotero's
 own citation dialog, all of its citation styles, automatic bibliography and refresh. Nothing to
-install in Zotero; it only has to be running. The **Zotero** tab in the ribbon has the buttons:
+install in Zotero; it only has to be running. The **Citations** tab in the ribbon (Zotero is the citation provider) has the buttons:
 Add/Edit Citation, Add Note, Add/Edit Bibliography, Refresh, Document Preferences and Unlink
-Citations (each runs one of the commands below).
+Citations (each runs one of the commands below). The tab's first group, **Provider**, is a menu
+with one checked item, Zotero, the only citation provider for now (`ui.citations.provider` with
+`{"value": "zotero"}`; any other value is an error, and choosing Zotero changes nothing).
 
 ## Commands
 
@@ -19,11 +21,14 @@ Citations (each runs one of the commands below).
 | `ui.zotero.status` | `{busy, waitingForAnswer, last}` |
 | `ui.zotero.answer` | `{"button": n}`: answer a question Zotero is asking (OK/Yes 1, No/Cancel 0; with Yes/No/Cancel: Yes 2, No 1, Cancel 0) |
 
-They run in the app (and through the control channel and MCP bridged to the app). A command
-returns at once with `{"started": …}`; Zotero then works in its own window and WordCraft answers
-it in the background. All changes from one command are one undo step. If New or Open replaces
-the document while a command is running, Zotero's remaining calls for it get an error and the
-new document is left as it is.
+They run in the app (and through the control channel and MCP bridged to the app). The six Zotero
+actions return at once with `{"started": …}`; Zotero then works in its own window and WordCraft
+answers it in the background. All changes from one action are one undo step. If New or Open
+replaces the document while an action is running, Zotero's remaining calls for it get an error
+and the new document is left as it is.
+
+`ui.zotero.status` returns the current state. A successful `ui.zotero.answer` returns
+`{"answered": n}` for the selected button.
 
 From a terminal, against a file:
 
@@ -33,7 +38,7 @@ wordcraft-cli zotero refresh paper.docx --save paper.docx [--trace]
 
 Two engine commands work with Zotero's fields without Zotero running:
 
-- `caret.pastCitation` (Zotero › Move Past Citation) moves the caret to just after the citation
+- `caret.pastCitation` (Citations › Move Past Citation) moves the caret to just after the citation
   it is in or before. Adjacent citations count as one. If there is none, it moves past the next
   citation.
 - Read Aloud (`review.readAloud`, Review › Speech, Mod+Alt+Space) skips citations and the

@@ -8,11 +8,15 @@ use wordcraft_layout::{DocLayout, NumeralMode, ViewMode};
 /// the undo and redo stacks (also the oldest undo steps the undo limit pushes out meanwhile), the
 /// open typing group, the pending
 /// [`Session::join_next_undo`]/[`Session::join_next_equation_edit`]/body IME replacement promises,
-/// whether the group has a step of its own, and the dirty flag. See
-/// [`Session::edit_snapshot`].
+/// whether the group has a step of its own, the formatting waiting at the caret (with where
+/// Backspace carried it over) and the dirty flag. See [`Session::edit_snapshot`].
 pub struct EditSnapshot {
     pub(super) doc: Document,
     pub(super) sel: Selection,
+    /// `Session::pending` and `Session::pending_at` then: they go together, so a restored caret
+    /// gets back the formatting it had, carried by Backspace or set there (#6518).
+    pub(super) pending: Option<wordcraft_doc::props::CharProps>,
+    pub(super) pending_at: Option<wordcraft_doc::Pos>,
     pub(super) history_len: usize,
     /// `Session::undo_evicted` when the snapshot was taken.
     pub(super) evicted: u64,
@@ -56,12 +60,12 @@ impl EditSnapshot {
 /// block.
 pub(super) type RunSnapshot = (Document, Selection, Vec<Arc<Undo>>, Vec<Arc<Undo>>, bool, u64, Option<ColumnBlock>);
 
-/// A layout made and what it was made for: (revision, width, read height, view, read line
+/// A layout made and what it was made for: ((revision, proofing dictionaries' generation), width, read height, view, read line
 /// spacing, layout, proofing, outline, (deletions left out, deletions marked Hidden, body
 /// deletions in balloons), numeral display, the word being typed, (hidden text shown, field
 /// codes shown)).
 pub(super) type LayoutEntry = (
-    u64,
+    (u64, u64),
     f32,
     f32,
     ViewMode,

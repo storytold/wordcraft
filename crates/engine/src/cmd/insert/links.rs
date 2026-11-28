@@ -51,7 +51,7 @@ pub(super) fn link(s: &mut Session, v: &Value) -> CmdResult {
         },
     };
     if url.is_empty() || url.len() > 4096 {
-        return Err(CmdError::Params("bad url".into()));
+        return Err(CmdError::Params("`url` must be non-empty and at most 4096 UTF-8 bytes".into()));
     }
     let style = Some("Hyperlink".to_string());
     if s.sel.is_collapsed() {
@@ -63,6 +63,17 @@ pub(super) fn link(s: &mut Session, v: &Value) -> CmdResult {
         let end = s.doc.insert_text(&at, &text, &props)?;
         s.sel = Selection::caret(end);
         s.pending = Some(CharProps::default());
+    } else if let Some(text) = retyped_text(s, v) {
+        // Text to display changed: the selection is retyped with it, then linked (as in Word).
+        crate::cmd::paste_text(s, &text)?;
+        let end = s.sel.focus.clone();
+        let start = Pos { off: end.off.saturating_sub(text.len()), ..end.clone() };
+        s.doc.format_range(&start, &end, &|c| {
+            c.link = Some(url.clone());
+            c.style = style.clone();
+        })?;
+        s.sel = Selection::caret(end);
+        s.pending = Some(CharProps::default());
     } else {
         let (a, b) = s.sel.ordered();
         s.doc.format_range(&a, &b, &|c| {
@@ -71,6 +82,33 @@ pub(super) fn link(s: &mut Session, v: &Value) -> CmdResult {
         })?;
     }
     sel_result(s)
+}
+
+/// The `text` to retype a selection with before linking it: only when it differs from the selected
+/// text and both fit in one line of one paragraph without pictures or fields, outside any field's
+/// result. Otherwise (as Word shows `<<Selection in Document>>`) the selection keeps its text.
+fn retyped_text(s: &Session, v: &Value) -> Option<String> {
+    use wordcraft_doc::para::{COLUMN_BREAK, LINE_BREAK, OBJ, PAGE_BREAK};
+    /// What can't stand in one line of text: breaks, and pictures or fields.
+    const NOT_ONE_LINE: [char; 7] = [LINE_BREAK, '\r', '\u{2029}', '\u{b}', PAGE_BREAK, COLUMN_BREAK, OBJ];
+    let text = p::str(v, "text").filter(|t| !t.is_empty() && t.len() <= 4096)?;
+    if text.contains(NOT_ONE_LINE) {
+        return None;
+    }
+    let (a, b) = s.sel.ordered();
+    if a.story != b.story || a.path != b.path {
+        return None;
+    }
+    let shown = s.doc.para(a.story, &a.path)?.text.get(a.off..b.off)?;
+    if shown.contains(NOT_ONE_LINE) || shown == text {
+        return None;
+    }
+    // A selection in a field's result (between its markers, which it doesn't hold) is retyped by
+    // the next update of the field, not here.
+    if s.doc.field_ranges(a.story).iter().any(|r| r.start < b && a <= r.end) {
+        return None;
+    }
+    Some(text.to_string())
 }
 
 /// Whether `name` can name a bookmark: starts with a letter or underscore, contains only alphanumeric characters
@@ -150,7 +188,9 @@ pub(super) fn delete_bookmark(s: &mut Session, v: &Value) -> CmdResult {
 pub(super) fn bookmark(s: &mut Session, v: &Value) -> CmdResult {
     let name = p::req_str(v, "name")?.trim().to_string();
     if !bookmark_name_ok(&name) {
-        return Err(CmdError::Params("bookmark names start with a letter, have no spaces and at most 40 characters".into()));
+        return Err(CmdError::Params(
+            "bookmark names start with a letter or underscore, contain only letters, numbers or underscores, and have at most 40 characters".into(),
+        ));
     }
     // Replace an existing bookmark of the same name.
     remove_bookmark(s, &name)?;

@@ -273,6 +273,12 @@ pub struct CharProps {
     pub small_caps: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hidden: Option<bool>,
+    /// Hidden in Web Layout (`w:webHidden`); distinct from `w:vanish` (`hidden`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub web_hidden: Option<bool>,
+    /// Snap characters to the document grid (`w:snapToGrid`). Unset inherits; Word's default is on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snap_to_grid: Option<bool>,
     /// Character spacing (expanded/condensed), points.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spacing: Option<f32>,
@@ -285,6 +291,10 @@ pub struct CharProps {
     /// Kerning for fonts at or above this size (points); 0 = off.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kern: Option<f32>,
+    /// A mark over (or under) each character (`w:em`, Font › Emphasis mark), as East Asian text
+    /// stresses words; `Some(EmphasisMark::None)` turns off one a style sets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emphasis: Option<EmphasisMark>,
     /// OpenType ligatures (`w14:ligatures`). `None` leaves WordCraft's default: standard and
     /// contextual ligatures.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -375,6 +385,41 @@ pub struct EastAsianLayout {
     pub vert_compress: Option<bool>,
 }
 
+/// A mark over or under each character (`ST_Em`, ECMA-376 §17.18.24): Word's Font › Emphasis
+/// mark.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum EmphasisMark {
+    #[default]
+    None,
+    /// A dot above.
+    Dot,
+    /// A comma (sesame) above.
+    Comma,
+    /// A hollow circle above.
+    Circle,
+    /// A dot below.
+    UnderDot,
+}
+
+impl EmphasisMark {
+    pub const ALL: [EmphasisMark; 5] = [EmphasisMark::None, EmphasisMark::Dot, EmphasisMark::Comma, EmphasisMark::Circle, EmphasisMark::UnderDot];
+    /// OOXML `w:em` value.
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            EmphasisMark::None => "none",
+            EmphasisMark::Dot => "dot",
+            EmphasisMark::Comma => "comma",
+            EmphasisMark::Circle => "circle",
+            EmphasisMark::UnderDot => "underDot",
+        }
+    }
+    /// The mark an OOXML `w:em` value names; unknown values are none.
+    pub fn from_ooxml(v: &str) -> EmphasisMark {
+        EmphasisMark::ALL.into_iter().find(|m| m.ooxml() == v.trim()).unwrap_or_default()
+    }
+}
+
 /// Brackets around two lines in one (`ST_CombineBrackets`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -448,6 +493,7 @@ impl CharProps {
     /// overlaid on `base`.
     pub fn minus(mut self, base: &CharProps) -> CharProps {
         self.minus_text_style(base);
+        self.minus_run_visibility(base);
         self.minus_script_style(base);
         self.minus_document_marks(base);
         self
@@ -456,6 +502,10 @@ impl CharProps {
     fn minus_text_style(&mut self, base: &CharProps) {
         drop_same_fields!(self, base; style, font, sym_font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
             shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl);
+    }
+
+    fn minus_run_visibility(&mut self, base: &CharProps) {
+        drop_same_fields!(self, base; web_hidden, snap_to_grid, emphasis);
     }
 
     fn minus_script_style(&mut self, base: &CharProps) {
@@ -472,6 +522,7 @@ impl CharProps {
     /// format both scripts must set both values explicitly.
     pub fn overlay(&mut self, patch: &CharProps) {
         self.overlay_text_style(patch);
+        self.overlay_run_visibility(patch);
         self.overlay_script_style(patch);
         self.overlay_document_marks(patch);
         if let Some(p) = &patch.text_effects {
@@ -482,6 +533,10 @@ impl CharProps {
     fn overlay_text_style(&mut self, patch: &CharProps) {
         overlay_fields!(self, patch; style, font, sym_font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
             shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl);
+    }
+
+    fn overlay_run_visibility(&mut self, patch: &CharProps) {
+        overlay_fields!(self, patch; web_hidden, snap_to_grid, emphasis);
     }
 
     fn overlay_script_style(&mut self, patch: &CharProps) {

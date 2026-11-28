@@ -9,12 +9,11 @@ const W_NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingm
 const ROOT_RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
 
 fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, bytes) in entries {
-        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(bytes).unwrap();
+        zw.add(name, bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 fn doc_zip(document_xml: &[u8]) -> Vec<u8> {
@@ -153,6 +152,7 @@ fn many_fields_and_huge_attribute_values() {
 /// A paragraph with 2,000,000 attributes deflates to ~15 KB. Opening it is refused with a
 /// limit error, or the extras are dropped and the text survives (#3702, WC-06).
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn millions_of_attributes_on_one_paragraph_are_capped() {
     let attrs: String = (0..2_000_000).map(|i| format!(" a{i}=\"\"")).collect();
     let x = format!("<w:document {W_NS}><w:body><w:p{attrs}><w:r><w:t>kept</w:t></w:r></w:p></w:body></w:document>");
@@ -223,6 +223,7 @@ fn malformed_or_hostile_bibliography_never_panics() {
 /// A file with a huge number of bibliography sources (duplicates and distinct ones) reads in
 /// linear time and keeps at most 10,000 of them.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn hostile_bibliography_source_count_is_capped() {
     let doc = format!("<w:document {W_NS}><w:body><w:p><w:r><w:t>body</w:t></w:r></w:p></w:body></w:document>");
     let mut sources = String::from(r#"<b:Sources xmlns:b="http://schemas.openxmlformats.org/officeDocument/2006/bibliography" StyleName="MLA">"#);

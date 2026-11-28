@@ -128,6 +128,32 @@ fn the_corner_handle_scales_the_table() {
     assert!(((d1.bottom() - a1.y) - h * 2.0).abs() < 0.5, "{h} → {}", d1.bottom() - a1.y);
 }
 
+/// #6438: a right-to-left table's columns run from its right edge, and mirrored drags for its
+/// column borders and corner aren't built yet: they aren't grabbed, so a drag leaves its columns
+/// alone (one used to squeeze all but the first to nothing). Its rows' borders resize as in any
+/// table.
+#[test]
+fn a_right_to_left_tables_columns_keep_their_widths() {
+    let mut s = table_session(2, 3);
+    s.run("table.rtl", &json!({"value": true})).unwrap();
+    let start = first_table(&s);
+    let (a, c) = (cell_rect(&mut s, 0, 0), cell_rect(&mut s, 1, 2));
+    let y = a.y + a.h / 2.0;
+    let l = s.layout();
+    for x in [a.x, a.x + 1.0, a.x - 1.0, a.right(), c.x, c.right()] {
+        assert!(resize_target(&l, &s.doc, 0, x, y, REACH).is_none_or(|t| !matches!(t.edge, Edge::Column(_))), "x {x}");
+        let _ = s.run("table.resizeDrag", &json!({"page": 0, "x": x, "y": y, "toX": x - 30.0, "toY": y}));
+        assert_eq!(first_table(&s), start, "x {x}");
+    }
+    let below = c.bottom() + 1.0 + HANDLE / 2.0;
+    for (x, y) in [(a.right() + 1.0 + HANDLE / 2.0, below), (c.x - 1.0 - HANDLE / 2.0, below), (a.x + 10.0, y)] {
+        assert!(table_under(&l, &s.doc, 0, x, y, REACH).is_none(), "no corner handle at {x}, {y}");
+    }
+    let x = a.x + a.w / 2.0;
+    s.run("table.resizeDrag", &json!({"page": 0, "x": x, "y": a.bottom() + 1.0, "toX": x, "toY": a.bottom() + 21.0})).unwrap();
+    assert!((cell_rect(&mut s, 0, 0).h - (a.h + 20.0)).abs() < 0.1, "the row border moves");
+}
+
 /// A merged cell hides the border it covers: no column border to grab in its middle.
 #[test]
 fn merged_cells_have_no_border_inside() {
@@ -209,6 +235,29 @@ fn ctrl_shares_a_border_drag_among_the_columns_right_of_it() {
     share_out(&mut w, 0, 500.0, Share::Proportional);
     assert!((w[1] - MIN_COL).abs() < 0.01 && (w.iter().sum::<f32>() - 232.0).abs() < 0.01, "{w:?}");
     assert_eq!(share_out(&mut w, 3, 1.0, Share::Proportional), None);
+}
+
+/// Columns a file gives narrower than the minimum (3 pt and 4 pt) aren't forced to it by a drag
+/// between them: that took the right one to 1 pt, which the next import read as no width.
+#[test]
+fn a_drag_between_narrow_columns_leaves_them_as_they_are() {
+    for share in [Share::Neighbour, Share::Proportional, Share::LeftOnly] {
+        for dx in [0.0, -2.0, 2.0] {
+            let mut w = [3.0, 4.0, 100.0];
+            share_out(&mut w, 0, dx, share);
+            assert!(w.iter().all(|x| *x > 1.0), "{share:?} by {dx}: {w:?}");
+            if share == Share::Neighbour {
+                assert_eq!(w, [3.0, 4.0, 100.0], "by {dx}: no room on either side");
+            }
+        }
+    }
+    // A narrow column still widens when its neighbour has room.
+    let mut w = [3.0, 100.0];
+    assert_eq!(share_out(&mut w, 0, 10.0, Share::Neighbour), Some(10.0));
+    assert_eq!(w, [13.0, 90.0]);
+    // Nothing moves for no drag.
+    let mut w = [3.0, 100.0];
+    assert_eq!(share_out(&mut w, 0, 0.0, Share::Neighbour), Some(0.0));
 }
 
 /// The table's left edge, grabbed from just outside it, moves the table in or out: its

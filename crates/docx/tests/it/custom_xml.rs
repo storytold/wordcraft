@@ -1,6 +1,5 @@
 //! Original synthetic custom XML stores, written from the public OOXML package contract.
 use std::collections::BTreeMap;
-use std::io::{Cursor, Read, Write};
 use wordcraft_doc::{Path, StoryRef};
 
 const REL_NS: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
@@ -36,22 +35,19 @@ fn fixture() -> BTreeMap<String, Vec<u8>> {
 }
 
 fn zip(parts: &BTreeMap<String, Vec<u8>>) -> Vec<u8> {
-    let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let mut z = craft_zip::Writer::new();
     for (name, bytes) in parts {
-        z.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        z.write_all(bytes).unwrap();
+        z.add(name, bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    z.finish().unwrap().into_inner()
+    z.finish().unwrap()
 }
 
 fn unzip(bytes: &[u8]) -> BTreeMap<String, Vec<u8>> {
-    let mut z = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let mut z = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let names: Vec<String> = z.names().map(|n| n.into_owned()).collect();
     let mut parts = BTreeMap::new();
-    for i in 0..z.len() {
-        let mut f = z.by_index(i).unwrap();
-        let name = f.name().to_string();
-        let mut bytes = Vec::new();
-        f.read_to_end(&mut bytes).unwrap();
+    for name in names {
+        let bytes = z.read(&name, 16 << 20).unwrap().unwrap();
         assert!(parts.insert(name, bytes).is_none(), "duplicate ZIP entry");
     }
     parts

@@ -180,6 +180,11 @@ pub(crate) fn dispatch(s: &mut Session, id: &str, mutates: bool, run: fn(&mut Se
         // Whole cells: table commands take the rectangle between the corners, and Tab moves on
         // from it without clearing it, as in Word.
         _ if cells && (id.starts_with("table.") || matches!(id, "text.tab" | "text.backTab")) => run(s, v),
+        // Copy and Cut of whole cells take a table of them (#1744).
+        "edit.copy" | "edit.cut" if cells => run(s, v),
+        // Paste can lay a copied table over the selected cells. Let it inspect the selection
+        // before the ordinary column replacement deletes it.
+        "edit.paste" if cells => run(s, v),
         "edit.copy" => copy(s, &segs),
         "edit.cut" => {
             let r = copy(s, &segs)?;
@@ -207,6 +212,16 @@ pub(crate) fn dispatch(s: &mut Session, id: &str, mutates: bool, run: fn(&mut Se
     }
 }
 
+/// Delete the pieces of a selected cell rectangle for an ordinary Paste replacement.
+pub(super) fn delete_cell_segments(s: &mut Session) -> Result<(), CmdError> {
+    if s.cell_range().is_some()
+        && let Some(segments) = s.column_segments().map(<[(Pos, Pos)]>::to_vec)
+    {
+        delete(s, &segments)?;
+    }
+    Ok(())
+}
+
 /// Copy: one paragraph per block row (formatting kept); the plain text joins rows with newlines.
 fn copy(s: &mut Session, segs: &[(Pos, Pos)]) -> CmdResult {
     let mut blocks = Vec::new();
@@ -230,7 +245,8 @@ fn copy(s: &mut Session, segs: &[(Pos, Pos)]) -> CmdResult {
         blocks.push(Block::Para(para));
     }
     s.clipboard_text = rows.join("\n");
-    s.clipboard = Some(Fragment { blocks, parts });
+    let media = s.doc.media_of_blocks(&blocks);
+    s.clipboard = Some(Fragment { blocks, parts, media });
     Ok(super::edit::copy_result(s))
 }
 

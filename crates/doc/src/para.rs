@@ -231,7 +231,7 @@ impl Paragraph {
 
     /// Number of objects in `text[..off]`.
     fn objects_before(&self, off: usize) -> usize {
-        self.text.get(..off).map(|t| t.chars().filter(|c| *c == OBJ).count()).unwrap_or(0)
+        self.text.get(..off).map(|t| t.chars().inspect(|_| crate::work::steps(1)).filter(|c| *c == OBJ).count()).unwrap_or(0)
     }
 
     /// The object at byte `off` (which must hold U+FFFC).
@@ -250,13 +250,13 @@ impl Paragraph {
     }
     /// Byte offsets of all objects, in order.
     pub fn object_offsets(&self) -> Vec<usize> {
-        self.text.char_indices().filter(|(_, c)| *c == OBJ).map(|(i, _)| i).collect()
+        self.text.char_indices().inspect(|_| crate::work::steps(1)).filter(|(_, c)| *c == OBJ).map(|(i, _)| i).collect()
     }
     /// (byte offset, object) for every object, in text order, in one pass. Prefer it to
     /// [`Paragraph::object_offsets`] + [`Paragraph::object_at`], which counts the objects before
     /// each offset again, so a loop over a paragraph's objects is quadratic (#3614).
     pub fn objects_with_offsets(&self) -> impl Iterator<Item = (usize, &InlineObject)> + '_ {
-        self.text.char_indices().filter(|(_, c)| *c == OBJ).map(|(i, _)| i).zip(self.objects.iter())
+        self.text.char_indices().inspect(|_| crate::work::steps(1)).filter(|(_, c)| *c == OBJ).map(|(i, _)| i).zip(self.objects.iter())
     }
 
     /// Insert plain text (U+FFFC is dropped) at `off` with `props`. Returns the inserted length.
@@ -501,9 +501,8 @@ impl Paragraph {
     pub fn next_boundary(&self, off: usize) -> usize {
         crate::cluster::next_cluster(&self.text, self.clamp(off))
     }
-    /// Where Backspace at `off` deletes from: the previous character in the Brahmic scripts
-    /// (Myanmar, Khmer, Devanagari, Thai…), where it removes one vowel sign or stacked consonant
-    /// at a time, otherwise the previous caret stop.
+    /// Where Backspace at `off` deletes from: one Arabic combining mark or one character in the
+    /// Brahmic scripts (Myanmar, Khmer, Devanagari, Thai…), otherwise the previous caret stop.
     pub fn backspace_from(&self, off: usize) -> usize {
         let off = self.clamp(off);
         match self.text.get(..off).and_then(|t| t.char_indices().next_back()) {

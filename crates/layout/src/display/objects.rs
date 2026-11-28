@@ -1,6 +1,7 @@
 use super::options::DisplayOptions;
 use super::paint::{Paint, paint_for};
-use super::{BezPath, Document, Draw, Graphic, GraphicItem, GraphicKind, InlineObject, PathSeg, Rect, Rgb, ShapeKind, Spin, TextAlign};
+use super::{BezPath, Document, Draw, FaceRef, Graphic, GraphicItem, GraphicKind, InlineObject, PathSeg, Rect, Rgb, ShapeKind, Spin, TextAlign};
+use wordcraft_doc::connector::{ArrowStyle, LineCap};
 
 /// The draws of a chart or diagram's items inside `rect` (page coordinates). The items were built
 /// for the size `g.w` × `g.h` (0: `rect`'s own size), so they are scaled to `rect`; strokes and text
@@ -9,8 +10,63 @@ pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32)
     let (sx, sy) = (scale_of(rect.w, g.w), scale_of(rect.h, g.h));
     let k = (sx + sy) / 2.0;
     let inside = |r: &[f32; 4]| Rect::new(rect.x + r[0] * sx, rect.y + r[1] * sy, r[2] * sx, r[3] * sy);
-    let mut out = Vec::with_capacity(g.items.len());
+    let joins = |c: char| c.is_whitespace() || wordcraft_doc::math_linear::is_combining(c);
+    let db = wordcraft_fonts::FontDb::global();
+
+    // A graphic (SmartArt diagram or chart) should maintain a consistent fallback font family
+    // across all its text nodes (#5672). Collect all characters across the graphic that each
+    // item's primary font lacks, and find one fallback face that covers them all (or, when
+    // unrelated symbols need another face, one fallback face that covers all missing East Asian
+    // characters). The serif/sans preference comes from the first text item with a missing
+    // character (or the first with a missing East Asian character on the East Asian-only retry),
+    // so mixed-style graphics follow that leading label's style across nodes.
+    let mut text_resolved: Vec<Option<wordcraft_fonts::word::Resolved>> = Vec::with_capacity(g.items.len());
+    let mut diagram_chars: Vec<char> = Vec::new();
+    let mut cjk_chars: Vec<char> = Vec::new();
+    let mut primary_face: Option<FaceRef> = None;
+    let mut cjk_primary_face: Option<FaceRef> = None;
     for it in &g.items {
+        if let GraphicItem::Text { text, font, bold, .. } = it {
+            let family = font.as_deref().filter(|f| !f.is_empty()).unwrap_or(&doc.settings.minor_font);
+            let resolved = wordcraft_fonts::word::resolve(family, *bold, false);
+            let primary = resolved.face;
+            for c in text.chars() {
+                if !joins(c) && !primary.covers(c) {
+                    if primary_face.is_none() {
+                        primary_face = Some(primary);
+                    }
+                    diagram_chars.push(c);
+                    if crate::para::is_east_asian(c) {
+                        if cjk_primary_face.is_none() {
+                            cjk_primary_face = Some(primary);
+                        }
+                        cjk_chars.push(c);
+                    }
+                }
+            }
+            text_resolved.push(Some(resolved));
+        } else {
+            text_resolved.push(None);
+        }
+    }
+    let diagram_fallback = if !diagram_chars.is_empty() {
+        let prefer_serif = primary_face.is_some_and(|p| p.get().is_serif());
+        let exclude = primary_face.map_or(0, |p| p.id());
+        db.fallback_for_diagram(&diagram_chars, exclude, prefer_serif).or_else(|| {
+            if !cjk_chars.is_empty() {
+                let cjk_prefer_serif = cjk_primary_face.is_some_and(|p| p.get().is_serif());
+                let cjk_exclude = cjk_primary_face.map_or(0, |p| p.id());
+                db.fallback_for_diagram(&cjk_chars, cjk_exclude, cjk_prefer_serif)
+            } else {
+                None
+            }
+        })
+    } else {
+        None
+    };
+
+    let mut out = Vec::with_capacity(g.items.len());
+    for (i, it) in g.items.iter().enumerate() {
         match it {
             GraphicItem::Shape { rect: r, kind, fill, stroke, stroke_width } => out.push(Draw::Shape {
                 rect: inside(r),
@@ -34,10 +90,32 @@ pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32)
                     cap: Default::default(),
                 })
             }
-            GraphicItem::Text { rect: r, .. } => out.extend(text_glyphs(doc, inside(r), it, alpha, k)),
-            GraphicItem::Image { rect: r, media } => {
-                out.push(Draw::Image { rect: inside(r), media: media.clone(), crop: [0.0; 4], alpha, alt: String::new(), decorative: false })
+            GraphicItem::Text { rect: r, angle, .. } if angle.is_finite() && angle.rem_euclid(360.0) != 0.0 => {
+                // Turned text is laid out level in its box turned the same way, then turned about
+                // the box's center.
+                let at = inside(r);
+                let (cx, cy) = (at.x + at.w / 2.0, at.y + at.h / 2.0);
+                let quarter = ((angle / 90.0).round() as i64).rem_euclid(2) == 1;
+                let level = if quarter { Rect::new(cx - at.h / 2.0, cy - at.w / 2.0, at.h, at.w) } else { at };
+                let resolved = text_resolved.get(i).copied().flatten();
+                let items = text_glyphs(doc, level, it, alpha, k, resolved, diagram_fallback.as_ref());
+                if !items.is_empty() {
+                    out.push(Draw::Rotated { cx, cy, spin: Spin::new(*angle, false, false), items });
+                }
             }
+            GraphicItem::Text { rect: r, .. } => {
+                let resolved = text_resolved.get(i).copied().flatten();
+                out.extend(text_glyphs(doc, inside(r), it, alpha, k, resolved, diagram_fallback.as_ref()));
+            }
+            GraphicItem::Image { rect: r, media } => out.push(Draw::Image {
+                rect: inside(r),
+                media: media.clone(),
+                crop: [0.0; 4],
+                alpha,
+                alt: String::new(),
+                fx: Default::default(),
+                decorative: false,
+            }),
         }
     }
     out
@@ -137,7 +215,7 @@ pub(super) fn shape_draws(rect: Rect, look: &ShapeLook, opts: &DisplayOptions, o
                 }
                 if !closed
                     && extra.arrow_end
-                    && let Some(arrow) = path_arrowhead(&pts, color, width)
+                    && let Some(arrow) = path_arrowhead(&pts, color, width, extra.end_style)
                 {
                     out.push(arrow);
                 }
@@ -166,7 +244,7 @@ pub(super) fn shape_draws(rect: Rect, look: &ShapeLook, opts: &DisplayOptions, o
             && let Some(color) = stroke
         {
             let points: Vec<(f32, f32)> = pts.iter().map(|[x, y]| (*x, *y)).collect();
-            if let Some(arrow) = path_arrowhead(&points, color, width) {
+            if let Some(arrow) = path_arrowhead(&points, color, width, extra.end_style) {
                 out.push(arrow);
             }
         }
@@ -179,10 +257,10 @@ fn path_stroke_width(width: f32) -> f32 {
 }
 
 /// Make a filled triangular arrowhead at the last point, in the points' coordinate space.
-/// The last distinct segment supplies its direction and the bounded stroke width sets its size.
+/// The last distinct segment supplies its direction; `style` and the stroke width set its size.
 /// Returns `None` if there is no usable final segment. The triangle has no outline, so the path's
 /// cap setting does not affect its appearance.
-fn path_arrowhead(points: &[(f32, f32)], color: Rgb, stroke_width: f32) -> Option<Draw> {
+fn path_arrowhead(points: &[(f32, f32)], color: Rgb, stroke_width: f32, style: ArrowStyle) -> Option<Draw> {
     let tip = *points.last()?;
     let (prev_x, prev_y) = points.iter().rev().skip(1).copied().find(|p| *p != tip)?;
     let dx = tip.0 - prev_x;
@@ -191,13 +269,17 @@ fn path_arrowhead(points: &[(f32, f32)], color: Rgb, stroke_width: f32) -> Optio
     if !length.is_finite() || length <= f32::EPSILON {
         return None;
     }
-    let (dx, dy) = (dx / length, dy / length);
-    let width = if stroke_width.is_finite() { stroke_width.clamp(0.25, 200.0) } else { 0.75 };
-    let len = (width * 3.5).max(7.0);
+    Some(arrowhead(tip, (dx / length, dy / length), stroke_width, style, color))
+}
+
+/// A filled triangular arrowhead with its tip at `tip`, pointing along unit vector `dir`: as long
+/// and as wide as `style` makes it for a `stroke_width` line ([`ArrowStyle::dims`]).
+fn arrowhead(tip: (f32, f32), (dx, dy): (f32, f32), stroke_width: f32, style: ArrowStyle, color: Rgb) -> Draw {
+    let (len, wide) = style.dims(stroke_width);
     let (bx, by) = (tip.0 - dx * len, tip.1 - dy * len);
-    let (nx, ny) = (-dy * len * 0.45, dx * len * 0.45);
+    let (nx, ny) = (-dy * wide / 2.0, dx * wide / 2.0);
     let segs = vec![PathSeg::Move(tip.0, tip.1), PathSeg::Line(bx + nx, by + ny), PathSeg::Line(bx - nx, by - ny), PathSeg::Close];
-    Some(Draw::Path { segs, fill: Some(Paint::solid(color)), stroke: None, stroke_width: 0.0, dash: Vec::new(), cap: Default::default() })
+    Draw::Path { segs, fill: Some(Paint::solid(color)), stroke: None, stroke_width: 0.0, dash: Vec::new(), cap: Default::default() }
 }
 
 /// A line or connector at `rect` (its unflipped frame: flips are the frame's turn), with its
@@ -212,9 +294,14 @@ fn line_draws(
     out: &mut Vec<Draw>,
 ) {
     use wordcraft_doc::connector::{connector_segs, end_direction};
+    let start_dir = end_direction(kind, rect.w, rect.h, false);
+    let end_dir = end_direction(kind, rect.w, rect.h, true);
+    // An arrowed end stops inside its head, which the stroke would otherwise stick out of.
+    let inset = |on: bool, style| if on && stroke.is_some() { arrow_inset(stroke_width, style, extra.cap) } else { 0.0 };
+    let ends = [(inset(extra.arrow_start, extra.start_style), start_dir), (inset(extra.arrow_end, extra.end_style), end_dir)];
     match connector_segs(kind, rect.w, rect.h) {
         Some(segs) => {
-            let segs = segs
+            let mut segs: Vec<PathSeg> = segs
                 .into_iter()
                 .map(|s| match s {
                     PathSeg::Move(x, y) => PathSeg::Move(rect.x + x, rect.y + y),
@@ -223,37 +310,89 @@ fn line_draws(
                     PathSeg::Close => PathSeg::Close,
                 })
                 .collect();
+            shorten_ends(&mut segs, ends);
             let width = path_stroke_width(stroke_width);
             out.push(Draw::Path { segs, fill: None, stroke, stroke_width: width, dash: extra.dash.pattern(width), cap: extra.cap });
         }
-        None => out.push(Draw::Shape {
-            rect,
-            kind,
-            fill: None,
-            stroke,
-            stroke_width,
-            effects,
-            corner: None,
-            dash: extra.dash.pattern(stroke_width),
-            cap: extra.cap,
-        }),
+        None => {
+            // A line's frame is its diagonal, top left to bottom right: shortened, it stays one.
+            let mut segs = [PathSeg::Move(rect.x, rect.y), PathSeg::Line(rect.right(), rect.bottom())];
+            shorten_ends(&mut segs, ends);
+            let line = match segs {
+                [PathSeg::Move(x0, y0), PathSeg::Line(x1, y1)] => Rect::new(x0.min(x1), y0.min(y1), (x1 - x0).abs(), (y1 - y0).abs()),
+                _ => rect,
+            };
+            out.push(Draw::Shape {
+                rect: line,
+                kind,
+                fill: None,
+                stroke,
+                stroke_width,
+                effects,
+                corner: None,
+                dash: extra.dash.pattern(stroke_width),
+                cap: extra.cap,
+            });
+        }
     }
     let Some(color) = stroke else { return };
-    // Our line runs from the bottom-left corner to the top-right; connectors from the top-left
-    // to the bottom-right.
-    let (start, end) =
-        if kind == ShapeKind::Line { ((rect.x, rect.bottom()), (rect.right(), rect.y)) } else { ((rect.x, rect.y), (rect.right(), rect.bottom())) };
-    let width = if stroke_width.is_finite() { stroke_width.clamp(0.25, 200.0) } else { 0.75 };
-    let len = (width * 3.5).max(7.0);
-    for (on, tip, at_end) in [(extra.arrow_start, start, false), (extra.arrow_end, end, true)] {
-        if !on {
-            continue;
+    // A line runs from the top-left corner to the bottom-right, as it is drawn (DrawingML's
+    // `line`), and so do connectors; flips are the frame's turn.
+    let (start, end) = ((rect.x, rect.y), (rect.right(), rect.bottom()));
+    for (on, tip, dir, style) in [(extra.arrow_start, start, start_dir, extra.start_style), (extra.arrow_end, end, end_dir, extra.end_style)] {
+        if on {
+            out.push(arrowhead(tip, dir, stroke_width, style, color));
         }
-        let (dx, dy) = end_direction(kind, rect.w, rect.h, at_end);
-        let (bx, by) = (tip.0 - dx * len, tip.1 - dy * len);
-        let (nx, ny) = (-dy * len * 0.45, dx * len * 0.45);
-        let segs = vec![PathSeg::Move(tip.0, tip.1), PathSeg::Line(bx + nx, by + ny), PathSeg::Line(bx - nx, by - ny), PathSeg::Close];
-        out.push(Draw::Path { segs, fill: Some(Paint::solid(color)), stroke: None, stroke_width: 0.0, dash: Vec::new(), cap: Default::default() });
+    }
+}
+
+/// How far short of an arrowhead's tip a line `stroke_width` wide with `cap` ends stops, so that
+/// none of its stroke shows outside the head (#6767): where the head is as wide as the stroke,
+/// plus what the cap reaches past the end. A head is at least twice as wide as its line, so this
+/// is inside the head; never past its base.
+fn arrow_inset(stroke_width: f32, style: ArrowStyle, cap: LineCap) -> f32 {
+    let width = path_stroke_width(stroke_width);
+    let (len, wide) = style.dims(stroke_width);
+    let reach = if cap == LineCap::Flat { 0.0 } else { width / 2.0 };
+    (len * width / wide.max(f32::EPSILON) + reach).clamp(0.0, len)
+}
+
+/// Draw the path `segs` (a line's or connector's, from its start to its end) short of its ends:
+/// each end by its distance, back against its unit direction (where its arrowhead points). An end
+/// moves at most half way to its neighbouring point, so the path keeps its shape, and a curve its
+/// direction at the end. The two ends of a single straight segment share its length in proportion
+/// to their distances instead, so an end without an arrowhead leaves its share to the other.
+fn shorten_ends(segs: &mut [PathSeg], [(start, start_dir), (end, end_dir)]: [(f32, (f32, f32)); 2]) {
+    let distance = |by: f32| if by.is_finite() { by.max(0.0) } else { 0.0 };
+    let (start, end) = (distance(start), distance(end));
+    let share = |by: f32| match segs {
+        [PathSeg::Move(..), PathSeg::Line(..)] => by / (start + end).max(f32::EPSILON),
+        _ => 0.5,
+    };
+    let (start_share, end_share) = (share(start), share(end));
+    let pull = |(x, y): (f32, f32), toward: Option<(f32, f32)>, by: f32, share: f32, (dx, dy): (f32, f32)| {
+        let room = toward.map_or(0.0, |(tx, ty)| (tx - x).hypot(ty - y) * share);
+        let by = if room.is_finite() { by.min(room) } else { 0.0 };
+        (x - dx * by, y - dy * by)
+    };
+    // The points next to each end, before either moves.
+    let after_first = match segs.get(1) {
+        Some(PathSeg::Line(x, y) | PathSeg::Cubic(x, y, ..)) => Some((*x, *y)),
+        _ => None,
+    };
+    let before_last = match segs.len().checked_sub(1).map(|i| segs.split_at(i)) {
+        Some((_, [PathSeg::Cubic(_, _, x, y, ..)])) => Some((*x, *y)),
+        Some((head, [PathSeg::Line(..)])) => match head.last() {
+            Some(PathSeg::Move(x, y) | PathSeg::Line(x, y) | PathSeg::Cubic(.., x, y)) => Some((*x, *y)),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(PathSeg::Move(x, y)) = segs.first_mut() {
+        (*x, *y) = pull((*x, *y), after_first, start, start_share, start_dir);
+    }
+    if let Some(PathSeg::Line(x, y) | PathSeg::Cubic(.., x, y)) = segs.last_mut() {
+        (*x, *y) = pull((*x, *y), before_last, end, end_share, end_dir);
     }
 }
 
@@ -271,51 +410,152 @@ pub fn seg_path(segs: &[PathSeg]) -> BezPath {
 }
 
 /// One line of a `GraphicItem::Text` in `r`, shaped in its font (the document's body font when
-/// unset) and aligned horizontally, centred vertically, at its size times `k`. `None` when there is
-/// nothing to draw, or the item's rectangle or size isn't a finite number (a degenerate scale:
-/// `r` itself is always finite, as [`Rect::new`] makes it).
-fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) -> Option<Draw> {
-    let GraphicItem::Text { rect, text, size, color, bold, align, font } = it else { return None };
+/// unset) and aligned horizontally, centred vertically, at its size times `k`. Characters the font
+/// lacks (Chinese in a chart drawn in Calibri's substitute, #4720) are drawn in a fallback face, as
+/// in body text: one draw per run of a face, in reading order. Empty when there is nothing to draw,
+/// or the item's rectangle or size isn't a finite number (a degenerate scale: `r` itself is always
+/// finite, as [`Rect::new`] makes it).
+fn text_glyphs(
+    doc: &Document,
+    r: Rect,
+    it: &GraphicItem,
+    alpha: f32,
+    k: f32,
+    resolved: Option<wordcraft_fonts::word::Resolved>,
+    diagram_fallback: Option<&std::sync::Arc<wordcraft_fonts::FontFace>>,
+) -> Vec<Draw> {
+    let GraphicItem::Text { rect, text, size, color, bold, align, font, .. } = it else { return Vec::new() };
     let size = *size * k;
     if !rect.iter().chain([&size]).all(|v| v.is_finite()) {
-        return None;
+        return Vec::new();
     }
-    let family = font.as_deref().filter(|f| !f.is_empty()).unwrap_or(&doc.settings.minor_font);
     let size = size.clamp(1.0, 400.0);
-    let resolved = wordcraft_fonts::word::resolve(family, *bold, false);
-    let face = resolved.face.get();
-    let shaped = wordcraft_fonts::shape(face, text, &[], |c| c);
-    if shaped.is_empty() {
-        return None;
-    }
-    let k = size / face.upem.max(1.0) as f32;
-    let width: f32 = shaped.iter().map(|g| g.x_advance as f32 * k).sum();
-    let (ascent, descent) = wordcraft_fonts::word::line_metrics(face);
-    let baseline = r.y + r.h / 2.0 + (ascent - descent) as f32 * k / 2.0;
+    let resolved = resolved.unwrap_or_else(|| {
+        let family = font.as_deref().filter(|f| !f.is_empty()).unwrap_or(&doc.settings.minor_font);
+        wordcraft_fonts::word::resolve(family, *bold, false)
+    });
+    let primary = resolved.face;
+    let scale = |f: FaceRef| size / f.upem.max(1.0) as f32;
+    let runs: Vec<_> = face_runs(text, primary, *bold, diagram_fallback)
+        .into_iter()
+        .map(|(face, s)| (face, s, wordcraft_fonts::shape(face.get(), s, &[], |c| c)))
+        .filter(|(_, _, shaped)| !shaped.is_empty())
+        .collect();
+    let width: f32 = runs.iter().map(|(f, _, shaped)| shaped.iter().map(|g| g.x_advance as f32).sum::<f32>() * scale(*f)).sum();
+    // The font's own line metrics centre the line, whichever faces draw it.
+    let (ascent, descent) = wordcraft_fonts::word::line_metrics(primary.get());
+    let baseline = r.y + r.h / 2.0 + (ascent - descent) as f32 * scale(primary) / 2.0;
     let mut pen = match align {
         TextAlign::Left => r.x,
         TextAlign::Center => r.x + (r.w - width) / 2.0,
         TextAlign::Right => r.x + r.w - width,
     };
-    let mut glyphs = Vec::with_capacity(shaped.len());
-    for g in &shaped {
-        glyphs.push((g.gid, pen + g.x_offset as f32 * k, baseline - g.y_offset as f32 * k));
-        pen += g.x_advance as f32 * k;
+    let mut out = Vec::with_capacity(runs.len());
+    for (face, s, shaped) in runs {
+        let k = scale(face);
+        let ranges = crate::missing::cluster_ranges(s, &shaped);
+        let mut glyphs = Vec::with_capacity(shaped.len());
+        for g in &shaped {
+            glyphs.push((g.gid, pen + g.x_offset as f32 * k, baseline - g.y_offset as f32 * k));
+            pen += g.x_advance as f32 * k;
+        }
+        // A fallback face is emboldened when it has no bold of its own, as in body text.
+        let synth_bold = if face.id() == primary.id() { resolved.synth_bold } else { *bold && face.weight < 600.0 };
+        out.push(Draw::Glyphs {
+            face,
+            size,
+            glyphs,
+            color: *color,
+            alpha,
+            synth_bold,
+            synth_italic: false,
+            text: s.to_string(),
+            link: None,
+            ranges,
+            text_bg: None,
+            x_scale: 1.0,
+        });
     }
-    Some(Draw::Glyphs {
-        face: resolved.face,
-        size,
-        glyphs,
-        color: *color,
-        alpha,
-        synth_bold: resolved.synth_bold,
-        synth_italic: false,
-        text: text.clone(),
-        link: None,
-        ranges: Vec::new(),
-        text_bg: None,
-        x_scale: 1.0,
-    })
+    out
+}
+
+/// `text` split into runs of the face that draws them: `primary` where it has the character, else a
+/// fallback face. A run the primary lacks takes one face covering all of it when one does (so a
+/// Chinese label doesn't mix serif and sans glyphs), else each character its own fallback. Spaces
+/// and combining marks stay in the run before them; a character no face has stays in `primary`.
+fn face_runs<'a>(
+    text: &'a str,
+    primary: FaceRef,
+    bold: bool,
+    diagram_fallback: Option<&std::sync::Arc<wordcraft_fonts::FontFace>>,
+) -> Vec<(FaceRef, &'a str)> {
+    let joins = |c: char| c.is_whitespace() || wordcraft_doc::math_linear::is_combining(c);
+    // (start, end, drawn by `primary`)
+    let mut spans: Vec<(usize, usize, bool)> = Vec::new();
+    for (i, c) in text.char_indices() {
+        let end = i + c.len_utf8();
+        let own = primary.covers(c);
+        match spans.last_mut() {
+            Some(last) if last.2 == own || joins(c) => last.1 = end,
+            _ => spans.push((i, end, own)),
+        }
+    }
+    let db = wordcraft_fonts::FontDb::global();
+    let mut out: Vec<(FaceRef, &str)> = Vec::with_capacity(spans.len());
+    for (start, end, own) in spans {
+        let Some(s) = text.get(start..end) else { continue };
+        if own {
+            out.push((primary, s));
+            continue;
+        }
+        let chars: Vec<char> = s.chars().filter(|c| !joins(*c)).collect();
+        let df_face_for = |df: &std::sync::Arc<wordcraft_fonts::FontFace>, covered: &[char]| {
+            if bold {
+                let styled = db.face(&df.family, "Bold");
+                if styled.family.eq_ignore_ascii_case(&df.family) && covered.iter().all(|c| styled.covers(*c)) {
+                    return FaceRef::of(&styled);
+                }
+            }
+            FaceRef::of(df)
+        };
+        // A single SmartArt or chart diagram maintains a consistent fallback face across its labels (#5672).
+        if let Some(df) = diagram_fallback
+            && chars.iter().all(|c| df.covers(*c))
+        {
+            out.push((df_face_for(df, &chars), s));
+            continue;
+        }
+        if diagram_fallback.is_none_or(|df| !chars.iter().any(|c| df.covers(*c)))
+            && let Some(f) = db.fallback_for_run(&chars, primary.id(), bold, false)
+        {
+            out.push((FaceRef::of(&f), s));
+            continue;
+        }
+        // No one face has them all: each character in its own fallback, neighbours sharing a face
+        // in one run.
+        let mut run: Option<(FaceRef, usize)> = None;
+        for (i, c) in s.char_indices() {
+            let face = if joins(c) {
+                None
+            } else if let Some(df) = diagram_fallback.filter(|df| df.covers(c)) {
+                Some(df_face_for(df, &[c]))
+            } else {
+                Some(db.fallback_styled(c, primary.id(), bold, false).map(|f| FaceRef::of(&f)).unwrap_or(primary))
+            };
+            match (run, face) {
+                (Some((cur, from)), Some(f)) if f.id() != cur.id() => {
+                    out.extend(s.get(from..i).map(|t| (cur, t)));
+                    run = Some((f, i));
+                }
+                (None, f) => run = Some((f.unwrap_or(primary), i)),
+                _ => {}
+            }
+        }
+        if let Some((cur, from)) = run {
+            out.extend(s.get(from..).map(|t| (cur, t)));
+        }
+    }
+    out
 }
 
 /// `items` turned by `spin` about the centre of `rect` (as they are, unturned).
@@ -333,9 +573,10 @@ pub(super) fn spun(spin: Spin, rect: Rect, items: Vec<Draw>, out: &mut Vec<Draw>
 pub(super) fn object_draws(o: &InlineObject, rect: Rect, outer: Spin, alpha: f32, opts: &DisplayOptions, out: &mut Vec<Draw>) {
     let own = o.frame().map(|(_, _, f)| f.spin()).unwrap_or_default();
     match o {
-        InlineObject::Image { media, crop, alt, .. } => {
+        InlineObject::Image { media, crop, alt, fx, .. } => {
+            let alpha = alpha * fx.opacity();
             let decorative = o.is_decorative();
-            spun(own, rect, vec![Draw::Image { rect, media: media.clone(), crop: *crop, alpha, alt: alt.clone(), decorative }], out)
+            spun(own, rect, vec![Draw::Image { rect, media: media.clone(), crop: *crop, alpha, alt: alt.clone(), fx: *fx, decorative }], out)
         }
         InlineObject::Shape { kind, fill, stroke, stroke_width, effects, freeform, extra, .. } => {
             let effects = effects_in(*effects, own.within(outer));
@@ -392,6 +633,7 @@ pub(super) fn object_draws(o: &InlineObject, rect: Rect, outer: Spin, alpha: f32
                         crop: [0.0; 4],
                         alpha,
                         alt: String::new(),
+                        fx: Default::default(),
                         decorative: false,
                     }),
                     _ => None,
@@ -416,17 +658,30 @@ pub(crate) fn effects_in(effects: wordcraft_doc::effects::ShapeEffects, spin: Sp
     e
 }
 
-/// Where inline object `obj` is drawn, given its cluster's box (`adv` × `obj_h` standing on the
-/// baseline at `cx`): inside the room kept for its effects.
+/// Where inline object `obj` is drawn, given its cluster's box (`adv` wide at `cx`, reaching
+/// `obj_h` above the baseline and `obj_d` below it): inside the room kept for its effects.
 /// A rotated one's unrotated frame, centred in that room.
-pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f32, obj_h: f32) -> Rect {
+///
+/// `line` is the room a horizontal rule is placed in, from `cx`; `modern`: Word 2013+ layout
+/// (see [`wordcraft_doc::para::Float::line_pad`]).
+pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f32, (obj_h, obj_d): (f32, f32), line: f32, modern: bool) -> Rect {
     let frame = obj.and_then(InlineObject::frame);
     let [l, t, r, b] = frame.map_or([0.0; 4], |(_, _, float)| float.effect_extent());
-    let room = Rect::new(cx + l, base - obj_h + t, (adv - l - r).max(0.0), (obj_h - t - b).max(0.0));
+    // Lowered further than its height, it is drawn with its top on the baseline (Word).
+    let room = Rect::new(cx + l, base - obj_h.max(0.0) + t, (adv - l - r).max(0.0), (obj_h + obj_d - t - b).max(0.0));
+    // A horizontal rule is as wide as its share of the paragraph's width, whatever narrows its
+    // line, and is placed by its alignment in what the line has left: it runs past the margin
+    // beside a float or a first-line indent, as in Word (see `ParaLayout::rule_room`).
+    if let Some(InlineObject::Shape { w, extra, .. }) = obj
+        && let Some(hr) = extra.hr
+    {
+        let rw = hr.width(room.w, *w);
+        return Rect::new(hr.left(room.x, line, rw), room.y, rw, room.h);
+    }
     let Some((w, h, float)) = frame.filter(|(_, _, f)| f.rot != 0.0) else { return room };
-    // The room is the rotated bounds of the frame: undo the rotation.
+    // The room is what the line kept for the turned frame: undo that.
     let (w, h) = (wordcraft_geom::finite(w).clamp(1.0, 4000.0), wordcraft_geom::finite(h).clamp(1.0, 4000.0));
-    let (bw, _) = float.spin().extent(w, h);
+    let bw = w + 2.0 * float.line_pad(w, h, modern).0;
     let k = if bw > 0.0 { room.w / bw } else { 1.0 };
     let (fw, fh) = (w * k, h * k);
     Rect::new(room.x + (room.w - fw) / 2.0, room.y + (room.h - fh) / 2.0, fw, fh)
@@ -446,3 +701,6 @@ fn canvas_background(rect: Rect, c: &wordcraft_doc::para::CanvasStyle) -> Draw {
         cap: Default::default(),
     }
 }
+
+#[cfg(test)]
+mod fill_alpha_tests;
